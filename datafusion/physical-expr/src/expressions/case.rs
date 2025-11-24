@@ -79,13 +79,7 @@ enum EvalMethod {
     /// This is a specialization for [`EvalMethod::WithExpression`] when the value and results are literals
     ///
     /// See [`LiteralLookupTable`] for more details
-    WithExprScalarLookupTable {
-        lookup_table: LiteralLookupTable,
-        /// Fallback to use when the `<expr>` data type does not match the WHEN literals data type
-        /// (e.g. `<expr>` data type is dictionary<int32, utf8> and WHEN literals data type is utf8)
-        /// TODO - avoid this and support different data types in the lookup table
-        fallback_for_datatype_mismatch: ProjectedCaseBody,
-    },
+    WithExprScalarLookupTable(LiteralLookupTable),
 }
 
 /// Implementing hash so we can use `derive` on [`EvalMethod`].
@@ -825,15 +819,11 @@ impl CaseExpr {
 
     fn find_best_eval_method(body: &CaseBody) -> Result<EvalMethod> {
         if body.expr.is_some() {
-            let with_expression_body = body.project()?;
             if let Some(mapping) = LiteralLookupTable::maybe_new(body) {
-                return Ok(EvalMethod::WithExprScalarLookupTable {
-                    lookup_table: mapping,
-                    fallback_for_datatype_mismatch: with_expression_body,
-                });
+                return Ok(EvalMethod::WithExprScalarLookupTable(mapping));
             }
 
-            return Ok(EvalMethod::WithExpression(with_expression_body));
+            return Ok(EvalMethod::WithExpression(body.project()?));
         }
 
         Ok(
@@ -1445,25 +1435,8 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression(p) => self.expr_or_expr(batch, p),
-            EvalMethod::WithExprScalarLookupTable {
-                lookup_table,
-                fallback_for_datatype_mismatch,
-            } => {
-                // Currently, the lookup table does not support different data types between
-                // the <expr> and the "when" values. If that is the case, use that eval method
-                // as a fallback instead
-                if &self
-                    .body
-                    .expr
-                    .as_ref()
-                    .unwrap()
-                    .data_type(batch.schema_ref())?
-                    == lookup_table.when_data_type()
-                {
-                    self.with_lookup_table(batch, lookup_table)
-                } else {
-                    self.case_when_with_expr(batch, fallback_for_datatype_mismatch)
-                }
+            EvalMethod::WithExprScalarLookupTable(lookup_table) => {
+                self.with_lookup_table(batch, lookup_table)
             }
         }
     }

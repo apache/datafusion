@@ -17,194 +17,26 @@
 
 use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 use arrow::array::{
-    Array, ArrayIter, ArrayRef, AsArray, FixedSizeBinaryArray, FixedSizeBinaryIter,
-    GenericByteArray, GenericByteViewArray, TypedDictionaryArray,
+    downcast_integer, Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray,
+    DictionaryArray, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
+    StringArray, StringViewArray,
 };
-use arrow::datatypes::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
-use datafusion_common::{exec_datafusion_err, internal_err, HashMap, ScalarValue};
+use arrow::datatypes::{
+    ArrowDictionaryKeyType, BinaryViewType, DataType, StringViewType,
+};
+use datafusion_common::{internal_err, plan_datafusion_err, HashMap, ScalarValue};
 use std::fmt::Debug;
-use std::iter::Map;
-use std::marker::PhantomData;
-
-/// Helper trait to convert various byte-like array types to iterator over byte slices
-pub(super) trait BytesMapHelperWrapperTrait: Send + Sync {
-    /// Iterator over byte slices that will return
-    type IntoIter<'a>: Iterator<Item = Option<&'a [u8]>> + 'a;
-
-    /// Convert the array to an iterator over byte slices
-    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>>;
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct GenericBytesHelper<T: ByteArrayType>(PhantomData<T>);
-
-impl<T: ByteArrayType> BytesMapHelperWrapperTrait for GenericBytesHelper<T> {
-    type IntoIter<'a> = Map<
-        ArrayIter<&'a GenericByteArray<T>>,
-        fn(Option<&'a <T as ByteArrayType>::Native>) -> Option<&[u8]>,
-    >;
-
-    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-        Ok(array.as_bytes::<T>().into_iter().map(|item| {
-            item.map(|v| {
-                let bytes: &[u8] = v.as_ref();
-
-                bytes
-            })
-        }))
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct FixedBinaryHelper;
-
-impl BytesMapHelperWrapperTrait for FixedBinaryHelper {
-    type IntoIter<'a> = FixedSizeBinaryIter<'a>;
-
-    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-        Ok(array.as_fixed_size_binary().into_iter())
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct GenericBytesViewHelper<T: ByteViewType>(PhantomData<T>);
-impl<T: ByteViewType> BytesMapHelperWrapperTrait for GenericBytesViewHelper<T> {
-    type IntoIter<'a> = Map<
-        ArrayIter<&'a GenericByteViewArray<T>>,
-        fn(Option<&'a <T as ByteViewType>::Native>) -> Option<&[u8]>,
-    >;
-
-    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-        Ok(array.as_byte_view::<T>().into_iter().map(|item| {
-            item.map(|v| {
-                let bytes: &[u8] = v.as_ref();
-
-                bytes
-            })
-        }))
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct BytesDictionaryHelper<Key: ArrowDictionaryKeyType, Value: ByteArrayType>(
-    PhantomData<(Key, Value)>,
-);
-
-impl<Key, Value> BytesMapHelperWrapperTrait for BytesDictionaryHelper<Key, Value>
-where
-    Key: ArrowDictionaryKeyType + Send + Sync,
-    Value: ByteArrayType,
-    for<'a> TypedDictionaryArray<'a, Key, GenericByteArray<Value>>:
-        IntoIterator<Item = Option<&'a Value::Native>>,
-{
-    type IntoIter<'a> = Map<<TypedDictionaryArray<'a, Key, GenericByteArray<Value>> as IntoIterator>::IntoIter, fn(Option<&'a <Value as ByteArrayType>::Native>) -> Option<&[u8]>>;
-
-    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-        let dict_array = array
-            .as_dictionary::<Key>()
-            .downcast_dict::<GenericByteArray<Value>>()
-            .ok_or_else(|| {
-                exec_datafusion_err!(
-              "Failed to downcast dictionary array {} to expected dictionary value {}",
-              array.data_type(),
-              Value::DATA_TYPE
-            )
-            })?;
-
-        Ok(dict_array.into_iter().map(|item| {
-            item.map(|v| {
-                let bytes: &[u8] = v.as_ref();
-
-                bytes
-            })
-        }))
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct FixedBytesDictionaryHelper<Key: ArrowDictionaryKeyType>(
-    PhantomData<Key>,
-);
-
-impl<Key> BytesMapHelperWrapperTrait for FixedBytesDictionaryHelper<Key>
-where
-    Key: ArrowDictionaryKeyType + Send + Sync,
-    for<'a> TypedDictionaryArray<'a, Key, FixedSizeBinaryArray>:
-        IntoIterator<Item = Option<&'a [u8]>>,
-{
-    type IntoIter<'a> =
-        <TypedDictionaryArray<'a, Key, FixedSizeBinaryArray> as IntoIterator>::IntoIter;
-
-    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-        let dict_array = array
-          .as_dictionary::<Key>()
-          .downcast_dict::<FixedSizeBinaryArray>()
-          .ok_or_else(|| exec_datafusion_err!(
-              "Failed to downcast dictionary array {} to expected dictionary fixed size binary values",
-              array.data_type()
-          ))?;
-
-        Ok(dict_array.into_iter())
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(super) struct BytesViewDictionaryHelper<
-    Key: ArrowDictionaryKeyType,
-    Value: ByteViewType,
->(PhantomData<(Key, Value)>);
-
-impl<Key, Value> BytesMapHelperWrapperTrait for BytesViewDictionaryHelper<Key, Value>
-where
-    Key: ArrowDictionaryKeyType + Send + Sync,
-    Value: ByteViewType,
-    for<'a> TypedDictionaryArray<'a, Key, GenericByteViewArray<Value>>:
-        IntoIterator<Item = Option<&'a Value::Native>>,
-{
-    type IntoIter<'a> = Map<<TypedDictionaryArray<'a, Key, GenericByteViewArray<Value>> as IntoIterator>::IntoIter, fn(Option<&'a <Value as ByteViewType>::Native>) -> Option<&[u8]>>;
-
-    fn array_to_iter(array: &ArrayRef) -> datafusion_common::Result<Self::IntoIter<'_>> {
-        let dict_array = array
-            .as_dictionary::<Key>()
-            .downcast_dict::<GenericByteViewArray<Value>>()
-            .ok_or_else(|| {
-                exec_datafusion_err!(
-                "Failed to downcast dictionary array {} to expected dictionary value {}",
-                array.data_type(),
-                Value::DATA_TYPE
-            )
-            })?;
-
-        Ok(dict_array.into_iter().map(|item| {
-            item.map(|v| {
-                let bytes: &[u8] = v.as_ref();
-
-                bytes
-            })
-        }))
-    }
-}
 
 /// Map from byte-like literal values to their first occurrence index
 ///
 /// This is a wrapper for handling different kinds of literal maps
-#[derive(Clone)]
-pub(super) struct BytesLikeIndexMap<Helper: BytesMapHelperWrapperTrait> {
+#[derive(Clone, Debug)]
+pub(super) struct BytesLikeIndexMap {
     /// Map from non-null literal value the first occurrence index in the literals
     map: HashMap<Vec<u8>, u32>,
-
-    _phantom_data: PhantomData<Helper>,
 }
 
-impl<T: BytesMapHelperWrapperTrait> Debug for BytesLikeIndexMap<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BytesMapHelper")
-            .field("map", &self.map)
-            .finish()
-    }
-}
-
-impl<Helper: BytesMapHelperWrapperTrait> BytesLikeIndexMap<Helper> {
+impl BytesLikeIndexMap {
     /// Try creating a new lookup table from the given literals and else index
     /// The index of each literal in the vector is used as the mapped value in the lookup table.
     ///
@@ -215,37 +47,29 @@ impl<Helper: BytesMapHelperWrapperTrait> BytesLikeIndexMap<Helper> {
         let input = ScalarValue::iter_to_array(unique_non_null_literals)?;
 
         // Literals are guaranteed to not contain nulls
-        if input.null_count() > 0 {
+        if input.logical_null_count() > 0 {
             return internal_err!("Literal values for WHEN clauses cannot contain nulls");
         }
 
-        let bytes_iter = Helper::array_to_iter(&input)?;
-
-        let map: HashMap<Vec<u8>, u32> = bytes_iter
+        let map: HashMap<Vec<u8>, u32> = try_get_bytes_iterator(&input)?
             // Flattening Option<&[u8]> to &[u8] as literals cannot contain nulls
             .flatten()
             .enumerate()
-            .map(|(map_index, value): (usize, &[u8])| (value.to_vec(), map_index as u32))
+            .map(|(map_index, value)| (value.to_vec(), map_index as u32))
             // Because literals are unique we can collect directly, and we can avoid only inserting the first occurrence
             .collect();
 
-        Ok(Self {
-            map,
-            _phantom_data: Default::default(),
-        })
+        Ok(Self { map })
     }
 }
 
-impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
-    for BytesLikeIndexMap<Helper>
-{
+impl WhenLiteralIndexMap for BytesLikeIndexMap {
     fn map_to_when_indices(
         &self,
         array: &ArrayRef,
         else_index: u32,
     ) -> datafusion_common::Result<Vec<u32>> {
-        let bytes_iter = Helper::array_to_iter(array)?;
-        let indices = bytes_iter
+        let indices = try_get_bytes_iterator(array)?
             .map(|value| match value {
                 Some(value) => self.map.get(value).copied().unwrap_or(else_index),
                 None => else_index,
@@ -254,4 +78,148 @@ impl<Helper: BytesMapHelperWrapperTrait> WhenLiteralIndexMap
 
         Ok(indices)
     }
+}
+
+fn try_get_bytes_iterator(
+    array: &ArrayRef,
+) -> datafusion_common::Result<Box<dyn Iterator<Item = Option<&[u8]>> + '_>> {
+    Ok(match array.data_type() {
+        DataType::Utf8 => Box::new(array.as_string::<i32>().into_iter().map(|item| {
+            item.map(|v| {
+                let bytes: &[u8] = v.as_ref();
+
+                bytes
+            })
+        })),
+
+        DataType::LargeUtf8 => {
+            Box::new(array.as_string::<i64>().into_iter().map(|item| {
+                item.map(|v| {
+                    let bytes: &[u8] = v.as_ref();
+
+                    bytes
+                })
+            }))
+        }
+
+        DataType::Binary => Box::new(array.as_binary::<i32>().into_iter()),
+
+        DataType::LargeBinary => Box::new(array.as_binary::<i64>().into_iter()),
+
+        DataType::FixedSizeBinary(_) => Box::new(array.as_binary::<i64>().into_iter()),
+
+        DataType::Utf8View => Box::new(
+            array
+                .as_byte_view::<StringViewType>()
+                .into_iter()
+                .map(|item| {
+                    item.map(|v| {
+                        let bytes: &[u8] = v.as_ref();
+
+                        bytes
+                    })
+                }),
+        ),
+        DataType::BinaryView => {
+            Box::new(array.as_byte_view::<BinaryViewType>().into_iter())
+        }
+
+        DataType::Dictionary(key, _) => {
+            macro_rules! downcast_dictionary_array_helper {
+                ($t:ty) => {{
+                    get_bytes_iterator_for_dictionary(array.as_dictionary::<$t>())?
+                }};
+            }
+
+            downcast_integer! {
+                key.as_ref() => (downcast_dictionary_array_helper),
+                k => unreachable!("unsupported dictionary key type: {}", k)
+            }
+        }
+        t => {
+            return Err(plan_datafusion_err!(
+                "Unsupported data type for bytes lookup table: {}",
+                t
+            ))
+        }
+    })
+}
+
+fn get_bytes_iterator_for_dictionary<K: ArrowDictionaryKeyType + Send + Sync>(
+    array: &DictionaryArray<K>,
+) -> datafusion_common::Result<Box<dyn Iterator<Item = Option<&[u8]>> + '_>> {
+    Ok(match array.values().data_type() {
+        DataType::Utf8 => Box::new(
+            array
+                .downcast_dict::<StringArray>()
+                .unwrap()
+                .into_iter()
+                .map(|item| {
+                    item.map(|v| {
+                        let bytes: &[u8] = v.as_ref();
+
+                        bytes
+                    })
+                }),
+        ),
+
+        DataType::LargeUtf8 => Box::new(
+            array
+                .downcast_dict::<LargeStringArray>()
+                .unwrap()
+                .into_iter()
+                .map(|item| {
+                    item.map(|v| {
+                        let bytes: &[u8] = v.as_ref();
+
+                        bytes
+                    })
+                }),
+        ),
+
+        DataType::Binary => {
+            Box::new(array.downcast_dict::<BinaryArray>().unwrap().into_iter())
+        }
+
+        DataType::LargeBinary => Box::new(
+            array
+                .downcast_dict::<LargeBinaryArray>()
+                .unwrap()
+                .into_iter(),
+        ),
+
+        DataType::FixedSizeBinary(_) => Box::new(
+            array
+                .downcast_dict::<FixedSizeBinaryArray>()
+                .unwrap()
+                .into_iter(),
+        ),
+
+        DataType::Utf8View => Box::new(
+            array
+                .downcast_dict::<StringViewArray>()
+                .unwrap()
+                .into_iter()
+                .map(|item| {
+                    item.map(|v| {
+                        let bytes: &[u8] = v.as_ref();
+
+                        bytes
+                    })
+                }),
+        ),
+        DataType::BinaryView => Box::new(
+            array
+                .downcast_dict::<BinaryViewArray>()
+                .unwrap()
+                .into_iter(),
+        ),
+
+        t => {
+            return Err(plan_datafusion_err!(
+                "Unsupported data type for lookup table dictionary value: {}",
+                t
+            ))
+        }
+    })
 }

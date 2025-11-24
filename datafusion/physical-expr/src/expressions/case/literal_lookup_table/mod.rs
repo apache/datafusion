@@ -20,21 +20,14 @@ mod bytes_like_lookup_table;
 mod primitive_lookup_table;
 
 use crate::expressions::case::literal_lookup_table::boolean_lookup_table::BooleanIndexMap;
-use crate::expressions::case::literal_lookup_table::bytes_like_lookup_table::{
-    BytesDictionaryHelper, BytesLikeIndexMap, BytesViewDictionaryHelper,
-    FixedBinaryHelper, FixedBytesDictionaryHelper, GenericBytesHelper,
-    GenericBytesViewHelper,
-};
+use crate::expressions::case::literal_lookup_table::bytes_like_lookup_table::BytesLikeIndexMap;
 use crate::expressions::case::literal_lookup_table::primitive_lookup_table::PrimitiveIndexMap;
 use crate::expressions::case::CaseBody;
 use crate::expressions::Literal;
-use arrow::array::{downcast_integer, downcast_primitive, ArrayRef, UInt32Array};
-use arrow::datatypes::{
-    ArrowDictionaryKeyType, BinaryViewType, DataType, GenericBinaryType,
-    GenericStringType, StringViewType,
-};
+use arrow::array::{downcast_primitive, Array, ArrayRef, UInt32Array};
+use arrow::datatypes::DataType;
+use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
-use datafusion_common::{assert_eq_or_internal_err, DataFusionError};
 use indexmap::IndexMap;
 use std::fmt::Debug;
 
@@ -76,7 +69,6 @@ use std::fmt::Debug;
 pub(in super::super) struct LiteralLookupTable {
     /// The lookup table to use for evaluating the CASE expression
     lookup: Box<dyn WhenLiteralIndexMap>,
-    when_data_type: DataType,
 
     else_index: u32,
 
@@ -161,9 +153,10 @@ impl LiteralLookupTable {
 
             null_scalar
         };
-        let when_data_type = when[0].data_type();
 
         {
+            let when_data_type = when[0].data_type();
+
             // If not all the WHEN literals are the same data type we cannot use this optimization
             if when.iter().any(|l| l.data_type() != when_data_type) {
                 return None;
@@ -197,26 +190,15 @@ impl LiteralLookupTable {
 
         Some(Self {
             lookup,
-            when_data_type,
             then_and_else_values,
             else_index,
         })
-    }
-
-    pub(in super::super) fn when_data_type(&self) -> &DataType {
-        &self.when_data_type
     }
 
     pub(in super::super) fn map_keys_to_values(
         &self,
         keys_array: &ArrayRef,
     ) -> datafusion_common::Result<ArrayRef> {
-        assert_eq_or_internal_err!(
-            keys_array.data_type(),
-            &self.when_data_type,
-            "Keys array data type does not match WHEN literals data type"
-        );
-
         let take_indices = self
             .lookup
             .map_to_when_indices(keys_array, self.else_index)?;
@@ -311,135 +293,36 @@ fn try_creating_lookup_table(
             }
         }
 
-        DataType::Utf8 => {
-            let lookup_table = BytesLikeIndexMap::<
-                GenericBytesHelper<GenericStringType<i32>>,
-            >::try_new(unique_non_null_literals)?;
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::FixedSizeBinary(_)
+        | DataType::Utf8View
+        | DataType::BinaryView => {
+            let lookup_table = BytesLikeIndexMap::try_new(unique_non_null_literals)?;
             Ok(Box::new(lookup_table))
         }
 
-        DataType::LargeUtf8 => {
-            let lookup_table = BytesLikeIndexMap::<
-                GenericBytesHelper<GenericStringType<i64>>,
-            >::try_new(unique_non_null_literals)?;
+        DataType::Dictionary(_key, value)
+            if matches!(
+                value.as_ref(),
+                DataType::Utf8
+                    | DataType::LargeUtf8
+                    | DataType::Binary
+                    | DataType::LargeBinary
+                    | DataType::FixedSizeBinary(_)
+                    | DataType::Utf8View
+                    | DataType::BinaryView
+            ) =>
+        {
+            let lookup_table = BytesLikeIndexMap::try_new(unique_non_null_literals)?;
             Ok(Box::new(lookup_table))
         }
 
-        DataType::Binary => {
-            let lookup_table = BytesLikeIndexMap::<
-                GenericBytesHelper<GenericBinaryType<i32>>,
-            >::try_new(unique_non_null_literals)?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::LargeBinary => {
-            let lookup_table = BytesLikeIndexMap::<
-                GenericBytesHelper<GenericBinaryType<i64>>,
-            >::try_new(unique_non_null_literals)?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::FixedSizeBinary(_) => {
-            let lookup_table = BytesLikeIndexMap::<FixedBinaryHelper>::try_new(
-                unique_non_null_literals,
-            )?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::Utf8View => {
-            let lookup_table =
-                BytesLikeIndexMap::<GenericBytesViewHelper<StringViewType>>::try_new(
-                    unique_non_null_literals,
-                )?;
-            Ok(Box::new(lookup_table))
-        }
-        DataType::BinaryView => {
-            let lookup_table =
-                BytesLikeIndexMap::<GenericBytesViewHelper<BinaryViewType>>::try_new(
-                    unique_non_null_literals,
-                )?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::Dictionary(key, value) => {
-            macro_rules! downcast_dictionary_array_helper {
-                ($t:ty) => {{
-                    create_lookup_table_for_dictionary_input::<$t>(
-                        value.as_ref(),
-                        unique_non_null_literals,
-                    )
-                }};
-            }
-
-            downcast_integer! {
-                key.as_ref() => (downcast_dictionary_array_helper),
-                k => unreachable!("unsupported dictionary key type: {}", k)
-            }
-        }
         _ => Err(plan_datafusion_err!(
             "Unsupported data type for lookup table: {}",
             unique_non_null_literals[0].data_type()
-        )),
-    }
-}
-
-fn create_lookup_table_for_dictionary_input<K: ArrowDictionaryKeyType + Send + Sync>(
-    value: &DataType,
-    unique_non_null_literals: Vec<ScalarValue>,
-) -> datafusion_common::Result<Box<dyn WhenLiteralIndexMap>> {
-    // TODO - optimize dictionary to use different wrapper that takes advantage of it being a dictionary
-    match value {
-        DataType::Utf8 => {
-            let lookup_table = BytesLikeIndexMap::<
-                BytesDictionaryHelper<K, GenericStringType<i32>>,
-            >::try_new(unique_non_null_literals)?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::LargeUtf8 => {
-            let lookup_table = BytesLikeIndexMap::<
-                BytesDictionaryHelper<K, GenericStringType<i64>>,
-            >::try_new(unique_non_null_literals)?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::Binary => {
-            let lookup_table = BytesLikeIndexMap::<
-                BytesDictionaryHelper<K, GenericBinaryType<i32>>,
-            >::try_new(unique_non_null_literals)?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::LargeBinary => {
-            let lookup_table = BytesLikeIndexMap::<
-                BytesDictionaryHelper<K, GenericBinaryType<i64>>,
-            >::try_new(unique_non_null_literals)?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::FixedSizeBinary(_) => {
-            let lookup_table =
-                BytesLikeIndexMap::<FixedBytesDictionaryHelper<K>>::try_new(
-                    unique_non_null_literals,
-                )?;
-            Ok(Box::new(lookup_table))
-        }
-
-        DataType::Utf8View => {
-            let lookup_table = BytesLikeIndexMap::<
-                BytesViewDictionaryHelper<K, StringViewType>,
-            >::try_new(unique_non_null_literals)?;
-            Ok(Box::new(lookup_table))
-        }
-        DataType::BinaryView => {
-            let lookup_table = BytesLikeIndexMap::<
-                BytesViewDictionaryHelper<K, BinaryViewType>,
-            >::try_new(unique_non_null_literals)?;
-            Ok(Box::new(lookup_table))
-        }
-        _ => Err(plan_datafusion_err!(
-            "Unsupported dictionary value type for lookup table: {}",
-            value
         )),
     }
 }
