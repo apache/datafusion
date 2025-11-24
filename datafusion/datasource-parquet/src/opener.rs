@@ -1108,6 +1108,7 @@ mod test {
 
     use crate::source::ParquetSource;
     use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
+    use arrow::array::RecordBatch;
     use arrow::{
         compute::cast,
         datatypes::{DataType, Field, Schema, SchemaRef},
@@ -1139,10 +1140,7 @@ mod test {
 
     async fn count_batches_and_rows(
         mut stream: std::pin::Pin<
-            Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
-                    + Send,
-            >,
+            Box<dyn Stream<Item = Result<RecordBatch, DataFusionError>> + Send>,
         >,
     ) -> (usize, usize) {
         let mut num_batches = 0;
@@ -1156,12 +1154,9 @@ mod test {
 
     async fn collect_batches(
         mut stream: std::pin::Pin<
-            Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
-                    + Send,
-            >,
+            Box<dyn Stream<Item = Result<RecordBatch, DataFusionError>> + Send>,
         >,
-    ) -> Vec<arrow::array::RecordBatch> {
+    ) -> Vec<RecordBatch> {
         let mut batches = vec![];
         while let Some(Ok(batch)) = stream.next().await {
             batches.push(batch);
@@ -1172,7 +1167,7 @@ mod test {
     async fn write_parquet(
         store: Arc<dyn ObjectStore>,
         filename: &str,
-        batch: arrow::record_batch::RecordBatch,
+        batch: RecordBatch,
     ) -> usize {
         let mut out = BytesMut::new().writer();
         {
@@ -1643,8 +1638,8 @@ mod test {
         impl SchemaMapper for CustomSchemaMapper {
             fn map_batch(
                 &self,
-                batch: arrow::array::RecordBatch,
-            ) -> datafusion_common::Result<arrow::array::RecordBatch> {
+                batch: RecordBatch,
+            ) -> datafusion_common::Result<RecordBatch> {
                 let a_column = cast(batch.column(0), &DataType::UInt64)?;
                 // Add in a new column "b" with default value 0.0
                 let b_column =
@@ -1654,9 +1649,7 @@ mod test {
                     Field::new("a", DataType::UInt64, false),
                     Field::new("b", DataType::Float64, false),
                 ]));
-                Ok(arrow::record_batch::RecordBatch::try_new(
-                    new_schema, columns,
-                )?)
+                Ok(RecordBatch::try_new(new_schema, columns)?)
             }
 
             fn map_column_statistics(
@@ -2262,19 +2255,6 @@ mod test {
         assert_eq!(reverse_values, vec![15, 14, 13, 12, 11, 10, 9]);
         assert_eq!(reverse_values.len(), 7);
     }
-}
-
-#[cfg(test)]
-mod reverse_scan_integration_tests {
-    use crate::source::ParquetSource;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use bytes::{BufMut, BytesMut};
-    use object_store::memory::InMemory;
-    use object_store::path::Path;
-    use object_store::ObjectStore;
-    use parquet::arrow::ArrowWriter;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_reverse_scan_end_to_end_ascending_data() {
