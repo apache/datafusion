@@ -130,8 +130,7 @@ impl ScalarUDFImpl for Flatten {
     }
 }
 
-/// Flatten SQL function
-pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("flatten", args)?;
 
     match array.data_type() {

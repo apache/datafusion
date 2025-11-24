@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,5 +15,60 @@
 # specific language governing permissions and limitations
 # under the License.
 
-set -ex
-cargo clippy --all-targets --workspace --features avro,integration-tests,extended_tests -- -D warnings
+# =================================
+# Test sqllogictest runner features
+# =================================
+
+# --------------------------
+# Test `<slt:ignore>` marker
+# --------------------------
+query T
+select 'DataFusion'
+----
+<slt:ignore>
+
+query T
+select 'DataFusion'
+----
+Data<slt:ignore>
+
+query T
+select 'DataFusion'
+----
+<slt:ignore>Fusion
+
+query T
+select 'Apache DataFusion';
+----
+<slt:ignore>Data<slt:ignore>
+
+query T
+select 'DataFusion'
+----
+DataFusion<slt:ignore>
+
+query T
+select 'DataFusion'
+----
+<slt:ignore>DataFusion
+
+query T
+select 'DataFusion'
+----
+<slt:ignore>DataFusion<slt:ignore>
+
+query I
+select * from generate_series(3);
+----
+0
+1
+<slt:ignore>
+3
+
+query I
+select * from generate_series(3);
+----
+<slt:ignore>
+1
+<slt:ignore>
+<slt:ignore>
