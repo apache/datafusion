@@ -17,6 +17,7 @@
 
 //! This module provides the bisect function, which implements binary search.
 
+pub mod array_utils;
 pub mod expr;
 pub mod memory;
 pub mod proxy;

@@ -21,10 +21,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::make_array::make_array_inner;
-use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
+use crate::utils::{check_datatypes, make_scalar_function};
 use arrow::array::{
-    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
-    NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
@@ -352,107 +351,15 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 }
 
-fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.is_empty() {
-        return exec_err!("array_concat expects at least one argument");
-    }
-
-    let mut all_null = true;
-    let mut large_list = false;
-    for arg in args {
-        match arg.data_type() {
-            DataType::Null => continue,
-            DataType::LargeList(_) => large_list = true,
-            _ => (),
-        }
-        if arg.null_count() < arg.len() {
-            all_null = false;
-        }
-    }
-
-    if all_null {
-        // Return a null array with the same type as the first non-null-type argument
-        let return_type = args
-            .iter()
-            .map(|arg| arg.data_type())
-            .find_or_first(|d| !d.is_null())
-            .unwrap(); // Safe because args is non-empty
-
-        Ok(arrow::array::make_array(ArrayData::new_null(
-            return_type,
-            args[0].len(),
-        )))
-    } else if large_list {
-        concat_internal::<i64>(args)
-    } else {
-        concat_internal::<i32>(args)
-    }
-}
-
-fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let args = align_array_dimensions::<O>(args.to_vec())?;
-
-    let list_arrays = args
-        .iter()
-        .map(|arg| as_generic_list_array::<O>(arg))
-        .collect::<Result<Vec<_>>>()?;
-    // Assume number of rows is the same for all arrays
-    let row_count = list_arrays[0].len();
-
-    let mut array_lengths = vec![];
-    let mut arrays = vec![];
-    let mut valid = NullBufferBuilder::new(row_count);
-    for i in 0..row_count {
-        let nulls = list_arrays
-            .iter()
-            .map(|arr| arr.is_null(i))
-            .collect::<Vec<_>>();
-
-        // If all the arrays are null, the concatenated array is null
-        let is_null = nulls.iter().all(|&x| x);
-        if is_null {
-            array_lengths.push(0);
-            valid.append_null();
-        } else {
-            // Get all the arrays on i-th row
-            let values = list_arrays
-                .iter()
-                .map(|arr| arr.value(i))
-                .collect::<Vec<_>>();
-
-            let elements = values
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<&dyn Array>>();
-
-            // Concatenated array on i-th row
-            let concatenated_array = arrow::compute::concat(elements.as_slice())?;
-            array_lengths.push(concatenated_array.len());
-            arrays.push(concatenated_array);
-            valid.append_non_null();
-        }
-    }
-    // Assume all arrays have the same data type
-    let data_type = list_arrays[0].value_type();
-
-    let elements = arrays
-        .iter()
-        .map(|a| a.as_ref())
-        .collect::<Vec<&dyn Array>>();
-
-    let list_arr = GenericListArray::<O>::new(
-        Arc::new(Field::new_list_field(data_type, true)),
-        OffsetBuffer::from_lengths(array_lengths),
-        Arc::new(arrow::compute::concat(elements.as_slice())?),
-        valid.finish(),
-    );
-
-    Ok(Arc::new(list_arr))
+/// Array_concat/Array_cat SQL function
+pub fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    datafusion_common::utils::array_utils::concat_arrays(args)
 }
 
 // Kernel functions
 
-fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+/// Array_append SQL function
+pub fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, values] = take_function_args("array_append", args)?;
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
@@ -462,7 +369,8 @@ fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+/// Array_prepend SQL function
+pub fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values, array] = take_function_args("array_prepend", args)?;
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
@@ -492,8 +400,10 @@ where
     };
 
     let res = match list_array.value_type() {
-        DataType::List(_) => concat_internal::<O>(args)?,
-        DataType::LargeList(_) => concat_internal::<O>(args)?,
+        DataType::List(_) => datafusion_common::utils::array_utils::concat_arrays(args)?,
+        DataType::LargeList(_) => {
+            datafusion_common::utils::array_utils::concat_arrays(args)?
+        }
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,

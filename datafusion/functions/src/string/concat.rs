@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::array::{as_largestring_array, Array};
-use arrow::compute;
 use arrow::datatypes::DataType;
 use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
@@ -96,33 +95,27 @@ impl ConcatFunc {
         Utf8
     }
 
-    /// Concatenate array arguments using full array concatenation logic
+    /// Concatenate array arguments
     fn concat_arrays(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        use arrow::array::*;
-
         if args.is_empty() {
             return plan_err!("concat requires at least one argument");
         }
 
         // Convert ColumnarValue arguments to ArrayRef
-        let array_refs: Result<Vec<Arc<dyn Array>>> = args
+        let arrays: Result<Vec<Arc<dyn Array>>> = args
             .iter()
             .map(|arg| match arg {
                 ColumnarValue::Array(arr) => Ok(Arc::clone(arr)),
                 ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(1),
             })
             .collect();
+        let arrays = arrays?;
 
-        let arrays = array_refs?;
-
-        // Check if all arrays are null
+        // Check if all arrays are null - concat errors in this case
         let mut all_null = true;
-        let mut large_list = false;
         for arg in &arrays {
-            match arg.data_type() {
-                DataType::Null => continue,
-                DataType::LargeList(_) => large_list = true,
-                _ => (),
+            if arg.data_type() == &DataType::Null {
+                continue;
             }
             if arg.null_count() < arg.len() {
                 all_null = false;
@@ -130,102 +123,12 @@ impl ConcatFunc {
         }
 
         if all_null {
-            // For concat function, if all arrays are null (even if they have types),
-            // we return an error since there are no valid arrays to concatenate
             return plan_err!("No valid arrays to concatenate");
         }
 
-        // Full implementation supporting multi-row arrays
-        if large_list {
-            self.concat_arrays_internal::<i64>(&arrays)
-        } else {
-            self.concat_arrays_internal::<i32>(&arrays)
-        }
-    }
-
-    /// Internal array concatenation implementation supporting different offset types
-    fn concat_arrays_internal<O: arrow::array::OffsetSizeTrait>(
-        &self,
-        arrays: &[Arc<dyn Array>],
-    ) -> Result<ColumnarValue>
-    where
-        i64: TryInto<O>,
-    {
-        use arrow::array::*;
-        use arrow::buffer::OffsetBuffer;
-        use arrow::datatypes::Field;
-        use datafusion_common::cast::as_generic_list_array;
-
-        let list_arrays: Result<Vec<_>> = arrays
-            .iter()
-            .map(|arg| as_generic_list_array::<O>(arg))
-            .collect();
-        let list_arrays = list_arrays?;
-
-        // Assume number of rows is the same for all arrays
-        let row_count = list_arrays[0].len();
-
-        let mut array_lengths = vec![];
-        let mut result_arrays = vec![];
-        let mut valid = NullBufferBuilder::new(row_count);
-
-        for i in 0..row_count {
-            let nulls: Vec<bool> = list_arrays.iter().map(|arr| arr.is_null(i)).collect();
-
-            // If all the arrays are null, the concatenated array is null
-            let is_null = nulls.iter().all(|&x| x);
-            if is_null {
-                array_lengths.push(0);
-                valid.append_null();
-            } else {
-                // Get all the arrays on i-th row
-                let values: Vec<_> = list_arrays
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, arr)| {
-                        if !nulls[idx] {
-                            Some(arr.value(i))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                if values.is_empty() {
-                    array_lengths.push(0);
-                    valid.append_null();
-                } else {
-                    let elements: Vec<&dyn Array> =
-                        values.iter().map(|a| a.as_ref()).collect();
-
-                    // Concatenated array on i-th row
-                    let concatenated_array = compute::concat(&elements)?;
-                    array_lengths.push(concatenated_array.len());
-                    result_arrays.push(concatenated_array);
-                    valid.append_non_null();
-                }
-            }
-        }
-
-        // Assume all arrays have the same data type
-        let data_type = list_arrays[0].value_type();
-
-        let values = if result_arrays.is_empty() {
-            new_empty_array(&data_type)
-        } else {
-            let elements: Vec<&dyn Array> =
-                result_arrays.iter().map(|a| a.as_ref()).collect();
-            compute::concat(&elements)?
-        };
-
-        let list_arr = GenericListArray::<O>::new(
-            Arc::new(Field::new_list_field(data_type, true)),
-            OffsetBuffer::from_lengths(array_lengths),
-            values,
-            valid.finish(),
-        );
-
-        Ok(ColumnarValue::Array(Arc::new(list_arr)))
+        // Delegate to shared array concatenation
+        let result = datafusion_common::utils::array_utils::concat_arrays(&arrays)?;
+        Ok(ColumnarValue::Array(result))
     }
 }
 
