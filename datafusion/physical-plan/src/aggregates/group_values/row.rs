@@ -236,7 +236,7 @@ impl GroupValues for GroupValuesRows {
                 if self.drain_mode {
                     let start = self.emission_offset;
                     let end = std::cmp::min(start + n, group_values.num_rows());
-                    let iter = group_values.iter().skip(start).take(end - start);
+                    let iter = (start..end).map(|i| group_values.row(i));
                     let output = self.row_converter.convert_rows(iter)?;
                     self.emission_offset = end;
                     if self.emission_offset == group_values.num_rows() {
