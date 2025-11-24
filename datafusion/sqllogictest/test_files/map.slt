@@ -175,6 +175,11 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, 30]);
 {POST: 41, HEAD: 33, PATCH: 30}
 
 query ?
+SELECT MAP('type', 'test');
+----
+{type: test}
+
+query ?
 SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
 ----
 {POST: 41, HEAD: 33, PATCH: NULL}
