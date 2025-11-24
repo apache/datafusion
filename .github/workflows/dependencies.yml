@@ -42,7 +42,7 @@ jobs:
     name: circular dependency check
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust:1.88
+      image: amd64/rust
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
@@ -60,7 +60,7 @@ jobs:
   detect-unused-dependencies:
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust:1.88
+      image: amd64/rust
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Install cargo-machete
