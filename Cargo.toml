@@ -187,7 +187,6 @@ testcontainers = { version = "0.25.2", features = ["default"] }
 testcontainers-modules = { version = "0.13" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
-xz2 = { version = "0.1", features = ["static"] }
 zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]
