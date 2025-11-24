@@ -122,7 +122,7 @@ pub trait PhysicalOptimizerRule: Debug {
     /// `optimize` nor `optimize_plan` was properly implemented. At least one
     /// of these methods must be overridden.
     #[deprecated(
-        since = "53.0.0",
+        since = "52.0.0",
         note = "use `PhysicalOptimizerRule::optimize_plan` instead"
     )]
     fn optimize(
