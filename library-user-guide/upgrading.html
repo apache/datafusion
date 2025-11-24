@@ -522,6 +522,41 @@ unless they explicitly declare support by overriding the method.</p>
 <h3>API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait<a class="headerlink" href="#api-change-for-cacheaccessor-trait" title="Link to this heading">#</a></h3>
 <p>The remove API no longer requires a mutable instance</p>
 </section>
+<section id="ffi-crate-updates">
+<h3>FFI crate updates<a class="headerlink" href="#ffi-crate-updates" title="Link to this heading">#</a></h3>
+<p>Many of the structs in the <code class="docutils literal notranslate"><span class="pre">datafusion-ffi</span></code> crate have been updated to allow easier
+conversion to the underlying trait types they represent. This simplifies some code
+paths, but also provides an additional improvement in cases where library code goes
+through a round trip via the foreign function interface.</p>
+<p>To update your code, suppose you have a <code class="docutils literal notranslate"><span class="pre">FFI_SchemaProvider</span></code> called <code class="docutils literal notranslate"><span class="pre">ffi_provider</span></code>
+and you wish to use this as a <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code>. In the old approach you would do
+something like:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_provider</span><span class="p">:</span><span class="w"> </span><span class="nc">ForeignSchemaProvider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_provider</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">foreign_provider</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">SchemaProvider</span><span class="o">&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>This code should now be written as:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_provider</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">SchemaProvider</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_provider</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_provider</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">foreign_provider</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">SchemaProvider</span><span class="o">&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>For the case of user defined functions, the updates are similar but you
+may need to change the way you call the creation of the <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code>.
+Aggregate and window functions follow the same pattern.</p>
+<p>Previously you may write:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">:</span><span class="w"> </span><span class="nc">ForeignScalarUDF</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_udf</span><span class="p">.</span><span class="n">try_into</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">:</span><span class="w"> </span><span class="nc">ScalarUDF</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>Instead this should now be:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ScalarUDFImpl</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_udf</span><span class="p">.</span><span class="n">try_into</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ScalarUDF</span><span class="p">::</span><span class="n">new_from_shared_impl</span><span class="p">(</span><span class="n">foreign_udf</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Additionally, the FFI structure for Scalar UDF’s no longer contains a
+<code class="docutils literal notranslate"><span class="pre">return_type</span></code> call. This code was not used since the <code class="docutils literal notranslate"><span class="pre">ForeignScalarUDF</span></code>
+struct implements the <code class="docutils literal notranslate"><span class="pre">return_field_from_args</span></code> instead.</p>
+</section>
 </section>
 <section id="datafusion-51-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code><a class="headerlink" href="#datafusion-51-0-0" title="Link to this heading">#</a></h2>
@@ -1765,6 +1800,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax">Planner now requires explicit opt-in for WITHIN GROUP syntax</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-cacheaccessor-trait">API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ffi-crate-updates">FFI crate updates</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-51-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code></a><ul class="nav section-nav flex-column">
