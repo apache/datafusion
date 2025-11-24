@@ -231,6 +231,7 @@ impl From<FFI_PartitionEvaluator> for Box<dyn PartitionEvaluator> {
                 let private_data = Box::from_raw(
                     evaluator.private_data as *mut PartitionEvaluatorPrivateData,
                 );
+                // We must set this to null to avoid a double free
                 evaluator.private_data = std::ptr::null_mut();
                 private_data.evaluator
             }

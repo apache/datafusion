@@ -272,6 +272,7 @@ impl From<FFI_GroupsAccumulator> for Box<dyn GroupsAccumulator> {
                 let private_data = Box::from_raw(
                     accumulator.private_data as *mut GroupsAccumulatorPrivateData,
                 );
+                // We must set this to null to avoid a double free
                 accumulator.private_data = null_mut();
                 private_data.accumulator
             }
