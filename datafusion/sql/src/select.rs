@@ -1042,6 +1042,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<SortExpr>>>()?;
 
+        let all_valid_exprs: Vec<Expr> = column_exprs_post_aggr
+            .iter()
+            .cloned()
+            .chain(select_exprs_post_aggr.iter().filter_map(|e| {
+                if let Expr::Alias(alias) = e {
+                    Some(Expr::Column(alias.name.clone().into()))
+                } else {
+                    None
+                }
+            }))
+            .collect();
+
+        let order_by_exprs_only: Vec<Expr> =
+            order_by_post_aggr.iter().map(|s| s.expr.clone()).collect();
+        check_columns_satisfy_exprs(
+            &all_valid_exprs,
+            &order_by_exprs_only,
+            CheckColumnsSatisfyExprsPurpose::Aggregate(
+                CheckColumnsMustReferenceAggregatePurpose::OrderBy,
+            ),
+        )?;
+
         Ok((
             plan,
             select_exprs_post_aggr,
