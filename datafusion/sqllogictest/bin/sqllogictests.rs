@@ -21,8 +21,9 @@ use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
 use datafusion_sqllogictest::{
     df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
-    should_skip_record, value_normalizer, CurrentlyExecutingSqlTracker, DataFusion,
-    DataFusionSubstraitRoundTrip, Filter, TestContext,
+    should_skip_record, take_last_validation_failure, value_normalizer,
+    CurrentlyExecutingSqlTracker, DataFusion, DataFusionSubstraitRoundTrip, Filter,
+    TestContext, ValidationFailure,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -33,7 +34,7 @@ use log::Level::Info;
 use log::{info, log_enabled};
 use sqllogictest::{
     parse_file, strict_column_validator, AsyncDB, Condition, MakeConnection, Normalizer,
-    Record, Validator,
+    Record, TestErrorKind, Validator,
 };
 
 #[cfg(feature = "postgres")]
@@ -43,6 +44,7 @@ use crate::postgres_container::{
 use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
 use std::ffi::OsStr;
+use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -384,6 +386,31 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
             continue;
         }
         if let Err(err) = runner.run_async(record).await {
+            if let TestErrorKind::QueryResultMismatch { sql, .. } = err.kind() {
+                if let Some(failure) = take_last_validation_failure() {
+                    let ValidationFailure {
+                        expected_snapshot,
+                        actual_snapshot,
+                        note,
+                    } = failure;
+                    let mut rendered = String::new();
+                    let _ = writeln!(
+                        &mut rendered,
+                        "query result mismatch (DataFusion validator):"
+                    );
+                    let _ = writeln!(&mut rendered, "[SQL] {sql}");
+                    if let Some(note) = note {
+                        let _ = writeln!(&mut rendered, "[Reason] {note}");
+                    }
+                    let _ = writeln!(&mut rendered, "[Expected]");
+                    let _ = writeln!(&mut rendered, "{}", expected_snapshot);
+                    let _ = writeln!(&mut rendered, "[Actual]");
+                    let _ = writeln!(&mut rendered, "{}", actual_snapshot);
+                    let _ = writeln!(&mut rendered, "at {}", err.location());
+                    errs.push(rendered);
+                    continue;
+                }
+            }
             errs.push(format!("{err}"));
         }
     }
