@@ -33,11 +33,10 @@ use arrow::datatypes::{
     ArrowDictionaryKeyType, BinaryViewType, DataType, GenericBinaryType,
     GenericStringType, StringViewType,
 };
-use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
+use datafusion_common::{assert_eq_or_internal_err, DataFusionError};
 use indexmap::IndexMap;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 /// Optimization for CASE expressions with literal WHEN and THEN clauses
 ///
@@ -204,23 +203,23 @@ impl LiteralLookupTable {
         })
     }
 
+    pub(in super::super) fn when_data_type(&self) -> &DataType {
+        &self.when_data_type
+    }
+
     pub(in super::super) fn map_keys_to_values(
         &self,
         keys_array: &ArrayRef,
     ) -> datafusion_common::Result<ArrayRef> {
-        // In case the <expr> data type is different than the WHEN literals data type
-        // we need to cast it to the WHEN literals data type
-        // TODO - avoid casting if possible
-        let keys_array_fixed_data_type = if keys_array.data_type() != &self.when_data_type
-        {
-            arrow::compute::cast(keys_array, &self.when_data_type)?
-        } else {
-            Arc::clone(keys_array)
-        };
+        assert_eq_or_internal_err!(
+            keys_array.data_type(),
+            &self.when_data_type,
+            "Keys array data type does not match WHEN literals data type"
+        );
 
         let take_indices = self
             .lookup
-            .map_to_when_indices(&keys_array_fixed_data_type, self.else_index)?;
+            .map_to_when_indices(keys_array, self.else_index)?;
 
         // Zero-copy conversion
         let take_indices = UInt32Array::from(take_indices);
