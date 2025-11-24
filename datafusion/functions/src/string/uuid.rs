@@ -24,7 +24,7 @@ use arrow::datatypes::DataType::Utf8;
 use rand::Rng;
 use uuid::Uuid;
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -81,9 +81,11 @@ impl ScalarUDFImpl for UuidFunc {
     /// Prints random (v4) uuid values per row
     /// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if !args.args.is_empty() {
-            return internal_err!("{} function does not accept arguments", self.name());
-        }
+        assert_or_internal_err!(
+            args.args.is_empty(),
+            "{} function does not accept arguments",
+            self.name()
+        );
 
         // Generate random u128 values
         let mut rng = rand::rng();

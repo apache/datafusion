@@ -89,6 +89,7 @@ macro_rules! digest_to_scalar {
         ScalarValue::Binary($INPUT.as_ref().map(|v| {
             let mut digest = $METHOD::default();
             digest.update(v);
+            #[allow(deprecated)]
             digest.finalize().as_slice().to_vec()
         }))
     }};
@@ -258,11 +259,11 @@ impl DigestAlgorithm {
         let array = match value.data_type() {
             DataType::Binary | DataType::LargeBinary => {
                 let v = value.as_binary::<T>();
-                self.digest_binary_array_impl::<&GenericBinaryArray<T>>(v)
+                self.digest_binary_array_impl::<&GenericBinaryArray<T>>(&v)
             }
             DataType::BinaryView => {
                 let v = value.as_binary_view();
-                self.digest_binary_array_impl::<&BinaryViewArray>(v)
+                self.digest_binary_array_impl::<&BinaryViewArray>(&v)
             }
             other => {
                 return exec_err!("unsupported type for digest_utf_array: {other:?}")
@@ -279,11 +280,11 @@ impl DigestAlgorithm {
         let array = match value.data_type() {
             DataType::Utf8 | DataType::LargeUtf8 => {
                 let v = value.as_string::<T>();
-                self.digest_utf8_array_impl::<&GenericStringArray<T>>(v)
+                self.digest_utf8_array_impl::<&GenericStringArray<T>>(&v)
             }
             DataType::Utf8View => {
                 let v = value.as_string_view();
-                self.digest_utf8_array_impl::<&StringViewArray>(v)
+                self.digest_utf8_array_impl::<&StringViewArray>(&v)
             }
             other => {
                 return exec_err!("unsupported type for digest_utf_array: {other:?}")
@@ -294,7 +295,7 @@ impl DigestAlgorithm {
 
     pub fn digest_utf8_array_impl<'a, StringArrType>(
         self,
-        input_value: StringArrType,
+        input_value: &StringArrType,
     ) -> ArrayRef
     where
         StringArrType: StringArrayType<'a>,
@@ -325,7 +326,7 @@ impl DigestAlgorithm {
 
     pub fn digest_binary_array_impl<'a, BinaryArrType>(
         self,
-        input_value: BinaryArrType,
+        input_value: &BinaryArrType,
     ) -> ArrayRef
     where
         BinaryArrType: BinaryArrayType<'a>,

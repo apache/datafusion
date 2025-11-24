@@ -38,7 +38,9 @@ The `current_time()` return value is determined at query time and will return th
 
 The session time zone can be set using the statement 'SET datafusion.execution.time_zone = desired time zone'. The time zone can be a value like +00:00, 'Europe/London' etc.
 "#,
-    syntax_example = "current_time()"
+    syntax_example = r#"current_time()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_time();"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentTimeFunc {
@@ -102,7 +104,14 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         let nano = info
             .execution_props()
             .config_options()
-            .and_then(|config| config.execution.time_zone.parse::<Tz>().ok())
+            .and_then(|config| {
+                config
+                    .execution
+                    .time_zone
+                    .as_ref()
+                    .map(|tz| tz.parse::<Tz>().ok())
+            })
+            .flatten()
             .map_or_else(
                 || datetime_to_time_nanos(&now_ts),
                 |tz| {
@@ -165,7 +174,11 @@ mod tests {
 
     fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> MockSimplifyInfo {
         let mut config = datafusion_common::config::ConfigOptions::default();
-        config.execution.time_zone = tz.to_string();
+        config.execution.time_zone = if tz.is_empty() {
+            None
+        } else {
+            Some(tz.to_string())
+        };
         let mut execution_props =
             ExecutionProps::new().with_query_execution_start_time(start_time);
         execution_props.config_options = Some(Arc::new(config));

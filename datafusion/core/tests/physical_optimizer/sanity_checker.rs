@@ -421,7 +421,7 @@ async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     assert_snapshot!(
         actual,
         @r#"
-    BoundedWindowAggExec: wdw=[count: Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
       SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]
         DataSourceExec: partitions=1, partition_sizes=[0]
     "#
@@ -449,7 +449,7 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
     assert_snapshot!(
         actual,
         @r#"
-    BoundedWindowAggExec: wdw=[count: Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
       DataSourceExec: partitions=1, partition_sizes=[0]
     "#
     );
@@ -556,10 +556,10 @@ async fn test_sort_merge_join_satisfied() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
-      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
     "
@@ -606,7 +606,7 @@ async fn test_sort_merge_join_order_missing() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
@@ -654,10 +654,10 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
     "

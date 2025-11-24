@@ -137,7 +137,13 @@ impl WindowShift {
                     TypeSignature::Any(3),
                 ],
                 Volatility::Immutable,
-            ),
+            )
+            .with_parameter_names(vec![
+                "expr".to_string(),
+                "offset".to_string(),
+                "default".to_string(),
+            ])
+            .expect("valid parameter names for lead/lag"),
             kind,
         }
     }
@@ -258,7 +264,7 @@ impl WindowUDFImpl for WindowShift {
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let shift_offset =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
-                .map(get_signed_integer)
+                .map(|v| get_signed_integer(&v))
                 .map_or(Ok(None), |v| v.map(Some))
                 .map(|n| self.kind.shift_offset(n))
                 .map(|offset| {

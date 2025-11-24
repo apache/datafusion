@@ -19,17 +19,160 @@
 
 # Upgrade Guides
 
+## DataFusion `52.0.0`
+
+**Note:** DataFusion `52.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+You can see the current [status of the `52.0.0`release here](https://github.com/apache/datafusion/issues/18566)
+
+### Removal of `pyarrow` feature
+
+The `pyarrow` feature flag has been removed. This feature has been migrated to
+the `datafusion-python` repository since version `44.0.0`.
+
+### Statistics handling moved from `FileSource` to `FileScanConfig`
+
+Statistics are now managed directly by `FileScanConfig` instead of being delegated to `FileSource` implementations. This simplifies the `FileSource` trait and provides more consistent statistics handling across all file formats.
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations
+
+**Breaking changes:**
+
+Two methods have been removed from the `FileSource` trait:
+
+- `with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>`
+- `statistics(&self) -> Result<Statistics>`
+
+**Migration guide:**
+
+If you have a custom `FileSource` implementation, you need to:
+
+1. Remove the `with_statistics` method implementation
+2. Remove the `statistics` method implementation
+3. Remove any internal state that was storing statistics
+
+**Before:**
+
+```rust,ignore
+#[derive(Clone)]
+struct MyCustomSource {
+    table_schema: TableSchema,
+    projected_statistics: Option<Statistics>,
+    // other fields...
+}
+
+impl FileSource for MyCustomSource {
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            table_schema: self.table_schema.clone(),
+            projected_statistics: Some(statistics),
+            // other fields...
+        })
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone().unwrap_or_else(||
+            Statistics::new_unknown(self.table_schema.file_schema())
+        ))
+    }
+
+    // other methods...
+}
+```
+
+**After:**
+
+```rust,ignore
+#[derive(Clone)]
+struct MyCustomSource {
+    table_schema: TableSchema,
+    // projected_statistics field removed
+    // other fields...
+}
+
+impl FileSource for MyCustomSource {
+    // with_statistics method removed
+    // statistics method removed
+
+    // other methods...
+}
+```
+
+**Accessing statistics:**
+
+Statistics are now accessed through `FileScanConfig` instead of `FileSource`:
+
+```diff
+- let stats = config.file_source.statistics()?;
++ let stats = config.statistics();
+```
+
+Note that `FileScanConfig::statistics()` automatically marks statistics as inexact when filters are present, ensuring correctness when filters are pushed down.
+
+### Planner now requires explicit opt-in for WITHIN GROUP syntax
+
+The SQL planner now enforces the aggregate UDF contract more strictly: the
+`WITHIN GROUP (ORDER BY ...)` syntax is accepted only if the aggregate UDAF
+explicitly advertises support by returning `true` from
+`AggregateUDFImpl::supports_within_group_clause()`.
+
+Previously the planner forwarded a `WITHIN GROUP` clause to order-sensitive
+aggregates even when they did not implement ordered-set semantics, which could
+cause queries such as `SUM(x) WITHIN GROUP (ORDER BY x)` to plan successfully.
+This behavior was too permissive and has been changed to match PostgreSQL and
+the documented semantics.
+
+Migration: If your UDAF intentionally implements ordered-set semantics and
+wants to accept the `WITHIN GROUP` SQL syntax, update your implementation to
+return `true` from `supports_within_group_clause()` and handle the ordering
+semantics in your accumulator implementation. If your UDAF is merely
+order-sensitive (but not an ordered-set aggregate), do not advertise
+`supports_within_group_clause()` and clients should use alternative function
+signatures (for example, explicit ordering as a function argument) instead.
+
+### `AggregateUDFImpl::supports_null_handling_clause` now defaults to `false`
+
+This method specifies whether an aggregate function allows `IGNORE NULLS`/`RESPECT NULLS`
+during SQL parsing, with the implication it respects these configs during computation.
+
+Most DataFusion aggregate functions silently ignored this syntax in prior versions
+as they did not make use of it and it was permitted by default. We change this so
+only the few functions which do respect this clause (e.g. `array_agg`, `first_value`,
+`last_value`) need to implement it.
+
+Custom user defined aggregate functions will also error if this syntax is used,
+unless they explicitly declare support by overriding the method.
+
+For example, SQL parsing will now fail for queries such as this:
+
+```sql
+SELECT median(c1) IGNORE NULLS FROM table
+```
+
+Instead of silently succeeding.
+
+### API change for `CacheAccessor` trait
+
+The remove API no longer requires a mutable instance
+
 ## DataFusion `51.0.0`
 
-**Note:** DataFusion `51.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+### `arrow` / `parquet` updated to 57.0.0
 
-You can see the current [status of the `51.0.0`release here](https://github.com/apache/datafusion/issues/17558)
+### Upgrade to arrow `57.0.0` and parquet `57.0.0`
 
-### `MSRV` updated to 1.87.0
+This version of DataFusion upgrades the underlying Apache Arrow implementation
+to version `57.0.0`, including several dependent crates such as `prost`,
+`tonic`, `pyo3`, and `substrait`. . See the [release
+notes](https://github.com/apache/arrow-rs/releases/tag/57.0.0) for more details.
 
-The Minimum Supported Rust Version (MSRV) has been updated to [`1.87.0`].
+### `MSRV` updated to 1.88.0
 
-[`1.87.0`]: https://releases.rs/docs/1.87.0/
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.88.0`].
+
+[`1.88.0`]: https://releases.rs/docs/1.88.0/
 
 ### `FunctionRegistry` exposes two additional methods
 
@@ -115,6 +258,241 @@ This follows the pattern for the AVRO, CSV, JSON, and Parquet data sources.
 Users may need to update their paths to account for these changes.
 
 See [issue #17713] for more details.
+
+### `FileScanConfig::projection` renamed to `FileScanConfig::projection_exprs`
+
+The `projection` field in `FileScanConfig` has been renamed to `projection_exprs` and its type has changed from `Option<Vec<usize>>` to `Option<ProjectionExprs>`. This change enables more powerful projection pushdown capabilities by supporting arbitrary physical expressions rather than just column indices.
+
+**Impact on direct field access:**
+
+If you directly access the `projection` field:
+
+```rust,ignore
+let config: FileScanConfig = ...;
+let projection = config.projection;
+```
+
+You should update to:
+
+```rust,ignore
+let config: FileScanConfig = ...;
+let projection_exprs = config.projection_exprs;
+```
+
+**Impact on builders:**
+
+The `FileScanConfigBuilder::with_projection()` method has been deprecated in favor of `with_projection_indices()`:
+
+```diff
+let config = FileScanConfigBuilder::new(url, file_source)
+-   .with_projection(Some(vec![0, 2, 3]))
++   .with_projection_indices(Some(vec![0, 2, 3]))
+    .build();
+```
+
+Note: `with_projection()` still works but is deprecated and will be removed in a future release.
+
+**What is `ProjectionExprs`?**
+
+`ProjectionExprs` is a new type that represents a list of physical expressions for projection. While it can be constructed from column indices (which is what `with_projection_indices` does internally), it also supports arbitrary physical expressions, enabling advanced features like expression evaluation during scanning.
+
+You can access column indices from `ProjectionExprs` using its methods if needed:
+
+```rust,ignore
+let projection_exprs: ProjectionExprs = ...;
+// Get the column indices if the projection only contains simple column references
+let indices = projection_exprs.column_indices();
+```
+
+### `DESCRIBE query` support
+
+`DESCRIBE query` was previously an alias for `EXPLAIN query`, which outputs the
+_execution plan_ of the query. With this release, `DESCRIBE query` now outputs
+the computed _schema_ of the query, consistent with the behavior of `DESCRIBE table_name`.
+
+### `datafusion.execution.time_zone` default configuration changed
+
+The default value for `datafusion.execution.time_zone` previously was a string value of `+00:00` (GMT/Zulu time).
+This was changed to be an `Option<String>` with a default of `None`. If you want to change the timezone back
+to the previous value you can execute the sql:
+
+```sql
+SET
+TIMEZONE = '+00:00';
+```
+
+This change was made to better support using the default timezone in scalar UDF functions such as
+`now`, `current_date`, `current_time`, and `to_timestamp` among others.
+
+### Refactoring of `FileSource` constructors and `FileScanConfigBuilder` to accept schemas upfront
+
+The way schemas are passed to file sources and scan configurations has been significantly refactored. File sources now require the schema (including partition columns) to be provided at construction time, and `FileScanConfigBuilder` no longer takes a separate schema parameter.
+
+**Who is affected:**
+
+- Users who create `FileScanConfig` or file sources (`ParquetSource`, `CsvSource`, `JsonSource`, `AvroSource`) directly
+- Users who implement custom `FileFormat` implementations
+
+**Key changes:**
+
+1. **FileSource constructors now require TableSchema**: All built-in file sources now take the schema in their constructor:
+
+   ```diff
+   - let source = ParquetSource::default();
+   + let source = ParquetSource::new(table_schema);
+   ```
+
+2. **FileScanConfigBuilder no longer takes schema as a parameter**: The schema is now passed via the FileSource:
+
+   ```diff
+   - FileScanConfigBuilder::new(url, schema, source)
+   + FileScanConfigBuilder::new(url, source)
+   ```
+
+3. **Partition columns are now part of TableSchema**: The `with_table_partition_cols()` method has been removed from `FileScanConfigBuilder`. Partition columns are now passed as part of the `TableSchema` to the FileSource constructor:
+
+   ```diff
+   + let table_schema = TableSchema::new(
+   +     file_schema,
+   +     vec![Arc::new(Field::new("date", DataType::Utf8, false))],
+   + );
+   + let source = ParquetSource::new(table_schema);
+     let config = FileScanConfigBuilder::new(url, source)
+   -     .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
+         .with_file(partitioned_file)
+         .build();
+   ```
+
+4. **FileFormat::file_source() now takes TableSchema parameter**: Custom `FileFormat` implementations must be updated:
+   ```diff
+   impl FileFormat for MyFileFormat {
+   -   fn file_source(&self) -> Arc<dyn FileSource> {
+   +   fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+   -       Arc::new(MyFileSource::default())
+   +       Arc::new(MyFileSource::new(table_schema))
+       }
+   }
+   ```
+
+**Migration examples:**
+
+For Parquet files:
+
+```diff
+- let source = Arc::new(ParquetSource::default());
+- let config = FileScanConfigBuilder::new(url, schema, source)
++ let table_schema = TableSchema::new(schema, vec![]);
++ let source = Arc::new(ParquetSource::new(table_schema));
++ let config = FileScanConfigBuilder::new(url, source)
+      .with_file(partitioned_file)
+      .build();
+```
+
+For CSV files with partition columns:
+
+```diff
+- let source = Arc::new(CsvSource::new(true, b',', b'"'));
+- let config = FileScanConfigBuilder::new(url, file_schema, source)
+-     .with_table_partition_cols(vec![Field::new("year", DataType::Int32, false)])
++ let options = CsvOptions {
++     has_header: Some(true),
++     delimiter: b',',
++     quote: b'"',
++     ..Default::default()
++ };
++ let table_schema = TableSchema::new(
++     file_schema,
++     vec![Arc::new(Field::new("year", DataType::Int32, false))],
++ );
++ let source = Arc::new(CsvSource::new(table_schema).with_csv_options(options));
++ let config = FileScanConfigBuilder::new(url, source)
+      .build();
+```
+
+### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
+
+A new `TableSchema` struct has been introduced in the `datafusion-datasource` crate to better manage table schemas with partition columns. This struct helps distinguish between:
+
+- **File schema**: The schema of actual data files on disk
+- **Partition columns**: Columns derived from directory structure (e.g., Hive-style partitioning)
+- **Table schema**: The complete schema combining both file and partition columns
+
+As part of this change, the `FileSource::with_schema()` method signature has changed from accepting a `SchemaRef` to accepting a `TableSchema`.
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations will need to update their code
+- Users who only use built-in file sources (Parquet, CSV, JSON, AVRO, Arrow) are not affected
+
+**Migration guide for custom `FileSource` implementations:**
+
+```diff
+ use datafusion_datasource::file::FileSource;
+-use arrow::datatypes::SchemaRef;
++use datafusion_datasource::TableSchema;
+
+ impl FileSource for MyCustomSource {
+-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
++    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+         Arc::new(Self {
+-            schema: Some(schema),
++            // Use schema.file_schema() to get the file schema without partition columns
++            schema: Some(Arc::clone(schema.file_schema())),
+             ..self.clone()
+         })
+     }
+ }
+```
+
+For implementations that need access to partition columns:
+
+```rust,ignore
+fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
+    Arc::new(Self {
+        file_schema: Arc::clone(schema.file_schema()),
+        partition_cols: schema.table_partition_cols().clone(),
+        table_schema: Arc::clone(schema.table_schema()),
+        ..self.clone()
+    })
+}
+```
+
+**Note**: Most `FileSource` implementations only need to store the file schema (without partition columns), as shown in the first example. The second pattern of storing all three schema components is typically only needed for advanced use cases where you need access to different schema representations for different operations (e.g., ParquetSource uses the file schema for building pruning predicates but needs the table schema for filter pushdown logic).
+
+**Using `TableSchema` directly:**
+
+If you're constructing a `FileScanConfig` or working with table schemas and partition columns, you can now use `TableSchema`:
+
+```rust
+use datafusion_datasource::TableSchema;
+use arrow::datatypes::{Schema, Field, DataType};
+use std::sync::Arc;
+
+// Create a TableSchema with partition columns
+let file_schema = Arc::new(Schema::new(vec![
+    Field::new("user_id", DataType::Int64, false),
+    Field::new("amount", DataType::Float64, false),
+]));
+
+let partition_cols = vec![
+    Arc::new(Field::new("date", DataType::Utf8, false)),
+    Arc::new(Field::new("region", DataType::Utf8, false)),
+];
+
+let table_schema = TableSchema::new(file_schema, partition_cols);
+
+// Access different schema representations
+let file_schema_ref = table_schema.file_schema();      // Schema without partition columns
+let full_schema = table_schema.table_schema();          // Complete schema with partition columns
+let partition_cols_ref = table_schema.table_partition_cols(); // Just the partition columns
+```
+
+### `AggregateUDFImpl::is_ordered_set_aggregate` has been renamed to `AggregateUDFImpl::supports_within_group_clause`
+
+This method has been renamed to better reflect the actual impact it has for aggregate UDF implementations.
+The accompanying `AggregateUDF::is_ordered_set_aggregate` has also been renamed to `AggregateUDF::supports_within_group_clause`.
+No functionality has been changed with regards to this method; it still refers only to permitting use of `WITHIN GROUP`
+SQL syntax for the aggregate function.
 
 ## DataFusion `50.0.0`
 
@@ -978,7 +1356,7 @@ Pattern in DataFusion `47.0.0`:
 
 ```rust
 # /* comment to avoid running
-let config = FileScanConfigBuilder::new(url, schema, Arc::new(file_source))
+let config = FileScanConfigBuilder::new(url, Arc::new(file_source))
   .with_statistics(stats)
   ...
   .build();

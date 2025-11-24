@@ -29,7 +29,7 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::execution::options::ArrowReadOptions;
-use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
+use datafusion::optimizer::optimize_unions::OptimizeUnions;
 use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
@@ -1072,6 +1072,35 @@ async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let plan = ctx
+        .sql("SELECT $1")
+        .await
+        .unwrap()
+        .into_optimized_plan()
+        .unwrap();
+    let prepared = LogicalPlanBuilder::new(plan)
+        .prepare(
+            "".to_string(),
+            vec![Field::new("", DataType::Int32, true)
+                .with_metadata(
+                    [("some_key".to_string(), "some_value".to_string())].into(),
+                )
+                .into()],
+        )
+        .unwrap()
+        .plan()
+        .clone();
+
+    let bytes = logical_plan_to_bytes(&prepared)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{prepared}"), format!("{logical_round_trip}"));
     Ok(())
 }
 
@@ -2715,7 +2744,7 @@ async fn roundtrip_union_query() -> Result<()> {
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     // proto deserialization only supports 2-way union, hence this plan has nested unions
     // apply the flatten unions optimizer rule to be able to compare
-    let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
+    let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeUnions::new())]);
     let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;
     assert_eq!(
         format!("{}", plan.display_indent_schema()),
@@ -2802,5 +2831,51 @@ async fn roundtrip_arrow_scan() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_mixed_case_table_reference() -> Result<()> {
+    // Prepare "client" database
+    let client_ctx = SessionContext::new_with_config(
+        SessionConfig::new()
+            .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
+    );
+    client_ctx
+        .register_csv(
+            "\"TestData\"",
+            "tests/testdata/test.csv",
+            CsvReadOptions::default(),
+        )
+        .await?;
+
+    // Prepare "server" database
+    let server_ctx = SessionContext::new_with_config(
+        SessionConfig::new()
+            .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
+    );
+    server_ctx
+        .register_csv(
+            "\"TestData\"",
+            "tests/testdata/test.csv",
+            CsvReadOptions::default(),
+        )
+        .await?;
+
+    // Create a logical plan, serialize it (client), then deserialize it (server)
+    let dataframe = client_ctx
+        .sql("SELECT a FROM TestData WHERE TestData.a = 1")
+        .await?;
+
+    let client_logical_plan = dataframe.into_optimized_plan()?;
+    let plan_bytes = logical_plan_to_bytes(&client_logical_plan)?;
+    let server_logical_plan =
+        logical_plan_from_bytes(&plan_bytes, &server_ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", client_logical_plan.display_indent_schema()),
+        format!("{}", server_logical_plan.display_indent_schema())
+    );
+
     Ok(())
 }

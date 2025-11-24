@@ -274,6 +274,33 @@ async fn test_nvl2() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_nvl2_short_circuit() -> Result<()> {
+    let expr = nvl2(
+        col("a"),
+        arrow_cast(lit("1"), lit("Int32")),
+        arrow_cast(col("a"), lit("Int32")),
+    );
+
+    let batches = get_batches(expr).await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r#"
+    +-----------------------------------------------------------------------------------+
+    | nvl2(test.a,arrow_cast(Utf8("1"),Utf8("Int32")),arrow_cast(test.a,Utf8("Int32"))) |
+    +-----------------------------------------------------------------------------------+
+    | 1                                                                                 |
+    | 1                                                                                 |
+    | 1                                                                                 |
+    | 1                                                                                 |
+    +-----------------------------------------------------------------------------------+
+    "#
+    );
+
+    Ok(())
+}
 #[tokio::test]
 async fn test_fn_arrow_typeof() -> Result<()> {
     let expr = arrow_typeof(col("l"));
@@ -282,16 +309,16 @@ async fn test_fn_arrow_typeof() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&batches),
-        @r#"
-    +------------------------------------------------------------------------------------------------------------------+
-    | arrow_typeof(test.l)                                                                                             |
-    +------------------------------------------------------------------------------------------------------------------+
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    +------------------------------------------------------------------------------------------------------------------+
-    "#);
+        @r"
+    +----------------------+
+    | arrow_typeof(test.l) |
+    +----------------------+
+    | List(nullable Int32) |
+    | List(nullable Int32) |
+    | List(nullable Int32) |
+    | List(nullable Int32) |
+    +----------------------+
+    ");
 
     Ok(())
 }

@@ -329,9 +329,9 @@ impl AggregateUDF {
         self.inner.supports_null_handling_clause()
     }
 
-    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
-    pub fn is_ordered_set_aggregate(&self) -> bool {
-        self.inner.is_ordered_set_aggregate()
+    /// See [`AggregateUDFImpl::supports_within_group_clause`] for more details.
+    pub fn supports_within_group_clause(&self) -> bool {
+        self.inner.supports_within_group_clause()
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -740,28 +740,66 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         ScalarValue::try_from(data_type)
     }
 
-    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
-    /// If the function does not, return false
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` SQL clause,
+    /// return `true`. Otherwise, return `false` which will cause an error to be
+    /// raised during SQL parsing if these clauses are detected for this function.
+    ///
+    /// Functions which implement this as `true` are expected to handle the resulting
+    /// null handling config present in [`AccumulatorArgs`], `ignore_nulls`.
     fn supports_null_handling_clause(&self) -> bool {
-        true
+        false
     }
 
-    /// If this function is ordered-set aggregate function, return true
-    /// otherwise, return false
+    /// If this function supports the `WITHIN GROUP (ORDER BY column [ASC|DESC])`
+    /// SQL syntax, return `true`. Otherwise, return `false` (default) which will
+    /// cause an error when parsing SQL where this syntax is detected for this
+    /// function.
     ///
-    /// Ordered-set aggregate functions require an explicit `ORDER BY` clause
-    /// because the calculation performed by these functions is dependent on the
-    /// specific sequence of the input rows, unlike other aggregate functions
-    /// like `SUM`, `AVG`, or `COUNT`.
+    /// This function should return `true` for ordered-set aggregate functions
+    /// only.
     ///
-    /// An example of an ordered-set aggregate function is `percentile_cont`
-    /// which computes a specific percentile value from a sorted list of values, and
-    /// is only meaningful when the input data is ordered.
+    /// # Ordered-set aggregate functions
     ///
-    /// In SQL syntax, ordered-set aggregate functions are used with the
-    /// `WITHIN GROUP (ORDER BY ...)` clause to specify the ordering of the input
-    /// data.
-    fn is_ordered_set_aggregate(&self) -> bool {
+    /// Ordered-set aggregate functions allow specifying a sort order that affects
+    /// how the function calculates its result, unlike other aggregate functions
+    /// like `sum` or `count`. For example, `percentile_cont` is an ordered-set
+    /// aggregate function that calculates the exact percentile value from a list
+    /// of values; the output of calculating the `0.75` percentile depends on if
+    /// you're calculating on an ascending or descending list of values.
+    ///
+    /// An example of how an ordered-set aggregate function is called with the
+    /// `WITHIN GROUP` SQL syntax:
+    ///
+    /// ```sql
+    /// -- Ascending
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 ASC) FROM table;
+    /// -- Default ordering is ascending if not explicitly specified
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1) FROM table;
+    /// -- Descending
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 DESC) FROM table;
+    /// ```
+    ///
+    /// This calculates the `0.75` percentile of the column `c1` from `table`,
+    /// according to the specific ordering. The column specified in the `WITHIN GROUP`
+    /// ordering clause is taken as the column to calculate values on; specifying
+    /// the `WITHIN GROUP` clause is optional so these queries are equivalent:
+    ///
+    /// ```sql
+    /// -- If no WITHIN GROUP is specified then default ordering is implementation
+    /// -- dependent; in this case ascending for percentile_cont
+    /// SELECT percentile_cont(c1, 0.75) FROM table;
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 ASC) FROM table;
+    /// ```
+    ///
+    /// Aggregate UDFs can define their default ordering if the function is called
+    /// without the `WITHIN GROUP` clause, though a default of ascending is the
+    /// standard practice.
+    ///
+    /// Ordered-set aggregate function implementations are responsible for handling
+    /// the input sort order themselves (e.g. `percentile_cont` must buffer and
+    /// sort the values internally). That is, DataFusion does not introduce any
+    /// kind of sort into the plan for these functions with this syntax.
+    fn supports_within_group_clause(&self) -> bool {
         false
     }
 
@@ -812,7 +850,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
 
     // exclude the first function argument(= column) in ordered set aggregate function,
     // because it is duplicated with the WITHIN GROUP clause in schema name.
-    let args = if func.is_ordered_set_aggregate() && !order_by.is_empty() {
+    let args = if func.supports_within_group_clause() && !order_by.is_empty() {
         &args[1..]
     } else {
         &args[..]
@@ -836,7 +874,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
     };
 
     if !order_by.is_empty() {
-        let clause = match func.is_ordered_set_aggregate() {
+        let clause = match func.supports_within_group_clause() {
             true => "WITHIN GROUP",
             false => "ORDER BY",
         };
@@ -1228,8 +1266,8 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.supports_null_handling_clause()
     }
 
-    fn is_ordered_set_aggregate(&self) -> bool {
-        self.inner.is_ordered_set_aggregate()
+    fn supports_within_group_clause(&self) -> bool {
+        self.inner.supports_within_group_clause()
     }
 
     fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {

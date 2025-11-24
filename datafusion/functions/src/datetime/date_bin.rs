@@ -687,7 +687,7 @@ mod tests {
         let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision but got Timestamp(Microsecond, None)"
+            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision but got Timestamp(µs)"
         );
 
         args = vec![
@@ -743,7 +743,7 @@ mod tests {
 
     #[test]
     fn test_date_bin_timezones() {
-        let cases = vec![
+        let cases = [
             (
                 vec![
                     "2020-09-08T00:00:00Z",
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn test_date_bin_single() {
-        let cases = vec![
+        let cases = [
             (
                 (
                     TimeDelta::try_minutes(15),

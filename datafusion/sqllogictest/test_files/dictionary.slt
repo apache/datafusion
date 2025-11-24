@@ -85,7 +85,7 @@ f1 Float64 YES
 f2 Utf8 YES
 f3 Utf8 YES
 f4 Float64 YES
-time Timestamp(Nanosecond, None) YES
+time Timestamp(ns) YES
 
 # in list with dictionary input
 query BBB
@@ -157,7 +157,7 @@ DESCRIBE m2;
 type Dictionary(Int32, Utf8) YES
 tag_id Dictionary(Int32, Utf8) YES
 f5 Float64 YES
-time Timestamp(Nanosecond, None) YES
+time Timestamp(ns) YES
 
 query I
 select count(*) from m1 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00';
@@ -410,9 +410,8 @@ logical_plan
 01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
 02)--TableScan: test projection=[column1, column2]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: column2@1 = 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # try literal = col to verify order doesn't matter
 # filter should not cast column2
@@ -423,9 +422,8 @@ logical_plan
 01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
 02)--TableScan: test projection=[column1, column2]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: column2@1 = 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # Now query using an integer which must be coerced into a dictionary string
@@ -441,9 +439,8 @@ logical_plan
 01)Filter: test.column2 = Dictionary(Int32, Utf8("1"))
 02)--TableScan: test projection=[column1, column2]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column2@1 = 1
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: column2@1 = 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Window Functions
 query I

@@ -30,14 +30,16 @@ use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow::datatypes::DataType;
+use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::{TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
-use datafusion_common::config::{ConfigExtension, ConfigOptions, Dialect, TableOptions};
+#[cfg(feature = "sql")]
+use datafusion_common::config::Dialect;
+use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
@@ -114,12 +116,12 @@ use uuid::Uuid;
 /// # use std::sync::Arc;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-///     let state = SessionStateBuilder::new()
-///         .with_config(SessionConfig::new())  
-///         .with_runtime_env(Arc::new(RuntimeEnv::default()))
-///         .with_default_features()
-///         .build();
-///     Ok(())  
+/// let state = SessionStateBuilder::new()
+///     .with_config(SessionConfig::new())
+///     .with_runtime_env(Arc::new(RuntimeEnv::default()))
+///     .with_default_features()
+///     .build();
+/// Ok(())
 /// # }
 /// ```
 ///
@@ -545,6 +547,16 @@ impl SessionState {
 
         let sql_expr = self.sql_to_expr_with_alias(sql, &dialect)?;
 
+        self.create_logical_expr_from_sql_expr(sql_expr, df_schema)
+    }
+
+    /// Creates a datafusion style AST [`Expr`] from a SQL expression.
+    #[cfg(feature = "sql")]
+    pub fn create_logical_expr_from_sql_expr(
+        &self,
+        sql_expr: SQLExprWithAlias,
+        df_schema: &DFSchema,
+    ) -> datafusion_common::Result<Expr> {
         let provider = SessionContextProvider {
             state: self,
             tables: HashMap::new(),
@@ -872,12 +884,12 @@ impl SessionState {
     pub(crate) fn store_prepared(
         &mut self,
         name: String,
-        data_types: Vec<DataType>,
+        fields: Vec<FieldRef>,
         plan: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<()> {
         match self.prepared_plans.entry(name) {
             Entry::Vacant(e) => {
-                e.insert(Arc::new(PreparedPlan { data_types, plan }));
+                e.insert(Arc::new(PreparedPlan { fields, plan }));
                 Ok(())
             }
             Entry::Occupied(e) => {
@@ -1322,7 +1334,7 @@ impl SessionStateBuilder {
     /// let url = Url::try_from("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
     /// let state = SessionStateBuilder::new()
-    ///     .with_config(SessionConfig::new())  
+    ///     .with_config(SessionConfig::new())
     ///     .with_object_store(&url, Arc::new(object_store))
     ///     .with_default_features()
     ///     .build();
@@ -1418,12 +1430,31 @@ impl SessionStateBuilder {
         }
 
         if let Some(scalar_functions) = scalar_functions {
-            scalar_functions.into_iter().for_each(|udf| {
-                let existing_udf = state.register_udf(udf);
-                if let Ok(Some(existing_udf)) = existing_udf {
-                    debug!("Overwrote an existing UDF: {}", existing_udf.name());
+            for udf in scalar_functions {
+                let config_options = state.config().options();
+                match udf.inner().with_updated_config(config_options) {
+                    Some(new_udf) => {
+                        if let Err(err) = state.register_udf(Arc::new(new_udf)) {
+                            debug!(
+                                "Failed to re-register updated UDF '{}': {}",
+                                udf.name(),
+                                err
+                            );
+                        }
+                    }
+                    None => match state.register_udf(Arc::clone(&udf)) {
+                        Ok(Some(existing)) => {
+                            debug!("Overwrote existing UDF '{}'", existing.name());
+                        }
+                        Ok(None) => {
+                            debug!("Registered UDF '{}'", udf.name());
+                        }
+                        Err(err) => {
+                            debug!("Failed to register UDF '{}': {}", udf.name(), err);
+                        }
+                    },
                 }
-            });
+            }
         }
 
         if let Some(aggregate_functions) = aggregate_functions {
@@ -2011,7 +2042,7 @@ impl SimplifyInfo for SessionSimplifyProvider<'_> {
 #[derive(Debug)]
 pub(crate) struct PreparedPlan {
     /// Data types of the parameters
-    pub(crate) data_types: Vec<DataType>,
+    pub(crate) fields: Vec<FieldRef>,
     /// The prepared logical plan
     pub(crate) plan: Arc<LogicalPlan>,
 }
@@ -2074,6 +2105,36 @@ mod tests {
         let state = SessionStateBuilder::new().build();
 
         assert!(sql_to_expr(&state).is_err())
+    }
+
+    #[test]
+    #[cfg(feature = "sql")]
+    fn test_create_logical_expr_from_sql_expr() {
+        let state = SessionStateBuilder::new().with_default_features().build();
+
+        let provider = SessionContextProvider {
+            state: &state,
+            tables: HashMap::new(),
+        };
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+        let dialect = state.config.options().sql_parser.dialect;
+        let query = SqlToRel::new_with_options(&provider, state.get_parser_options());
+
+        for sql in ["[1,2,3]", "a > 10", "SUM(a)"] {
+            let sql_expr = state.sql_to_expr(sql, &dialect).unwrap();
+            let from_str = query
+                .sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())
+                .unwrap();
+
+            let sql_expr_with_alias =
+                state.sql_to_expr_with_alias(sql, &dialect).unwrap();
+            let from_expr = state
+                .create_logical_expr_from_sql_expr(sql_expr_with_alias, &df_schema)
+                .unwrap();
+            assert_eq!(from_str, from_expr);
+        }
     }
 
     #[test]

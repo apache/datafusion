@@ -23,14 +23,15 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+// https://github.com/apache/datafusion/issues/18503
+#![deny(clippy::needless_pass_by_value)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 mod column;
 mod dfschema;
 mod functional_dependencies;
 mod join_type;
 mod param_value;
-#[cfg(feature = "pyarrow")]
-mod pyarrow;
 mod schema_reference;
 mod table_reference;
 mod unnest;
@@ -39,6 +40,7 @@ pub mod alias;
 pub mod cast;
 pub mod config;
 pub mod cse;
+pub mod datatype;
 pub mod diagnostic;
 pub mod display;
 pub mod encryption;
@@ -47,6 +49,7 @@ pub mod file_options;
 pub mod format;
 pub mod hash_utils;
 pub mod instant;
+pub mod metadata;
 pub mod nested_struct;
 mod null_equality;
 pub mod parsers;

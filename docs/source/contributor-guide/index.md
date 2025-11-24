@@ -32,7 +32,8 @@ community as well as get more familiar with Rust and the relevant codebases.
 
 ## Development Environment
 
-You can find how to setup build and testing environment [here](https://datafusion.apache.org/contributor-guide/development_environment.html)
+Setup your development environment [here](development_environment.md), and learn
+how to test the code [here](testing.md).
 
 ## Finding and Creating Issues to Work On
 
@@ -59,9 +60,8 @@ If you want to work on an issue which is not already assigned to someone else
 and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by using the `unassign me`
-link at the top of the issue page (and ask for help if are stuck) so that
-someone else can get involved in the work.
+unable to make progress you should unassign the issue by commenting a single
+word `untake`.
 
 # Developer's guide
 
@@ -113,7 +113,7 @@ do take priority over the conventional commit approach, allowing maintainers to 
 
 [conventional commits]: https://www.conventionalcommits.org/en/v1.0.0/
 
-# Reviewing Pull Requests
+## Reviewing Pull Requests
 
 Some helpful links:
 
@@ -175,3 +175,27 @@ The good thing about open code and open development is that any issues in one ch
 
 Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
+
+## AI-Assisted contributions
+
+DataFusion has the following policy for AI-assisted PRs:
+
+- The PR author should **understand the core ideas** behind the implementation **end-to-end**, and be able to justify the design and code during review.
+- **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. You should comment on these cases and point them out to reviewers so that they can use their knowledge of the codebase to clear up any concerns. For example, you might comment "calling this function here seems to work but I'm not familiar with how it works internally, I wonder if there's a race condition if it is called concurrently".
+
+### Why fully AI-generated PRs without understanding are not helpful
+
+Today, AI tools cannot reliably make complex changes to DataFusion on their own, which is why we rely on pull requests and code review.
+
+The purposes of code review are:
+
+1. Finish the intended task.
+2. Share knowledge between authors and reviewers, as a long-term investment in the project. For this reason, even if someone familiar with the codebase can finish a task quickly, we're still happy to help a new contributor work on it even if it takes longer.
+
+An AI dump for an issue doesn’t meet these purposes. Maintainers could finish the task faster by using AI directly, and the submitters gain little knowledge if they act only as a pass through AI proxy without understanding.
+
+Please understand the reviewing capacity is **very limited** for the project, so large PRs which appear to not have the requisite understanding might not get reviewed, and eventually closed or redirected.
+
+### Better ways to contribute than an “AI dump”
+
+It's recommended to write a high-quality issue with a clear problem statement and a minimal, reproducible example. This can make it easier for others to contribute.

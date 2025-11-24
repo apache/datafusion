@@ -23,6 +23,10 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+// Enforce lint rule to prevent needless pass by value
+// https://github.com/apache/datafusion/issues/18503
+#![deny(clippy::needless_pass_by_value)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
@@ -310,7 +314,6 @@ pub async fn calculate_range(
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
 ///
 /// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
-///
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,

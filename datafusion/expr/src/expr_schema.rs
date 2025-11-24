@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{Between, Expr, Like};
+use super::{predicate_bounds, Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, FieldMetadata,
-    InList, InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
 use crate::type_coercion::functions::{
@@ -28,9 +28,10 @@ use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, Spans, TableReference,
+    Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -81,15 +82,17 @@ impl ExprSchemable for Expr {
     /// # use std::collections::HashMap;
     ///
     /// fn main() {
-    ///   let expr = col("c1") + col("c2");
-    ///   let schema = DFSchema::from_unqualified_fields(
-    ///     vec![
-    ///       Field::new("c1", DataType::Int32, true),
-    ///       Field::new("c2", DataType::Float32, true),
-    ///       ].into(),
-    ///       HashMap::new(),
-    ///   ).unwrap();
-    ///   assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
+    ///     let expr = col("c1") + col("c2");
+    ///     let schema = DFSchema::from_unqualified_fields(
+    ///         vec![
+    ///             Field::new("c1", DataType::Int32, true),
+    ///             Field::new("c2", DataType::Float32, true),
+    ///         ]
+    ///         .into(),
+    ///         HashMap::new(),
+    ///     )
+    ///     .unwrap();
+    ///     assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
     /// }
     /// ```
     ///
@@ -104,9 +107,9 @@ impl ExprSchemable for Expr {
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
+                Expr::Placeholder(Placeholder { field, .. }) => match &field {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
-                    Some(dt) => Ok(dt.clone()),
+                    Some(field) => Ok(field.data_type().clone()),
                 },
                 _ => expr.get_type(schema),
             },
@@ -211,9 +214,9 @@ impl ExprSchemable for Expr {
             )
             .get_result_type(),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
-            Expr::Placeholder(Placeholder { data_type, .. }) => {
-                if let Some(dtype) = data_type {
-                    Ok(dtype.clone())
+            Expr::Placeholder(Placeholder { field, .. }) => {
+                if let Some(field) = field {
+                    Ok(field.data_type().clone())
                 } else {
                     // If the placeholder's type hasn't been specified, treat it as
                     // null (unspecified placeholders generate an error during planning)
@@ -279,15 +282,65 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
-                // This expression is nullable if any of the input expressions are nullable
-                let then_nullable = case
+                let nullable_then = case
                     .when_then_expr
                     .iter()
-                    .map(|(_, t)| t.nullable(input_schema))
-                    .collect::<Result<Vec<_>>>()?;
-                if then_nullable.contains(&true) {
-                    Ok(true)
+                    .filter_map(|(w, t)| {
+                        let is_nullable = match t.nullable(input_schema) {
+                            Err(e) => return Some(Err(e)),
+                            Ok(n) => n,
+                        };
+
+                        // Branches with a then expression that is not nullable do not impact the
+                        // nullability of the case expression.
+                        if !is_nullable {
+                            return None;
+                        }
+
+                        // For case-with-expression assume all 'then' expressions are reachable
+                        if case.expr.is_some() {
+                            return Some(Ok(()));
+                        }
+
+                        // For branches with a nullable 'then' expression, try to determine
+                        // if the 'then' expression is ever reachable in the situation where
+                        // it would evaluate to null.
+                        let bounds = match predicate_bounds::evaluate_bounds(
+                            w,
+                            Some(unwrap_certainly_null_expr(t)),
+                            input_schema,
+                        ) {
+                            Err(e) => return Some(Err(e)),
+                            Ok(b) => b,
+                        };
+
+                        let can_be_true = match bounds
+                            .contains_value(ScalarValue::Boolean(Some(true)))
+                        {
+                            Err(e) => return Some(Err(e)),
+                            Ok(b) => b,
+                        };
+
+                        if !can_be_true {
+                            // If the derived 'when' expression can never evaluate to true, the
+                            // 'then' expression is not reachable when it would evaluate to NULL.
+                            // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                            None
+                        } else {
+                            // The branch might be taken
+                            Some(Ok(()))
+                        }
+                    })
+                    .next();
+
+                if let Some(nullable_then) = nullable_then {
+                    // There is at least one reachable nullable 'then' expression, so the case
+                    // expression itself is nullable.
+                    // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+                    nullable_then.map(|_| true)
                 } else if let Some(e) = &case.else_expr {
+                    // There are no reachable nullable 'then' expressions, so all we still need to
+                    // check is the 'else' expression's nullability.
                     e.nullable(input_schema)
                 } else {
                     // CASE produces NULL if there is no `else` expr
@@ -309,10 +362,12 @@ impl ExprSchemable for Expr {
                     window_function,
                 )
                 .map(|(_, nullable)| nullable),
-            Expr::ScalarVariable(_, _)
-            | Expr::TryCast { .. }
-            | Expr::Unnest(_)
-            | Expr::Placeholder(_) => Ok(true),
+            Expr::Placeholder(Placeholder { id: _, field }) => {
+                Ok(field.as_ref().map(|f| f.is_nullable()).unwrap_or(true))
+            }
+            Expr::ScalarVariable(_, _) | Expr::TryCast { .. } | Expr::Unnest(_) => {
+                Ok(true)
+            }
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -428,25 +483,11 @@ impl ExprSchemable for Expr {
         let field = match self {
             Expr::Alias(Alias {
                 expr,
-                name,
+                name: _,
                 metadata,
                 ..
             }) => {
-                let field = match &**expr {
-                    Expr::Placeholder(Placeholder { data_type, .. }) => {
-                        match &data_type {
-                            None => schema
-                                .data_type_and_nullable(&Column::from_name(name))
-                                .map(|(d, n)| Field::new(&schema_name, d.clone(), n)),
-                            Some(dt) => Ok(Field::new(
-                                &schema_name,
-                                dt.clone(),
-                                expr.nullable(schema)?,
-                            )),
-                        }
-                    }
-                    _ => expr.to_field(schema).map(|(_, f)| f.as_ref().clone()),
-                }?;
+                let field = expr.to_field(schema).map(|(_, f)| f.as_ref().clone())?;
 
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
@@ -594,6 +635,10 @@ impl ExprSchemable for Expr {
                 .to_field(schema)
                 .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone()))
                 .map(Arc::new),
+            Expr::Placeholder(Placeholder {
+                id: _,
+                field: Some(field),
+            }) => Ok(field.as_ref().clone().with_name(&schema_name).into()),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -644,6 +689,16 @@ impl ExprSchemable for Expr {
         } else {
             plan_err!("Cannot automatically convert {this_type} to {cast_to_type}")
         }
+    }
+}
+
+/// Returns the innermost [Expr] that is provably null if `expr` is null.
+fn unwrap_certainly_null_expr(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Not(e) => unwrap_certainly_null_expr(e),
+        Expr::Negative(e) => unwrap_certainly_null_expr(e),
+        Expr::Cast(e) => unwrap_certainly_null_expr(e.expr.as_ref()),
+        _ => expr,
     }
 }
 
@@ -741,7 +796,6 @@ impl Expr {
 ///    new projection with the casted expression.
 /// 2. **Non-projection plan**: If the subquery isn't a projection, it adds a projection to the plan
 ///    with the casted first column.
-///
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
     if subquery.subquery.schema().field(0).data_type() == cast_to_type {
         return Ok(subquery);
@@ -776,10 +830,14 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{col, lit, out_ref_col_with_metadata};
+    use std::collections::HashMap;
 
-    use datafusion_common::{internal_err, DFSchema, HashMap, ScalarValue};
+    use super::*;
+    use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
+
+    use datafusion_common::{
+        assert_or_internal_err, DFSchema, DataFusionError, ScalarValue,
+    };
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -828,6 +886,137 @@ mod tests {
 
         let expr = col("foo").between(null.clone(), null);
         assert!(expr.nullable(&get_schema(false)).unwrap());
+    }
+
+    fn assert_nullability(expr: &Expr, schema: &dyn ExprSchema, expected: bool) {
+        assert_eq!(
+            expr.nullable(schema).unwrap(),
+            expected,
+            "Nullability of '{expr}' should be {expected}"
+        );
+    }
+
+    fn assert_not_nullable(expr: &Expr, schema: &dyn ExprSchema) {
+        assert_nullability(expr, schema, false);
+    }
+
+    fn assert_nullable(expr: &Expr, schema: &dyn ExprSchema) {
+        assert_nullability(expr, schema, true);
+    }
+
+    #[test]
+    fn test_case_expression_nullability() -> Result<()> {
+        let nullable_schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_nullable(true);
+
+        let not_nullable_schema = MockExprSchema::new()
+            .with_data_type(DataType::Int32)
+            .with_nullable(false);
+
+        // CASE WHEN x IS NOT NULL THEN x ELSE 0
+        let e = when(col("x").is_not_null(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN NOT x IS NULL THEN x ELSE 0
+        let e = when(not(col("x").is_null()), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN X = 5 THEN x ELSE 0
+        let e = when(col("x").eq(lit(5)), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT NULL AND x = 5 THEN x ELSE 0
+        let e = when(and(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x = 5 AND x IS NOT NULL THEN x ELSE 0
+        let e = when(and(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT NULL OR x = 5 THEN x ELSE 0
+        let e = when(or(col("x").is_not_null(), col("x").eq(lit(5))), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x = 5 OR x IS NOT NULL THEN x ELSE 0
+        let e = when(or(col("x").eq(lit(5)), col("x").is_not_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN (x = 5 AND x IS NOT NULL) OR (x = bar AND x IS NOT NULL) THEN x ELSE 0
+        let e = when(
+            or(
+                and(col("x").eq(lit(5)), col("x").is_not_null()),
+                and(col("x").eq(col("bar")), col("x").is_not_null()),
+            ),
+            col("x"),
+        )
+        .otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x = 5 OR x IS NULL THEN x ELSE 0
+        let e = when(or(col("x").eq(lit(5)), col("x").is_null()), col("x"))
+            .otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS TRUE THEN x ELSE 0
+        let e = when(col("x").is_true(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT TRUE THEN x ELSE 0
+        let e = when(col("x").is_not_true(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS FALSE THEN x ELSE 0
+        let e = when(col("x").is_false(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT FALSE THEN x ELSE 0
+        let e = when(col("x").is_not_false(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS UNKNOWN THEN x ELSE 0
+        let e = when(col("x").is_unknown(), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x IS NOT UNKNOWN THEN x ELSE 0
+        let e = when(col("x").is_not_unknown(), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN x LIKE 'x' THEN x ELSE 0
+        let e = when(col("x").like(lit("x")), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN 0 THEN x ELSE 0
+        let e = when(lit(0), col("x")).otherwise(lit(0))?;
+        assert_not_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        // CASE WHEN 1 THEN x ELSE 0
+        let e = when(lit(1), col("x")).otherwise(lit(0))?;
+        assert_nullable(&e, &nullable_schema);
+        assert_not_nullable(&e, &not_nullable_schema);
+
+        Ok(())
     }
 
     #[test]
@@ -905,7 +1094,7 @@ mod tests {
 
         let schema = DFSchema::from_unqualified_fields(
             vec![meta.add_to_field(Field::new("foo", DataType::Int32, true))].into(),
-            std::collections::HashMap::new(),
+            HashMap::new(),
         )
         .unwrap();
 
@@ -919,6 +1108,52 @@ mod tests {
             Column::from_name("foo"),
         );
         assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
+    }
+
+    #[test]
+    fn test_expr_placeholder() {
+        let schema = MockExprSchema::new();
+
+        let mut placeholder_meta = HashMap::new();
+        placeholder_meta.insert("bar".to_string(), "buzz".to_string());
+        let placeholder_meta = FieldMetadata::from(placeholder_meta);
+
+        let expr = Expr::Placeholder(Placeholder::new_with_field(
+            "".to_string(),
+            Some(
+                Field::new("", DataType::Utf8, true)
+                    .with_metadata(placeholder_meta.to_hashmap())
+                    .into(),
+            ),
+        ));
+
+        assert_eq!(
+            expr.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, true)
+        );
+        assert_eq!(placeholder_meta, expr.metadata(&schema).unwrap());
+
+        let expr_alias = expr.alias("a placeholder by any other name");
+        assert_eq!(
+            expr_alias.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, true)
+        );
+        assert_eq!(placeholder_meta, expr_alias.metadata(&schema).unwrap());
+
+        // Non-nullable placeholder field should remain non-nullable
+        let expr = Expr::Placeholder(Placeholder::new_with_field(
+            "".to_string(),
+            Some(Field::new("", DataType::Utf8, false).into()),
+        ));
+        assert_eq!(
+            expr.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, false)
+        );
+        let expr_alias = expr.alias("a placeholder by any other name");
+        assert_eq!(
+            expr_alias.data_type_and_nullable(&schema).unwrap(),
+            (DataType::Utf8, false)
+        );
     }
 
     #[derive(Debug)]
@@ -958,11 +1193,8 @@ mod tests {
 
     impl ExprSchema for MockExprSchema {
         fn nullable(&self, _col: &Column) -> Result<bool> {
-            if self.error_on_nullable {
-                internal_err!("nullable error")
-            } else {
-                Ok(self.field.is_nullable())
-            }
+            assert_or_internal_err!(!self.error_on_nullable, "nullable error");
+            Ok(self.field.is_nullable())
         }
 
         fn field_from_column(&self, _col: &Column) -> Result<&Field> {

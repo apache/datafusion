@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use super::*;
-use datafusion_common::ScalarValue;
+use datafusion_common::{metadata::ScalarAndMetadata, ParamValues, ScalarValue};
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -219,11 +221,11 @@ async fn test_parameter_invalid_types() -> Result<()> {
         .collect()
         .await;
     assert_snapshot!(results.unwrap_err().strip_backtrace(),
-        @r#"
-    type_coercion
-    caused by
-    Error during planning: Cannot infer common argument type for comparison operation List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) = Int32
-    "#);
+        @r"
+        type_coercion
+        caused by
+        Error during planning: Cannot infer common argument type for comparison operation List(nullable Int32) = Int32
+        ");
     Ok(())
 }
 
@@ -318,6 +320,47 @@ async fn test_named_parameter_not_bound() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_query_parameters_with_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let df = ctx.sql("SELECT $1, $2").await.unwrap();
+
+    let metadata1 = HashMap::from([("some_key".to_string(), "some_value".to_string())]);
+    let metadata2 =
+        HashMap::from([("some_other_key".to_string(), "some_other_value".to_string())]);
+
+    let df_with_params_replaced = df
+        .with_param_values(ParamValues::List(vec![
+            ScalarAndMetadata::new(
+                ScalarValue::UInt32(Some(1)),
+                Some(metadata1.clone().into()),
+            ),
+            ScalarAndMetadata::new(
+                ScalarValue::Utf8(Some("two".to_string())),
+                Some(metadata2.clone().into()),
+            ),
+        ]))
+        .unwrap();
+
+    let schema = df_with_params_replaced.schema();
+    assert_eq!(schema.field(0).data_type(), &DataType::UInt32);
+    assert_eq!(schema.field(0).metadata(), &metadata1);
+    assert_eq!(schema.field(1).data_type(), &DataType::Utf8);
+    assert_eq!(schema.field(1).metadata(), &metadata2);
+
+    let batches = df_with_params_replaced.collect().await.unwrap();
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +----+-----+
+    | $1 | $2  |
+    +----+-----+
+    | 1  | two |
+    +----+-----+
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_version_function() {
     let expected_version = format!(
         "Apache DataFusion {}, {} on {}",
@@ -369,5 +412,22 @@ async fn test_select_no_projection() -> Result<()> {
     ++
     ++
     ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_select_cast_date_literal_to_timestamp_overflow() -> Result<()> {
+    let ctx = SessionContext::new();
+    let err = ctx
+        .sql("SELECT CAST(DATE '9999-12-31' AS TIMESTAMP)")
+        .await?
+        .collect()
+        .await
+        .unwrap_err();
+
+    assert_contains!(
+        err.to_string(),
+        "Cannot cast Date32 value 2932896 to Timestamp(ns): converted value exceeds the representable i64 range"
+    );
     Ok(())
 }

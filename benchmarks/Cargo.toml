@@ -26,6 +26,9 @@ repository = { workspace = true }
 license = { workspace = true }
 rust-version = { workspace = true }
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -53,7 +56,7 @@ serde_json = { workspace = true }
 snmalloc-rs = { version = "0.3", optional = true }
 structopt = { version = "0.3", default-features = false }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
-tokio-util = { version = "0.7.16" }
+tokio-util = { version = "0.7.17" }
 
 [dev-dependencies]
 datafusion-proto = { workspace = true }

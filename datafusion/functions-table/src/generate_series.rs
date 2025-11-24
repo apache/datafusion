@@ -472,14 +472,12 @@ impl TableProvider for GenerateSeriesTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let batch_size = state.config_options().execution.batch_size;
-        let schema = match projection {
-            Some(projection) => Arc::new(self.schema.project(projection)?),
-            None => self.schema(),
-        };
-
         let generator = self.as_generator(batch_size)?;
 
-        Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
+        Ok(Arc::new(
+            LazyMemoryExec::try_new(self.schema(), vec![generator])?
+                .with_projection(projection.cloned()),
+        ))
     }
 }
 
