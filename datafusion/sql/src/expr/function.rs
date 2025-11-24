@@ -279,12 +279,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     self.function_args_to_expr(args.clone(), schema, planner_context)?;
 
                 let is_two_array_syntax = args.len() == 2
-                    && args.iter().all(|arg| match arg.get_type(schema) {
-                        Ok(DataType::List(_))
-                        | Ok(DataType::LargeList(_))
-                        | Ok(DataType::FixedSizeList(_, _)) => true,
-                        _ => false,
+                    && args.iter().all(|arg| {
+                        matches!(
+                            arg.get_type(schema),
+                            Ok(DataType::List(_))
+                                | Ok(DataType::LargeList(_))
+                                | Ok(DataType::FixedSizeList(_, _))
+                        )
                     });
+
+                // map function with variadic syntax requires non-empty list of arguments
+                if !is_two_array_syntax && args.is_empty() {
+                    return plan_err!(
+                        "Function 'map' expected at least one argument but received 0"
+                    );
+                }
 
                 !is_two_array_syntax
             }
@@ -294,6 +303,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if use_plan_make_map {
             let mut fn_args =
                 self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
             for planner in self.context_provider.get_expr_planners().iter() {
                 match planner.plan_make_map(fn_args)? {
                     PlannerResult::Planned(expr) => return Ok(expr),
