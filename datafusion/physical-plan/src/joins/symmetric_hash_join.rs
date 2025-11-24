@@ -67,8 +67,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
-    assert_eq_or_internal_err, plan_err, DataFusionError, HashSet, JoinSide, JoinType,
-    NullEquality, Result,
+    assert_eq_or_internal_err, plan_err, HashSet, JoinSide, JoinType, NullEquality,
+    Result,
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
