@@ -28,12 +28,13 @@
 use std::{any::Any, fmt::Debug, sync::Arc};
 
 use crate::catalog_provider::FFI_CatalogProvider;
+use crate::catalog_provider_list::FFI_CatalogProviderList;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
 use datafusion::{
     catalog::{
-        CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider,
-        TableProvider,
+        CatalogProvider, CatalogProviderList, MemoryCatalogProvider,
+        MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
     },
     common::exec_err,
     datasource::MemTable,
@@ -180,4 +181,56 @@ impl CatalogProvider for FixedCatalogProvider {
 pub(crate) extern "C" fn create_catalog_provider() -> FFI_CatalogProvider {
     let catalog_provider = Arc::new(FixedCatalogProvider::default());
     FFI_CatalogProvider::new(catalog_provider, None)
+}
+
+/// This catalog provider list is intended only for unit tests. It prepopulates with one
+/// catalog and only allows for catalogs named after four colors.
+#[derive(Debug)]
+pub struct FixedCatalogProviderList {
+    inner: MemoryCatalogProviderList,
+}
+
+impl Default for FixedCatalogProviderList {
+    fn default() -> Self {
+        let inner = MemoryCatalogProviderList::new();
+
+        let _ = inner.register_catalog(
+            "blue".to_owned(),
+            Arc::new(FixedCatalogProvider::default()),
+        );
+
+        Self { inner }
+    }
+}
+
+impl CatalogProviderList for FixedCatalogProviderList {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn catalog_names(&self) -> Vec<String> {
+        self.inner.catalog_names()
+    }
+
+    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        self.inner.catalog(name)
+    }
+
+    fn register_catalog(
+        &self,
+        name: String,
+        catalog: Arc<dyn CatalogProvider>,
+    ) -> Option<Arc<dyn CatalogProvider>> {
+        if !["blue", "red", "green", "yellow"].contains(&name.as_str()) {
+            log::warn!("FixedCatalogProviderList only provides four catalogs: blue, red, green, yellow");
+            return None;
+        }
+
+        self.inner.register_catalog(name, catalog)
+    }
+}
+
+pub(crate) extern "C" fn create_catalog_provider_list() -> FFI_CatalogProviderList {
+    let catalog_provider_list = Arc::new(FixedCatalogProviderList::default());
+    FFI_CatalogProviderList::new(catalog_provider_list, None)
 }
