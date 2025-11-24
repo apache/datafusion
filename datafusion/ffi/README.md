@@ -120,7 +120,7 @@ actual `Arc<dyn CatalogProvider`. That `Arc<>` must be freed, but if the
 `FFI_CatalogProvider` is only owned on the consumer's side, we have no way
 to access the private data and free it.
 
-To account for this most structs in this crate have a `release` method that
+To account for this, most structs in this crate have a `release` method that
 is used to clean up any privately held data. This calls into the producer's
 side, regardless of if it is called on either the local or foreign side.
 Most of the structs in this crate carry atomic reference counts to the
