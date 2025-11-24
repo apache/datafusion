@@ -399,8 +399,7 @@ impl FileOpener for CsvOpener {
 
                     let mut reader = config.open(decoder)?;
 
-                    // We use std::iter::from_fn to wrap the *execution* of the iterator's next() method.
-                    // This ensures the timer runs while the CSV is actually being parsed.
+                    // Use std::iter::from_fn to wrap execution of iterator's next() method.
                     let iterator = std::iter::from_fn(move || {
                         let mut timer = baseline_metrics.elapsed_compute().timer();
                         let result = reader.next();
