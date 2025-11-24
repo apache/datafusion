@@ -17,9 +17,14 @@
 
 //! array function utils
 
-use arrow::datatypes::{DataType, Fields};
+use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BooleanArray, Scalar, UInt32Array};
+use arrow::datatypes::{DataType, Field, Fields};
+
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar, UInt32Array,
+};
+use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
@@ -75,6 +80,44 @@ where
             result.map(ColumnarValue::Array)
         }
     }
+}
+
+pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
+    args: Vec<ArrayRef>,
+) -> Result<Vec<ArrayRef>> {
+    let args_ndim = args
+        .iter()
+        .map(|arg| datafusion_common::utils::list_ndims(arg.data_type()))
+        .collect::<Vec<_>>();
+    let max_ndim = args_ndim.iter().max().unwrap_or(&0);
+
+    // Align the dimensions of the arrays
+    let aligned_args: Result<Vec<ArrayRef>> = args
+        .into_iter()
+        .zip(args_ndim.iter())
+        .map(|(array, ndim)| {
+            if ndim < max_ndim {
+                let mut aligned_array = Arc::clone(&array);
+                for _ in 0..(max_ndim - ndim) {
+                    let data_type = aligned_array.data_type().to_owned();
+                    let array_lengths = vec![1; aligned_array.len()];
+                    let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
+
+                    aligned_array = Arc::new(GenericListArray::<O>::try_new(
+                        Arc::new(Field::new_list_field(data_type, true)),
+                        offsets,
+                        aligned_array,
+                        None,
+                    )?);
+                }
+                Ok(aligned_array)
+            } else {
+                Ok(Arc::clone(&array))
+            }
+        })
+        .collect();
+
+    aligned_args
 }
 
 /// Computes a BooleanArray indicating equality or inequality between elements in a list array and a specified element array.
@@ -231,6 +274,7 @@ mod tests {
     use arrow::array::ListArray;
     use arrow::datatypes::Int64Type;
     use datafusion_common::utils::SingleRowListArrayBuilder;
+    use std::sync::Arc;
 
     /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
