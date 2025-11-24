@@ -105,6 +105,13 @@ fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
             .into_iter()
             .map(Arc::unwrap_or_clone)
             .collect::<Vec<_>>(),
+        // While unnesting, unwrap a Projection whose input is a nested Union,
+        // flatten the inner Union, and push the same Projection down onto
+        // each of the nested Union’s children.
+        //
+        // Example:
+        //   Union { Projection { Union { plan1, plan2 } }, plan3 }
+        //     => Union { Projection { plan1 }, Projection { plan2 }, plan3 }
         LogicalPlan::Projection(Projection {
             expr,
             input,
