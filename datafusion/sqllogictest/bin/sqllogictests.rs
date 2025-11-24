@@ -403,9 +403,9 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
                         let _ = writeln!(&mut rendered, "[Reason] {note}");
                     }
                     let _ = writeln!(&mut rendered, "[Expected]");
-                    let _ = writeln!(&mut rendered, "{}", expected_snapshot);
+                    let _ = writeln!(&mut rendered, "{expected_snapshot}");
                     let _ = writeln!(&mut rendered, "[Actual]");
-                    let _ = writeln!(&mut rendered, "{}", actual_snapshot);
+                    let _ = writeln!(&mut rendered, "{actual_snapshot}");
                     let _ = writeln!(&mut rendered, "at {}", err.location());
                     errs.push(rendered);
                     continue;
