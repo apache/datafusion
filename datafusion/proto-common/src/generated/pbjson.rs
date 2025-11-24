@@ -5696,7 +5696,7 @@ impl serde::Serialize for ParquetOptions {
             struct_ser.serialize_field("skipArrowMetadata", &self.skip_arrow_metadata)?;
         }
         if self.enable_sort_pushdown {
-            struct_ser.serialize_field("enableReverseScan", &self.enable_sort_pushdown)?;
+            struct_ser.serialize_field("enableSortPushdown", &self.enable_sort_pushdown)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5845,7 +5845,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "skip_arrow_metadata",
             "skipArrowMetadata",
             "enable_sort_pushdown",
-            "enableReverseScan",
+            "enableSortPushdown",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5894,7 +5894,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             SchemaForceViewTypes,
             BinaryAsString,
             SkipArrowMetadata,
-            EnableReverseScan,
+            EnableSortPushdown,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5947,7 +5947,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
                             "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
                             "skipArrowMetadata" | "skip_arrow_metadata" => Ok(GeneratedField::SkipArrowMetadata),
-                            "enableReverseScan" | "enable_sort_pushdown" => Ok(GeneratedField::EnableReverseScan),
+                            "enableSortPushdown" | "enable_sort_pushdown" => Ok(GeneratedField::EnableSortPushdown),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -6120,9 +6120,9 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             skip_arrow_metadata__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::EnableReverseScan => {
+                        GeneratedField::EnableSortPushdown => {
                             if enable_sort_pushdown__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("enableReverseScan"));
+                                return Err(serde::de::Error::duplicate_field("enableSortPushdown"));
                             }
                             enable_sort_pushdown__ = Some(map_.next_value()?);
                         }
