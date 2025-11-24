@@ -20,7 +20,7 @@
 use crate::{FileRange, PartitionedFile};
 use datafusion_common::{ScalarValue, Statistics};
 use itertools::Itertools;
-use log::{debug, warn};
+use log::debug;
 use std::cmp::{min, Ordering};
 use std::collections::{BinaryHeap, HashMap};
 use std::iter::repeat_with;
