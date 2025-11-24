@@ -3295,62 +3295,133 @@ mod tests {
 
         println!("Testing with {num_groups} groups (UInt32 + String + LargeList keys)");
 
-        // Helper to run the aggregation with a specific batch size
-        // Returns (time_to_first_emission, total_batch_count)
-        let run_scenario = |batch_size: usize| {
-            let schema = Arc::clone(&schema);
-            let batch = batch.clone();
-            let group_by = group_by.clone();
-            let aggregates = aggregates.clone();
+        // Case 1: Chunked emission with detailed timing
+        println!("\n=== Chunked emission (batch_size=8192) ===");
+        let input_chunked = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let session_config_chunked = SessionConfig::new().with_batch_size(8192);
+        let task_ctx_chunked =
+            Arc::new(TaskContext::default().with_session_config(session_config_chunked));
+        let aggregate_chunked = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None],
+            input_chunked,
+            Arc::clone(&schema),
+        )?);
 
-            async move {
-                let input = TestMemoryExec::try_new_exec(
-                    &[vec![batch]],
-                    Arc::clone(&schema),
-                    None,
-                )?;
+        let mut stream_chunked = aggregate_chunked.execute(0, task_ctx_chunked)?;
+        let start = Instant::now();
+        let mut first_emission = None;
+        let mut batch_count = 0;
+        let mut prev_batch_time = start;
+        let mut poll_times_chunked = Vec::new();
 
-                let session_config = SessionConfig::new().with_batch_size(batch_size);
-                let task_ctx =
-                    Arc::new(TaskContext::default().with_session_config(session_config));
+        while let Some(result) = stream_chunked.next().await {
+            let batch = result?;
+            batch_count += 1;
+            let batch_time = prev_batch_time.elapsed();
+            poll_times_chunked.push(batch_time);
 
-                let aggregate = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Single,
-                    group_by,
-                    aggregates,
-                    vec![None],
-                    input,
-                    schema,
-                )?);
-
-                let mut stream = aggregate.execute(0, task_ctx)?;
-                let start = Instant::now();
-                let mut first_emission = None;
-                let mut batch_count = 0;
-
-                while let Some(result) = stream.next().await {
-                    if first_emission.is_none() {
-                        first_emission = Some(start.elapsed());
-                    }
-                    result?;
-                    batch_count += 1;
-                }
-
-                Ok::<(Duration, usize), DataFusionError>((
-                    first_emission.unwrap_or_default(),
-                    batch_count,
-                ))
+            if first_emission.is_none() {
+                first_emission = Some(start.elapsed());
+                println!(
+                    "First batch arrived at: {:?} ({} rows)",
+                    start.elapsed(),
+                    batch.num_rows()
+                );
             }
-        };
 
-        // Case 1: Chunked emission (small batch size)
-        let (time_chunked, count_chunked) = run_scenario(1024).await?;
-        println!("Chunked emission (1024): {time_chunked:?} ({count_chunked} batches)");
+            prev_batch_time = Instant::now();
+        }
 
-        // Case 2: Blocking emission (large batch size)
-        let (time_blocking, count_blocking) =
-            run_scenario(num_groups as usize + 1000).await?;
-        println!("Blocking emission (all): {time_blocking:?} ({count_blocking} batches)");
+        let count_chunked = batch_count;
+        let total_chunked = start.elapsed();
+        let min_poll_chunked =
+            poll_times_chunked.iter().min().copied().unwrap_or_default();
+        let max_poll_chunked =
+            poll_times_chunked.iter().max().copied().unwrap_or_default();
+        let avg_poll_chunked: Duration =
+            poll_times_chunked.iter().sum::<Duration>() / poll_times_chunked.len() as u32;
+
+        println!("Total batches: {count_chunked}");
+        println!("Total time: {total_chunked:?}");
+        println!("Poll times: min={min_poll_chunked:?}, max={max_poll_chunked:?}, avg={avg_poll_chunked:?}");
+
+        // Case 2: Blocking emission with detailed timing
+        println!("\n=== Blocking emission (batch_size > num_groups) ===");
+        let input_blocking = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let session_config_blocking =
+            SessionConfig::new().with_batch_size(num_groups as usize + 1000);
+        let task_ctx_blocking =
+            Arc::new(TaskContext::default().with_session_config(session_config_blocking));
+        let aggregate_blocking = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            aggregates,
+            vec![None],
+            input_blocking,
+            Arc::clone(&schema),
+        )?);
+
+        let mut stream_blocking = aggregate_blocking.execute(0, task_ctx_blocking)?;
+        let start = Instant::now();
+        let mut count_blocking = 0;
+        let mut prev_batch_time = start;
+        let mut poll_times_blocking = Vec::new();
+
+        while let Some(result) = stream_blocking.next().await {
+            let batch = result?;
+            count_blocking += 1;
+            let batch_time = prev_batch_time.elapsed();
+            poll_times_blocking.push(batch_time);
+            println!("  Batch {count_blocking} arrived at: {:?} ({} rows, batch creation took {batch_time:?})", start.elapsed(), batch.num_rows());
+            prev_batch_time = Instant::now();
+        }
+
+        let time_blocking = start.elapsed();
+        let min_poll_blocking = poll_times_blocking
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or_default();
+        let max_poll_blocking = poll_times_blocking
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or_default();
+        let avg_poll_blocking: Duration = poll_times_blocking.iter().sum::<Duration>()
+            / poll_times_blocking.len() as u32;
+
+        println!("Total time: {time_blocking:?}");
+        println!("Poll times: min={min_poll_blocking:?}, max={max_poll_blocking:?}, avg={avg_poll_blocking:?}");
+
+        println!("\n=== Summary ===");
+        println!("Total execution time:");
+        println!("  Chunked:  {total_chunked:?}");
+        println!("  Blocking: {time_blocking:?}");
+        println!(
+            "  Overhead: {:.2}x with chunked",
+            total_chunked.as_secs_f64() / time_blocking.as_secs_f64()
+        );
+
+        println!("\nPoll duration (time between batches):");
+        println!("  Chunked:  min={min_poll_chunked:?}, max={max_poll_chunked:?}, avg={avg_poll_chunked:?}");
+        println!("  Blocking: min={min_poll_blocking:?}, max={max_poll_blocking:?}, avg={avg_poll_blocking:?}");
+
+        println!("\nYield behavior:");
+        println!("  Chunked:  {count_chunked} batches (yields between each)");
+        println!("  Blocking: {count_blocking} batch (single long stall)");
+
+        println!("Benefit: max poll reduced from {max_poll_blocking:?} to {max_poll_chunked:?}.");
 
         assert!(
             count_chunked > 1,
@@ -3362,9 +3433,31 @@ mod tests {
         );
 
         // Example output:
-        // Testing with 1000000 groups (UInt32 + String + LargeList keys)
-        // Chunked emission (1024): 2.1316265s (977 batches)
-        // Blocking emission (all): 2.815402s (1 batches)
+        // === Chunked emission (batch_size=8192) ===
+        // First batch arrived at: 2.210163709s (8192 rows)
+        // Total batches: 123
+        // Total time: 2.869591125s
+        // Poll times: min=369.209µs, max=2.210162417s, avg=23.324541ms
+
+        // === Blocking emission (batch_size > num_groups) ===
+        //   Batch 1 arrived at: 2.877907958s (1000000 rows, batch creation took 2.877906208s)
+        // Total time: 2.8790405s
+        // Poll times: min=2.877906208s, max=2.877906208s, avg=2.877906208s
+
+        // === Summary ===
+        // Total execution time:
+        //   Chunked:  2.869591125s
+        //   Blocking: 2.8790405s
+        //   Overhead: 1.00x with chunked
+
+        // Poll duration (time between batches):
+        //   Chunked:  min=369.209µs, max=2.210162417s, avg=23.324541ms
+        //   Blocking: min=2.877906208s, max=2.877906208s, avg=2.877906208s
+
+        // Yield behavior:
+        //   Chunked:  123 batches (yields between each)
+        //   Blocking: 1 batch (single long stall)
+        // Benefit: max poll reduced from 2.877906208s to 2.210162417s.
         Ok(())
     }
 }
