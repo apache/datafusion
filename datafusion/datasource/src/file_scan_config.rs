@@ -906,7 +906,7 @@ impl FileScanConfig {
             return (
                 Arc::clone(self.file_schema()),
                 self.constraints.clone(),
-                self.statistics.clone(),
+                self.statistics().clone(),
                 self.output_ordering.clone(),
             );
         }
@@ -2425,7 +2425,7 @@ mod tests {
             config.statistics().column_statistics.len(),
             file_schema.fields().len()
         );
-        for stat in &config.statistics().column_statistics {
+        for stat in config.statistics().column_statistics {
             assert_eq!(stat.distinct_count, Precision::Absent);
             assert_eq!(stat.min_value, Precision::Absent);
             assert_eq!(stat.max_value, Precision::Absent);
