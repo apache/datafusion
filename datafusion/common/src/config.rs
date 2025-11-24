@@ -1121,7 +1121,7 @@ impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions 
                 return _config_err!(
                     "Invalid duration format: {}. Valid values are pretty or iso8601",
                     self.duration_format
-                )
+                );
             }
         };
 
@@ -2257,13 +2257,13 @@ impl ConfigField for TableParquetOptions {
                 [_meta] | [_meta, ""] => {
                     return _config_err!(
                         "Invalid metadata key provided, missing key in metadata::<key>"
-                    )
+                    );
                 }
                 [_meta, k] => k.into(),
                 _ => {
                     return _config_err!(
                         "Invalid metadata key provided, found too many '::' in \"{key}\""
-                    )
+                    );
                 }
             };
             self.key_value_metadata.insert(k, Some(value.into()));
@@ -3287,9 +3287,11 @@ mod tests {
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
         let entries = table_config.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key == "format.bloom_filter_enabled::col1"))
+        assert!(
+            entries
+                .iter()
+                .any(|item| item.key == "format.bloom_filter_enabled::col1")
+        )
     }
 
     #[cfg(feature = "parquet")]
@@ -3303,10 +3305,10 @@ mod tests {
             )
             .unwrap();
         let entries = table_parquet_options.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key
-                == "crypto.file_encryption.column_key_as_hex::double_field"))
+        assert!(
+            entries.iter().any(|item| item.key
+                == "crypto.file_encryption.column_key_as_hex::double_field")
+        )
     }
 
     #[cfg(feature = "parquet")]
