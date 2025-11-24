@@ -811,7 +811,9 @@ impl DefaultPhysicalPlanner {
                         {
                             // All partition columns must be present in the GROUP BY
                             partition_exprs.iter().all(|part_expr| {
-                                let Some(part_col) = part_expr.as_any().downcast_ref::<Column>() else {
+                                let Some(part_col) =
+                                    part_expr.as_any().downcast_ref::<Column>()
+                                else {
                                     return false;
                                 };
 
@@ -819,7 +821,9 @@ impl DefaultPhysicalPlanner {
                                     group_expr
                                         .as_any()
                                         .downcast_ref::<Column>()
-                                        .map_or(false, |group_col| group_col.name() == part_col.name())
+                                        .map_or(false, |group_col| {
+                                            group_col.name() == part_col.name()
+                                        })
                                 })
                             })
                         } else {

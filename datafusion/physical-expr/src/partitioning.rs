@@ -202,20 +202,13 @@ impl Partitioning {
                     fast_match
                 }
                 Partitioning::KeyPartitioned(partition_exprs, _) => {
-                    // KeyPartitioned satisfies HashPartitioned if all partition columns
-                    // are present in the required hash columns
-                    if partition_exprs.iter().all(|partition_expr| {
+                    partition_exprs.iter().all(|partition_expr| {
                         exprs_match_with_equivalence(
                             partition_expr,
                             required_exprs,
                             eq_properties,
                         )
-                    }) {
-                        true
-                    } else {
-                        // As a last resort, try comparing entire sets of labels
-                        partition_labels_subset(required_exprs, partition_exprs)
-                    }
+                    }) || partition_labels_subset(required_exprs, partition_exprs)
                 }
                 _ => false,
             },
@@ -263,13 +256,12 @@ fn exprs_match_with_equivalence(
     candidates: &[Arc<dyn PhysicalExpr>],
     eq_properties: &EquivalenceProperties,
 ) -> bool {
-    let eq_groups = eq_properties.eq_group();
-
     candidates.iter().any(|candidate| {
         if physical_exprs_equal(&[Arc::clone(candidate)], &[Arc::clone(expr)]) {
             return true;
         }
 
+        let eq_groups = eq_properties.eq_group();
         if !eq_groups.is_empty() {
             let normalized_candidate = eq_groups.normalize_expr(Arc::clone(candidate));
             let normalized_expr = eq_groups.normalize_expr(Arc::clone(expr));
@@ -278,13 +270,10 @@ fn exprs_match_with_equivalence(
             }
         }
 
-        match (
-            normalize_partition_label(candidate),
-            normalize_partition_label(expr),
-        ) {
-            (Some(candidate_label), Some(expr_label)) => candidate_label == expr_label,
-            _ => false,
-        }
+        matches!(
+            (normalize_partition_label(candidate), normalize_partition_label(expr)),
+            (Some(candidate_label), Some(expr_label)) if candidate_label == expr_label
+        )
     })
 }
 

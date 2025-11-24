@@ -469,10 +469,7 @@ impl FileGroup {
             debug!(
                 "Mixed partitioned/non-partitioned files detected, falling back to single file group"
             );
-            let all_files = groups
-                .into_values()
-                .flatten()
-                .collect();
+            let all_files = groups.into_values().flatten().collect();
             return vec![FileGroup::new(all_files)];
         }
 
