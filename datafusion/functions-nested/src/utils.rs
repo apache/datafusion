@@ -77,7 +77,6 @@ where
     }
 }
 
-
 /// Computes a BooleanArray indicating equality or inequality between elements in a list array and a specified element array.
 ///
 /// # Arguments
@@ -225,4 +224,3 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
         _ => internal_err!("Expected a Map type, got {data_type}"),
     }
 }
-

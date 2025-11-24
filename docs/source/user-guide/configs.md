@@ -255,3 +255,4 @@ SET datafusion.execution.batch_size = 1024;
 ```
 
 [`fairspillpool`]: https://docs.rs/datafusion/latest/datafusion/execution/memory_pool/struct.FairSpillPool.html
+
