@@ -110,7 +110,7 @@ this crate, you will find that many of them implement the `Drop` trait and
 perform a foreign call.
 
 Suppose we have a `FFI_CatalogProvider`, for example. This struct is safe to
-pass across the FFI boundary, so it may be owned be either the library that
+pass across the FFI boundary, so it may be owned by either the library that
 produces the underlying `CatalogProvider` or by another library that consumes
 it. If we look closer at the `FFI_CatalogProvider`, it has a pointer to
 some private data. That private data is only accessible on the producer's
