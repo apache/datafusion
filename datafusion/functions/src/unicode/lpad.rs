@@ -129,7 +129,7 @@ impl ScalarUDFImpl for LPadFunc {
 /// Extends the string to length 'length' by prepending the characters fill (a space by default).
 /// If the string is already longer than length then it is truncated (on the right).
 /// lpad('hi', 5, 'xy') = 'xyxhi'
-pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() <= 1 || args.len() > 3 {
         return exec_err!(
             "lpad was called with {} arguments. It requires at least 2 and at most 3.",

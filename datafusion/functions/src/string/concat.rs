@@ -287,7 +287,7 @@ impl ScalarUDFImpl for ConcatFunc {
     }
 }
 
-pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
+pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     let mut new_args = Vec::with_capacity(args.len());
     let mut contiguous_scalar = "".to_string();
 
