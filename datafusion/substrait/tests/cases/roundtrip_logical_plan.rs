@@ -32,8 +32,8 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
-    Extension, InvariantLevel, LogicalPlan, PartitionEvaluator, Repartition,
-    UserDefinedLogicalNode, Values, Volatility,
+    EmptyRelation, Extension, InvariantLevel, LogicalPlan, PartitionEvaluator,
+    Repartition, UserDefinedLogicalNode, Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -183,6 +183,46 @@ impl MockUserDefinedLogicalPlan {
 #[tokio::test]
 async fn simple_select() -> Result<()> {
     roundtrip("SELECT a, b FROM data").await
+}
+
+#[tokio::test]
+async fn roundtrip_literal_without_from() -> Result<()> {
+    roundtrip("SELECT 1 AS one").await
+}
+
+#[tokio::test]
+async fn roundtrip_empty_relation_with_schema() -> Result<()> {
+    // Test produce_one_row=true with multiple typed columns
+    roundtrip("SELECT 1::int as a, 'hello'::text as b, 3.14::double as c").await
+}
+
+#[tokio::test]
+async fn roundtrip_empty_relation_no_rows() -> Result<()> {
+    // Test produce_one_row=false
+    let ctx = create_context().await?;
+    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: false,
+        schema: DFSchemaRef::new(DFSchema::empty()),
+    });
+    roundtrip_logical_plan_with_ctx(plan, ctx).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_subquery_with_empty_relation() -> Result<()> {
+    // Test EmptyRelation in the context of scalar subqueries.
+    // The optimizer may simplify the subquery away, but we're testing that
+    // the EmptyRelation round-trips correctly when it appears in the plan.
+    let ctx = create_context().await?;
+    let df = ctx.sql("SELECT (SELECT 1) as nested").await?;
+    let plan = df.into_optimized_plan()?;
+
+    // Just verify the round-trip succeeds and produces valid results
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let df2 = DataFrame::new(ctx.state(), plan2);
+    df2.show().await?;
+    Ok(())
 }
 
 #[tokio::test]
