@@ -20,7 +20,7 @@ use crate::logical_plan::producer::{
 };
 use datafusion::common::{internal_err, not_impl_err, DFSchemaRef};
 use datafusion::logical_expr::expr::Alias;
-use datafusion::logical_expr::utils::powerset_cloned;
+use datafusion::logical_expr::utils::powerset;
 use datafusion::logical_expr::{Aggregate, Distinct, Expr, GroupingSet};
 use substrait::proto::aggregate_rel::{Grouping, Measure};
 use substrait::proto::rel::RelType;

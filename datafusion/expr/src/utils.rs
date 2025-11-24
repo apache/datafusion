@@ -100,7 +100,7 @@ fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
 ///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
 ///
 /// [power set]: https://en.wikipedia.org/wiki/Power_set
-fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>> {
+pub fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>> {
     if slice.len() >= 64 {
         return plan_err!("The size of the set must be less than 64");
     }
