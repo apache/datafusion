@@ -153,7 +153,7 @@ impl PercentileCont {
         }
     }
 
-    fn create_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn create_accumulator(&self, args: &AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
         let is_descending = args
@@ -292,7 +292,7 @@ impl AggregateUDFImpl for PercentileCont {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        self.create_accumulator(acc_args)
+        self.create_accumulator(&acc_args)
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {

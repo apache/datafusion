@@ -519,9 +519,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
 
     let raw_tpcds_sql_queries = (1..100)
-        // skip query 75 until it is fixed
-        // https://github.com/apache/datafusion/issues/17801
-        .filter(|q| *q != 75)
         .map(|q| std::fs::read_to_string(format!("{tests_path}tpc-ds/{q}.sql")).unwrap())
         .collect::<Vec<_>>();
 
