@@ -81,8 +81,8 @@ enum EvalMethod {
     /// See [`LiteralLookupTable`] for more details
     WithExprScalarLookupTable {
         lookup_table: LiteralLookupTable,
-        /// Fallback to use when the <expr> data type does not match the WHEN literals data type
-        /// (e.g. <expr> data type is dictionary<int32, utf8> and WHEN literals data type is utf8)
+        /// Fallback to use when the `<expr>` data type does not match the WHEN literals data type
+        /// (e.g. `<expr>` data type is dictionary<int32, utf8> and WHEN literals data type is utf8)
         /// TODO - avoid this and support different data types in the lookup table
         fallback_for_datatype_mismatch: ProjectedCaseBody,
     },
