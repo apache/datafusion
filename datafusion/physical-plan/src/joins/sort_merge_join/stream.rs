@@ -351,19 +351,45 @@ pub(super) struct SortMergeJoinStream {
 /// Joined batches with attached join filter information
 pub(super) struct JoinedRecordBatches {
     /// Joined batches. Each batch is already joined columns from left and right sources
-    pub batches: Vec<RecordBatch>,
-    pub joined_batches: BatchCoalescer,
+    pub(super) batches: Vec<RecordBatch>,
+    pub(super) joined_batches: BatchCoalescer,
     /// Filter match mask for each row(matched/non-matched)
-    pub filter_mask: BooleanBuilder,
+    pub(super) filter_mask: BooleanBuilder,
     /// Left row indices to glue together rows in `batches` and `filter_mask`
-    pub row_indices: UInt64Builder,
+    pub(super) row_indices: UInt64Builder,
     /// Which unique batch id the row belongs to
     /// It is necessary to differentiate rows that are distributed the way when they point to the same
     /// row index but in not the same batches
-    pub batch_ids: Vec<usize>,
+    pub(super) batch_ids: Vec<usize>,
 }
 
 impl JoinedRecordBatches {
+    /// Returns true if there are no batches accumulated
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.batches.is_empty()
+    }
+
+    /// Concatenates all accumulated batches into a single RecordBatch
+    fn concat_batches(&self, schema: &SchemaRef) -> Result<RecordBatch> {
+        Ok(concat_batches(schema, &self.batches)?)
+    }
+
+    /// Finishes and returns the metadata arrays, clearing the builders
+    ///
+    /// Returns (row_indices, filter_mask, batch_ids_ref)
+    /// Note: batch_ids is returned as a reference since it's still needed in the struct
+    fn finish_metadata(&mut self) -> (UInt64Array, BooleanArray, &[usize]) {
+        let row_indices = self.row_indices.finish();
+        let filter_mask = self.filter_mask.finish();
+        (row_indices, filter_mask, &self.batch_ids)
+    }
+
+    /// Clears only the batches vector (used in non-filtered path)
+    fn clear_batches(&mut self) {
+        self.batches.clear();
+    }
+
     /// Asserts that internal metadata arrays are consistent with each other
     /// Only checks if metadata is actually being used (i.e., not all empty)
     #[inline]
@@ -474,10 +500,8 @@ impl JoinedRecordBatches {
         // For Full joins, we keep the pre_mask (with nulls), for others we keep the cleaned mask
         self.filter_mask.extend(filter_mask);
         self.row_indices.extend(row_indices);
-        self.batch_ids.resize(
-            self.batch_ids.len() + row_indices.len(),
-            streamed_batch_id,
-        );
+        self.batch_ids
+            .resize(self.batch_ids.len() + row_indices.len(), streamed_batch_id);
 
         self.debug_assert_metadata_aligned();
         self.batches.push(batch);
@@ -777,10 +801,7 @@ impl Stream for SortMergeJoinStream {
 
                                         // If join is filtered and there is joined tuples waiting
                                         // to be filtered
-                                        if !self
-                                            .staging_output_record_batches
-                                            .batches
-                                            .is_empty()
+                                        if !self.staging_output_record_batches.is_empty()
                                         {
                                             // Apply filter on joined tuples and get filtered batch
                                             let out_filtered_batch =
@@ -898,7 +919,7 @@ impl Stream for SortMergeJoinStream {
                         .debug_assert_metadata_aligned();
 
                     // if there is still something not processed
-                    if !self.staging_output_record_batches.batches.is_empty() {
+                    if !self.staging_output_record_batches.is_empty() {
                         if self.filter.is_some()
                             && matches!(
                                 self.join_type,
@@ -1638,8 +1659,9 @@ impl SortMergeJoinStream {
         self.staging_output_record_batches
             .debug_assert_metadata_aligned();
 
-        let record_batch =
-            concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
+        let record_batch = self
+            .staging_output_record_batches
+            .concat_batches(&self.schema)?;
         (&record_batch).record_output(&self.join_metrics.baseline_metrics());
         // If join filter exists, `self.output_size` is not accurate as we don't know the exact
         // number of rows in the output record batch. If streamed row joined with buffered rows,
@@ -1668,12 +1690,12 @@ impl SortMergeJoinStream {
         {
             // For non-filtered outer joins, we clear batches immediately after concat
             // since we don't need them for deferred filter processing
-            self.staging_output_record_batches.batches.clear();
+            self.staging_output_record_batches.clear_batches();
         } else {
             // For filtered outer joins, we keep the batches for later filter processing
             // in filter_joined_batch(). Batches should still contain data.
             debug_assert!(
-                !self.staging_output_record_batches.batches.is_empty(),
+                !self.staging_output_record_batches.is_empty(),
                 "For filtered outer joins, batches should not be empty after concat since they're needed for filter processing"
             );
         }
@@ -1686,11 +1708,11 @@ impl SortMergeJoinStream {
         self.staging_output_record_batches
             .debug_assert_metadata_aligned();
 
-        let record_batch =
-            concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
-        let mut out_indices = self.staging_output_record_batches.row_indices.finish();
-        let mut out_mask = self.staging_output_record_batches.filter_mask.finish();
-        let mut batch_ids = &self.staging_output_record_batches.batch_ids;
+        let record_batch = self
+            .staging_output_record_batches
+            .concat_batches(&self.schema)?;
+        let (mut out_indices, mut out_mask, mut batch_ids) =
+            self.staging_output_record_batches.finish_metadata();
         let default_batch_ids = vec![0; record_batch.num_rows()];
 
         // If only nulls come in and indices sizes doesn't match with expected record batch count
@@ -1722,7 +1744,7 @@ impl SortMergeJoinStream {
         );
 
         if out_mask.is_empty() {
-            self.staging_output_record_batches.batches.clear();
+            self.staging_output_record_batches.clear_batches();
             return Ok(record_batch);
         }
 
