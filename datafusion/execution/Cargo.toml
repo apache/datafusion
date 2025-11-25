@@ -47,7 +47,7 @@ parquet_encryption = [
     "parquet/encryption",
 ]
 arrow_buffer_pool = [
-    "arrow-buffer/pool"
+    "arrow-buffer/pool",
 ]
 sql = []
 
