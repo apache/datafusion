@@ -1037,7 +1037,7 @@ By default if you do not use a custom `SchemaAdapterFactory` we will use express
 If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
 
 To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and use that instead of a `SchemaAdapterFactory`.
-See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
+See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for an example of how to do this.
 Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
 
 See [#16800] for details.

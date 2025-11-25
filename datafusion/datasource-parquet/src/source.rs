@@ -240,7 +240,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).
 ///
-/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_parquet_index.rs
+/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/parquet_advanced_index.rs
 ///
 /// # Execution Overview
 ///

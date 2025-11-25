@@ -785,7 +785,7 @@ impl SessionContext {
     /// * [`SessionState::create_physical_expr`] for a lower level API
     ///
     /// [simplified]: datafusion_optimizer::simplify_expressions
-    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
     pub fn create_physical_expr(
         &self,
         expr: Expr,
@@ -1903,7 +1903,7 @@ pub trait QueryPlanner: Debug {
 /// because the implementation and requirements vary widely. Please see
 /// [function_factory example] for a reference implementation.
 ///
-/// [function_factory example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/function_factory.rs
+/// [function_factory example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/function_factory.rs
 ///
 /// # Examples of syntax that can be supported
 ///
