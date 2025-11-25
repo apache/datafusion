@@ -707,7 +707,7 @@ impl SessionState {
     /// * [`create_physical_expr`] for a lower-level API
     ///
     /// [simplified]: datafusion_optimizer::simplify_expressions
-    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
     /// [`SessionContext::create_physical_expr`]: crate::execution::context::SessionContext::create_physical_expr
     pub fn create_physical_expr(
         &self,
