@@ -804,34 +804,31 @@ impl DefaultPhysicalPlanner {
 
                 // Check if the data is partitioned on the grouping columns.
                 // If all partition columns are present in the GROUP BY, we can avoid repartitioning.
-                let key_partition_on_group =
-                    if groups.is_single() && !groups.expr().is_empty() {
-                        if let Partitioning::KeyPartitioned(ref partition_exprs, _) =
-                            output_partitioning
-                        {
-                            // All partition columns must be present in the GROUP BY
-                            partition_exprs.iter().all(|part_expr| {
-                                let Some(part_col) =
-                                    part_expr.as_any().downcast_ref::<Column>()
-                                else {
-                                    return false;
-                                };
+                let key_partition_on_group = if groups.is_single()
+                    && !groups.expr().is_empty()
+                {
+                    if let Partitioning::KeyPartitioned(ref partition_exprs, _) =
+                        output_partitioning
+                    {
+                        partition_exprs.iter().all(|part_expr| {
+                            let Some(part_col) =
+                                part_expr.as_any().downcast_ref::<Column>()
+                            else {
+                                return false;
+                            };
 
-                                grouping_input_exprs.iter().any(|group_expr| {
-                                    group_expr
-                                        .as_any()
-                                        .downcast_ref::<Column>()
-                                        .map_or(false, |group_col| {
-                                            group_col.name() == part_col.name()
-                                        })
-                                })
+                            grouping_input_exprs.iter().any(|group_expr| {
+                                group_expr.as_any().downcast_ref::<Column>().is_some_and(
+                                    |group_col| group_col.name() == part_col.name(),
+                                )
                             })
-                        } else {
-                            false
-                        }
+                        })
                     } else {
                         false
-                    };
+                    }
+                } else {
+                    false
+                };
 
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
