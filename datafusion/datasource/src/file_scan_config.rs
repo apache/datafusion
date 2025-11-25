@@ -158,6 +158,8 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
+    /// Whether the scan's limit is order sensitive
+    pub limit_order_sensitive: bool,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
@@ -240,6 +242,8 @@ pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
+    limit_order_sensitive: bool,
+    projection_indices: Option<Vec<usize>>,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
@@ -270,6 +274,8 @@ impl FileScanConfigBuilder {
             file_compression_type: None,
             new_lines_in_values: None,
             limit: None,
+            limit_order_sensitive: false,
+            projection_indices: None,
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
@@ -280,6 +286,12 @@ impl FileScanConfigBuilder {
     /// all records after filtering are returned.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
+        self
+    }
+
+    /// Set whether the limit should be order-sensitive.
+    pub fn with_limit_order_sensitive(mut self, order_sensitive: bool) -> Self {
+        self.limit_order_sensitive = order_sensitive;
         self
     }
 
@@ -446,6 +458,8 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            limit_order_sensitive,
+            projection_indices,
             constraints,
             file_groups,
             statistics,
@@ -468,6 +482,8 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            limit_order_sensitive,
+            projection_exprs,
             constraints,
             file_groups,
             output_ordering,
@@ -491,6 +507,10 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             file_compression_type: Some(config.file_compression_type),
             new_lines_in_values: Some(config.new_lines_in_values),
             limit: config.limit,
+            limit_order_sensitive: config.limit_order_sensitive,
+            projection_indices: config
+                .projection_exprs
+                .map(|p| p.ordered_column_indices()),
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
