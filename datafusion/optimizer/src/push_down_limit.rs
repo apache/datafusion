@@ -25,6 +25,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::combine_limit;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 use datafusion_expr::{FetchType, SkipType, lit};
@@ -124,6 +125,9 @@ impl OptimizerRule for PushDownLimit {
                 })),
 
             LogicalPlan::Sort(mut sort) => {
+                let marked_input =
+                    mark_fetch_order_sensitive(Arc::unwrap_or_clone(sort.input))?;
+                sort.input = Arc::new(marked_input);
                 let new_fetch = {
                     let sort_fetch = skip + fetch;
                     Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
@@ -268,6 +272,17 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     Transformed::yes(join)
 }
 
+fn mark_fetch_order_sensitive(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_down(|node| match node {
+        LogicalPlan::TableScan(mut scan) => {
+            scan.fetch_order_sensitive = true;
+            Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
+        }
+        _ => Ok(Transformed::no(node)),
+    })
+    .map(|t| t.data)
+}
+
 #[cfg(test)]
 mod test {
     use std::cmp::Ordering;
@@ -275,10 +290,11 @@ mod test {
     use std::vec;
 
     use super::*;
-    use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
+    use crate::{assert_optimized_plan_eq_snapshot, Optimizer};
 
     use crate::OptimizerContext;
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_common::DFSchemaRef;
     use datafusion_expr::{
         Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
@@ -1044,7 +1060,7 @@ mod test {
             plan,
             @r"
         Limit: skip=0, fetch=1000
-          Cross Join: 
+          Cross Join:
             Limit: skip=0, fetch=1000
               TableScan: test, fetch=1000
             Limit: skip=0, fetch=1000
@@ -1067,7 +1083,7 @@ mod test {
             plan,
             @r"
         Limit: skip=1000, fetch=1000
-          Cross Join: 
+          Cross Join:
             Limit: skip=0, fetch=2000
               TableScan: test, fetch=2000
             Limit: skip=0, fetch=2000
@@ -1130,5 +1146,40 @@ mod test {
             TableScan: test, fetch=0
         "
         )
+    }
+
+    fn has_fetch_order_sensitive_scan(plan: &LogicalPlan) -> bool {
+        let mut found = false;
+        plan.apply(|node| {
+            if let LogicalPlan::TableScan(scan) = node {
+                if scan.fetch_order_sensitive {
+                    found = true;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("plan traversal");
+        found
+    }
+
+    #[test]
+    fn limit_push_down_sort_marks_scans_order_sensitive() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(has_fetch_order_sensitive_scan(&optimized_plan));
+
+        Ok(())
     }
 }
