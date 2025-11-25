@@ -32,6 +32,7 @@ use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
 use datafusion_common::types::NativeType;
 use datafusion_common::DataFusionError;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use datafusion_expr::{TableType, Volatility};
@@ -215,9 +216,14 @@ impl InformationSchemaConfig {
     fn make_df_settings(
         &self,
         config_options: &ConfigOptions,
+        runtime_env: &Arc<RuntimeEnv>,
         builder: &mut InformationSchemaDfSettingsBuilder,
     ) {
         for entry in config_options.entries() {
+            builder.add_setting(entry);
+        }
+        // Add runtime configuration entries
+        for entry in runtime_env.config_entries() {
             builder.add_setting(entry);
         }
     }
@@ -1060,7 +1066,12 @@ impl PartitionStream for InformationSchemaDfSettings {
             // TODO: Stream this
             futures::stream::once(async move {
                 // create a mem table with the names of tables
-                config.make_df_settings(ctx.session_config().options(), &mut builder);
+                let runtime_env = ctx.runtime_env();
+                config.make_df_settings(
+                    ctx.session_config().options(),
+                    &runtime_env,
+                    &mut builder,
+                );
                 Ok(builder.finish())
             }),
         ))

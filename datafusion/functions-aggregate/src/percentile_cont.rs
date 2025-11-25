@@ -34,7 +34,8 @@ use arrow::{
 use arrow::array::ArrowNativeTypeOp;
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, DataFusionError, Result, ScalarValue,
+    assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError,
+    Result, ScalarValue,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -152,7 +153,7 @@ impl PercentileCont {
         }
     }
 
-    fn create_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn create_accumulator(&self, args: &AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
         let is_descending = args
@@ -291,7 +292,7 @@ impl AggregateUDFImpl for PercentileCont {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        self.create_accumulator(acc_args)
+        self.create_accumulator(&acc_args)
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -303,12 +304,12 @@ impl AggregateUDFImpl for PercentileCont {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let num_args = args.exprs.len();
-        if num_args != 2 {
-            return internal_err!(
-                "percentile_cont should have 2 args, but found num args:{}",
-                args.exprs.len()
-            );
-        }
+        assert_eq_or_internal_err!(
+            num_args,
+            2,
+            "percentile_cont should have 2 args, but found num args:{}",
+            num_args
+        );
 
         let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 

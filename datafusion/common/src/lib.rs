@@ -32,8 +32,6 @@ mod dfschema;
 mod functional_dependencies;
 mod join_type;
 mod param_value;
-#[cfg(feature = "pyarrow")]
-mod pyarrow;
 mod schema_reference;
 mod table_reference;
 mod unnest;

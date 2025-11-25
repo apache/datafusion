@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::DFSchema;
 use datafusion::logical_expr::{col, lit};
@@ -32,17 +34,15 @@ use datafusion::{
 /// The code in this example shows how to:
 ///
 /// 1. [`simple_session_context_parse_sql_expr_demo`]: Parse a simple SQL text into a logical
-/// expression using a schema at [`SessionContext`].
+///    expression using a schema at [`SessionContext`].
 ///
 /// 2. [`simple_dataframe_parse_sql_expr_demo`]: Parse a simple SQL text into a logical expression
-/// using a schema at [`DataFrame`].
+///    using a schema at [`DataFrame`].
 ///
 /// 3. [`query_parquet_demo`]: Query a parquet file using the parsed_sql_expr from a DataFrame.
 ///
 /// 4. [`round_trip_parse_sql_expr_demo`]: Parse a SQL text and convert it back to SQL using [`Unparser`].
-
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn parse_sql_expr() -> Result<()> {
     // See how to evaluate expressions
     simple_session_context_parse_sql_expr_demo()?;
     simple_dataframe_parse_sql_expr_demo().await?;
