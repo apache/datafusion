@@ -76,6 +76,13 @@ pub struct GroupValuesRows {
 
     /// Random state for creating hashes
     random_state: RandomState,
+
+    /// State for iterative emission (activated after input is complete)
+    /// When true, emit() uses offset-based slicing instead of copying remaining rows
+    drain_mode: bool,
+
+    /// Current offset for drain mode emission (number of rows already emitted)
+    emission_offset: usize,
 }
 
 impl GroupValuesRows {
@@ -107,11 +114,19 @@ impl GroupValuesRows {
             hashes_buffer: Default::default(),
             rows_buffer,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            drain_mode: false,
+            emission_offset: 0,
         })
     }
 }
 
 impl GroupValues for GroupValuesRows {
+    fn input_done(&mut self) {
+        self.drain_mode = true;
+        self.map.clear();
+        self.map_size = 0;
+    }
+
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         // Convert the group keys into the row format
         let group_rows = &mut self.rows_buffer;
@@ -185,10 +200,22 @@ impl GroupValues for GroupValuesRows {
         self.len() == 0
     }
 
+    /// Returns the number of group values.
+    ///
+    /// In drain mode (after `input_done()`), returns remaining groups not yet emitted,
+    /// which matches the accumulator state size for consistency.
     fn len(&self) -> usize {
         self.group_values
             .as_ref()
-            .map(|group_values| group_values.num_rows())
+            .map(|group_values| {
+                let total_rows = group_values.num_rows();
+                if self.drain_mode {
+                    // In drain mode, return remaining rows (not yet emitted)
+                    total_rows.saturating_sub(self.emission_offset)
+                } else {
+                    total_rows
+                }
+            })
             .unwrap_or(0)
     }
 
@@ -206,29 +233,43 @@ impl GroupValues for GroupValuesRows {
                 output
             }
             EmitTo::First(n) => {
-                let groups_rows = group_values.iter().take(n);
-                let output = self.row_converter.convert_rows(groups_rows)?;
-                // Clear out first n group keys by copying them to a new Rows.
-                // TODO file some ticket in arrow-rs to make this more efficient?
-                let mut new_group_values = self.row_converter.empty_rows(0, 0);
-                for row in group_values.iter().skip(n) {
-                    new_group_values.push(row);
-                }
-                std::mem::swap(&mut new_group_values, &mut group_values);
-
-                self.map.retain(|(_exists_hash, group_idx)| {
-                    // Decrement group index by n
-                    match group_idx.checked_sub(n) {
-                        // Group index was >= n, shift value down
-                        Some(sub) => {
-                            *group_idx = sub;
-                            true
-                        }
-                        // Group index was < n, so remove from table
-                        None => false,
+                if self.drain_mode {
+                    let start = self.emission_offset;
+                    let end = std::cmp::min(start + n, group_values.num_rows());
+                    let iter = (start..end).map(|i| group_values.row(i));
+                    let output = self.row_converter.convert_rows(iter)?;
+                    self.emission_offset = end;
+                    if self.emission_offset == group_values.num_rows() {
+                        group_values.clear();
+                        self.emission_offset = 0;
                     }
-                });
-                output
+                    output
+                } else {
+                    let groups_rows = group_values.iter().take(n);
+                    let output = self.row_converter.convert_rows(groups_rows)?;
+
+                    // Clear out first n group keys by copying them to a new Rows.
+                    // TODO file some ticket in arrow-rs to make this more efficient?
+                    let mut new_group_values = self.row_converter.empty_rows(0, 0);
+                    for row in group_values.iter().skip(n) {
+                        new_group_values.push(row);
+                    }
+                    std::mem::swap(&mut new_group_values, &mut group_values);
+
+                    self.map.retain(|(_exists_hash, group_idx)| {
+                        // Decrement group index by n
+                        match group_idx.checked_sub(n) {
+                            // Group index was >= n, shift value down
+                            Some(sub) => {
+                                *group_idx = sub;
+                                true
+                            }
+                            // Group index was < n, so remove from table
+                            None => false,
+                        }
+                    });
+                    output
+                }
             }
         };
 
@@ -254,6 +295,8 @@ impl GroupValues for GroupValuesRows {
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(count);
+        self.drain_mode = false;
+        self.emission_offset = 0;
     }
 }
 

@@ -1550,9 +1550,10 @@ mod tests {
     use crate::test::TestMemoryExec;
     use crate::RecordBatchStream;
 
+    use crate::sorts::sort::SortExec;
     use arrow::array::{
-        DictionaryArray, Float32Array, Float64Array, Int32Array, StructArray,
-        UInt32Array, UInt64Array,
+        DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Builder,
+        LargeListBuilder, StringArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Int32Type};
@@ -1572,8 +1573,9 @@ mod tests {
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-    use futures::{FutureExt, Stream};
+    use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -3144,6 +3146,429 @@ mod tests {
         run_test_with_spill_pool_if_necessary(2_000, true).await?;
         // test without spill
         run_test_with_spill_pool_if_necessary(20_000, false).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chunked_group_emission() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_id", DataType::UInt32, false),
+            Field::new("value", DataType::Float64, false),
+        ]));
+
+        let num_groups = 100_000;
+        let group_ids: Vec<u32> = (0..num_groups).collect();
+        let values: Vec<f64> = (0..num_groups).map(|i| i as f64).collect();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(group_ids)),
+                Arc::new(Float64Array::from(values)),
+            ],
+        )?;
+
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group_id", &schema)?,
+            "group_id".to_string(),
+        )]);
+
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("COUNT(value)")
+                .build()?,
+        )];
+
+        // Use a small batch size to force chunked emission
+        let batch_size = 100;
+        let session_config = SessionConfig::new().with_batch_size(batch_size);
+
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+
+        let mut stream = aggregate.execute(0, task_ctx)?;
+        let mut total_rows = 0;
+        let mut batch_count = 0;
+        let mut max_batch_size = 0;
+
+        // Collect all batches and verify they are chunked
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            let batch_rows = batch.num_rows();
+            total_rows += batch_rows;
+            batch_count += 1;
+            max_batch_size = max_batch_size.max(batch_rows);
+
+            // Each batch should be <= batch_size (except possibly the last one)
+            assert!(
+                batch_rows <= batch_size || batch_count == 1,
+                "Batch {batch_count} has {batch_rows} rows, expected <= {batch_size}"
+            );
+        }
+
+        // Verify we got all groups
+        assert_eq!(total_rows, num_groups as usize, "Should emit all groups");
+
+        // Verify chunking happened (should have multiple batches)
+        assert!(
+            batch_count > 1,
+            "Expected multiple batches for chunked emission, got {batch_count}"
+        );
+
+        // Verify no single huge batch was emitted
+        assert!(
+            max_batch_size <= batch_size,
+            "Max batch size {max_batch_size} should be <= {batch_size}"
+        );
+
+        Ok(())
+    }
+
+    /// Reproducer for the "long poll" issue in group by aggregations.
+    ///
+    /// This test demonstrates the difference between:
+    /// 1. OLD BEHAVIOR (simulated with very large batch_size): Emits all groups at once,
+    ///    causing a long blocking operation before the first batch is returned
+    /// 2. NEW BEHAVIOR (with small batch_size): Emits groups in chunks, allowing
+    ///    incremental output without blocking the async runtime
+    #[tokio::test]
+    async fn test_long_poll_reproducer() -> Result<()> {
+        use datafusion_common::instant::Instant;
+        use std::time::Duration;
+
+        let num_groups = 1_000_000;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_id", DataType::UInt32, false),
+            Field::new("group_name", DataType::Utf8, false),
+            Field::new(
+                "group_list",
+                DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+                false,
+            ),
+            Field::new("value", DataType::Float64, false),
+        ]));
+
+        // Generate test data
+        let group_ids: Vec<u32> = (0..num_groups).collect();
+        let group_names: Vec<String> =
+            (0..num_groups).map(|i| format!("group_{i}")).collect();
+
+        let mut list_builder = LargeListBuilder::new(Int64Builder::new());
+        for i in 0..num_groups {
+            list_builder.append_value([Some(i as i64), Some((i + 1) as i64)]);
+        }
+        let group_lists = list_builder.finish();
+        let values: Vec<f64> = (0..num_groups).map(|i| i as f64).collect();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(group_ids)),
+                Arc::new(StringArray::from(group_names)),
+                Arc::new(group_lists),
+                Arc::new(Float64Array::from(values)),
+            ],
+        )?;
+
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("group_id", &schema)?, "group_id".to_string()),
+            (col("group_name", &schema)?, "group_name".to_string()),
+            (col("group_list", &schema)?, "group_list".to_string()),
+        ]);
+
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("COUNT(value)")
+                .build()?,
+        )];
+
+        println!("Testing with {num_groups} groups (UInt32 + String + LargeList keys)");
+
+        // Case 1: Chunked emission with detailed timing
+        println!("\n=== Chunked emission (batch_size=8192) ===");
+        let input_chunked = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let session_config_chunked = SessionConfig::new().with_batch_size(8192);
+        let task_ctx_chunked =
+            Arc::new(TaskContext::default().with_session_config(session_config_chunked));
+        let aggregate_chunked = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by.clone(),
+            aggregates.clone(),
+            vec![None],
+            input_chunked,
+            Arc::clone(&schema),
+        )?);
+
+        let mut stream_chunked = aggregate_chunked.execute(0, task_ctx_chunked)?;
+        let start = Instant::now();
+        let mut first_emission = None;
+        let mut batch_count = 0;
+        let mut prev_batch_time = start;
+        let mut poll_times_chunked = Vec::new();
+
+        while let Some(result) = stream_chunked.next().await {
+            let batch = result?;
+            batch_count += 1;
+            let batch_time = prev_batch_time.elapsed();
+            poll_times_chunked.push(batch_time);
+
+            if first_emission.is_none() {
+                first_emission = Some(start.elapsed());
+                println!(
+                    "First batch arrived at: {:?} ({} rows)",
+                    start.elapsed(),
+                    batch.num_rows()
+                );
+            }
+
+            prev_batch_time = Instant::now();
+        }
+
+        let count_chunked = batch_count;
+        let total_chunked = start.elapsed();
+        let min_poll_chunked =
+            poll_times_chunked.iter().min().copied().unwrap_or_default();
+        let max_poll_chunked =
+            poll_times_chunked.iter().max().copied().unwrap_or_default();
+        let avg_poll_chunked: Duration =
+            poll_times_chunked.iter().sum::<Duration>() / poll_times_chunked.len() as u32;
+
+        println!("Total batches: {count_chunked}");
+        println!("Total time: {total_chunked:?}");
+        println!("Poll times: min={min_poll_chunked:?}, max={max_poll_chunked:?}, avg={avg_poll_chunked:?}");
+
+        // Case 2: Blocking emission with detailed timing
+        println!("\n=== Blocking emission (batch_size > num_groups) ===");
+        let input_blocking = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let session_config_blocking =
+            SessionConfig::new().with_batch_size(num_groups as usize + 1000);
+        let task_ctx_blocking =
+            Arc::new(TaskContext::default().with_session_config(session_config_blocking));
+        let aggregate_blocking = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            aggregates,
+            vec![None],
+            input_blocking,
+            Arc::clone(&schema),
+        )?);
+
+        let mut stream_blocking = aggregate_blocking.execute(0, task_ctx_blocking)?;
+        let start = Instant::now();
+        let mut count_blocking = 0;
+        let mut prev_batch_time = start;
+        let mut poll_times_blocking = Vec::new();
+
+        while let Some(result) = stream_blocking.next().await {
+            let batch = result?;
+            count_blocking += 1;
+            let batch_time = prev_batch_time.elapsed();
+            poll_times_blocking.push(batch_time);
+            println!("  Batch {count_blocking} arrived at: {:?} ({} rows, batch creation took {batch_time:?})", start.elapsed(), batch.num_rows());
+            prev_batch_time = Instant::now();
+        }
+
+        let time_blocking = start.elapsed();
+        let min_poll_blocking = poll_times_blocking
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or_default();
+        let max_poll_blocking = poll_times_blocking
+            .iter()
+            .max()
+            .copied()
+            .unwrap_or_default();
+        let avg_poll_blocking: Duration = poll_times_blocking.iter().sum::<Duration>()
+            / poll_times_blocking.len() as u32;
+
+        println!("Total time: {time_blocking:?}");
+        println!("Poll times: min={min_poll_blocking:?}, max={max_poll_blocking:?}, avg={avg_poll_blocking:?}");
+
+        println!("\n=== Summary ===");
+        println!("Total execution time:");
+        println!("  Chunked:  {total_chunked:?}");
+        println!("  Blocking: {time_blocking:?}");
+        println!(
+            "  Overhead: {:.2}x with chunked",
+            total_chunked.as_secs_f64() / time_blocking.as_secs_f64()
+        );
+
+        println!("\nPoll duration (time between batches):");
+        println!("  Chunked:  min={min_poll_chunked:?}, max={max_poll_chunked:?}, avg={avg_poll_chunked:?}");
+        println!("  Blocking: min={min_poll_blocking:?}, max={max_poll_blocking:?}, avg={avg_poll_blocking:?}");
+
+        println!("\nYield behavior:");
+        println!("  Chunked:  {count_chunked} batches (yields between each)");
+        println!("  Blocking: {count_blocking} batch (single long stall)");
+
+        println!("Benefit: max poll reduced from {max_poll_blocking:?} to {max_poll_chunked:?}.");
+
+        assert!(
+            count_chunked > 1,
+            "Chunked emission should produce multiple batches"
+        );
+        assert_eq!(
+            count_blocking, 1,
+            "Blocking emission should produce single batch"
+        );
+
+        // Example output:
+        // === Chunked emission (batch_size=8192) ===
+        // First batch arrived at: 2.210163709s (8192 rows)
+        // Total batches: 123
+        // Total time: 2.869591125s
+        // Poll times: min=369.209µs, max=2.210162417s, avg=23.324541ms
+
+        // === Blocking emission (batch_size > num_groups) ===
+        //   Batch 1 arrived at: 2.877907958s (1000000 rows, batch creation took 2.877906208s)
+        // Total time: 2.8790405s
+        // Poll times: min=2.877906208s, max=2.877906208s, avg=2.877906208s
+
+        // === Summary ===
+        // Total execution time:
+        //   Chunked:  2.869591125s
+        //   Blocking: 2.8790405s
+        //   Overhead: 1.00x with chunked
+
+        // Poll duration (time between batches):
+        //   Chunked:  min=369.209µs, max=2.210162417s, avg=23.324541ms
+        //   Blocking: min=2.877906208s, max=2.877906208s, avg=2.877906208s
+
+        // Yield behavior:
+        //   Chunked:  123 batches (yields between each)
+        //   Blocking: 1 batch (single long stall)
+        // Benefit: max poll reduced from 2.877906208s to 2.210162417s.
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sorted_input() -> Result<()> {
+        // This test triggers emission with drain_mode=false by using sorted input.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_id", DataType::UInt32, false),
+            Field::new(
+                "group_list",
+                DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+                false,
+            ),
+            Field::new("value", DataType::Float64, false),
+        ]));
+
+        // Create a single large batch with group boundaries within it
+        // GroupOrdering::Full should detect boundaries and emit incrementally
+        let num_rows = 100;
+        let group_ids: Vec<u32> = (0..num_rows).map(|i| i / 5).collect(); // 20 groups, 5 rows each
+
+        let mut list_builder = LargeListBuilder::new(Int64Builder::new());
+        for i in 0..num_rows {
+            list_builder.append_value([Some(i as i64), Some((i + 1) as i64)]);
+        }
+        let group_lists = list_builder.finish();
+
+        let values: Vec<f64> = (0..num_rows).map(|i| i as f64).collect();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(group_ids)),
+                Arc::new(group_lists),
+                Arc::new(Float64Array::from(values)),
+            ],
+        )
+        .expect("Failed to create batch");
+
+        let batches = vec![batch];
+
+        let sort_expr = [PhysicalSortExpr {
+            expr: col("group_id", &schema).expect("Failed to create column"),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+        let ordering: LexOrdering = sort_expr.into();
+
+        let memory_input =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)
+                .expect("Failed to create input");
+
+        let sorted_input: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(ordering, memory_input));
+
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (
+                col("group_id", &schema).expect("Failed to create column"),
+                "group_id".to_string(),
+            ),
+            (
+                col("group_list", &schema).expect("Failed to create column"),
+                "group_list".to_string(),
+            ),
+        ]);
+
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(
+                count_udaf(),
+                vec![col("value", &schema).expect("Failed to create column")],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("COUNT(value)")
+            .build()
+            .expect("Failed to build aggregate"),
+        )];
+
+        let task_ctx = Arc::new(TaskContext::default());
+
+        let aggregate = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by,
+                aggregates,
+                vec![None],
+                sorted_input,
+                Arc::clone(&schema),
+            )
+            .expect("Failed to create aggregate"),
+        );
+
+        let mut stream = aggregate
+            .execute(0, task_ctx)
+            .expect("Failed to execute aggregate");
+
+        let mut batch_count = 0;
+        let mut total_rows = 0;
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            batch_count += 1;
+            total_rows += batch.num_rows();
+        }
+
+        assert!(batch_count > 0, "Should have at least one batch");
+        assert!(total_rows > 0, "Should have at least some rows");
+
         Ok(())
     }
 }

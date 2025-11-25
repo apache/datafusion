@@ -111,6 +111,9 @@ pub trait GroupValues: Send {
     /// Emits the group values
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
+    /// Signals that input is complete and drain mode should be activated
+    fn input_done(&mut self) {}
+
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
     fn clear_shrink(&mut self, batch: &RecordBatch);
 }

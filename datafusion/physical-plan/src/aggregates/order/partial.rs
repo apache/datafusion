@@ -174,7 +174,14 @@ impl GroupOrderingPartial {
                 assert!(*current_sort >= n);
                 *current_sort -= n;
             }
-            State::Complete => panic!("invalid state: complete"),
+            State::Complete => {
+                // When input is complete, we're in "drain mode" where groups are being
+                // emitted iteratively without receiving new input. In this state:
+                // - No new groups will be added (input_done() was called)
+                // - We don't need to track group indices anymore
+                // - remove_groups() is called as part of emit(EmitTo::First(n)) but has
+                //   no work to do since we're just draining accumulated groups
+            }
         }
     }
 
