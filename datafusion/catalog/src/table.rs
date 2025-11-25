@@ -361,6 +361,7 @@ pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
     projection: Option<&'a [usize]>,
     limit: Option<usize>,
+    limit_order_sensitive: bool,
 }
 
 impl<'a> ScanArgs<'a> {
@@ -421,6 +422,25 @@ impl<'a> ScanArgs<'a> {
     /// Returns the row limit, or `None` if no limit was specified.
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+
+    /// Set whether the scan's limit should be order-sensitive.
+    ///
+    /// If specified, the scan should return the limited rows in a specific order.
+    /// Or we can leverage limit pruning to optimize the scan.
+    ///
+    /// # Arguments
+    /// * `order_sensitive` - Whether the scan's limit should be order-sensitive
+    pub fn with_limit_order_sensitive(mut self, order_sensitive: bool) -> Self {
+        self.limit_order_sensitive = order_sensitive;
+        self
+    }
+
+    /// Get whether the scan's limit should be order-sensitive.
+    ///
+    /// Returns `true` if the scan's limit should be order-sensitive, or `false` if not.
+    pub fn limit_order_sensitive(&self) -> bool {
+        self.limit_order_sensitive
     }
 }
 

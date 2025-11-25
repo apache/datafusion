@@ -127,7 +127,7 @@ struct TestOutput {
 impl TestOutput {
     /// retrieve the value of the named metric, if any
     fn metric_value(&self, metric_name: &str) -> Option<usize> {
-        if let Some((pruned, _matched)) = self.pruning_metric(metric_name) {
+        if let Some((pruned, _matched, _fully)) = self.pruning_metric(metric_name) {
             return Some(pruned);
         }
 
@@ -141,9 +141,10 @@ impl TestOutput {
             })
     }
 
-    fn pruning_metric(&self, metric_name: &str) -> Option<(usize, usize)> {
+    fn pruning_metric(&self, metric_name: &str) -> Option<(usize, usize, usize)> {
         let mut total_pruned = 0;
         let mut total_matched = 0;
+        let mut total_fully_matched = 0;
         let mut found = false;
 
         for metric in self.parquet_metrics.iter() {
@@ -152,15 +153,18 @@ impl TestOutput {
                 && let MetricValue::PruningMetrics {
                     pruning_metrics, ..
                 } = metric.value()
-            {
-                total_pruned += pruning_metrics.pruned();
-                total_matched += pruning_metrics.matched();
-                found = true;
+                {
+                    total_pruned += pruning_metrics.pruned();
+                    total_matched += pruning_metrics.matched();
+                    total_fully_matched += pruning_metrics.fully_matched();
+
+                    found = true;
+                }
             }
         }
 
         if found {
-            Some((total_pruned, total_matched))
+            Some((total_pruned, total_matched, total_fully_matched))
         } else {
             None
         }
@@ -172,32 +176,33 @@ impl TestOutput {
     }
 
     /// The number of row_groups pruned / matched by bloom filter
-    fn row_groups_bloom_filter(&self) -> Option<(usize, usize)> {
+    fn row_groups_bloom_filter(&self) -> Option<(usize, usize, usize)> {
         self.pruning_metric("row_groups_pruned_bloom_filter")
     }
 
     /// The number of row_groups matched by statistics
     fn row_groups_matched_statistics(&self) -> Option<usize> {
         self.pruning_metric("row_groups_pruned_statistics")
-            .map(|(_pruned, matched)| matched)
+            .map(|(_pruned, matched, _fully)| matched)
     }
 
     /// The number of row_groups fully matched by statistics
     fn row_groups_fully_matched_statistics(&self) -> Option<usize> {
-        self.metric_value("row_groups_fully_matched_statistics")
+        self.pruning_metric("row_groups_pruned_statistics")
+            .map(|(_pruned, _, fully)| fully)
     }
 
     /// The number of row_groups pruned by statistics
     fn row_groups_pruned_statistics(&self) -> Option<usize> {
         self.pruning_metric("row_groups_pruned_statistics")
-            .map(|(pruned, _matched)| pruned)
+            .map(|(pruned, _matched, _fully)| pruned)
     }
 
     /// Metric `files_ranges_pruned_statistics` tracks both pruned and matched count,
     /// for testing purpose, here it only aggregate the `pruned` count.
     fn files_ranges_pruned_statistics(&self) -> Option<usize> {
         self.pruning_metric("files_ranges_pruned_statistics")
-            .map(|(pruned, _matched)| pruned)
+            .map(|(pruned, _matched, _fully)| pruned)
     }
 
     /// The number of row_groups matched by bloom filter or statistics
@@ -207,13 +212,13 @@ impl TestOutput {
     /// count.
     fn row_groups_matched(&self) -> Option<usize> {
         self.row_groups_bloom_filter()
-            .map(|(_pruned, matched)| matched)
+            .map(|(_pruned, matched, _fully)| matched)
     }
 
     /// The number of row_groups pruned
     fn row_groups_pruned(&self) -> Option<usize> {
         self.row_groups_bloom_filter()
-            .map(|(pruned, _matched)| pruned)
+            .map(|(pruned, _matched, _fully)| pruned)
             .zip(self.row_groups_pruned_statistics())
             .map(|(a, b)| a + b)
     }
@@ -221,12 +226,13 @@ impl TestOutput {
     /// The number of row pages pruned
     fn row_pages_pruned(&self) -> Option<usize> {
         self.pruning_metric("page_index_rows_pruned")
-            .map(|(pruned, _matched)| pruned)
+            .map(|(pruned, _matched, _fully)| pruned)
     }
 
     /// The number of row groups pruned by limit pruning
     fn limit_pruned_row_groups(&self) -> Option<usize> {
-        self.metric_value("limit_pruned_row_groups")
+        self.pruning_metric("limit_pruned_row_groups")
+            .map(|(pruned, _, _)| pruned)
     }
 
     fn description(&self) -> String {
