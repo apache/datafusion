@@ -448,4 +448,153 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_key_partitioned_satisfies() {
+        use crate::expressions::Column;
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+
+        let eq_properties = EquivalenceProperties::new(schema);
+
+        // Case 1: Exact match - [a] satisfies [a]
+        let partitioning = Partitioning::KeyPartitioned(vec![Arc::clone(&col_a)], 4);
+        let required = vec![Arc::clone(&col_a)];
+        assert!(partitioning
+            .satisfy(&Distribution::HashPartitioned(required), &eq_properties));
+
+        // Case 2: Superset - [a] satisfies [a, b] (partition columns are subset of required)
+        let partitioning = Partitioning::KeyPartitioned(vec![Arc::clone(&col_a)], 4);
+        let required = vec![Arc::clone(&col_a), Arc::clone(&col_b)];
+        assert!(partitioning
+            .satisfy(&Distribution::HashPartitioned(required), &eq_properties));
+
+        // Case 3: NOT satisfied - [a, b] does not satisfy [a]
+        let partitioning =
+            Partitioning::KeyPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4);
+        let required = vec![Arc::clone(&col_a)];
+        assert!(!partitioning
+            .satisfy(&Distribution::HashPartitioned(required), &eq_properties));
+
+        // Case 4: Multi-column exact match
+        let partitioning =
+            Partitioning::KeyPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4);
+        let required = vec![Arc::clone(&col_a), Arc::clone(&col_b)];
+        assert!(partitioning
+            .satisfy(&Distribution::HashPartitioned(required), &eq_properties));
+
+        // Case 5: Multi-column superset
+        let partitioning =
+            Partitioning::KeyPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4);
+        let required = vec![Arc::clone(&col_a), Arc::clone(&col_b), Arc::clone(&col_c)];
+        assert!(partitioning
+            .satisfy(&Distribution::HashPartitioned(required), &eq_properties));
+
+        // Case 6: Different columns - not satisfied
+        let partitioning = Partitioning::KeyPartitioned(vec![Arc::clone(&col_a)], 4);
+        let required = vec![Arc::clone(&col_b)];
+        assert!(!partitioning
+            .satisfy(&Distribution::HashPartitioned(required), &eq_properties));
+    }
+
+    #[test]
+    fn test_key_partitioned_project() {
+        use crate::expressions::Column;
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let col_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_c = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        // Case 1: Identity projection - no changes
+        let partitioning =
+            Partitioning::KeyPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4);
+        let mapping = ProjectionMapping::try_new(
+            vec![
+                (Arc::clone(&col_a), "a".to_string()),
+                (Arc::clone(&col_b), "b".to_string()),
+                (Arc::clone(&col_c), "c".to_string()),
+            ],
+            &schema,
+        )
+        .unwrap();
+
+        let projected = partitioning.project(&mapping, &eq_properties);
+        if let Partitioning::KeyPartitioned(exprs, count) = projected {
+            assert_eq!(count, 4);
+            assert_eq!(exprs.len(), 2);
+        } else {
+            panic!("Expected KeyPartitioned");
+        }
+
+        // Case 2: Projection drops a partition column
+        let partitioning =
+            Partitioning::KeyPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4);
+        let mapping = ProjectionMapping::try_new(
+            vec![
+                (Arc::clone(&col_a), "a".to_string()),
+                (Arc::clone(&col_c), "c".to_string()),
+            ],
+            &schema,
+        )
+        .unwrap();
+
+        let projected = partitioning.project(&mapping, &eq_properties);
+        if let Partitioning::KeyPartitioned(exprs, count) = projected {
+            assert_eq!(count, 4);
+            assert_eq!(exprs.len(), 2);
+            // First expression should be projected, second becomes UnknownColumn
+            assert!(exprs[0].as_any().downcast_ref::<Column>().is_some());
+        } else {
+            panic!("Expected KeyPartitioned");
+        }
+
+        // Case 3: Projection reorders columns
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("c", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let partitioning =
+            Partitioning::KeyPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4);
+        let col_c_new = Arc::new(Column::new("c", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b_new = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let col_a_new = Arc::new(Column::new("a", 2)) as Arc<dyn PhysicalExpr>;
+
+        let mapping = ProjectionMapping::try_new(
+            vec![
+                (col_c_new, "c".to_string()),
+                (col_b_new, "b".to_string()),
+                (col_a_new, "a".to_string()),
+            ],
+            &output_schema,
+        )
+        .unwrap();
+
+        let projected = partitioning.project(&mapping, &eq_properties);
+        if let Partitioning::KeyPartitioned(exprs, count) = projected {
+            assert_eq!(count, 4);
+            assert_eq!(exprs.len(), 2);
+        } else {
+            panic!("Expected KeyPartitioned");
+        }
+    }
 }

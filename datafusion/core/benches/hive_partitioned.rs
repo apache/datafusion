@@ -42,7 +42,7 @@ fn generate_partitioned_data(
     let props = WriterProperties::builder().build();
 
     for i in 0..num_partitions {
-        let part_dir = base_dir.join(format!("part_col={}", i));
+        let part_dir = base_dir.join(format!("part_col={i}"));
         fs::create_dir_all(&part_dir).unwrap();
         let file_path = part_dir.join("data.parquet");
         let file = File::create(file_path).unwrap();
@@ -69,7 +69,7 @@ async fn save_plans(table_path: &str, output_file: &Path) {
     let mut file = File::create(output_file).unwrap();
 
     writeln!(file, "KeyPartitioned Aggregation Benchmark Plans\n").unwrap();
-    writeln!(file, "Query: {}\n", query).unwrap();
+    writeln!(file, "Query: {query}\n").unwrap();
 
     // Optimized plan
     let config_opt = SessionConfig::new().with_target_partitions(20).set_bool(

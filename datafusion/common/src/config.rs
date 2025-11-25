@@ -594,7 +594,7 @@ config_namespace! {
         /// Should a `ListingTable` created through the `ListingTableFactory` keep files that share
         /// the same partition column values in the same execution partition when `PARTITIONED BY`
         /// columns are declared. Defaults to false to avoid overhead on non-partitioned tables.
-        /// Optmization is beest with moderate partition counts (10-100 partitions) and large partitions
+        /// Optimization is best with moderate partition counts (10-100 partitions) and large partitions
         /// (>500K rows). With many small partitions (500+), task scheduling overhead may outweigh shuffle
         /// savings.
         pub listing_table_preserve_partition_values: bool, default = false

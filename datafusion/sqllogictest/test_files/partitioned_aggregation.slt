@@ -24,8 +24,9 @@ SET datafusion.execution.target_partitions = 4;
 statement ok
 SET datafusion.execution.listing_table_preserve_partition_values = true;
 
+# Single-column partitioned table
 statement ok
-CREATE TABLE staging (
+CREATE TABLE single_col_staging (
     part_col INT,
     val INT
 ) AS VALUES
@@ -35,35 +36,77 @@ CREATE TABLE staging (
     (4, 40);
 
 query I
-COPY (SELECT * FROM staging WHERE part_col = 1)
+COPY (SELECT * FROM single_col_staging WHERE part_col = 1)
 TO 'test_files/scratch/partitioned_aggregation/part_col=1/0.parquet'
 STORED AS PARQUET;
 ----
 3
 
 query I
-COPY (SELECT * FROM staging WHERE part_col = 2)
+COPY (SELECT * FROM single_col_staging WHERE part_col = 2)
 TO 'test_files/scratch/partitioned_aggregation/part_col=2/1.parquet'
 STORED AS PARQUET;
 ----
 2
 
 query I
-COPY (SELECT * FROM staging WHERE part_col = 3)
+COPY (SELECT * FROM single_col_staging WHERE part_col = 3)
 TO 'test_files/scratch/partitioned_aggregation/part_col=3/2.parquet'
 STORED AS PARQUET;
 ----
 1
 
 query I
-COPY (SELECT * FROM staging WHERE part_col = 4)
+COPY (SELECT * FROM single_col_staging WHERE part_col = 4)
 TO 'test_files/scratch/partitioned_aggregation/part_col=4/3.parquet'
 STORED AS PARQUET;
 ----
 1
 
+# Multi-column partitioned table
 statement ok
-CREATE EXTERNAL TABLE partitioned_table_optim (
+CREATE TABLE multi_col_staging (
+    year INT,
+    month INT,
+    day INT,
+    val INT
+) AS VALUES
+    (2024, 1, 1, 100), (2024, 1, 2, 101),
+    (2024, 2, 1, 200), (2024, 2, 2, 201),
+    (2025, 1, 1, 300), (2025, 1, 2, 301),
+    (2025, 2, 1, 400);
+
+query I
+COPY (SELECT * FROM multi_col_staging WHERE year = 2024 AND month = 1)
+TO 'test_files/scratch/partitioned_aggregation/multi_col/year=2024/month=1/data.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM multi_col_staging WHERE year = 2024 AND month = 2)
+TO 'test_files/scratch/partitioned_aggregation/multi_col/year=2024/month=2/data.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM multi_col_staging WHERE year = 2025 AND month = 1)
+TO 'test_files/scratch/partitioned_aggregation/multi_col/year=2025/month=1/data.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM multi_col_staging WHERE year = 2025 AND month = 2)
+TO 'test_files/scratch/partitioned_aggregation/multi_col/year=2025/month=2/data.parquet'
+STORED AS PARQUET;
+----
+1
+
+# Create external tables
+statement ok
+CREATE EXTERNAL TABLE single_col_table (
     part_col INT,
     val INT
 )
@@ -71,17 +114,27 @@ STORED AS PARQUET
 LOCATION 'test_files/scratch/partitioned_aggregation/'
 PARTITIONED BY (part_col);
 
-# 1. Verify plan when grouping by partition column
-# Should see AggregateExec: mode=SinglePartitioned (Optimization applied!)
-# Should NOT see CoalescePartitionsExec or RepartitionExec before the aggregate
+statement ok
+CREATE EXTERNAL TABLE multi_col_table (
+    year INT,
+    month INT,
+    day INT,
+    val INT
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/partitioned_aggregation/multi_col/'
+PARTITIONED BY (year, month);
+
+# Test 1: Single-column partition - GROUP BY partition column
+# Should use SinglePartitioned
 query TT
-EXPLAIN SELECT part_col, count(*) FROM partitioned_table_optim GROUP BY part_col ORDER BY part_col
+EXPLAIN SELECT part_col, count(*) FROM single_col_table GROUP BY part_col ORDER BY part_col
 ----
 logical_plan
-01)Sort: partitioned_table_optim.part_col ASC NULLS LAST
-02)--Projection: partitioned_table_optim.part_col, count(Int64(1)) AS count(*)
-03)----Aggregate: groupBy=[[partitioned_table_optim.part_col]], aggr=[[count(Int64(1))]]
-04)------TableScan: partitioned_table_optim projection=[part_col]
+01)Sort: single_col_table.part_col ASC NULLS LAST
+02)--Projection: single_col_table.part_col, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[single_col_table.part_col]], aggr=[[count(Int64(1))]]
+04)------TableScan: single_col_table projection=[part_col]
 physical_plan
 01)SortPreservingMergeExec: [part_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[part_col@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -89,25 +142,24 @@ physical_plan
 04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
 05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[part_col], file_type=parquet
 
-# Verify results
 query II
-SELECT part_col, count(*) FROM partitioned_table_optim GROUP BY part_col ORDER BY part_col
+SELECT part_col, count(*) FROM single_col_table GROUP BY part_col ORDER BY part_col
 ----
 1 3
 2 2
 3 1
 4 1
 
-# 2. Verify plan when grouping by partition column + other column
-# Should still use SinglePartitioned because partition key is a subset
+# Test 2: Single-column partition - GROUP BY partition + other column (superset)
+# Should use SinglePartitioned
 query TT
-EXPLAIN SELECT part_col, val, count(*) FROM partitioned_table_optim GROUP BY part_col, val ORDER BY part_col, val
+EXPLAIN SELECT part_col, val, count(*) FROM single_col_table GROUP BY part_col, val ORDER BY part_col, val
 ----
 logical_plan
-01)Sort: partitioned_table_optim.part_col ASC NULLS LAST, partitioned_table_optim.val ASC NULLS LAST
-02)--Projection: partitioned_table_optim.part_col, partitioned_table_optim.val, count(Int64(1)) AS count(*)
-03)----Aggregate: groupBy=[[partitioned_table_optim.part_col, partitioned_table_optim.val]], aggr=[[count(Int64(1))]]
-04)------TableScan: partitioned_table_optim projection=[val, part_col]
+01)Sort: single_col_table.part_col ASC NULLS LAST, single_col_table.val ASC NULLS LAST
+02)--Projection: single_col_table.part_col, single_col_table.val, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[single_col_table.part_col, single_col_table.val]], aggr=[[count(Int64(1))]]
+04)------TableScan: single_col_table projection=[val, part_col]
 physical_plan
 01)SortPreservingMergeExec: [part_col@0 ASC NULLS LAST, val@1 ASC NULLS LAST]
 02)--SortExec: expr=[val@1 ASC NULLS LAST], preserve_partitioning=[true]
@@ -115,16 +167,16 @@ physical_plan
 04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@1 as part_col, val@0 as val], aggr=[count(Int64(1))], ordering_mode=PartiallySorted([0])
 05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[val, part_col], file_type=parquet
 
-# 3. Verify fallback when grouping by non-partition column
-# Should use FinalPartitioned and Repartition (not SinglePartitioned)
+# Test 3: Single-column partition - GROUP BY non-partition column
+# Should use FinalPartitioned with Repartition
 query TT
-EXPLAIN SELECT val, count(*) FROM partitioned_table_optim GROUP BY val ORDER BY val
+EXPLAIN SELECT val, count(*) FROM single_col_table GROUP BY val ORDER BY val
 ----
 logical_plan
-01)Sort: partitioned_table_optim.val ASC NULLS LAST
-02)--Projection: partitioned_table_optim.val, count(Int64(1)) AS count(*)
-03)----Aggregate: groupBy=[[partitioned_table_optim.val]], aggr=[[count(Int64(1))]]
-04)------TableScan: partitioned_table_optim projection=[val]
+01)Sort: single_col_table.val ASC NULLS LAST
+02)--Projection: single_col_table.val, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[single_col_table.val]], aggr=[[count(Int64(1))]]
+04)------TableScan: single_col_table projection=[val]
 physical_plan
 01)SortPreservingMergeExec: [val@0 ASC NULLS LAST]
 02)--SortExec: expr=[val@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -135,14 +187,77 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[val@0 as val], aggr=[count(Int64(1))]
 08)--------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[val], file_type=parquet
 
-# 4. With preserve_partition_values=false (the default), files are distributed across
-# target_partitions without preserving partition boundaries, so the optimization does NOT apply.
-# The query will use standard hash repartitioning for aggregation.
+# Test 4: Multi-column partition - GROUP BY all partition columns + other (superset)
+# Should use SinglePartitioned
+query TT
+EXPLAIN SELECT year, month, day, count(*) FROM multi_col_table GROUP BY year, month, day ORDER BY year, month, day
+----
+logical_plan
+01)Sort: multi_col_table.year ASC NULLS LAST, multi_col_table.month ASC NULLS LAST, multi_col_table.day ASC NULLS LAST
+02)--Projection: multi_col_table.year, multi_col_table.month, multi_col_table.day, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[multi_col_table.year, multi_col_table.month, multi_col_table.day]], aggr=[[count(Int64(1))]]
+04)------TableScan: multi_col_table projection=[day, year, month]
+physical_plan
+01)SortPreservingMergeExec: [year@0 ASC NULLS LAST, month@1 ASC NULLS LAST, day@2 ASC NULLS LAST]
+02)--SortExec: expr=[year@0 ASC NULLS LAST, month@1 ASC NULLS LAST, day@2 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[year@0 as year, month@1 as month, day@2 as day, count(Int64(1))@3 as count(*)]
+04)------AggregateExec: mode=SinglePartitioned, gby=[year@1 as year, month@2 as month, day@0 as day], aggr=[count(Int64(1))]
+05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2024/month=1/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2024/month=2/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2025/month=1/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2025/month=2/data.parquet]]}, projection=[day, year, month], file_type=parquet
+
+query IIII
+SELECT year, month, day, count(*) FROM multi_col_table GROUP BY year, month, day ORDER BY year, month, day
+----
+2024 1 1 1
+2024 1 2 1
+2024 2 1 1
+2024 2 2 1
+2025 1 1 1
+2025 1 2 1
+2025 2 1 1
+
+# Test 5: Multi-column partition - GROUP BY only first partition column (subset)
+# Should use FinalPartitioned with Repartition
+query TT
+EXPLAIN SELECT year, count(*) FROM multi_col_table GROUP BY year
+----
+logical_plan
+01)Projection: multi_col_table.year, count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[multi_col_table.year]], aggr=[[count(Int64(1))]]
+03)----TableScan: multi_col_table projection=[year]
+physical_plan
+01)ProjectionExec: expr=[year@0 as year, count(Int64(1))@1 as count(*)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[year@0 as year], aggr=[count(Int64(1))]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([year@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[year@0 as year], aggr=[count(Int64(1))]
+06)----------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2024/month=1/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2024/month=2/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2025/month=1/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2025/month=2/data.parquet]]}, projection=[year], file_type=parquet
+
+query II
+SELECT year, count(*) FROM multi_col_table GROUP BY year ORDER BY year
+----
+2024 4
+2025 3
+
+# Test 6: GROUPING SETS should NOT use SinglePartitioned
+query TT
+EXPLAIN SELECT year, count(*) FROM multi_col_table GROUP BY GROUPING SETS ((year), (month))
+----
+logical_plan
+01)Projection: multi_col_table.year, count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[GROUPING SETS ((multi_col_table.year), (multi_col_table.month))]], aggr=[[count(Int64(1))]]
+03)----TableScan: multi_col_table projection=[year, month]
+physical_plan
+01)ProjectionExec: expr=[year@0 as year, count(Int64(1))@3 as count(*)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[year@0 as year, month@1 as month, __grouping_id@2 as __grouping_id], aggr=[count(Int64(1))]
+03)----AggregateExec: mode=Partial, gby=[(year@0 as year, NULL as month), (NULL as year, month@1 as month)], aggr=[count(Int64(1))]
+04)------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2024/month=1/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2024/month=2/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2025/month=1/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/multi_col/year=2025/month=2/data.parquet]]}, projection=[year, month], file_type=parquet
+
+# Test 7: With preserve_partition_values=false, optimization should NOT apply
 statement ok
 SET datafusion.execution.listing_table_preserve_partition_values = false;
 
 statement ok
-CREATE EXTERNAL TABLE partitioned_table_disabled (
+CREATE EXTERNAL TABLE single_col_table_disabled (
     part_col INT,
     val INT
 )
@@ -151,13 +266,13 @@ LOCATION 'test_files/scratch/partitioned_aggregation/'
 PARTITIONED BY (part_col);
 
 query TT
-EXPLAIN SELECT part_col, count(*) FROM partitioned_table_disabled GROUP BY part_col ORDER BY part_col
+EXPLAIN SELECT part_col, count(*) FROM single_col_table_disabled GROUP BY part_col ORDER BY part_col
 ----
 logical_plan
-01)Sort: partitioned_table_disabled.part_col ASC NULLS LAST
-02)--Projection: partitioned_table_disabled.part_col, count(Int64(1)) AS count(*)
-03)----Aggregate: groupBy=[[partitioned_table_disabled.part_col]], aggr=[[count(Int64(1))]]
-04)------TableScan: partitioned_table_disabled projection=[part_col]
+01)Sort: single_col_table_disabled.part_col ASC NULLS LAST
+02)--Projection: single_col_table_disabled.part_col, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[single_col_table_disabled.part_col]], aggr=[[count(Int64(1))]]
+04)------TableScan: single_col_table_disabled projection=[part_col]
 physical_plan
 01)SortPreservingMergeExec: [part_col@0 ASC NULLS LAST]
 02)--SortExec: expr=[part_col@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -170,10 +285,16 @@ physical_plan
 
 # Cleanup
 statement ok
-DROP TABLE partitioned_table_optim;
+DROP TABLE single_col_table;
 
 statement ok
-DROP TABLE partitioned_table_disabled;
+DROP TABLE single_col_table_disabled;
 
 statement ok
-DROP TABLE staging;
+DROP TABLE multi_col_table;
+
+statement ok
+DROP TABLE single_col_staging;
+
+statement ok
+DROP TABLE multi_col_staging;
