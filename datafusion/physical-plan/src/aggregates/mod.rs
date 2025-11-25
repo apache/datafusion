@@ -1549,6 +1549,7 @@ mod tests {
     use crate::test::TestMemoryExec;
     use crate::RecordBatchStream;
 
+    use crate::sorts::sort::SortExec;
     use arrow::array::{
         DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Builder,
         LargeListBuilder, StringArray, StructArray, UInt32Array, UInt64Array,
@@ -1571,6 +1572,7 @@ mod tests {
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
@@ -3458,6 +3460,114 @@ mod tests {
         //   Chunked:  123 batches (yields between each)
         //   Blocking: 1 batch (single long stall)
         // Benefit: max poll reduced from 2.877906208s to 2.210162417s.
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sorted_input() -> Result<()> {
+        // This test triggers emission with drain_mode=false by using sorted input.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_id", DataType::UInt32, false),
+            Field::new(
+                "group_list",
+                DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+                false,
+            ),
+            Field::new("value", DataType::Float64, false),
+        ]));
+
+        // Create a single large batch with group boundaries within it
+        // GroupOrdering::Full should detect boundaries and emit incrementally
+        let num_rows = 100;
+        let group_ids: Vec<u32> = (0..num_rows).map(|i| i / 5).collect(); // 20 groups, 5 rows each
+
+        let mut list_builder = LargeListBuilder::new(Int64Builder::new());
+        for i in 0..num_rows {
+            list_builder.append_value([Some(i as i64), Some((i + 1) as i64)]);
+        }
+        let group_lists = list_builder.finish();
+
+        let values: Vec<f64> = (0..num_rows).map(|i| i as f64).collect();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(group_ids)),
+                Arc::new(group_lists),
+                Arc::new(Float64Array::from(values)),
+            ],
+        )
+        .expect("Failed to create batch");
+
+        let batches = vec![batch];
+
+        let sort_expr = [PhysicalSortExpr {
+            expr: col("group_id", &schema).expect("Failed to create column"),
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }];
+        let ordering: LexOrdering = sort_expr.into();
+
+        let memory_input =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)
+                .expect("Failed to create input");
+
+        let sorted_input: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(ordering, memory_input));
+
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (
+                col("group_id", &schema).expect("Failed to create column"),
+                "group_id".to_string(),
+            ),
+            (
+                col("group_list", &schema).expect("Failed to create column"),
+                "group_list".to_string(),
+            ),
+        ]);
+
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(
+                count_udaf(),
+                vec![col("value", &schema).expect("Failed to create column")],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("COUNT(value)")
+            .build()
+            .expect("Failed to build aggregate"),
+        )];
+
+        let task_ctx = Arc::new(TaskContext::default());
+
+        let aggregate = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by,
+                aggregates,
+                vec![None],
+                sorted_input,
+                Arc::clone(&schema),
+            )
+            .expect("Failed to create aggregate"),
+        );
+
+        let mut stream = aggregate
+            .execute(0, task_ctx)
+            .expect("Failed to execute aggregate");
+
+        let mut batch_count = 0;
+        let mut total_rows = 0;
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            batch_count += 1;
+            total_rows += batch.num_rows();
+        }
+
+        assert!(batch_count > 0, "Should have at least one batch");
+        assert!(total_rows > 0, "Should have at least some rows");
+
         Ok(())
     }
 }
