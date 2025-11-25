@@ -145,3 +145,69 @@ impl TryFrom<&FFI_TaskContextProvider> for Arc<TaskContext> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::execution::FFI_TaskContextProvider;
+    use datafusion_common::{DataFusionError, Result};
+    use datafusion_execution::{TaskContext, TaskContextProvider};
+    use std::sync::Arc;
+
+    #[derive(Default)]
+    struct TestCtxProvider {
+        ctx: Arc<TaskContext>,
+    }
+
+    impl TaskContextProvider for TestCtxProvider {
+        fn task_ctx(&self) -> Arc<TaskContext> {
+            Arc::clone(&self.ctx)
+        }
+    }
+
+    #[test]
+    fn ffi_task_context_provider_round_trip() -> Result<()> {
+        let ctx = Arc::new(TestCtxProvider::default()) as Arc<dyn TaskContextProvider>;
+        let mut ffi_ctx_provider: FFI_TaskContextProvider = (&Arc::clone(&ctx)).into();
+        ffi_ctx_provider.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_task_ctx: Arc<TaskContext> = (&ffi_ctx_provider).try_into()?;
+
+        assert_eq!(
+            format!("{foreign_task_ctx:?}"),
+            format!("{:?}", ctx.task_ctx())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn ffi_task_context_provider_clone() -> Result<()> {
+        let ctx = Arc::new(TestCtxProvider::default()) as Arc<dyn TaskContextProvider>;
+        let first_provider: FFI_TaskContextProvider = (&ctx).into();
+
+        let second_provider = first_provider.clone();
+
+        let first_ctx: Arc<TaskContext> = (&first_provider).try_into()?;
+        let second_ctx: Arc<TaskContext> = (&second_provider).try_into()?;
+
+        assert!(Arc::ptr_eq(&first_ctx, &second_ctx));
+
+        Ok(())
+    }
+
+    #[test]
+    fn ffi_task_context_provider_out_of_scope() {
+        fn create_ffi_out_of_scope() -> FFI_TaskContextProvider {
+            let ctx =
+                Arc::new(TestCtxProvider::default()) as Arc<dyn TaskContextProvider>;
+            (&ctx).into()
+        }
+
+        let provider = create_ffi_out_of_scope();
+        let failed_ctx = <Arc<TaskContext>>::try_from(&provider);
+
+        let Err(DataFusionError::Execution(_)) = failed_ctx else {
+            panic!("Expected out of scope error")
+        };
+    }
+}

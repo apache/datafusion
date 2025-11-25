@@ -15,21 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ffi::c_void;
-use std::sync::Arc;
+use std::{ffi::c_void, sync::Arc};
 
-use crate::session_config::FFI_SessionConfig;
-use crate::udaf::FFI_AggregateUDF;
-use crate::udf::FFI_ScalarUDF;
-use crate::udwf::FFI_WindowUDF;
-use abi_stable::pmr::ROption;
-use abi_stable::std_types::{RHashMap, RString};
-use abi_stable::StableAbi;
-use datafusion_execution::config::SessionConfig;
-use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
+use abi_stable::{
+    pmr::ROption,
+    std_types::{RHashMap, RString},
+    StableAbi,
+};
+use datafusion_execution::{config::SessionConfig, runtime_env::RuntimeEnv, TaskContext};
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
+};
+
+use crate::{
+    session_config::FFI_SessionConfig, udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF,
+    udwf::FFI_WindowUDF,
 };
 
 /// A stable struct for sharing [`TaskContext`] across FFI boundaries.
@@ -232,5 +232,50 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
                 runtime,
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::Result;
+    use datafusion_execution::TaskContext;
+
+    use crate::execution::FFI_TaskContext;
+
+    #[test]
+    fn ffi_task_ctx_round_trip() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let original = session_ctx.task_ctx();
+        let mut ffi_task_ctx = FFI_TaskContext::from(Arc::clone(&original));
+        ffi_task_ctx.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_task_ctx: Arc<TaskContext> = ffi_task_ctx.into();
+
+        // TaskContext doesn't implement Eq (nor should it) so check some of the
+        // data is round tripping correctly.
+
+        assert_eq!(
+            original.scalar_functions(),
+            foreign_task_ctx.scalar_functions()
+        );
+        assert_eq!(
+            original.aggregate_functions(),
+            foreign_task_ctx.aggregate_functions()
+        );
+        assert_eq!(
+            original.window_functions(),
+            foreign_task_ctx.window_functions()
+        );
+        assert_eq!(original.task_id(), foreign_task_ctx.task_id());
+        assert_eq!(original.session_id(), foreign_task_ctx.session_id());
+        assert_eq!(
+            format!("{:?}", original.session_config()),
+            format!("{:?}", foreign_task_ctx.session_config())
+        );
+
+        Ok(())
     }
 }
