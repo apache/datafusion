@@ -94,6 +94,7 @@ apache-avro = { version = "0.21", default-features = false }
 arrow = { version = "57.0.0", features = [
     "prettyprint",
     "chrono-tz",
+    "canonical_extension_types"
 ] }
 arrow-buffer = { version = "57.0.0", default-features = false }
 arrow-flight = { version = "57.0.0", features = [
@@ -103,7 +104,7 @@ arrow-ipc = { version = "57.0.0", default-features = false, features = [
     "lz4",
 ] }
 arrow-ord = { version = "57.0.0", default-features = false }
-arrow-schema = { version = "57.0.0", default-features = false }
+arrow-schema = { version = "57.0.0", default-features = false, features = ["canonical_extension_types"] }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -183,6 +184,7 @@ testcontainers = { version = "0.25.2", features = ["default"] }
 testcontainers-modules = { version = "0.13" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
+uuid = { version = "1.18", features = ["v4"] }
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
