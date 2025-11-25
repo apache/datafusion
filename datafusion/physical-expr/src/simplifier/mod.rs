@@ -58,7 +58,7 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
 
     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
         // Apply NOT expression simplification first
-        let not_simplified = simplify_not_expr_recursive(node, self.schema)?;
+        let not_simplified = simplify_not_expr_recursive(&node, self.schema)?;
         let node = not_simplified.data;
         let transformed = not_simplified.transformed;
 

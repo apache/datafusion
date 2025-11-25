@@ -506,6 +506,7 @@ impl TableProvider for ListingTable {
                     .with_statistics(statistics)
                     .with_projection_indices(projection)?
                     .with_limit(limit)
+                    .with_limit_order_sensitive(args.limit_order_sensitive())
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())
                     .build(),
