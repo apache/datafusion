@@ -445,7 +445,7 @@ impl GroupedHashAggregateStream {
     /// Create a new GroupedHashAggregateStream
     pub fn new(
         agg: &AggregateExec,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
         debug!("Creating GroupedHashAggregateStream");
@@ -454,7 +454,7 @@ impl GroupedHashAggregateStream {
         let agg_filter_expr = agg.filter_expr.clone();
 
         let batch_size = context.session_config().batch_size();
-        let input = agg.input.execute(partition, Arc::clone(&context))?;
+        let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
 
@@ -685,7 +685,7 @@ impl Stream for GroupedHashAggregateStream {
                             }
 
                             // Do the grouping
-                            self.group_aggregate_batch(batch)?;
+                            self.group_aggregate_batch(&batch)?;
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -739,7 +739,7 @@ impl Stream for GroupedHashAggregateStream {
                             self.spill_previous_if_necessary(&batch)?;
 
                             // Do the grouping
-                            self.group_aggregate_batch(batch)?;
+                            self.group_aggregate_batch(&batch)?;
 
                             // If we can begin emitting rows, do so,
                             // otherwise keep consuming input
@@ -788,7 +788,7 @@ impl Stream for GroupedHashAggregateStream {
                             if let Some(probe) = self.skip_aggregation_probe.as_mut() {
                                 probe.record_skipped(&batch);
                             }
-                            let states = self.transform_to_states(batch)?;
+                            let states = self.transform_to_states(&batch)?;
                             return Poll::Ready(Some(Ok(
                                 states.record_output(&self.baseline_metrics)
                             )));
@@ -881,12 +881,12 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 
 impl GroupedHashAggregateStream {
     /// Perform group-by aggregation for the given [`RecordBatch`].
-    fn group_aggregate_batch(&mut self, batch: RecordBatch) -> Result<()> {
+    fn group_aggregate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         // Evaluate the grouping expressions
         let group_by_values = if self.spill_state.is_stream_merging {
-            evaluate_group_by(&self.spill_state.merging_group_by, &batch)?
+            evaluate_group_by(&self.spill_state.merging_group_by, batch)?
         } else {
-            evaluate_group_by(&self.group_by, &batch)?
+            evaluate_group_by(&self.group_by, batch)?
         };
 
         // Only create the timer if there are actual aggregate arguments to evaluate
@@ -903,18 +903,18 @@ impl GroupedHashAggregateStream {
 
         // Evaluate the aggregation expressions.
         let input_values = if self.spill_state.is_stream_merging {
-            evaluate_many(&self.spill_state.merging_aggregate_arguments, &batch)?
+            evaluate_many(&self.spill_state.merging_aggregate_arguments, batch)?
         } else {
-            evaluate_many(&self.aggregate_arguments, &batch)?
+            evaluate_many(&self.aggregate_arguments, batch)?
         };
         drop(timer);
 
         // Evaluate the filter expressions, if any, against the inputs
         let filter_values = if self.spill_state.is_stream_merging {
             let filter_expressions = vec![None; self.accumulators.len()];
-            evaluate_optional(&filter_expressions, &batch)?
+            evaluate_optional(&filter_expressions, batch)?
         } else {
-            evaluate_optional(&self.filter_expressions, &batch)?
+            evaluate_optional(&self.filter_expressions, batch)?
         };
 
         for group_values in &group_by_values {
@@ -1248,10 +1248,10 @@ impl GroupedHashAggregateStream {
     }
 
     /// Transforms input batch to intermediate aggregate state, without grouping it
-    fn transform_to_states(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let mut group_values = evaluate_group_by(&self.group_by, &batch)?;
-        let input_values = evaluate_many(&self.aggregate_arguments, &batch)?;
-        let filter_values = evaluate_optional(&self.filter_expressions, &batch)?;
+    fn transform_to_states(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let mut group_values = evaluate_group_by(&self.group_by, batch)?;
+        let input_values = evaluate_many(&self.aggregate_arguments, batch)?;
+        let filter_values = evaluate_optional(&self.filter_expressions, batch)?;
 
         assert_eq_or_internal_err!(
             group_values.len(),
@@ -1360,7 +1360,7 @@ mod tests {
         )];
 
         let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode where the race condition occurs
         let aggregate_exec = AggregateExec::try_new(
@@ -1374,7 +1374,7 @@ mod tests {
 
         // Execute and collect results
         let mut stream =
-            GroupedHashAggregateStream::new(&aggregate_exec, Arc::clone(&task_ctx), 0)?;
+            GroupedHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {

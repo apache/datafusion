@@ -209,8 +209,6 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=math_expressions
       - name: Check datafusion (parquet)
         run: cargo check --profile ci --no-default-features -p datafusion --features=parquet
-      - name: Check datafusion (pyarrow)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=pyarrow
       - name: Check datafusion (regex_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=regex_expressions
       - name: Check datafusion (recursive_protection)
@@ -448,7 +446,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@62da238c048aa0f865cc5a322082957d34e7fc1a  # v2.62.54
+        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9  # v2.62.56
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -585,30 +583,6 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
-
-  test-datafusion-pyarrow:
-    name: cargo test pyarrow (amd64)
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust:bullseye # Use the bullseye tag image which comes with python3.9
-    steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Install PyArrow
-        run: |
-          echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          apt-get update
-          apt-get install python3-pip -y
-          python3 -m pip install pyarrow
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run datafusion-common tests
-        run: cargo test --profile ci -p datafusion-common --features=pyarrow,sql
 
   vendor:
     name: Verify Vendored Code
@@ -775,7 +749,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@62da238c048aa0f865cc5a322082957d34e7fc1a  # v2.62.54
+        uses: taiki-e/install-action@f79fe7514db78f0a7bdba3cb6dd9c1baa7d046d9  # v2.62.56
         with:
           tool: cargo-msrv
 

@@ -15,10 +15,60 @@
 # specific language governing permissions and limitations
 # under the License.
 
-sphinx==8.2.3
-sphinx-reredirects==1.0.0
-pydata-sphinx-theme==0.16.1
-myst-parser==4.0.1
-maturin==1.10.2
-jinja2==3.1.6
-setuptools==80.9.0
+# =================================
+# Test sqllogictest runner features
+# =================================
+
+# --------------------------
+# Test `<slt:ignore>` marker
+# --------------------------
+query T
+select 'DataFusion'
+----
+<slt:ignore>
+
+query T
+select 'DataFusion'
+----
+Data<slt:ignore>
+
+query T
+select 'DataFusion'
+----
+<slt:ignore>Fusion
+
+query T
+select 'Apache DataFusion';
+----
+<slt:ignore>Data<slt:ignore>
+
+query T
+select 'DataFusion'
+----
+DataFusion<slt:ignore>
+
+query T
+select 'DataFusion'
+----
+<slt:ignore>DataFusion
+
+query T
+select 'DataFusion'
+----
+<slt:ignore>DataFusion<slt:ignore>
+
+query I
+select * from generate_series(3);
+----
+0
+1
+<slt:ignore>
+3
+
+query I
+select * from generate_series(3);
+----
+<slt:ignore>
+1
+<slt:ignore>
+<slt:ignore>

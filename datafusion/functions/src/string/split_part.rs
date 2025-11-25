@@ -123,64 +123,64 @@ impl ScalarUDFImpl for SplitPartFunc {
         let result = match (args[0].data_type(), args[1].data_type()) {
             (DataType::Utf8View, DataType::Utf8View) => {
                 split_part_impl::<&StringViewArray, &StringViewArray, i32>(
-                    args[0].as_string_view(),
-                    args[1].as_string_view(),
+                    &args[0].as_string_view(),
+                    &args[1].as_string_view(),
                     n_array,
                 )
             }
             (DataType::Utf8View, DataType::Utf8) => {
                 split_part_impl::<&StringViewArray, &GenericStringArray<i32>, i32>(
-                    args[0].as_string_view(),
-                    args[1].as_string::<i32>(),
+                    &args[0].as_string_view(),
+                    &args[1].as_string::<i32>(),
                     n_array,
                 )
             }
             (DataType::Utf8View, DataType::LargeUtf8) => {
                 split_part_impl::<&StringViewArray, &GenericStringArray<i64>, i32>(
-                    args[0].as_string_view(),
-                    args[1].as_string::<i64>(),
+                    &args[0].as_string_view(),
+                    &args[1].as_string::<i64>(),
                     n_array,
                 )
             }
             (DataType::Utf8, DataType::Utf8View) => {
                 split_part_impl::<&GenericStringArray<i32>, &StringViewArray, i32>(
-                    args[0].as_string::<i32>(),
-                    args[1].as_string_view(),
+                    &args[0].as_string::<i32>(),
+                    &args[1].as_string_view(),
                     n_array,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8View) => {
                 split_part_impl::<&GenericStringArray<i64>, &StringViewArray, i64>(
-                    args[0].as_string::<i64>(),
-                    args[1].as_string_view(),
+                    &args[0].as_string::<i64>(),
+                    &args[1].as_string_view(),
                     n_array,
                 )
             }
             (DataType::Utf8, DataType::Utf8) => {
                 split_part_impl::<&GenericStringArray<i32>, &GenericStringArray<i32>, i32>(
-                    args[0].as_string::<i32>(),
-                    args[1].as_string::<i32>(),
+                    &args[0].as_string::<i32>(),
+                    &args[1].as_string::<i32>(),
                     n_array,
                 )
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
                 split_part_impl::<&GenericStringArray<i64>, &GenericStringArray<i64>, i64>(
-                    args[0].as_string::<i64>(),
-                    args[1].as_string::<i64>(),
+                    &args[0].as_string::<i64>(),
+                    &args[1].as_string::<i64>(),
                     n_array,
                 )
             }
             (DataType::Utf8, DataType::LargeUtf8) => {
                 split_part_impl::<&GenericStringArray<i32>, &GenericStringArray<i64>, i32>(
-                    args[0].as_string::<i32>(),
-                    args[1].as_string::<i64>(),
+                    &args[0].as_string::<i32>(),
+                    &args[1].as_string::<i64>(),
                     n_array,
                 )
             }
             (DataType::LargeUtf8, DataType::Utf8) => {
                 split_part_impl::<&GenericStringArray<i64>, &GenericStringArray<i32>, i64>(
-                    args[0].as_string::<i64>(),
-                    args[1].as_string::<i32>(),
+                    &args[0].as_string::<i64>(),
+                    &args[1].as_string::<i32>(),
                     n_array,
                 )
             }
@@ -200,10 +200,9 @@ impl ScalarUDFImpl for SplitPartFunc {
     }
 }
 
-/// impl
-pub fn split_part_impl<'a, StringArrType, DelimiterArrType, StringArrayLen>(
-    string_array: StringArrType,
-    delimiter_array: DelimiterArrType,
+fn split_part_impl<'a, StringArrType, DelimiterArrType, StringArrayLen>(
+    string_array: &StringArrType,
+    delimiter_array: &DelimiterArrType,
     n_array: &Int64Array,
 ) -> Result<ArrayRef>
 where

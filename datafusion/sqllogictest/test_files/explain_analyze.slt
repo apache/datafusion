@@ -15,10 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-sphinx==8.2.3
-sphinx-reredirects==1.0.0
-pydata-sphinx-theme==0.16.1
-myst-parser==4.0.1
-maturin==1.10.2
-jinja2==3.1.6
-setuptools==80.9.0
+statement ok
+set datafusion.explain.analyze_level = summary;
+
+query TT
+EXPLAIN ANALYZE SELECT * FROM generate_series(100);
+----
+Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
+
+statement ok
+reset datafusion.explain.analyze_level;

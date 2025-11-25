@@ -327,7 +327,7 @@ fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum SetOp {
     Union,
     Intersect,
@@ -501,13 +501,11 @@ fn general_set_op(
     }
 }
 
-/// Array_union SQL function
 fn array_union_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_union", args)?;
     general_set_op(array1, array2, SetOp::Union)
 }
 
-/// array_intersect SQL function
 fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_intersect", args)?;
     general_set_op(array1, array2, SetOp::Intersect)
