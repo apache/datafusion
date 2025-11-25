@@ -31,7 +31,7 @@ use arrow::array::{
     BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
     Int32Array, RecordBatch, UInt64Array,
 };
-use arrow::compute::{concat_batches, filter_record_batch, SortOptions};
+use arrow::compute::{concat_batches, filter_record_batch, BatchCoalescer, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::JoinType::*;
@@ -2320,6 +2320,7 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
 
     let mut batches = JoinedRecordBatches {
         batches: vec![],
+        joined_batches: BatchCoalescer::new(Arc::clone(&schema), 8192),
         filter_mask: BooleanBuilder::new(),
         row_indices: UInt64Builder::new(),
         batch_ids: vec![],
