@@ -324,15 +324,11 @@ pub(super) struct SortMergeJoinStream {
     pub staging_output_record_batches: JoinedRecordBatches,
     /// Output buffer. Currently used by filtering as it requires double buffering
     /// to avoid small/empty batches. Non-filtered join outputs directly from `staging_output_record_batches.batches`
-    /// Uses BatchCoalescer to accumulate small batches efficiently without repeated concatenation.
-    pub output_buffer: BatchCoalescer,
+    pub output: BatchCoalescer,
     /// Staging output size, including output batches and staging joined results.
     /// Increased when we put rows into buffer and decreased after we actually output batches.
     /// Used to trigger output when sufficient rows are ready
     pub output_size: usize,
-    /// Flag indicating that staging_output_record_batches coalescer has reached target
-    /// and should be processed
-    pub staging_ready: bool,
     /// The comparison result of current streamed row and buffered batches
     pub current_ordering: Ordering,
     /// Manages the process of spilling and reading back intermediate data
@@ -355,7 +351,7 @@ pub(super) struct SortMergeJoinStream {
 /// Joined batches with attached join filter information
 pub(super) struct JoinedRecordBatches {
     /// Joined batches. Each batch is already joined columns from left and right sources
-    pub coalescer: BatchCoalescer,
+    pub batches: Vec<RecordBatch>,
     /// Filter match mask for each row(matched/non-matched)
     pub filter_mask: BooleanBuilder,
     /// Left row indices to glue together rows in `batches` and `filter_mask`
@@ -368,7 +364,7 @@ pub(super) struct JoinedRecordBatches {
 
 impl JoinedRecordBatches {
     fn clear(&mut self) {
-        // Note: BatchCoalescer clears itself in finish_buffered_batch()
+        self.batches.clear();
         self.batch_ids.clear();
         self.filter_mask = BooleanBuilder::new();
         self.row_indices = UInt64Builder::new();
@@ -597,43 +593,26 @@ impl Stream for SortMergeJoinStream {
                                         self.freeze_all()?;
 
                                         // If join is filtered and there is joined tuples waiting
-                                        // to be filtered. Process when coalescer has reached target size.
-                                        if self.staging_ready {
-                                            // Track buffered row count before draining the coalescer
-                                            let pre_filter_row_count = self
-                                                .staging_output_record_batches
-                                                .coalescer
-                                                .get_buffered_rows();
-
+                                        // to be filtered
+                                        if !self
+                                            .staging_output_record_batches
+                                            .batches
+                                            .is_empty()
+                                        {
                                             // Apply filter on joined tuples and get filtered batch
                                             let out_filtered_batch =
                                                 self.filter_joined_batch()?;
 
-                                            // Decrement output_size by the number of unfiltered rows processed.
-                                            // output_size tracks unfiltered pairs, but we just processed
-                                            // pre_filter_row_count rows from the coalescer.
-                                            if pre_filter_row_count > self.output_size {
-                                                self.output_size = 0;
-                                            } else {
-                                                self.output_size -= pre_filter_row_count;
-                                            }
-
-                                            // Reset the flag after processing
-                                            self.staging_ready = false;
-
                                             // Append filtered batch to the output buffer
-                                            self.output_buffer
-                                                .push_batch(out_filtered_batch)?;
-                                            if self.output_buffer.has_completed_batch() {
-                                                self.output_buffer
-                                                    .finish_buffered_batch()?;
+                                            self.output
+                                                .push_batch(out_filtered_batch)
+                                                .expect("Failed to push output batch");
+
+                                            if self.output.has_completed_batch() {
                                                 let record_batch = self
-                                                    .output_buffer
+                                                    .output
                                                     .next_completed_batch()
-                                                    .unwrap();
-                                                (&record_batch).record_output(
-                                                    &self.join_metrics.baseline_metrics(),
-                                                );
+                                                    .expect("Failed to get output batch");
                                                 return Poll::Ready(Some(Ok(
                                                     record_batch,
                                                 )));
@@ -694,11 +673,13 @@ impl Stream for SortMergeJoinStream {
                         }
                     } else {
                         self.freeze_all()?;
-                        // Only process if coalescer has reached target
-                        if self.staging_ready {
-                            // For filtered joins, batches accumulate across multiple freeze_all() calls
-                            // and are processed at safe transition points (between streamed batches or
-                            // at Exhausted state). Don't output here in the tight JoinOutput loop.
+                        if !self.staging_output_record_batches.batches.is_empty() {
+                            let record_batch = self.output_record_batch_and_reset()?;
+                            // For non-filtered join output whenever the target output batch size
+                            // is hit. For filtered join its needed to output on later phase
+                            // because target output batch size can be hit in the middle of
+                            // filtering causing the filtering to be incomplete and causing
+                            // correctness issues
                             if self.filter.is_some()
                                 && matches!(
                                     self.join_type,
@@ -713,31 +694,19 @@ impl Stream for SortMergeJoinStream {
                                         | JoinType::Full
                                 )
                             {
-                                // Keep staging_ready set to let it propagate to Init state
-                                // where it will be processed. Transition to Init state to continue.
-                                self.buffered_data.scanning_reset();
-                                self.state = SortMergeJoinState::Init;
                                 continue;
-                            } else {
-                                // Non-filtered joins output immediately
-                                let record_batch =
-                                    self.output_record_batch_and_reset()?;
-                                self.staging_ready = false;
-                                (&record_batch)
-                                    .record_output(&self.join_metrics.baseline_metrics());
-                                return Poll::Ready(Some(Ok(record_batch)));
                             }
+
+                            return Poll::Ready(Some(Ok(record_batch)));
                         }
-                        // Reset scanning and transition to Init to continue processing
-                        self.buffered_data.scanning_reset();
-                        self.state = SortMergeJoinState::Init;
+                        return Poll::Pending;
                     }
                 }
                 SortMergeJoinState::Exhausted => {
                     self.freeze_all()?;
 
-                    // if there is still something not processed in coalescer
-                    if !self.staging_output_record_batches.coalescer.is_empty() {
+                    // if there is still something not processed
+                    if !self.staging_output_record_batches.batches.is_empty() {
                         if self.filter.is_some()
                             && matches!(
                                 self.join_type,
@@ -753,24 +722,19 @@ impl Stream for SortMergeJoinStream {
                             )
                         {
                             let record_batch = self.filter_joined_batch()?;
-                            (&record_batch)
-                                .record_output(&self.join_metrics.baseline_metrics());
                             return Poll::Ready(Some(Ok(record_batch)));
                         } else {
                             let record_batch = self.output_record_batch_and_reset()?;
-                            (&record_batch)
-                                .record_output(&self.join_metrics.baseline_metrics());
                             return Poll::Ready(Some(Ok(record_batch)));
                         }
-                    } else if !self.output_buffer.is_empty() {
-                        // if processed but still not outputted because it didn't hit batch size before
-                        self.output_buffer.finish_buffered_batch()?;
-                        let record_batch =
-                            self.output_buffer.next_completed_batch().unwrap_or_else(
-                                || RecordBatch::new_empty(Arc::clone(&self.schema)),
-                            );
-                        (&record_batch)
-                            .record_output(&self.join_metrics.baseline_metrics());
+                    } else if !self.output.is_empty() {
+                        self.output
+                            .finish_buffered_batch()
+                            .expect("Failed to finish last batch");
+                        let record_batch = self
+                            .output
+                            .next_completed_batch()
+                            .expect("Failed to get last batch");
                         return Poll::Ready(Some(Ok(record_batch)));
                     } else {
                         return Poll::Ready(None);
@@ -828,16 +792,13 @@ impl SortMergeJoinStream {
             on_buffered,
             filter,
             staging_output_record_batches: JoinedRecordBatches {
-                coalescer: BatchCoalescer::new(Arc::clone(&schema), batch_size)
-                    .with_biggest_coalesce_batch_size(Some(batch_size / 2)),
+                batches: vec![],
                 filter_mask: BooleanBuilder::new(),
                 row_indices: UInt64Builder::new(),
                 batch_ids: vec![],
             },
-            output_buffer: BatchCoalescer::new(Arc::clone(&schema), batch_size)
-                .with_biggest_coalesce_batch_size(Some(batch_size / 2)),
+            output: BatchCoalescer::new(schema, batch_size),
             output_size: 0,
-            staging_ready: false,
             batch_size,
             join_type,
             join_metrics,
@@ -1239,15 +1200,8 @@ impl SortMergeJoinStream {
                 );
 
                 self.staging_output_record_batches
-                    .coalescer
-                    .push_batch(record_batch)?;
-                if self
-                    .staging_output_record_batches
-                    .coalescer
-                    .has_completed_batch()
-                {
-                    self.staging_ready = true;
-                }
+                    .batches
+                    .push(record_batch);
             }
             buffered_batch.null_joined.clear();
         }
@@ -1292,15 +1246,8 @@ impl SortMergeJoinStream {
                 0,
             );
             self.staging_output_record_batches
-                .coalescer
-                .push_batch(record_batch)?;
-            if self
-                .staging_output_record_batches
-                .coalescer
-                .has_completed_batch()
-            {
-                self.staging_ready = true;
-            }
+                .batches
+                .push(record_batch);
         }
         buffered_batch.join_filter_not_matched_map.clear();
 
@@ -1310,7 +1257,6 @@ impl SortMergeJoinStream {
     // Produces and stages record batch for all output indices found
     // for current streamed batch and clears staged output indices.
     fn freeze_streamed(&mut self) -> Result<()> {
-        let mut rows_processed = 0;
         for chunk in self.streamed_batch.output_indices.iter_mut() {
             // The row indices of joined streamed batch
             let left_indices = chunk.streamed_indices.finish();
@@ -1318,8 +1264,6 @@ impl SortMergeJoinStream {
             if left_indices.is_empty() {
                 continue;
             }
-
-            rows_processed += left_indices.len();
 
             let mut left_columns = self
                 .streamed_batch
@@ -1445,26 +1389,13 @@ impl SortMergeJoinStream {
                             | JoinType::Full
                     ) {
                         self.staging_output_record_batches
-                            .coalescer
-                            .push_batch(output_batch)?;
-                        if self
-                            .staging_output_record_batches
-                            .coalescer
-                            .has_completed_batch()
-                        {
-                            self.staging_ready = true;
-                        }
+                            .batches
+                            .push(output_batch);
                     } else {
+                        let filtered_batch = filter_record_batch(&output_batch, &mask)?;
                         self.staging_output_record_batches
-                            .coalescer
-                            .push_batch_with_filter(output_batch, &mask)?;
-                        if self
-                            .staging_output_record_batches
-                            .coalescer
-                            .has_completed_batch()
-                        {
-                            self.staging_ready = true;
-                        }
+                            .batches
+                            .push(filtered_batch);
                     }
 
                     if !matches!(self.join_type, JoinType::Full) {
@@ -1512,71 +1443,25 @@ impl SortMergeJoinStream {
                     }
                 } else {
                     self.staging_output_record_batches
-                        .coalescer
-                        .push_batch(output_batch)?;
-                    if self
-                        .staging_output_record_batches
-                        .coalescer
-                        .has_completed_batch()
-                    {
-                        self.staging_ready = true;
-                    }
+                        .batches
+                        .push(output_batch);
                 }
             } else {
                 self.staging_output_record_batches
-                    .coalescer
-                    .push_batch(output_batch)?;
-                if self
-                    .staging_output_record_batches
-                    .coalescer
-                    .has_completed_batch()
-                {
-                    self.staging_ready = true;
-                }
+                    .batches
+                    .push(output_batch);
             }
         }
 
         self.streamed_batch.output_indices.clear();
 
-        // Decrement output_size by the number of rows we just processed and added to the coalescer
-        if rows_processed > self.output_size {
-            self.output_size = 0;
-        } else {
-            self.output_size -= rows_processed;
-        }
-
-        // After clearing output_indices, if the coalescer has buffered data but hasn't
-        // reached the target yet, we may need to force a flush to prevent deadlock.
-        // This is only necessary for filtered joins where partial batches can accumulate
-        // without reaching the target batch size.
-        if !self.staging_output_record_batches.coalescer.is_empty()
-            && !self.staging_ready
-            && self.filter.is_some()
-        {
-            self.staging_output_record_batches
-                .coalescer
-                .finish_buffered_batch()?;
-            if self
-                .staging_output_record_batches
-                .coalescer
-                .has_completed_batch()
-            {
-                self.staging_ready = true;
-            }
-        }
-
         Ok(())
     }
 
     fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
-        self.staging_output_record_batches
-            .coalescer
-            .finish_buffered_batch()?;
-        let record_batch = self
-            .staging_output_record_batches
-            .coalescer
-            .next_completed_batch()
-            .unwrap_or_else(|| RecordBatch::new_empty(Arc::clone(&self.schema)));
+        let record_batch =
+            concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
+        (&record_batch).record_output(&self.join_metrics.baseline_metrics());
         // If join filter exists, `self.output_size` is not accurate as we don't know the exact
         // number of rows in the output record batch. If streamed row joined with buffered rows,
         // once join filter is applied, the number of output rows may be more than 1.
@@ -1588,25 +1473,29 @@ impl SortMergeJoinStream {
             self.output_size -= record_batch.num_rows();
         }
 
-        // Note: coalescer is already cleared by finish_buffered_batch() above
-        // The metadata MUST also be cleared since the batches they refer to are gone.
-        // For non-filtered joins, clear everything immediately.
-        // For filtered joins, this path shouldn't be hit (they use filter_joined_batch),
-        // but if it is, we still need to clear to avoid desync.
-        self.staging_output_record_batches.clear();
+        if !(self.filter.is_some()
+            && matches!(
+                self.join_type,
+                JoinType::Left
+                    | JoinType::LeftSemi
+                    | JoinType::Right
+                    | JoinType::RightSemi
+                    | JoinType::LeftAnti
+                    | JoinType::RightAnti
+                    | JoinType::LeftMark
+                    | JoinType::RightMark
+                    | JoinType::Full
+            ))
+        {
+            self.staging_output_record_batches.batches.clear();
+        }
 
         Ok(record_batch)
     }
 
     fn filter_joined_batch(&mut self) -> Result<RecordBatch> {
-        self.staging_output_record_batches
-            .coalescer
-            .finish_buffered_batch()?;
-        let record_batch = self
-            .staging_output_record_batches
-            .coalescer
-            .next_completed_batch()
-            .unwrap_or_else(|| RecordBatch::new_empty(Arc::clone(&self.schema)));
+        let record_batch =
+            concat_batches(&self.schema, &self.staging_output_record_batches.batches)?;
         let mut out_indices = self.staging_output_record_batches.row_indices.finish();
         let mut out_mask = self.staging_output_record_batches.filter_mask.finish();
         let mut batch_ids = &self.staging_output_record_batches.batch_ids;
@@ -1624,11 +1513,7 @@ impl SortMergeJoinStream {
         }
 
         if out_mask.is_empty() {
-            // Coalescer already cleared by finish_buffered_batch() above
-            // Clear metadata only
-            self.staging_output_record_batches.batch_ids.clear();
-            self.staging_output_record_batches.filter_mask = BooleanBuilder::new();
-            self.staging_output_record_batches.row_indices = UInt64Builder::new();
+            self.staging_output_record_batches.batches.clear();
             return Ok(record_batch);
         }
 
