@@ -316,6 +316,7 @@ async fn optimizers_catch_all_statistics() {
     assert_eq!(format!("{:?}", actual[0]), format!("{expected:?}"));
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn contains_place_holder_exec(plan: Arc<dyn ExecutionPlan>) -> bool {
     if plan.as_any().is::<PlaceholderRowExec>() {
         true

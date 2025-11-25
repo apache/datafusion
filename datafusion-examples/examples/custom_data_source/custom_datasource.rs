@@ -196,6 +196,7 @@ struct CustomExec {
 }
 
 impl CustomExec {
+    #[expect(clippy::needless_pass_by_value)]
     fn new(
         projections: Option<&Vec<usize>>,
         schema: SchemaRef,

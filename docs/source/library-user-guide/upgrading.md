@@ -157,6 +157,51 @@ Instead of silently succeeding.
 
 The remove API no longer requires a mutable instance
 
+### FFI crate updates
+
+Many of the structs in the `datafusion-ffi` crate have been updated to allow easier
+conversion to the underlying trait types they represent. This simplifies some code
+paths, but also provides an additional improvement in cases where library code goes
+through a round trip via the foreign function interface.
+
+To update your code, suppose you have a `FFI_SchemaProvider` called `ffi_provider`
+and you wish to use this as a `SchemaProvider`. In the old approach you would do
+something like:
+
+```rust,ignore
+    let foreign_provider: ForeignSchemaProvider = ffi_provider.into();
+    let foreign_provider = Arc::new(foreign_provider) as Arc<dyn SchemaProvider>;
+```
+
+This code should now be written as:
+
+```rust,ignore
+    let foreign_provider: Arc<dyn SchemaProvider + Send> = ffi_provider.into();
+    let foreign_provider = foreign_provider as Arc<dyn SchemaProvider>;
+```
+
+For the case of user defined functions, the updates are similar but you
+may need to change the way you call the creation of the `ScalarUDF`.
+Aggregate and window functions follow the same pattern.
+
+Previously you may write:
+
+```rust,ignore
+    let foreign_udf: ForeignScalarUDF = ffi_udf.try_into()?;
+    let foreign_udf: ScalarUDF = foreign_udf.into();
+```
+
+Instead this should now be:
+
+```rust,ignore
+    let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.try_into()?;
+    let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
+```
+
+Additionally, the FFI structure for Scalar UDF's no longer contains a
+`return_type` call. This code was not used since the `ForeignScalarUDF`
+struct implements the `return_field_from_args` instead.
+
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0
@@ -970,7 +1015,7 @@ By default if you do not use a custom `SchemaAdapterFactory` we will use express
 If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
 
 To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and use that instead of a `SchemaAdapterFactory`.
-See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
+See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for an example of how to do this.
 Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
 
 See [#16800] for details.
