@@ -1060,7 +1060,7 @@ mod test {
             plan,
             @r"
         Limit: skip=0, fetch=1000
-          Cross Join:
+          Cross Join: 
             Limit: skip=0, fetch=1000
               TableScan: test, fetch=1000
             Limit: skip=0, fetch=1000
@@ -1083,7 +1083,7 @@ mod test {
             plan,
             @r"
         Limit: skip=1000, fetch=1000
-          Cross Join:
+          Cross Join: 
             Limit: skip=0, fetch=2000
               TableScan: test, fetch=2000
             Limit: skip=0, fetch=2000
