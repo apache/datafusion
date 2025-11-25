@@ -55,5 +55,3 @@ group by
 order by
     o_year;
 ----
-1995 0.03
-1996 0.02
