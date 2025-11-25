@@ -190,6 +190,7 @@ impl PruningStatistics for MyCatalog {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate {
     let df_schema = DFSchema::try_from(Arc::clone(schema)).unwrap();
     let props = ExecutionProps::new();
