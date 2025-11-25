@@ -51,6 +51,21 @@ use sqlparser::ast::{
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
+/// Result of the `aggregate` function, containing the aggregate plan and
+/// rewritten expressions that reference the aggregate output columns.
+struct AggregatePlanResult {
+    /// The aggregate logical plan
+    plan: LogicalPlan,
+    /// SELECT expressions rewritten to reference aggregate output columns
+    select_exprs: Vec<Expr>,
+    /// HAVING expression rewritten to reference aggregate output columns
+    having_expr: Option<Expr>,
+    /// QUALIFY expression rewritten to reference aggregate output columns
+    qualify_expr: Option<Expr>,
+    /// ORDER BY expressions rewritten to reference aggregate output columns
+    order_by_exprs: Vec<SortExpr>,
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
@@ -240,13 +255,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         // Process group by, aggregation or having
-        let (
+        let AggregatePlanResult {
             plan,
-            mut select_exprs_post_aggr,
-            having_expr_post_aggr,
-            qualify_expr_post_aggr,
-            order_by_rex,
-        ) = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
+            select_exprs: mut select_exprs_post_aggr,
+            having_expr: having_expr_post_aggr,
+            qualify_expr: qualify_expr_post_aggr,
+            order_by_exprs: order_by_rex,
+        } = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
                 &select_exprs,
@@ -259,7 +274,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             match having_expr_opt {
                 Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
-                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt, qualify_expr_opt, order_by_rex)
+                None => AggregatePlanResult {
+                    plan: base_plan.clone(),
+                    select_exprs: select_exprs.clone(),
+                    having_expr: having_expr_opt,
+                    qualify_expr: qualify_expr_opt,
+                    order_by_exprs: order_by_rex,
+                }
             }
         };
 
@@ -889,7 +910,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///   the aggregate
     /// * `order_by_post_aggr`     - The ORDER BY expressions rewritten to reference columns from
     ///   the aggregate
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn aggregate(
         &self,
         input: &LogicalPlan,
@@ -899,13 +920,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         order_by_exprs: &[SortExpr],
         group_by_exprs: &[Expr],
         aggr_exprs: &[Expr],
-    ) -> Result<(
-        LogicalPlan,
-        Vec<Expr>,
-        Option<Expr>,
-        Option<Expr>,
-        Vec<SortExpr>,
-    )> {
+    ) -> Result<AggregatePlanResult> {
         // create the aggregate plan
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
@@ -1064,13 +1079,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             ),
         )?;
 
-        Ok((
+        Ok(AggregatePlanResult {
             plan,
-            select_exprs_post_aggr,
-            having_expr_post_aggr,
-            qualify_expr_post_aggr,
-            order_by_post_aggr,
-        ))
+            select_exprs: select_exprs_post_aggr,
+            having_expr: having_expr_post_aggr,
+            qualify_expr: qualify_expr_post_aggr,
+            order_by_exprs: order_by_post_aggr,
+        })
     }
 
     // If the projection is done over a named window, that window
