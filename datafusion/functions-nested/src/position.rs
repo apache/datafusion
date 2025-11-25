@@ -141,8 +141,7 @@ impl ScalarUDFImpl for ArrayPosition {
     }
 }
 
-/// Array_position SQL function
-pub fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!("array_position expects two or three arguments");
     }
@@ -152,6 +151,7 @@ pub fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         array_type => exec_err!("array_position does not support type '{array_type}'."),
     }
 }
+
 fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_generic_list_array::<O>(&args[0])?;
     let element_array = &args[1];
@@ -181,13 +181,13 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
         );
     }
 
-    generic_position::<O>(list_array, element_array, arr_from)
+    generic_position::<O>(list_array, element_array, &arr_from)
 }
 
 fn generic_position<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
-    arr_from: Vec<i64>, // 0-indexed
+    arr_from: &[i64], // 0-indexed
 ) -> Result<ArrayRef> {
     let mut data = Vec::with_capacity(list_array.len());
 
@@ -292,8 +292,7 @@ impl ScalarUDFImpl for ArrayPositions {
     }
 }
 
-/// Array_positions SQL function
-pub fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, element] = take_function_args("array_positions", args)?;
 
     match &array.data_type() {

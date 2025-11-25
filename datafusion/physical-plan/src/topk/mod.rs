@@ -178,7 +178,8 @@ impl TopK {
     /// Create a new [`TopK`] that stores the top `k` values, as
     /// defined by the sort expressions in `expr`.
     // TODO: make a builder or some other nicer API
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
@@ -226,6 +227,7 @@ impl TopK {
 
     /// Insert `batch`, remembering if any of its values are among
     /// the top k seen so far.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
         let baseline = self.metrics.baseline.clone();
@@ -377,7 +379,7 @@ impl TopK {
         };
 
         // Build the filter expression OUTSIDE any synchronization
-        let predicate = Self::build_filter_expression(&self.expr, thresholds)?;
+        let predicate = Self::build_filter_expression(&self.expr, &thresholds)?;
         let new_threshold = new_threshold_row.to_vec();
 
         // update the threshold. Since there was a lock gap, we must check if it is still the best
@@ -420,7 +422,7 @@ impl TopK {
     /// This is now called outside of any locks to reduce critical section time.
     fn build_filter_expression(
         sort_exprs: &[PhysicalSortExpr],
-        thresholds: Vec<ScalarValue>,
+        thresholds: &[ScalarValue],
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Create filter expressions for each threshold
         let mut filters: Vec<Arc<dyn PhysicalExpr>> =

@@ -34,7 +34,7 @@ use datafusion_datasource::{
 
 use arrow::csv;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -90,7 +90,6 @@ pub struct CsvSource {
     table_schema: TableSchema,
     file_projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -103,7 +102,6 @@ impl CsvSource {
             batch_size: None,
             file_projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            projected_statistics: None,
             schema_adapter_factory: None,
         }
     }
@@ -266,12 +264,6 @@ impl FileSource for CsvSource {
         Arc::new(conf)
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.file_projection = config.file_column_projection_indices();
@@ -281,12 +273,7 @@ impl FileSource for CsvSource {
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set"))
-    }
+
     fn file_type(&self) -> &str {
         "csv"
     }

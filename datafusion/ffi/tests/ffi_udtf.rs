@@ -23,11 +23,11 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{create_array, ArrayRef};
+    use datafusion::catalog::TableFunctionImpl;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
 
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_ffi::udtf::ForeignTableFunction;
 
     /// This test validates that we can load an external module and use a scalar
     /// udf defined in it via the foreign function interface. In this case we are
@@ -42,12 +42,10 @@ mod tests {
             "External table function provider failed to implement create_table_function"
                 .to_string(),
         ))?();
-        let foreign_table_func: ForeignTableFunction = ffi_table_func.into();
-
-        let udtf = Arc::new(foreign_table_func);
+        let foreign_table_func: Arc<dyn TableFunctionImpl> = ffi_table_func.into();
 
         let ctx = SessionContext::default();
-        ctx.register_udtf("my_range", udtf);
+        ctx.register_udtf("my_range", foreign_table_func);
 
         let result = ctx
             .sql("SELECT * FROM my_range(5)")

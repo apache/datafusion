@@ -246,6 +246,24 @@ impl DiskManager {
         self.used_disk_space.load(Ordering::Relaxed)
     }
 
+    /// Returns the maximum temporary directory size in bytes
+    pub fn max_temp_directory_size(&self) -> u64 {
+        self.max_temp_directory_size
+    }
+
+    /// Returns the temporary directory paths
+    pub fn temp_dir_paths(&self) -> Vec<PathBuf> {
+        self.local_dirs
+            .lock()
+            .as_ref()
+            .map(|dirs| {
+                dirs.iter()
+                    .map(|temp_dir| temp_dir.path().to_path_buf())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Return true if this disk manager supports creating temporary
     /// files. If this returns false, any call to `create_tmp_file`
     /// will error.
