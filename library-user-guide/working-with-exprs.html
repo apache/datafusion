@@ -454,7 +454,7 @@
 </section>
 <section id="creating-and-evaluating-exprs">
 <h2>Creating and Evaluating <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s<a class="headerlink" href="#creating-and-evaluating-exprs" title="Link to this heading">#</a></h2>
-<p>Please see <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs">expr_api.rs</a> for well commented code for creating, evaluating, simplifying, and analyzing <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s.</p>
+<p>Please see <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs">expr_api.rs</a> for well commented code for creating, evaluating, simplifying, and analyzing <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s.</p>
 </section>
 <section id="a-scalar-udf-example">
 <h2>A Scalar UDF Example<a class="headerlink" href="#a-scalar-udf-example" title="Link to this heading">#</a></h2>
@@ -485,9 +485,9 @@
 <h2>Rewriting <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s<a class="headerlink" href="#rewriting-exprs" title="Link to this heading">#</a></h2>
 <p>There are several examples of rewriting and working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s:</p>
 <ul class="simple">
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs">expr_api.rs</a></p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/analyzer_rule.rs">analyzer_rule.rs</a></p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/optimizer_rule.rs">optimizer_rule.rs</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs">expr_api.rs</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/analyzer_rule.rs">analyzer_rule.rs</a></p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/optimizer_rule.rs">optimizer_rule.rs</a></p></li>
 </ul>
 <p>Rewriting Expressions is the process of taking an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and transforming it into another <code class="docutils literal notranslate"><span class="pre">Expr</span></code>. This is useful for a number of reasons, including:</p>
 <ul class="simple">
