@@ -245,7 +245,7 @@ impl PruningStatistics for PartitionPruningStatistics {
             match acc {
                 None => Some(Some(eq_result)),
                 Some(acc_array) => {
-                    arrow::compute::kernels::boolean::and(&acc_array, &eq_result)
+                    arrow::compute::kernels::boolean::or(&acc_array, &eq_result)
                         .map(Some)
                         .ok()
                 }
@@ -558,6 +558,28 @@ mod tests {
 
         // The number of containers is the length of the partition values
         assert_eq!(partition_stats.num_containers(), 2);
+    }
+
+    #[test]
+    fn test_partition_pruning_statistics_multiple_values() {
+        let partition_values = vec![
+            vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
+            vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
+        ];
+        let partition_fields = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ];
+        let partition_stats =
+            PartitionPruningStatistics::try_new(partition_values, partition_fields)
+                .unwrap();
+
+        let column_a = Column::new_unqualified("a");
+
+        let values = HashSet::from([ScalarValue::from(1i32), ScalarValue::from(3i32)]);
+        let contained_a = partition_stats.contained(&column_a, &values).unwrap();
+        let expected_contained_a = BooleanArray::from(vec![true, true]);
+        assert_eq!(contained_a, expected_contained_a);
     }
 
     #[test]
