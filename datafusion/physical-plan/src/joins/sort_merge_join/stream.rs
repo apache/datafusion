@@ -410,6 +410,11 @@ impl JoinedRecordBatches {
     }
 
     fn clear(&mut self) {
+        // Note: clear() can be called when batches still contains data!
+        // This happens in filter_joined_batch() after concat_batches() has read
+        // the batches but before they're removed. The batches have been processed
+        // into output, so clearing them here is the final cleanup step.
+
         self.batches.clear();
         self.batch_ids.clear();
         self.filter_mask = BooleanBuilder::new();
