@@ -470,14 +470,14 @@ impl DistinctDeduplicator {
     ///
     /// We use a hash table to allocate new group ids for the new rows.
     /// [`GroupValues`] allocate increasing group ids.
-    /// Hence, if groups (i.e., rows) are now, then they have ids >= length before interning, we keep them.
+    /// Hence, if groups (i.e., rows) are new, then they have ids >= length before interning, we keep them.
     /// We also detect duplicates by enforcing that group ids are increasing.
     fn deduplicate(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let size_before = self.group_values.len();
         self.intern_output_buffer.reserve(batch.num_rows());
         self.group_values
             .intern(batch.columns(), &mut self.intern_output_buffer)?;
-        let mask = are_increasing_mask(&self.intern_output_buffer, size_before);
+        let mask = new_groups_mask(&self.intern_output_buffer, size_before);
         self.intern_output_buffer.clear();
         // We update the reservation to reflect the new size of the hash table.
         self.reservation.try_resize(self.group_values.size())?;
@@ -485,13 +485,16 @@ impl DistinctDeduplicator {
     }
 }
 
-/// Return a mask, each element being true if, and only if, the element is greater than all previous elements and greater or equal than the provided min_value
-fn are_increasing_mask(values: &[usize], mut min_value: usize) -> BooleanArray {
+/// Return a mask, each element being true if, and only if, the element is greater than all previous elements and greater or equal than the provided max_already_seen_group_id
+fn new_groups_mask(
+    values: &[usize],
+    mut max_already_seen_group_id: usize,
+) -> BooleanArray {
     let mut output = BooleanBuilder::with_capacity(values.len());
     for value in values {
-        if *value >= min_value {
+        if *value >= max_already_seen_group_id {
             output.append_value(true);
-            min_value = *value + 1; // We want to be increasing
+            max_already_seen_group_id = *value + 1; // We want to be increasing
         } else {
             output.append_value(false);
         }
