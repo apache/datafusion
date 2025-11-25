@@ -442,6 +442,11 @@ impl PruningMetrics {
     pub fn matched(&self) -> usize {
         self.matched.load(Ordering::Relaxed)
     }
+
+    /// Number of items fully matched
+    pub fn fully_matched(&self) -> usize {
+        self.fully_matched.load(Ordering::Relaxed)
+    }
 }
 
 /// Counters tracking ratio metrics (e.g. matched vs total)
