@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use object_store::aws::AmazonS3Builder;
@@ -22,14 +24,13 @@ use std::env;
 use std::sync::Arc;
 use url::Url;
 
-/// This example demonstrates querying data in an S3 bucket.
+/// This example demonstrates querying data in a public S3 bucket
+/// (the NYC TLC open dataset: `s3://nyc-tlc`).
 ///
 /// The following environment variables must be defined:
-///
-/// - AWS_ACCESS_KEY_ID
-/// - AWS_SECRET_ACCESS_KEY
-#[tokio::main]
-async fn main() -> Result<()> {
+/// - `AWS_ACCESS_KEY_ID`
+/// - `AWS_SECRET_ACCESS_KEY`
+pub async fn query_aws_s3() -> Result<()> {
     let ctx = SessionContext::new();
 
     // the region must be set to the region where the bucket exists until the following
