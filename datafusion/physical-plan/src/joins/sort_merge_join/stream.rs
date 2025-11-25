@@ -409,6 +409,93 @@ impl JoinedRecordBatches {
         }
     }
 
+    /// Pushes a batch with null metadata (used for Full join null-joined rows)
+    ///
+    /// This is used when outputting rows that didn't match any rows from the other side.
+    /// The metadata is set to nulls because these rows don't correspond to any input row index.
+    fn push_batch_with_null_metadata(&mut self, batch: RecordBatch, join_type: JoinType) {
+        debug_assert!(
+            matches!(join_type, JoinType::Full),
+            "push_batch_with_null_metadata should only be called for Full joins"
+        );
+
+        let num_rows = batch.num_rows();
+
+        self.filter_mask.append_nulls(num_rows);
+        self.row_indices.append_nulls(num_rows);
+        self.batch_ids.resize(
+            self.batch_ids.len() + num_rows,
+            0, // batch_id = 0 for null-joined rows
+        );
+
+        self.debug_assert_metadata_aligned();
+        self.batches.push(batch);
+    }
+
+    /// Pushes a batch with filter metadata (used for filtered outer/semi/anti/mark joins)
+    ///
+    /// This is the primary method for adding batches in filtered joins where we need to track:
+    /// - Which rows passed the filter (filter_mask)
+    /// - Which input row each output row came from (row_indices)
+    /// - Which input batch each output row came from (batch_ids)
+    ///
+    /// The metadata is essential for get_corrected_filter_mask() to implement outer join semantics
+    /// (ensuring at least one output row per input row, filling with nulls when needed).
+    fn push_batch_with_filter_metadata(
+        &mut self,
+        batch: RecordBatch,
+        row_indices: &UInt64Array,
+        filter_mask: &BooleanArray,
+        streamed_batch_id: usize,
+        join_type: JoinType,
+    ) {
+        debug_assert!(
+            matches!(
+                join_type,
+                JoinType::Left
+                    | JoinType::LeftSemi
+                    | JoinType::LeftMark
+                    | JoinType::Right
+                    | JoinType::RightSemi
+                    | JoinType::RightMark
+                    | JoinType::LeftAnti
+                    | JoinType::RightAnti
+                    | JoinType::Full
+            ),
+            "push_batch_with_filter_metadata should only be called for outer/semi/anti/mark joins that need deferred filtering"
+        );
+
+        debug_assert_eq!(
+            row_indices.len(),
+            filter_mask.len(),
+            "row_indices and filter_mask must have same length"
+        );
+
+        // For Full joins, we keep the pre_mask (with nulls), for others we keep the cleaned mask
+        self.filter_mask.extend(filter_mask);
+        self.row_indices.extend(row_indices);
+        self.batch_ids.resize(
+            self.batch_ids.len() + row_indices.len(),
+            streamed_batch_id,
+        );
+
+        self.debug_assert_metadata_aligned();
+        self.batches.push(batch);
+    }
+
+    /// Pushes a batch without metadata (used for non-filtered joins)
+    ///
+    /// For non-filtered joins, we don't need to track row-level metadata because
+    /// the output is produced directly without deferred filter processing.
+    ///
+    /// Note: For Full joins without filters, metadata may exist from null-joined rows
+    /// that were produced earlier, but we don't add metadata for the regular joined rows.
+    fn push_batch_without_metadata(&mut self, batch: RecordBatch, _join_type: JoinType) {
+        // No preconditions to check - batches can be pushed regardless of metadata state
+        // because this is used in non-filtered paths where metadata isn't needed
+        self.batches.push(batch);
+    }
+
     fn clear(&mut self) {
         // Note: clear() can be called when batches still contains data!
         // This happens in filter_joined_batch() after concat_batches() has read
@@ -1303,25 +1390,8 @@ impl SortMergeJoinStream {
                 &buffered_indices,
                 buffered_batch,
             )? {
-                let num_rows = record_batch.num_rows();
                 self.staging_output_record_batches
-                    .filter_mask
-                    .append_nulls(num_rows);
-                self.staging_output_record_batches
-                    .row_indices
-                    .append_nulls(num_rows);
-                self.staging_output_record_batches.batch_ids.resize(
-                    self.staging_output_record_batches.batch_ids.len() + num_rows,
-                    0,
-                );
-
-                // Verify metadata arrays stayed aligned after extending
-                self.staging_output_record_batches
-                    .debug_assert_metadata_aligned();
-
-                self.staging_output_record_batches
-                    .batches
-                    .push(record_batch);
+                    .push_batch_with_null_metadata(record_batch, self.join_type);
             }
             buffered_batch.null_joined.clear();
         }
@@ -1353,26 +1423,8 @@ impl SortMergeJoinStream {
             &buffered_indices,
             buffered_batch,
         )? {
-            let num_rows = record_batch.num_rows();
-
             self.staging_output_record_batches
-                .filter_mask
-                .append_nulls(num_rows);
-            self.staging_output_record_batches
-                .row_indices
-                .append_nulls(num_rows);
-            self.staging_output_record_batches.batch_ids.resize(
-                self.staging_output_record_batches.batch_ids.len() + num_rows,
-                0,
-            );
-
-            // Verify metadata arrays stayed aligned after extending
-            self.staging_output_record_batches
-                .debug_assert_metadata_aligned();
-
-            self.staging_output_record_batches
-                .batches
-                .push(record_batch);
+                .push_batch_with_null_metadata(record_batch, self.join_type);
         }
         buffered_batch.join_filter_not_matched_map.clear();
 
@@ -1501,7 +1553,9 @@ impl SortMergeJoinStream {
                     };
 
                     // Push the filtered batch which contains rows passing join filter to the output
-                    if matches!(
+                    // For outer/semi/anti/mark joins with deferred filtering, push the unfiltered batch with metadata
+                    // For INNER joins, filter immediately and push without metadata
+                    let needs_deferred_filtering = matches!(
                         self.join_type,
                         JoinType::Left
                             | JoinType::LeftSemi
@@ -1512,36 +1566,30 @@ impl SortMergeJoinStream {
                             | JoinType::LeftMark
                             | JoinType::RightMark
                             | JoinType::Full
-                    ) {
-                        self.staging_output_record_batches
-                            .batches
-                            .push(output_batch);
-                    } else {
-                        let filtered_batch = filter_record_batch(&output_batch, &mask)?;
-                        self.staging_output_record_batches
-                            .batches
-                            .push(filtered_batch);
-                    }
-
-                    if !matches!(self.join_type, JoinType::Full) {
-                        self.staging_output_record_batches.filter_mask.extend(&mask);
-                    } else {
-                        self.staging_output_record_batches
-                            .filter_mask
-                            .extend(pre_mask);
-                    }
-                    self.staging_output_record_batches
-                        .row_indices
-                        .extend(&left_indices);
-                    self.staging_output_record_batches.batch_ids.resize(
-                        self.staging_output_record_batches.batch_ids.len()
-                            + left_indices.len(),
-                        self.streamed_batch_counter.load(Relaxed),
                     );
 
-                    // Verify metadata arrays stayed aligned after extending
-                    self.staging_output_record_batches
-                        .debug_assert_metadata_aligned();
+                    if needs_deferred_filtering {
+                        // Outer/semi/anti/mark joins: push unfiltered batch with metadata for deferred filtering
+                        let mask_to_use = if !matches!(self.join_type, JoinType::Full) {
+                            &mask
+                        } else {
+                            pre_mask
+                        };
+
+                        self.staging_output_record_batches
+                            .push_batch_with_filter_metadata(
+                                output_batch,
+                                &left_indices,
+                                mask_to_use,
+                                self.streamed_batch_counter.load(Relaxed),
+                                self.join_type,
+                            );
+                    } else {
+                        // INNER joins: filter immediately and push without metadata
+                        let filtered_batch = filter_record_batch(&output_batch, &mask)?;
+                        self.staging_output_record_batches
+                            .push_batch_without_metadata(filtered_batch, self.join_type);
+                    }
 
                     // For outer joins, we need to push the null joined rows to the output if
                     // all joined rows are failed on the join filter.
@@ -1572,13 +1620,11 @@ impl SortMergeJoinStream {
                     }
                 } else {
                     self.staging_output_record_batches
-                        .batches
-                        .push(output_batch);
+                        .push_batch_without_metadata(output_batch, self.join_type);
                 }
             } else {
                 self.staging_output_record_batches
-                    .batches
-                    .push(output_batch);
+                    .push_batch_without_metadata(output_batch, self.join_type);
             }
         }
 
