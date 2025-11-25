@@ -1595,7 +1595,7 @@ fn has_sufficient_rows_for_repartition(
 
     if let Some(num_rows) = stats.num_rows.get_value().copied() {
         let batch_size = session_state.config().batch_size();
-        
+
         return Ok(num_rows >= batch_size);
     }
 
@@ -3215,9 +3215,18 @@ mod tests {
 
     #[tokio::test]
     async fn hash_agg_group_by_partitioned_on_dicts() -> Result<()> {
-        let dict_array: DictionaryArray<Int32Type> =
-            vec!["A", "B", "A", "A", "C", "A"].into_iter().collect();
-        let val_array: Int32Array = vec![1, 2, 2, 4, 1, 1].into();
+        // Create a larger dataset that will still trigger partitioned aggregation
+        // even after the small dataset optimization
+        let dict_values: Vec<&str> = (0..10000)
+            .map(|i| match i % 4 {
+                0 => "A",
+                1 => "B",
+                2 => "C",
+                _ => "D",
+            })
+            .collect();
+        let dict_array: DictionaryArray<Int32Type> = dict_values.into_iter().collect();
+        let val_array: Int32Array = (0..10000).map(|i| (i % 10) as i32).collect();
 
         let batch = RecordBatch::try_from_iter(vec![
             ("d1", Arc::new(dict_array) as ArrayRef),
@@ -3240,6 +3249,35 @@ mod tests {
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
         // mode in Aggregate (which is slower)
         assert!(formatted.contains("FinalPartitioned"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_agg_small_dataset_single_mode() -> Result<()> {
+        let dict_array: DictionaryArray<Int32Type> =
+            vec!["A", "B", "A", "A", "C", "A"].into_iter().collect();
+        let val_array: Int32Array = vec![1, 2, 2, 4, 1, 1].into();
+
+        let batch = RecordBatch::try_from_iter(vec![
+            ("d1", Arc::new(dict_array) as ArrayRef),
+            ("d2", Arc::new(val_array) as ArrayRef),
+        ])
+        .unwrap();
+
+        let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        let ctx = SessionContext::new();
+
+        let logical_plan = LogicalPlanBuilder::from(
+            ctx.read_table(Arc::new(table))?.into_optimized_plan()?,
+        )
+        .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
+        .build()?;
+
+        let execution_plan = plan(&logical_plan).await?;
+        let formatted = format!("{execution_plan:?}");
+
+        // Small datasets (6 rows) should use Single mode to avoid repartitioning overhead
+        assert!(formatted.contains("mode: Single"));
         Ok(())
     }
 
