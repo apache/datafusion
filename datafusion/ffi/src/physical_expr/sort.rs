@@ -50,3 +50,24 @@ impl From<&FFI_PhysicalSortExpr> for PhysicalSortExpr {
         Self { expr, options }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::physical_expr::sort::FFI_PhysicalSortExpr;
+    use arrow_schema::SortOptions;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use std::sync::Arc;
+
+    #[test]
+    fn ffi_sort_expr_round_trip() {
+        let col_expr = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let expr = PhysicalSortExpr::new(col_expr, SortOptions::default());
+
+        let ffi_expr = FFI_PhysicalSortExpr::from(&expr);
+        let foreign_expr = PhysicalSortExpr::from(&ffi_expr);
+
+        assert_eq!(expr, foreign_expr);
+    }
+}

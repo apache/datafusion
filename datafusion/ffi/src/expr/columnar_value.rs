@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::std_types::RVec;
-use abi_stable::StableAbi;
+use abi_stable::{std_types::RVec, StableAbi};
 use datafusion_common::DataFusionError;
 use datafusion_expr::ColumnarValue;
 
-use crate::arrow_wrappers::WrappedArray;
-use crate::expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8};
+use crate::{
+    arrow_wrappers::WrappedArray,
+    expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8},
+};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -54,5 +55,32 @@ impl TryFrom<FFI_ColumnarValue> for ColumnarValue {
                 ColumnarValue::Scalar(rvec_u8_to_scalar_value(&v)?)
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::create_array;
+    use datafusion_common::{DataFusionError, ScalarValue};
+    use datafusion_expr::ColumnarValue;
+
+    use crate::expr::columnar_value::FFI_ColumnarValue;
+
+    #[test]
+    fn ffi_columnar_value_round_trip() -> Result<(), DataFusionError> {
+        let array = create_array!(Int32, [1, 2, 3, 4, 5]);
+
+        for original in [
+            ColumnarValue::Array(array),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
+        ] {
+            let ffi_variant = FFI_ColumnarValue::try_from(original.clone())?;
+
+            let returned_value = ColumnarValue::try_from(ffi_variant)?;
+
+            assert_eq!(format!("{returned_value:?}"), format!("{original:?}"));
+        }
+
+        Ok(())
     }
 }

@@ -18,36 +18,42 @@
 pub(crate) mod partitioning;
 pub(crate) mod sort;
 
-use std::any::Any;
-use std::ffi::c_void;
-use std::fmt::{Display, Formatter};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
+use std::{
+    any::Any,
+    ffi::c_void,
+    fmt::{Display, Formatter},
+    hash::{DefaultHasher, Hash, Hasher},
+    sync::Arc,
+};
 
-use abi_stable::std_types::{ROption, RResult, RString, RVec};
-use abi_stable::StableAbi;
-use arrow::array::{ArrayRef, BooleanArray, RecordBatch};
-use arrow::datatypes::SchemaRef;
-use arrow_schema::ffi::FFI_ArrowSchema;
-use arrow_schema::{DataType, Field, FieldRef, Schema};
+use abi_stable::{
+    std_types::{ROption, RResult, RString, RVec},
+    StableAbi,
+};
+use arrow::{
+    array::{ArrayRef, BooleanArray, RecordBatch},
+    datatypes::SchemaRef,
+};
+use arrow_schema::{ffi::FFI_ArrowSchema, DataType, Field, FieldRef, Schema};
 use datafusion_common::{exec_datafusion_err, Result};
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::statistics::Distribution;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{
+    interval_arithmetic::Interval, sort_properties::ExprProperties,
+    statistics::Distribution, ColumnarValue,
+};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
-use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
-use crate::expr::columnar_value::FFI_ColumnarValue;
-use crate::expr::distribution::FFI_Distribution;
-use crate::expr::expr_properties::FFI_ExprProperties;
-use crate::expr::interval::FFI_Interval;
-use crate::record_batch_stream::{
-    record_batch_to_wrapped_array, wrapped_array_to_record_batch,
+use crate::{
+    arrow_wrappers::{WrappedArray, WrappedSchema},
+    df_result,
+    expr::{
+        columnar_value::FFI_ColumnarValue, distribution::FFI_Distribution,
+        expr_properties::FFI_ExprProperties, interval::FFI_Interval,
+    },
+    record_batch_stream::{record_batch_to_wrapped_array, wrapped_array_to_record_batch},
+    rresult, rresult_return,
+    util::FFIResult,
 };
-use crate::util::FFIResult;
-use crate::{df_result, rresult, rresult_return};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -366,6 +372,7 @@ unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> RString {
 
 unsafe extern "C" fn hash_fn_wrapper(expr: &FFI_PhysicalExpr) -> u64 {
     let expr = expr.inner();
+    // let mut hasher = DefaultHasher::new();
     let mut hasher = DefaultHasher::new();
     expr.hash(&mut hasher);
     hasher.finish()
@@ -696,33 +703,38 @@ impl Display for ForeignPhysicalExpr {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::{DefaultHasher, Hash, Hasher};
     use std::sync::Arc;
 
-    use arrow::array::{record_batch, BooleanArray};
-    use arrow_schema::Schema;
-    use datafusion_common::tree_node::DynTreeNode;
-    use datafusion_common::{DataFusionError, ScalarValue};
-    use datafusion_expr::interval_arithmetic::Interval;
-
-    use datafusion_expr::statistics::Distribution;
+    use arrow::array::{record_batch, BooleanArray, RecordBatch};
+    use datafusion_common::{tree_node::DynTreeNode, DataFusionError, ScalarValue};
+    use datafusion_expr::{interval_arithmetic::Interval, statistics::Distribution};
     use datafusion_physical_expr::expressions::{Column, NegativeExpr, NotExpr};
     use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
 
     use crate::physical_expr::FFI_PhysicalExpr;
 
-    #[test]
-    fn round_trip_physical_expr() -> Result<(), DataFusionError> {
+    fn create_test_expr() -> (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>) {
         let original = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
         let mut ffi_expr = FFI_PhysicalExpr::from(Arc::clone(&original));
         ffi_expr.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_expr: Arc<dyn PhysicalExpr> = (&ffi_expr).into();
 
+        (original, foreign_expr)
+    }
+
+    fn test_record_batch() -> RecordBatch {
+        record_batch!(("a", Int32, [1, 2, 3])).unwrap()
+    }
+
+    #[test]
+    fn ffi_physical_expr_fields() -> Result<(), DataFusionError> {
+        let (original, foreign_expr) = create_test_expr();
+        let schema = test_record_batch().schema();
+
         // Verify the mock marker worked, otherwise tests to follow are not useful
         assert_ne!(original.as_ref(), foreign_expr.as_ref());
-
-        let rb = record_batch!(("a", Int32, [1, 2, 3]))?;
-        let schema: Arc<Schema> = rb.schema();
 
         assert_eq!(
             original.return_field(&schema)?,
@@ -734,10 +746,25 @@ mod tests {
             foreign_expr.data_type(&schema)?
         );
         assert_eq!(original.nullable(&schema)?, foreign_expr.nullable(&schema)?);
+
+        Ok(())
+    }
+    #[test]
+    fn ffi_physical_expr_evaluate() -> Result<(), DataFusionError> {
+        let (original, foreign_expr) = create_test_expr();
+        let rb = test_record_batch();
+
         assert_eq!(
             original.evaluate(&rb)?.to_array(3)?.as_ref(),
             foreign_expr.evaluate(&rb)?.to_array(3)?.as_ref()
         );
+
+        Ok(())
+    }
+    #[test]
+    fn ffi_physical_expr_selection() -> Result<(), DataFusionError> {
+        let (original, foreign_expr) = create_test_expr();
+        let rb = test_record_batch();
 
         let selection = BooleanArray::from(vec![true, false, true]);
 
@@ -751,7 +778,12 @@ mod tests {
                 .to_array(3)?
                 .as_ref()
         );
+        Ok(())
+    }
 
+    #[test]
+    fn ffi_physical_expr_with_children() -> Result<(), DataFusionError> {
+        let (original, _) = create_test_expr();
         let not_expr =
             Arc::new(NotExpr::new(Arc::clone(&original))) as Arc<dyn PhysicalExpr>;
         let mut ffi_not = FFI_PhysicalExpr::from(not_expr);
@@ -770,11 +802,24 @@ mod tests {
             .with_new_arc_children(Arc::clone(&foreign_not), vec![replacement])?;
         assert_eq!(format!("{updated}").as_str(), "NOT b@1");
 
+        Ok(())
+    }
+
+    fn create_test_negative_expr() -> (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>) {
+        let (original, _) = create_test_expr();
+
         let negative_expr =
             Arc::new(NegativeExpr::new(Arc::clone(&original))) as Arc<dyn PhysicalExpr>;
         let mut ffi_neg = FFI_PhysicalExpr::from(Arc::clone(&negative_expr));
         ffi_neg.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_neg: Arc<dyn PhysicalExpr> = (&ffi_neg).into();
+
+        (negative_expr, foreign_neg)
+    }
+
+    #[test]
+    fn ffi_physical_expr_bounds() -> Result<(), DataFusionError> {
+        let (negative_expr, foreign_neg) = create_test_negative_expr();
 
         let interval =
             Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(10)))?;
@@ -783,12 +828,30 @@ mod tests {
 
         assert_eq!(left, right);
 
+        Ok(())
+    }
+
+    #[test]
+    fn ffi_physical_expr_constraints() -> Result<(), DataFusionError> {
+        let (negative_expr, foreign_neg) = create_test_negative_expr();
+
+        let interval =
+            Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(10)))?;
+
         let child =
             Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(10)))?;
         let left = negative_expr.propagate_constraints(&interval, &[&child])?;
         let right = foreign_neg.propagate_constraints(&interval, &[&child])?;
 
         assert_eq!(left, right);
+        Ok(())
+    }
+
+    #[test]
+    fn ffi_physical_expr_statistics() -> Result<(), DataFusionError> {
+        let (negative_expr, foreign_neg) = create_test_negative_expr();
+        let interval =
+            Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(Some(10)))?;
 
         for distribution in [
             Distribution::new_uniform(interval.clone())?,
@@ -820,6 +883,12 @@ mod tests {
 
             assert_eq!(left, right);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn ffi_physical_expr_properties() -> Result<(), DataFusionError> {
+        let (original, foreign_expr) = create_test_expr();
 
         let left = original.get_properties(&[])?;
         let right = foreign_expr.get_properties(&[])?;
@@ -827,9 +896,21 @@ mod tests {
         assert_eq!(left.sort_properties, right.sort_properties);
         assert_eq!(left.range, right.range);
 
+        Ok(())
+    }
+
+    #[test]
+    fn ffi_physical_formatting() {
+        let (original, foreign_expr) = create_test_expr();
+
         let left = format!("{}", fmt_sql(original.as_ref()));
         let right = format!("{}", fmt_sql(foreign_expr.as_ref()));
-        assert_eq!(left, right,);
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn ffi_physical_expr_snapshots() -> Result<(), DataFusionError> {
+        let (original, foreign_expr) = create_test_expr();
 
         let left = original.snapshot()?;
         let right = foreign_expr.snapshot()?;
@@ -840,8 +921,39 @@ mod tests {
             foreign_expr.snapshot_generation()
         );
 
-        assert_eq!(original.is_volatile_node(), foreign_expr.is_volatile_node());
-
         Ok(())
+    }
+
+    #[test]
+    fn ffi_physical_expr_volatility() {
+        let (original, foreign_expr) = create_test_expr();
+        assert_eq!(original.is_volatile_node(), foreign_expr.is_volatile_node());
+    }
+
+    #[test]
+    fn ffi_physical_expr_hash() {
+        let (_, foreign_1) = create_test_expr();
+        let (_, foreign_2) = create_test_expr();
+
+        assert_ne!(&foreign_1, &foreign_2);
+
+        let mut hasher = DefaultHasher::new();
+        foreign_1.as_ref().hash(&mut hasher);
+        let hash_1 = hasher.finish();
+
+        let mut hasher = DefaultHasher::new();
+        foreign_2.as_ref().hash(&mut hasher);
+        let hash_2 = hasher.finish();
+
+        // We cannot compare a local object and a foreign object
+        // so create two foreign objects that *should* be identical
+        // even though they were created differently.
+        assert_eq!(hash_1, hash_2);
+    }
+
+    #[test]
+    fn ffi_physical_expr_display() {
+        let (original, foreign_expr) = create_test_expr();
+        assert_eq!(format!("{original}"), format!("{foreign_expr}"));
     }
 }
