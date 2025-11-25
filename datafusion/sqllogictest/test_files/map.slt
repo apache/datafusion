@@ -175,6 +175,16 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, 30]);
 {POST: 41, HEAD: 33, PATCH: 30}
 
 query ?
+SELECT MAP('type', 'test');
+----
+{type: test}
+
+query ?
+SELECT MAP('a', 2, 'b', 3);
+----
+{a: 2, b: 3}
+
+query ?
 SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
 ----
 {POST: 41, HEAD: 33, PATCH: NULL}
@@ -187,10 +197,10 @@ SELECT MAP([[1,2], [3,4]], ['a', 'b']);
 query error
 SELECT MAP()
 
-query error DataFusion error: Execution error: map function requires 2 arguments, got 1
+query error DataFusion error: Error during planning: make_map requires an even number of arguments
 SELECT MAP(['POST', 'HEAD'])
 
-query error DataFusion error: Execution error: Expected list, large_list or fixed_size_list, got Null
+query error DataFusion error: Execution error: map key cannot be null
 SELECT MAP(null, [41, 33, 30]);
 
 query error DataFusion error: Execution error: map requires key and value lists to have the same length
@@ -280,8 +290,12 @@ SELECT map(column8, column9) FROM t;
 {[4]: b}
 {[1, 2]: c}
 
-query error
+query ?
 SELECT map(column6, column7) FROM t;
+----
+{[1, 2]: POST}
+{[3]: PUT}
+{[5]: NULL}
 
 query ?
 select Map {column6: column7} from t;
