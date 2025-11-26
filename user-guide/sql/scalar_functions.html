@@ -5404,11 +5404,11 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <section id="id337">
 <h4>Example<a class="headerlink" href="#id337" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">digest</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;sha256&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">digest</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;sha256&quot;</span><span class="p">))</span><span class="w">      </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="o">&lt;</span><span class="n">binary_hash_result</span><span class="o">&gt;</span><span class="w">                     </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">digest</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">),</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;sha256&quot;</span><span class="p">))</span><span class="w">                               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="n">c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5428,11 +5428,11 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <section id="id339">
 <h4>Example<a class="headerlink" href="#id339" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">md5</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">md5</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="o">&lt;</span><span class="n">md5_checksum_result</span><span class="o">&gt;</span><span class="w">               </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">md5</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                 </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">acbd18db4cc2f85cedef654fccc4a4d8</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5452,11 +5452,11 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <section id="id341">
 <h4>Example<a class="headerlink" href="#id341" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">sha224</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">sha224</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                      </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="o">&lt;</span><span class="n">sha224_hash_result</span><span class="o">&gt;</span><span class="w">                     </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">------------------------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">sha224</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                                      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">0808</span><span class="n">f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5476,11 +5476,11 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <section id="id343">
 <h4>Example<a class="headerlink" href="#id343" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">sha256</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">--------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">sha256</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                  </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="o">&lt;</span><span class="n">sha256_hash_result</span><span class="o">&gt;</span><span class="w">                 </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------+</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">sha256</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="n">c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5500,11 +5500,11 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <section id="id345">
 <h4>Example<a class="headerlink" href="#id345" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">sha384</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">sha384</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                     </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="o">&lt;</span><span class="n">sha384_hash_result</span><span class="o">&gt;</span><span class="w">                    </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------------------------+</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">sha384</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                                                                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">98</span><span class="n">c11ffdfdd540676b1a137cb1a22b2a70350c9a44171d6b1180c6be5cbb2ee3f79d532c8a1dd9ef2e8e08e752a3babb</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5524,11 +5524,11 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <section id="id347">
 <h4>Example<a class="headerlink" href="#id347" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">sha512</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">sha512</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="o">&lt;</span><span class="n">sha512_hash_result</span><span class="o">&gt;</span><span class="w">                      </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------------------------+</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">sha512</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w">                                                                                                              </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------------------------------------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">f7fbba6e0636f890e56fbbf3283e524c6fa3204ae298382d624741d0dc6638326e282c41be5e4254d8820772c5518a2c5a8c0c7f7eda19594a7eb539453e1ed7</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------------------------------------------------------------------------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
