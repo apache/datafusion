@@ -29,8 +29,8 @@ use datafusion_common::{downcast_value, not_impl_err, plan_err, Result, ScalarVa
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
-    Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, GroupsAccumulator, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
@@ -54,6 +54,29 @@ make_udaf_expr_and_func!(
     "Computes the population variance.",
     var_pop_udaf
 );
+
+fn variance_signature() -> Signature {
+    Signature::one_of(
+        vec![
+            TypeSignature::Numeric(1),
+            TypeSignature::Coercible(vec![Coercion::new_exact(
+                TypeSignatureClass::Decimal,
+            )]),
+        ],
+        Volatility::Immutable,
+    )
+}
+
+fn is_numeric_or_decimal(data_type: &DataType) -> bool {
+    data_type.is_numeric()
+        || matches!(
+            data_type,
+            DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+        )
+}
 
 #[user_doc(
     doc_section(label = "General Functions"),
@@ -86,7 +109,7 @@ impl VarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_sample"), String::from("var_samp")],
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: variance_signature(),
         }
     }
 }
@@ -179,7 +202,7 @@ impl VariancePopulation {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("var_population")],
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: variance_signature(),
         }
     }
 }
@@ -198,7 +221,7 @@ impl AggregateUDFImpl for VariancePopulation {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
+        if !is_numeric_or_decimal(&arg_types[0]) {
             return plan_err!("Variance requires numeric input types");
         }
 
@@ -583,9 +606,52 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Decimal128Builder;
     use datafusion_expr::EmitTo;
+    use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn variance_population_accepts_decimal() -> Result<()> {
+        let variance = VariancePopulation::new();
+        variance.return_type(&[DataType::Decimal128(10, 3)])?;
+        Ok(())
+    }
+
+    #[test]
+    fn variance_decimal_input() -> Result<()> {
+        let mut builder = Decimal128Builder::with_capacity(20);
+        for i in 0..10 {
+            builder.append_value(110000 + i);
+        }
+        for i in 0..10 {
+            builder.append_value(-((100000 + i) as i128));
+        }
+        let decimal_array = builder.finish().with_precision_and_scale(10, 3).unwrap();
+        let array: ArrayRef = Arc::new(decimal_array);
+
+        let mut pop_acc = VarianceAccumulator::try_new(StatsType::Population)?;
+        let pop_input = [Arc::clone(&array)];
+        pop_acc.update_batch(&pop_input)?;
+        assert_variance(pop_acc.evaluate()?, 11025.9450285);
+
+        let mut sample_acc = VarianceAccumulator::try_new(StatsType::Sample)?;
+        let sample_input = [array];
+        sample_acc.update_batch(&sample_input)?;
+        assert_variance(sample_acc.evaluate()?, 11606.257924736841);
+
+        Ok(())
+    }
+
+    fn assert_variance(value: ScalarValue, expected: f64) {
+        match value {
+            ScalarValue::Float64(Some(actual)) => {
+                assert!((actual - expected).abs() < 1e-9)
+            }
+            other => panic!("expected Float64 result, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_groups_accumulator_merge_empty_states() -> Result<()> {
