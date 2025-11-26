@@ -1006,6 +1006,8 @@ select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median
 ----
 2.75 Float16
 
+# This shouldn't be NaN, see:
+# https://github.com/apache/datafusion/issues/18945
 query RT
 select
   percentile_cont(0.5) within group (order by arrow_cast(col_f32, 'Float16')),
