@@ -26,9 +26,9 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! Note: The Flight server must be started in a separate process
-//! before running the `client` example. Therefore, running `all` will
-//! not produce a full server+client workflow automatically.
+//!   Note: The Flight server must be started in a separate process
+//!   before running the `client` example. Therefore, running `all` will
+//!   not produce a full server+client workflow automatically.
 //! - `client` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
 //! - `server` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
 //! - `sql_server` — run DataFusion as a standalone process and execute SQL queries from JDBC clients
