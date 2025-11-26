@@ -28,6 +28,7 @@ DataFusion supports extension of operators by transforming logical plan and exec
 ### Optimizing Logical Plan
 
 The `rewrite` function transforms logical plans by identifying temporal patterns and aggregation functions that match the stored wheel indices. When match is found, it queries the corresponding index to retrieve pre-computed aggregate values, stores these results in a [MemTable](https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemTable.html), and returns as a new `LogicalPlan::TableScan`. If no match is found, the original plan proceeds unchanged through DataFusion's standard execution path.
+
 ```rust,ignore
 fn rewrite(
   &self,
@@ -71,6 +72,7 @@ Creating a custom operator in DataFusion requires implementing four key componen
 ### Implementation
 
 The optimizer rule identifies queries with a `LIMIT` clause applied to a `SORT` operation. When this pattern is detected, it replaces the combination with a single `TopK` node:
+
 ```rust,ignore
 impl OptimizerRule for TopKOptimizerRule {
     fn rewrite(
@@ -102,6 +104,7 @@ impl OptimizerRule for TopKOptimizerRule {
 ```
 
 The logical plan node implements `UserDefinedLogicalNodeCore` to define how TopK fits into DataFusion's plan structure:
+
 ```rust,ignore
 impl UserDefinedLogicalNodeCore for TopKPlanNode {
     fn name(&self) -> &str {
@@ -127,6 +130,7 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
 ```
 
 The physical planner bridges the logical and physical representations by implementing `ExtensionPlanner`:
+
 ```rust,ignore
 impl ExtensionPlanner for TopKPlanner {
     async fn plan_extension(
@@ -155,6 +159,7 @@ Finally, the physical execution plan implements the actual TopK algorithm, maint
 ### Usage
 
 To register the TopK operator with DataFusion:
+
 ```rust,ignore
 let state = SessionStateBuilder::new()
     .with_query_planner(Arc::new(TopKQueryPlanner {}))
@@ -165,4 +170,7 @@ let ctx = SessionContext::new_with_state(state);
 ```
 
 For the complete implementation including the physical execution details, see `datafusion/core/tests/user_defined/user_defined_plan.rs`.
+
+```
+
 ```
