@@ -41,7 +41,7 @@ use serde_json::Value;
 pub struct AvroSource {
     table_schema: TableSchema,
     batch_size: Option<usize>,
-    projection: Option<Vec<String>>,
+    projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
@@ -182,7 +182,7 @@ impl FileSource for AvroSource {
 
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.projection = config.projected_file_column_names();
+        conf.projection = config.file_column_projection_indices();
         Arc::new(conf)
     }
 
