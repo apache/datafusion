@@ -37,7 +37,7 @@ use arrow::datatypes::{
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
 
-/// DFSchema wraps an Arrow schema and adds relation names.
+/// DFSchema wraps an Arrow schema and add a relation (table) name.
 ///
 /// The schema may hold the fields across multiple tables. Some fields may be
 /// qualified and some unqualified. A qualified field is a field that has a
@@ -47,8 +47,14 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// have a distinct name from any qualified field names. This allows finding a
 /// qualified field by name to be possible, so long as there aren't multiple
 /// qualified fields with the same name.
+///]
+/// # See Also
+/// * [DFSchemaRef], an alias to `Arc<DFSchema>`
+/// * [DataTypeExt], common methods for working with Arrow [DataType]s
+/// * [FieldExt], extension methods for working with Arrow [Field]s
 ///
-/// There is an alias to `Arc<DFSchema>` named [DFSchemaRef].
+/// [DataTypeExt]: crate::datatype::DataTypeExt
+/// [FieldExt]: crate::datatype::FieldExt
 ///
 /// # Creating qualified schemas
 ///
