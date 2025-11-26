@@ -22,6 +22,7 @@
 use std::fmt::{self, Debug};
 use std::ops::Sub;
 
+use arrow::datatypes::ArrowNativeType;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 use hashbrown::HashTable;
 
@@ -270,9 +271,10 @@ fn traverse_chain<T>(
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
+    T: ArrowNativeType,
 {
-    let zero = T::try_from(0).unwrap();
-    let one = T::try_from(1).unwrap();
+    let zero = T::usize_as(0);
+    let one = T::usize_as(1);
     let mut match_row_idx = start_chain_idx - one;
 
     loop {
@@ -390,6 +392,7 @@ pub fn get_matched_indices_with_limit_offset<T>(
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
+    T: ArrowNativeType,
 {
     let mut input_indices = Vec::with_capacity(limit);
     let mut match_indices = Vec::with_capacity(limit);
@@ -426,7 +429,7 @@ where
         // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
         // to start with the next index
         (idx, Some(next_idx)) => {
-            let next_idx: T = T::try_from(next_idx as usize).unwrap();
+            let next_idx: T = T::usize_as(next_idx as usize);
             let is_last = idx == hash_values.len() - 1;
             if let Some(next_offset) = traverse_chain(
                 next_chain,
