@@ -176,21 +176,18 @@ impl SplitProjection {
         Self::new(table_schema.file_schema(), &projection)
     }
 
-    /// Creates a new `SplitProjection` by splitting columns into file and partition columns.
+    /// Creates a new [`SplitProjection`] by splitting a projection into
+    /// simple file column indices and a remainder projection that is applied after reading the file.
     ///
-    /// # Algorithm
-    /// Single-pass approach that combines extraction, classification, and remapping:
-    /// 1. Extract all unique column references from projection expressions
-    /// 2. Sort columns by original table index
-    /// 3. Classify each column as either file or partition based on file_schema length
-    /// 4. Assign final indices: file columns → [0..n), partition columns → [n..)
-    /// 5. Transform expressions once to remap all column references
+    /// In other words: we get a `Vec<usize>` projection that is meant to be applied on top of `file_schema`
+    /// and a remainder projection that is applied to the result of that first projection.
     ///
-    /// This replaces the previous three-pass approach:
-    /// - Old: extract → sort → remap → split → remap again (3 transformations)
-    /// - New: extract → classify → remap (1 transformation)
-    pub fn new(file_schema: &Schema, projection: &ProjectionExprs) -> Self {
-        let num_file_schema_columns = file_schema.fields().len();
+    /// Here `file_schema` is expected to be the *logical* schema of the file, that is the
+    /// table schema minus any partition columns.
+    /// Partition columns are always expected to be at the end of the table schema.
+    /// Note that `file_schema` is *not* the physical schema of the file.
+    pub fn new(logical_file_schema: &Schema, projection: &ProjectionExprs) -> Self {
+        let num_file_schema_columns = logical_file_schema.fields().len();
 
         // Collect all unique columns and classify as file or partition
         let mut file_columns = Vec::new();

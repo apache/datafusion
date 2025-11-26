@@ -465,7 +465,7 @@ impl FileFormat for ParquetFormat {
             .as_any()
             .downcast_ref::<ParquetSource>()
             .cloned()
-            .expect("should be a parquet source");
+            .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
         source = source.with_table_parquet_options(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
