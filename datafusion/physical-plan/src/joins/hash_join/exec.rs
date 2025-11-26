@@ -910,7 +910,21 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
+        // Only enable dynamic filter pushdown if:
+        // - The session config enables dynamic filter pushdown
+        // - A dynamic filter exists
+        // - At least one consumer is holding a reference to it, this avoids expensive filter
+        //   computation when disabled or when no consumer will use it.
+        let enable_dynamic_filter_pushdown = context
+            .session_config()
+            .options()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown
+            && self
+                .dynamic_filter
+                .as_ref()
+                .map(|df| df.filter.is_used())
+                .unwrap_or(false);
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
