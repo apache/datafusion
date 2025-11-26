@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example query_planning -- [analyzer_rule|expr_api|optimizer_rule|parse_sql_expr|plan_to_sql|planner_api|pruning|thread_pools]
+//! cargo run --example query_planning -- [all|analyzer_rule|expr_api|optimizer_rule|parse_sql_expr|plan_to_sql|planner_api|pruning|thread_pools]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `analyzer_rule` — use a custom AnalyzerRule to change a query's semantics (row level access control)
 //! - `expr_api` — create, execute, simplify, analyze and coerce `Expr`s
 //! - `optimizer_rule` — use a custom OptimizerRule to replace certain predicates
@@ -48,6 +49,7 @@ use std::str::FromStr;
 use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
+    All,
     AnalyzerRule,
     ExprApi,
     OptimizerRule,
@@ -61,6 +63,7 @@ enum ExampleKind {
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::AnalyzerRule => "analyzer_rule",
             Self::ExprApi => "expr_api",
             Self::OptimizerRule => "optimizer_rule",
@@ -78,6 +81,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "analyzer_rule" => Ok(Self::AnalyzerRule),
             "expr_api" => Ok(Self::ExprApi),
             "optimizer_rule" => Ok(Self::OptimizerRule),
@@ -92,7 +96,19 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 8] = [
+    const ALL_VARIANTS: [Self; 9] = [
+        Self::All,
+        Self::AnalyzerRule,
+        Self::ExprApi,
+        Self::OptimizerRule,
+        Self::ParseSqlExpr,
+        Self::PlanToSql,
+        Self::PlannerApi,
+        Self::Pruning,
+        Self::ThreadPools,
+    ];
+
+    const RUNNABLE_VARIANTS: [Self; 8] = [
         Self::AnalyzerRule,
         Self::ExprApi,
         Self::OptimizerRule,
@@ -106,7 +122,25 @@ impl ExampleKind {
     const EXAMPLE_NAME: &str = "query_planning";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::AnalyzerRule => analyzer_rule::analyzer_rule().await?,
+            ExampleKind::ExprApi => expr_api::expr_api().await?,
+            ExampleKind::OptimizerRule => optimizer_rule::optimizer_rule().await?,
+            ExampleKind::ParseSqlExpr => parse_sql_expr::parse_sql_expr().await?,
+            ExampleKind::PlanToSql => plan_to_sql::plan_to_sql_examples().await?,
+            ExampleKind::PlannerApi => planner_api::planner_api().await?,
+            ExampleKind::Pruning => pruning::pruning().await?,
+            ExampleKind::ThreadPools => thread_pools::thread_pools().await?,
+            ExampleKind::All => unreachable!("`All` should be handled in main"),
+        }
+        Ok(())
     }
 }
 
@@ -124,14 +158,13 @@ async fn main() -> Result<()> {
     })?;
 
     match arg.parse::<ExampleKind>()? {
-        ExampleKind::AnalyzerRule => analyzer_rule::analyzer_rule().await?,
-        ExampleKind::ExprApi => expr_api::expr_api().await?,
-        ExampleKind::OptimizerRule => optimizer_rule::optimizer_rule().await?,
-        ExampleKind::ParseSqlExpr => parse_sql_expr::parse_sql_expr().await?,
-        ExampleKind::PlanToSql => plan_to_sql::plan_to_sql_examples().await?,
-        ExampleKind::PlannerApi => planner_api::planner_api().await?,
-        ExampleKind::Pruning => pruning::pruning().await?,
-        ExampleKind::ThreadPools => thread_pools::thread_pools().await?,
+        ExampleKind::All => {
+            for example in ExampleKind::RUNNABLE_VARIANTS {
+                println!("Running example: {}", example.as_ref());
+                example.run().await?;
+            }
+        }
+        example => example.run().await?,
     }
 
     Ok(())

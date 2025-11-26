@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example sql_ops -- [analysis|dialect|frontend|query]
+//! cargo run --example sql_ops -- [all|analysis|dialect|frontend|query]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `analysis` — analyse SQL queries with DataFusion structures
 //! - `dialect` — implementing a custom SQL dialect on top of DFParser
 //! - `frontend` — create LogicalPlans (only) from sql strings
@@ -40,6 +41,7 @@ use std::str::FromStr;
 use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
+    All,
     Analysis,
     Dialect,
     Frontend,
@@ -49,6 +51,7 @@ enum ExampleKind {
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::Analysis => "analysis",
             Self::Dialect => "dialect",
             Self::Frontend => "frontend",
@@ -62,6 +65,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "analysis" => Ok(Self::Analysis),
             "dialect" => Ok(Self::Dialect),
             "frontend" => Ok(Self::Frontend),
@@ -72,12 +76,35 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 4] = [Self::Analysis, Self::Dialect, Self::Frontend, Self::Query];
+    const ALL_VARIANTS: [Self; 5] = [
+        Self::All,
+        Self::Analysis,
+        Self::Dialect,
+        Self::Frontend,
+        Self::Query,
+    ];
+
+    const RUNNABLE_VARIANTS: [Self; 4] =
+        [Self::Analysis, Self::Dialect, Self::Frontend, Self::Query];
 
     const EXAMPLE_NAME: &str = "sql_ops";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::Analysis => analysis::analysis().await?,
+            ExampleKind::Dialect => dialect::dialect().await?,
+            ExampleKind::Frontend => frontend::frontend()?,
+            ExampleKind::Query => query::query().await?,
+            ExampleKind::All => unreachable!("`All` should be handled in main"),
+        }
+        Ok(())
     }
 }
 
@@ -95,10 +122,13 @@ async fn main() -> Result<()> {
     })?;
 
     match arg.parse::<ExampleKind>()? {
-        ExampleKind::Analysis => analysis::analysis().await?,
-        ExampleKind::Dialect => dialect::dialect().await?,
-        ExampleKind::Frontend => frontend::frontend()?,
-        ExampleKind::Query => query::query().await?,
+        ExampleKind::All => {
+            for example in ExampleKind::RUNNABLE_VARIANTS {
+                println!("Running example: {}", example.as_ref());
+                example.run().await?;
+            }
+        }
+        example => example.run().await?,
     }
 
     Ok(())

@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example dataframe -- [dataframe|deserialize_to_struct]
+//! cargo run --example dataframe -- [all|dataframe|deserialize_to_struct]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `dataframe` — run a query using a DataFrame API against parquet files, csv files, and in-memory data, including multiple subqueries
 //! - `deserialize_to_struct` — convert query results (Arrow ArrayRefs) into Rust structs
 
@@ -36,6 +37,7 @@ use std::str::FromStr;
 use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
+    All,
     Dataframe,
     DeserializeToStruct,
 }
@@ -43,6 +45,7 @@ enum ExampleKind {
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::Dataframe => "dataframe",
             Self::DeserializeToStruct => "deserialize_to_struct",
         }
@@ -54,6 +57,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "dataframe" => Ok(Self::Dataframe),
             "deserialize_to_struct" => Ok(Self::DeserializeToStruct),
             _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
@@ -62,12 +66,29 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 2] = [Self::Dataframe, Self::DeserializeToStruct];
+    const ALL_VARIANTS: [Self; 3] =
+        [Self::All, Self::Dataframe, Self::DeserializeToStruct];
+
+    const RUNNABLE_VARIANTS: [Self; 2] = [Self::Dataframe, Self::DeserializeToStruct];
 
     const EXAMPLE_NAME: &str = "dataframe";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::Dataframe => dataframe::dataframe_example().await?,
+            ExampleKind::DeserializeToStruct => {
+                deserialize_to_struct::deserialize_to_struct().await?
+            }
+            ExampleKind::All => unreachable!("`All` should be handled in main"),
+        }
+        Ok(())
     }
 }
 
@@ -85,10 +106,13 @@ async fn main() -> Result<()> {
     })?;
 
     match arg.parse::<ExampleKind>()? {
-        ExampleKind::Dataframe => dataframe::dataframe_example().await?,
-        ExampleKind::DeserializeToStruct => {
-            deserialize_to_struct::deserialize_to_struct().await?
+        ExampleKind::All => {
+            for example in ExampleKind::RUNNABLE_VARIANTS {
+                println!("Running example: {}", example.as_ref());
+                example.run().await?;
+            }
         }
+        example => example.run().await?,
     }
 
     Ok(())

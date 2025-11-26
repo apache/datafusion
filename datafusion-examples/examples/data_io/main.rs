@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example data_io -- [catalog|json_shredding|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
+//! cargo run --example data_io -- [all|catalog|json_shredding|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `catalog` — register the table into a custom catalog
 //! - `json_shredding` — shows how to implement custom filter rewriting for JSON shredding
 //! - `parquet_adv_idx` — create a detailed secondary index that covers the contents of several parquet files
@@ -52,6 +53,7 @@ use std::str::FromStr;
 use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
+    All,
     Catalog,
     JsonShredding,
     ParquetAdvIdx,
@@ -67,6 +69,7 @@ enum ExampleKind {
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::Catalog => "catalog",
             Self::JsonShredding => "json_shredding",
             Self::ParquetAdvIdx => "parquet_adv_idx",
@@ -86,6 +89,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "catalog" => Ok(Self::Catalog),
             "json_shredding" => Ok(Self::JsonShredding),
             "parquet_adv_idx" => Ok(Self::ParquetAdvIdx),
@@ -102,7 +106,21 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 10] = [
+    const ALL_VARIANTS: [Self; 11] = [
+        Self::All,
+        Self::Catalog,
+        Self::JsonShredding,
+        Self::ParquetAdvIdx,
+        Self::ParquetEmbIdx,
+        Self::ParquetEnc,
+        Self::ParquetEncWithKms,
+        Self::ParquetExecVisitor,
+        Self::ParquetIdx,
+        Self::QueryHttpCsv,
+        Self::RemoteCatalog,
+    ];
+
+    const RUNNABLE_VARIANTS: [Self; 10] = [
         Self::Catalog,
         Self::JsonShredding,
         Self::ParquetAdvIdx,
@@ -118,7 +136,35 @@ impl ExampleKind {
     const EXAMPLE_NAME: &str = "data_io";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::Catalog => catalog::catalog().await?,
+            ExampleKind::JsonShredding => json_shredding::json_shredding().await?,
+            ExampleKind::ParquetAdvIdx => {
+                parquet_advanced_index::parquet_advanced_index().await?
+            }
+            ExampleKind::ParquetEmbIdx => {
+                parquet_embedded_index::parquet_embedded_index().await?
+            }
+            ExampleKind::ParquetEncWithKms => {
+                parquet_encrypted_with_kms::parquet_encrypted_with_kms().await?
+            }
+            ExampleKind::ParquetEnc => parquet_encrypted::parquet_encrypted().await?,
+            ExampleKind::ParquetExecVisitor => {
+                parquet_exec_visitor::parquet_exec_visitor().await?
+            }
+            ExampleKind::ParquetIdx => parquet_index::parquet_index().await?,
+            ExampleKind::QueryHttpCsv => query_http_csv::query_http_csv().await?,
+            ExampleKind::RemoteCatalog => remote_catalog::remote_catalog().await?,
+            ExampleKind::All => unreachable!("`All` should be handled in main"),
+        }
+        Ok(())
     }
 }
 
@@ -136,24 +182,13 @@ async fn main() -> Result<()> {
     })?;
 
     match arg.parse::<ExampleKind>()? {
-        ExampleKind::Catalog => catalog::catalog().await?,
-        ExampleKind::JsonShredding => json_shredding::json_shredding().await?,
-        ExampleKind::ParquetAdvIdx => {
-            parquet_advanced_index::parquet_advanced_index().await?
+        ExampleKind::All => {
+            for example in ExampleKind::RUNNABLE_VARIANTS {
+                println!("Running example: {}", example.as_ref());
+                example.run().await?;
+            }
         }
-        ExampleKind::ParquetEmbIdx => {
-            parquet_embedded_index::parquet_embedded_index().await?
-        }
-        ExampleKind::ParquetEncWithKms => {
-            parquet_encrypted_with_kms::parquet_encrypted_with_kms().await?
-        }
-        ExampleKind::ParquetEnc => parquet_encrypted::parquet_encrypted().await?,
-        ExampleKind::ParquetExecVisitor => {
-            parquet_exec_visitor::parquet_exec_visitor().await?
-        }
-        ExampleKind::ParquetIdx => parquet_index::parquet_index().await?,
-        ExampleKind::QueryHttpCsv => query_http_csv::query_http_csv().await?,
-        ExampleKind::RemoteCatalog => remote_catalog::remote_catalog().await?,
+        example => example.run().await?,
     }
 
     Ok(())

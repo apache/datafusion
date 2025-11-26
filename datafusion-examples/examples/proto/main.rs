@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example proto -- [composed_extension_codec]
+//! cargo run --example proto -- [all|composed_extension_codec]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `composed_extension_codec` — example of using multiple extension codecs for serialization / deserialization
 
 mod composed_extension_codec;
@@ -34,12 +35,14 @@ use std::str::FromStr;
 use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
+    All,
     ComposedExtensionCodec,
 }
 
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::ComposedExtensionCodec => "composed_extension_codec",
         }
     }
@@ -50,6 +53,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "composed_extension_codec" => Ok(Self::ComposedExtensionCodec),
             _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
         }
@@ -57,12 +61,27 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 1] = [Self::ComposedExtensionCodec];
+    const ALL_VARIANTS: [Self; 2] = [Self::All, Self::ComposedExtensionCodec];
+
+    const RUNNABLE_VARIANTS: [Self; 1] = [Self::ComposedExtensionCodec];
 
     const EXAMPLE_NAME: &str = "proto";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::ComposedExtensionCodec => {
+                composed_extension_codec::composed_extension_codec().await?
+            }
+            ExampleKind::All => unreachable!("`All` should be handled in main"),
+        }
+        Ok(())
     }
 }
 
@@ -80,9 +99,13 @@ async fn main() -> Result<()> {
     })?;
 
     match arg.parse::<ExampleKind>()? {
-        ExampleKind::ComposedExtensionCodec => {
-            composed_extension_codec::composed_extension_codec().await?
+        ExampleKind::All => {
+            for example in ExampleKind::RUNNABLE_VARIANTS {
+                println!("Running example: {}", example.as_ref());
+                example.run().await?;
+            }
         }
+        example => example.run().await?,
     }
 
     Ok(())

@@ -25,12 +25,26 @@ export CARGO_PROFILE_CI_STRIP=true
 cd datafusion-examples/examples/
 cargo build --profile ci --examples
 
-files=$(ls .)
-for filename in $files
-do
-  example_name=`basename $filename ".rs"`
-  # Skip tests that rely on external storage and flight
-  if [ ! -d $filename ]; then
-    cargo run --profile ci --example $example_name
-  fi
+SKIP_LIST=("external_dependency" "flight" "ffi")
+
+skip_example() {
+    local name="$1"
+    for skip in "${SKIP_LIST[@]}"; do
+        if [ "$name" = "$skip" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+for dir in */; do
+    example_name=$(basename "$dir")
+
+    if skip_example "$example_name"; then
+        echo "Skipping $example_name"
+        continue
+    fi
+
+    echo "Running example group: $example_name"
+    cargo run --profile ci --example "$example_name" all
 done

@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example custom_data_source -- [csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|default_column_values|file_stream_provider]
+//! cargo run --example custom_data_source -- [all|csv_json_opener|csv_sql_streaming|custom_datasource|custom_file_casts|custom_file_format|default_column_values|file_stream_provider]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `csv_json_opener` — use low level FileOpener APIs to read CSV/JSON into Arrow RecordBatches
 //! - `csv_sql_streaming` — build and run a streaming query plan from a SQL statement against a local CSV file
 //! - `custom_datasource` — run queries against a custom datasource (TableProvider)
@@ -46,6 +47,7 @@ use std::str::FromStr;
 use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
+    All,
     CsvJsonOpener,
     CsvSqlStreaming,
     CustomDatasource,
@@ -58,6 +60,7 @@ enum ExampleKind {
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::CsvJsonOpener => "csv_json_opener",
             Self::CsvSqlStreaming => "csv_sql_streaming",
             Self::CustomDatasource => "custom_datasource",
@@ -74,6 +77,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "csv_json_opener" => Ok(Self::CsvJsonOpener),
             "csv_sql_streaming" => Ok(Self::CsvSqlStreaming),
             "custom_datasource" => Ok(Self::CustomDatasource),
@@ -87,7 +91,18 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 7] = [
+    const ALL_VARIANTS: [Self; 8] = [
+        Self::All,
+        Self::CsvJsonOpener,
+        Self::CsvSqlStreaming,
+        Self::CustomDatasource,
+        Self::CustomFileCasts,
+        Self::CustomFileFormat,
+        Self::DefaultColumnValues,
+        Self::FileFtreamProvider,
+    ];
+
+    const RUNNABLE_VARIANTS: [Self; 7] = [
         Self::CsvJsonOpener,
         Self::CsvSqlStreaming,
         Self::CustomDatasource,
@@ -100,7 +115,36 @@ impl ExampleKind {
     const EXAMPLE_NAME: &str = "custom_data_source";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::CsvJsonOpener => csv_json_opener::csv_json_opener().await?,
+            ExampleKind::CsvSqlStreaming => {
+                csv_sql_streaming::csv_sql_streaming().await?
+            }
+            ExampleKind::CustomDatasource => {
+                custom_datasource::custom_datasource().await?
+            }
+            ExampleKind::CustomFileCasts => {
+                custom_file_casts::custom_file_casts().await?
+            }
+            ExampleKind::CustomFileFormat => {
+                custom_file_format::custom_file_format().await?
+            }
+            ExampleKind::DefaultColumnValues => {
+                default_column_values::default_column_values().await?
+            }
+            ExampleKind::FileFtreamProvider => {
+                file_stream_provider::file_stream_provider().await?
+            }
+            ExampleKind::All => unreachable!("`All` should be handled in main"),
+        }
+        Ok(())
     }
 }
 
@@ -118,17 +162,13 @@ async fn main() -> Result<()> {
     })?;
 
     match arg.parse::<ExampleKind>()? {
-        ExampleKind::CsvJsonOpener => csv_json_opener::csv_json_opener().await?,
-        ExampleKind::CsvSqlStreaming => csv_sql_streaming::csv_sql_streaming().await?,
-        ExampleKind::CustomDatasource => custom_datasource::custom_datasource().await?,
-        ExampleKind::CustomFileCasts => custom_file_casts::custom_file_casts().await?,
-        ExampleKind::CustomFileFormat => custom_file_format::custom_file_format().await?,
-        ExampleKind::DefaultColumnValues => {
-            default_column_values::default_column_values().await?
+        ExampleKind::All => {
+            for example in ExampleKind::RUNNABLE_VARIANTS {
+                println!("Running example: {}", example.as_ref());
+                example.run().await?;
+            }
         }
-        ExampleKind::FileFtreamProvider => {
-            file_stream_provider::file_stream_provider().await?
-        }
+        example => example.run().await?,
     }
 
     Ok(())

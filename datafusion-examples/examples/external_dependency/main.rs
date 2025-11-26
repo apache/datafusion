@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example external_dependency -- [dataframe_to_s3|query_aws_s3]
+//! cargo run --example external_dependency -- [all|dataframe_to_s3|query_aws_s3]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `dataframe_to_s3` — run a query using a DataFrame against a parquet file from AWS S3 and writing back to AWS S3
 //! - `query_aws_s3` — configure `object_store` and run a query against files stored in AWS S3
 
@@ -36,6 +37,7 @@ use std::str::FromStr;
 use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
+    All,
     DataframeToS3,
     QueryAwsS3,
 }
@@ -43,6 +45,7 @@ enum ExampleKind {
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::DataframeToS3 => "dataframe_to_s3",
             Self::QueryAwsS3 => "query_aws_s3",
         }
@@ -54,6 +57,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "dataframe_to_s3" => Ok(Self::DataframeToS3),
             "query_aws_s3" => Ok(Self::QueryAwsS3),
             _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
@@ -62,12 +66,26 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 2] = [Self::DataframeToS3, Self::QueryAwsS3];
+    const ALL_VARIANTS: [Self; 3] = [Self::All, Self::DataframeToS3, Self::QueryAwsS3];
+
+    const RUNNABLE_VARIANTS: [Self; 2] = [Self::DataframeToS3, Self::QueryAwsS3];
 
     const EXAMPLE_NAME: &str = "external_dependency";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::DataframeToS3 => dataframe_to_s3::dataframe_to_s3().await?,
+            ExampleKind::QueryAwsS3 => query_aws_s3::query_aws_s3().await?,
+            ExampleKind::All => unreachable!("`All` should be handled in main"),
+        }
+        Ok(())
     }
 }
 
@@ -85,8 +103,13 @@ async fn main() -> Result<()> {
     })?;
 
     match arg.parse::<ExampleKind>()? {
-        ExampleKind::DataframeToS3 => dataframe_to_s3::dataframe_to_s3().await?,
-        ExampleKind::QueryAwsS3 => query_aws_s3::query_aws_s3().await?,
+        ExampleKind::All => {
+            for example in ExampleKind::RUNNABLE_VARIANTS {
+                println!("Running example: {}", example.as_ref());
+                example.run().await?;
+            }
+        }
+        example => example.run().await?,
     }
 
     Ok(())

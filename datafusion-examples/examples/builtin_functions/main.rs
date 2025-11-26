@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example builtin_functions -- [date_time|function_factory|regexp]
+//! cargo run --example builtin_functions -- [all|date_time|function_factory|regexp]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `date_time` — examples of date-time related functions and queries
 //! - `function_factory` — register `CREATE FUNCTION` handler to implement SQL macros
 //! - `regexp` — examples of using regular expression functions
@@ -38,6 +39,7 @@ use std::str::FromStr;
 use datafusion::error::{DataFusionError, Result};
 
 enum ExampleKind {
+    All,
     DateTime,
     FunctionFactory,
     Regexp,
@@ -46,6 +48,7 @@ enum ExampleKind {
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::DateTime => "date_time",
             Self::FunctionFactory => "function_factory",
             Self::Regexp => "regexp",
@@ -58,6 +61,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "date_time" => Ok(Self::DateTime),
             "function_factory" => Ok(Self::FunctionFactory),
             "regexp" => Ok(Self::Regexp),
@@ -67,12 +71,33 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 3] = [Self::DateTime, Self::FunctionFactory, Self::Regexp];
+    const ALL_VARIANTS: [Self; 4] = [
+        Self::All,
+        Self::DateTime,
+        Self::FunctionFactory,
+        Self::Regexp,
+    ];
+
+    const RUNNABLE_VARIANTS: [Self; 3] =
+        [Self::DateTime, Self::FunctionFactory, Self::Regexp];
 
     const EXAMPLE_NAME: &str = "builtin_functions";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::DateTime => date_time::date_time().await?,
+            ExampleKind::FunctionFactory => function_factory::function_factory().await?,
+            ExampleKind::Regexp => regexp::regexp().await?,
+            ExampleKind::All => unreachable!("`All` should be handled in main"),
+        }
+        Ok(())
     }
 }
 
@@ -90,9 +115,13 @@ async fn main() -> Result<()> {
     })?;
 
     match arg.parse::<ExampleKind>()? {
-        ExampleKind::DateTime => date_time::date_time().await?,
-        ExampleKind::FunctionFactory => function_factory::function_factory().await?,
-        ExampleKind::Regexp => regexp::regexp().await?,
+        ExampleKind::All => {
+            for example in ExampleKind::RUNNABLE_VARIANTS {
+                println!("Running example: {}", example.as_ref());
+                example.run().await?;
+            }
+        }
+        example => example.run().await?,
     }
 
     Ok(())
