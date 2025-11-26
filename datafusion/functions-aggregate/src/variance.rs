@@ -20,12 +20,23 @@
 
 use arrow::datatypes::FieldRef;
 use arrow::{
-    array::{Array, ArrayRef, BooleanArray, Float64Array, UInt64Array},
+    array::{
+        Array, ArrayRef, AsArray, BooleanArray, FixedSizeBinaryArray,
+        FixedSizeBinaryBuilder, Float64Array, Float64Builder, PrimitiveArray,
+        UInt64Array, UInt64Builder,
+    },
     buffer::NullBuffer,
     compute::kernels::cast,
-    datatypes::{DataType, Field},
+    datatypes::i256,
+    datatypes::{
+        ArrowNumericType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
+        Decimal64Type, DecimalType, Field, DECIMAL256_MAX_SCALE,
+    },
 };
-use datafusion_common::{downcast_value, not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_common::{
+    downcast_value, exec_err, not_impl_err, plan_err, DataFusionError, Result,
+    ScalarValue,
+};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
@@ -36,8 +47,9 @@ use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
 };
 use datafusion_macros::user_doc;
+use std::convert::TryInto;
 use std::mem::{size_of, size_of_val};
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, marker::PhantomData, ops::Neg, sync::Arc};
 
 make_udaf_expr_and_func!(
     VarianceSample,
@@ -67,6 +79,61 @@ fn variance_signature() -> Signature {
     )
 }
 
+const DECIMAL_VARIANCE_BINARY_SIZE: i32 = 32;
+
+fn decimal_overflow_err() -> DataFusionError {
+    DataFusionError::Execution("Decimal variance overflow".to_string())
+}
+
+fn i256_to_f64_lossy(value: i256) -> f64 {
+    const SCALE: f64 = 18446744073709551616.0; // 2^64
+    let mut abs = value;
+    let negative = abs < i256::ZERO;
+    if negative {
+        abs = abs.neg();
+    }
+    let bytes = abs.to_le_bytes();
+    let mut result = 0f64;
+    for chunk in bytes.chunks_exact(8).rev() {
+        let chunk_val = u64::from_le_bytes(chunk.try_into().unwrap());
+        result = result * SCALE + chunk_val as f64;
+    }
+    if negative {
+        -result
+    } else {
+        result
+    }
+}
+
+fn decimal_scale(dt: &DataType) -> Option<i8> {
+    match dt {
+        DataType::Decimal32(_, scale)
+        | DataType::Decimal64(_, scale)
+        | DataType::Decimal128(_, scale)
+        | DataType::Decimal256(_, scale) => Some(*scale),
+        _ => None,
+    }
+}
+
+fn decimal_variance_state_fields(name: &str) -> Vec<FieldRef> {
+    vec![
+        Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+        Field::new(
+            format_state_name(name, "sum"),
+            DataType::FixedSizeBinary(DECIMAL_VARIANCE_BINARY_SIZE),
+            true,
+        ),
+        Field::new(
+            format_state_name(name, "sum_squares"),
+            DataType::FixedSizeBinary(DECIMAL_VARIANCE_BINARY_SIZE),
+            true,
+        ),
+    ]
+    .into_iter()
+    .map(Arc::new)
+    .collect()
+}
+
 fn is_numeric_or_decimal(data_type: &DataType) -> bool {
     data_type.is_numeric()
         || matches!(
@@ -76,6 +143,460 @@ fn is_numeric_or_decimal(data_type: &DataType) -> bool {
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _)
         )
+}
+
+fn i256_from_bytes(bytes: &[u8]) -> Result<i256> {
+    if bytes.len() != DECIMAL_VARIANCE_BINARY_LEN {
+        return exec_err!(
+            "Decimal variance state expected {} bytes got {}",
+            DECIMAL_VARIANCE_BINARY_LEN,
+            bytes.len()
+        );
+    }
+    let mut buffer = [0u8; DECIMAL_VARIANCE_BINARY_LEN];
+    buffer.copy_from_slice(bytes);
+    Ok(i256::from_le_bytes(buffer))
+}
+
+const DECIMAL_VARIANCE_BINARY_LEN: usize = DECIMAL_VARIANCE_BINARY_SIZE as usize;
+
+fn i256_to_scalar(value: i256) -> ScalarValue {
+    ScalarValue::FixedSizeBinary(
+        DECIMAL_VARIANCE_BINARY_SIZE,
+        Some(value.to_le_bytes().to_vec()),
+    )
+}
+
+fn create_decimal_variance_accumulator(
+    data_type: &DataType,
+    stats_type: StatsType,
+) -> Result<Option<Box<dyn Accumulator>>> {
+    let accumulator = match data_type {
+        DataType::Decimal32(_, scale) => Some(Box::new(DecimalVarianceAccumulator::<
+            Decimal32Type,
+        >::try_new(
+            *scale, stats_type
+        )?) as Box<dyn Accumulator>),
+        DataType::Decimal64(_, scale) => Some(Box::new(DecimalVarianceAccumulator::<
+            Decimal64Type,
+        >::try_new(
+            *scale, stats_type
+        )?) as Box<dyn Accumulator>),
+        DataType::Decimal128(_, scale) => Some(Box::new(DecimalVarianceAccumulator::<
+            Decimal128Type,
+        >::try_new(
+            *scale, stats_type
+        )?) as Box<dyn Accumulator>),
+        DataType::Decimal256(_, scale) => Some(Box::new(DecimalVarianceAccumulator::<
+            Decimal256Type,
+        >::try_new(
+            *scale, stats_type
+        )?) as Box<dyn Accumulator>),
+        _ => None,
+    };
+    Ok(accumulator)
+}
+
+fn create_decimal_variance_groups_accumulator(
+    data_type: &DataType,
+    stats_type: StatsType,
+) -> Result<Option<Box<dyn GroupsAccumulator>>> {
+    let accumulator = match data_type {
+        DataType::Decimal32(_, scale) => Some(Box::new(
+            DecimalVarianceGroupsAccumulator::<Decimal32Type>::new(*scale, stats_type),
+        ) as Box<dyn GroupsAccumulator>),
+        DataType::Decimal64(_, scale) => Some(Box::new(
+            DecimalVarianceGroupsAccumulator::<Decimal64Type>::new(*scale, stats_type),
+        ) as Box<dyn GroupsAccumulator>),
+        DataType::Decimal128(_, scale) => Some(Box::new(
+            DecimalVarianceGroupsAccumulator::<Decimal128Type>::new(*scale, stats_type),
+        ) as Box<dyn GroupsAccumulator>),
+        DataType::Decimal256(_, scale) => Some(Box::new(
+            DecimalVarianceGroupsAccumulator::<Decimal256Type>::new(*scale, stats_type),
+        ) as Box<dyn GroupsAccumulator>),
+        _ => None,
+    };
+    Ok(accumulator)
+}
+
+trait DecimalNative: Copy {
+    fn to_i256(self) -> i256;
+}
+
+impl DecimalNative for i32 {
+    fn to_i256(self) -> i256 {
+        i256::from(self)
+    }
+}
+
+impl DecimalNative for i64 {
+    fn to_i256(self) -> i256 {
+        i256::from(self)
+    }
+}
+
+impl DecimalNative for i128 {
+    fn to_i256(self) -> i256 {
+        i256::from_i128(self)
+    }
+}
+
+impl DecimalNative for i256 {
+    fn to_i256(self) -> i256 {
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct DecimalVarianceState {
+    count: u64,
+    sum: i256,
+    sum_squares: i256,
+}
+
+impl DecimalVarianceState {
+    fn update(&mut self, value: i256) -> Result<()> {
+        self.count = self.count.checked_add(1).ok_or_else(decimal_overflow_err)?;
+        self.sum = self
+            .sum
+            .checked_add(value)
+            .ok_or_else(decimal_overflow_err)?;
+        let square = value.checked_mul(value).ok_or_else(decimal_overflow_err)?;
+        self.sum_squares = self
+            .sum_squares
+            .checked_add(square)
+            .ok_or_else(decimal_overflow_err)?;
+        Ok(())
+    }
+
+    fn retract(&mut self, value: i256) -> Result<()> {
+        if self.count == 0 {
+            return exec_err!("Decimal variance retract underflow");
+        }
+        self.count -= 1;
+        self.sum = self
+            .sum
+            .checked_sub(value)
+            .ok_or_else(decimal_overflow_err)?;
+        let square = value.checked_mul(value).ok_or_else(decimal_overflow_err)?;
+        self.sum_squares = self
+            .sum_squares
+            .checked_sub(square)
+            .ok_or_else(decimal_overflow_err)?;
+        Ok(())
+    }
+
+    fn merge(&mut self, other: &Self) -> Result<()> {
+        self.count = self
+            .count
+            .checked_add(other.count)
+            .ok_or_else(decimal_overflow_err)?;
+        self.sum = self
+            .sum
+            .checked_add(other.sum)
+            .ok_or_else(decimal_overflow_err)?;
+        self.sum_squares = self
+            .sum_squares
+            .checked_add(other.sum_squares)
+            .ok_or_else(decimal_overflow_err)?;
+        Ok(())
+    }
+
+    fn variance(&self, stats_type: StatsType, scale: i8) -> Result<Option<f64>> {
+        if self.count == 0 {
+            return Ok(None);
+        }
+        if matches!(stats_type, StatsType::Sample) && self.count <= 1 {
+            return Ok(None);
+        }
+
+        let count_i256 = i256::from_i128(self.count as i128);
+        let scaled_sum_squares = self
+            .sum_squares
+            .checked_mul(count_i256)
+            .ok_or_else(decimal_overflow_err)?;
+        let sum_squared = self
+            .sum
+            .checked_mul(self.sum)
+            .ok_or_else(decimal_overflow_err)?;
+        let numerator = scaled_sum_squares
+            .checked_sub(sum_squared)
+            .ok_or_else(decimal_overflow_err)?;
+
+        let numerator = if numerator < i256::ZERO {
+            i256::ZERO
+        } else {
+            numerator
+        };
+
+        let denominator_counts = match stats_type {
+            StatsType::Population => {
+                let count = self.count as f64;
+                count * count
+            }
+            StatsType::Sample => {
+                let count = self.count as f64;
+                count * ((self.count - 1) as f64)
+            }
+        };
+
+        if denominator_counts == 0.0 {
+            return Ok(None);
+        }
+
+        let numerator_f64 = i256_to_f64_lossy(numerator);
+        let scale_factor = 10f64.powi(2 * scale as i32);
+        Ok(Some(numerator_f64 / (denominator_counts * scale_factor)))
+    }
+
+    fn to_scalar_state(&self) -> Vec<ScalarValue> {
+        vec![
+            ScalarValue::from(self.count),
+            i256_to_scalar(self.sum),
+            i256_to_scalar(self.sum_squares),
+        ]
+    }
+}
+
+#[derive(Debug)]
+struct DecimalVarianceAccumulator<T>
+where
+    T: DecimalType + ArrowNumericType + Debug,
+    T::Native: DecimalNative,
+{
+    state: DecimalVarianceState,
+    scale: i8,
+    stats_type: StatsType,
+    _marker: PhantomData<T>,
+}
+
+impl<T> DecimalVarianceAccumulator<T>
+where
+    T: DecimalType + ArrowNumericType + Debug,
+    T::Native: DecimalNative,
+{
+    fn try_new(scale: i8, stats_type: StatsType) -> Result<Self> {
+        if scale > DECIMAL256_MAX_SCALE {
+            return exec_err!(
+                "Decimal variance does not support scale {} greater than {}",
+                scale,
+                DECIMAL256_MAX_SCALE
+            );
+        }
+        Ok(Self {
+            state: DecimalVarianceState::default(),
+            scale,
+            stats_type,
+            _marker: PhantomData,
+        })
+    }
+
+    fn convert_array(values: &ArrayRef) -> &PrimitiveArray<T> {
+        values.as_primitive::<T>()
+    }
+}
+
+impl<T> Accumulator for DecimalVarianceAccumulator<T>
+where
+    T: DecimalType + ArrowNumericType + Debug,
+    T::Native: DecimalNative,
+{
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(self.state.to_scalar_state())
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = Self::convert_array(&values[0]);
+        for value in array.iter().flatten() {
+            self.state.update(value.to_i256())?;
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = Self::convert_array(&values[0]);
+        for value in array.iter().flatten() {
+            self.state.retract(value.to_i256())?;
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let counts = downcast_value!(states[0], UInt64Array);
+        let sums = downcast_value!(states[1], FixedSizeBinaryArray);
+        let sum_squares = downcast_value!(states[2], FixedSizeBinaryArray);
+
+        for i in 0..counts.len() {
+            if counts.is_null(i) {
+                continue;
+            }
+            let count = counts.value(i);
+            if count == 0 {
+                continue;
+            }
+            let sum = i256_from_bytes(sums.value(i))?;
+            let sum_sq = i256_from_bytes(sum_squares.value(i))?;
+            let other = DecimalVarianceState {
+                count,
+                sum,
+                sum_squares: sum_sq,
+            };
+            self.state.merge(&other)?;
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        match self.state.variance(self.stats_type, self.scale)? {
+            Some(v) => Ok(ScalarValue::Float64(Some(v))),
+            None => Ok(ScalarValue::Float64(None)),
+        }
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
+struct DecimalVarianceGroupsAccumulator<T>
+where
+    T: DecimalType + ArrowNumericType + Debug,
+    T::Native: DecimalNative,
+{
+    states: Vec<DecimalVarianceState>,
+    scale: i8,
+    stats_type: StatsType,
+    _marker: PhantomData<T>,
+}
+
+impl<T> DecimalVarianceGroupsAccumulator<T>
+where
+    T: DecimalType + ArrowNumericType + Debug,
+    T::Native: DecimalNative,
+{
+    fn new(scale: i8, stats_type: StatsType) -> Self {
+        Self {
+            states: Vec::new(),
+            scale,
+            stats_type,
+            _marker: PhantomData,
+        }
+    }
+
+    fn resize(&mut self, total_num_groups: usize) {
+        if self.states.len() < total_num_groups {
+            self.states
+                .resize(total_num_groups, DecimalVarianceState::default());
+        }
+    }
+}
+
+impl<T> GroupsAccumulator for DecimalVarianceGroupsAccumulator<T>
+where
+    T: DecimalType + ArrowNumericType + Debug,
+    T::Native: DecimalNative,
+{
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let array = values[0].as_primitive::<T>();
+        self.resize(total_num_groups);
+        for (row, group_index) in group_indices.iter().enumerate() {
+            if let Some(filter) = opt_filter {
+                if !filter.value(row) {
+                    continue;
+                }
+            }
+            if array.is_null(row) {
+                continue;
+            }
+            let value = array.value(row).to_i256();
+            self.states[*group_index].update(value)?;
+        }
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        _opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        let counts = downcast_value!(values[0], UInt64Array);
+        let sums = downcast_value!(values[1], FixedSizeBinaryArray);
+        let sum_squares = downcast_value!(values[2], FixedSizeBinaryArray);
+        self.resize(total_num_groups);
+
+        for (row, group_index) in group_indices.iter().enumerate() {
+            if counts.is_null(row) {
+                continue;
+            }
+            let count = counts.value(row);
+            if count == 0 {
+                continue;
+            }
+            let sum = i256_from_bytes(sums.value(row))?;
+            let sum_sq = i256_from_bytes(sum_squares.value(row))?;
+            let other = DecimalVarianceState {
+                count,
+                sum,
+                sum_squares: sum_sq,
+            };
+            self.states[*group_index].merge(&other)?;
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
+        let states = emit_to.take_needed(&mut self.states);
+        let mut builder = Float64Builder::with_capacity(states.len());
+        for state in &states {
+            match state.variance(self.stats_type, self.scale)? {
+                Some(value) => builder.append_value(value),
+                None => builder.append_null(),
+            }
+        }
+        Ok(Arc::new(builder.finish()))
+    }
+
+    fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
+        let states = emit_to.take_needed(&mut self.states);
+        let mut counts = UInt64Builder::with_capacity(states.len());
+        let mut sums = FixedSizeBinaryBuilder::with_capacity(
+            states.len(),
+            DECIMAL_VARIANCE_BINARY_SIZE,
+        );
+        let mut sum_squares = FixedSizeBinaryBuilder::with_capacity(
+            states.len(),
+            DECIMAL_VARIANCE_BINARY_SIZE,
+        );
+
+        for state in states {
+            counts.append_value(state.count);
+            sums.append_value(state.sum.to_le_bytes())?;
+            sum_squares.append_value(state.sum_squares.to_le_bytes())?;
+        }
+
+        Ok(vec![
+            Arc::new(counts.finish()),
+            Arc::new(sums.finish()),
+            Arc::new(sum_squares.finish()),
+        ])
+    }
+
+    fn size(&self) -> usize {
+        self.states.capacity() * size_of::<DecimalVarianceState>()
+    }
 }
 
 #[user_doc(
@@ -133,6 +654,14 @@ impl AggregateUDFImpl for VarianceSample {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
+        if args
+            .input_fields
+            .first()
+            .and_then(|field| decimal_scale(field.data_type()))
+            .is_some()
+        {
+            return Ok(decimal_variance_state_fields(name));
+        }
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
             Field::new(format_state_name(name, "mean"), DataType::Float64, true),
@@ -148,6 +677,13 @@ impl AggregateUDFImpl for VarianceSample {
             return not_impl_err!("VAR(DISTINCT) aggregations are not available");
         }
 
+        if let Some(acc) = create_decimal_variance_accumulator(
+            acc_args.expr_fields[0].data_type(),
+            StatsType::Sample,
+        )? {
+            return Ok(acc);
+        }
+
         Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
     }
 
@@ -161,8 +697,14 @@ impl AggregateUDFImpl for VarianceSample {
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        if let Some(acc) = create_decimal_variance_groups_accumulator(
+            args.expr_fields[0].data_type(),
+            StatsType::Sample,
+        )? {
+            return Ok(acc);
+        }
         Ok(Box::new(VarianceGroupsAccumulator::new(StatsType::Sample)))
     }
 
@@ -230,6 +772,14 @@ impl AggregateUDFImpl for VariancePopulation {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
+        if args
+            .input_fields
+            .first()
+            .and_then(|field| decimal_scale(field.data_type()))
+            .is_some()
+        {
+            return Ok(decimal_variance_state_fields(name));
+        }
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
             Field::new(format_state_name(name, "mean"), DataType::Float64, true),
@@ -243,6 +793,13 @@ impl AggregateUDFImpl for VariancePopulation {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
             return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
+        }
+
+        if let Some(acc) = create_decimal_variance_accumulator(
+            acc_args.expr_fields[0].data_type(),
+            StatsType::Population,
+        )? {
+            return Ok(acc);
         }
 
         Ok(Box::new(VarianceAccumulator::try_new(
@@ -260,8 +817,14 @@ impl AggregateUDFImpl for VariancePopulation {
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        if let Some(acc) = create_decimal_variance_groups_accumulator(
+            args.expr_fields[0].data_type(),
+            StatsType::Population,
+        )? {
+            return Ok(acc);
+        }
         Ok(Box::new(VarianceGroupsAccumulator::new(
             StatsType::Population,
         )))
