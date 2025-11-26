@@ -58,22 +58,99 @@ impl AvroSource {
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
-        let schema = self.table_schema.file_schema().as_ref(); // todo - avro metadata loading
-
-        let projected_schema = if let Some(projection) = &self.file_projection {
-            &schema.project(projection)?
-        } else {
-            schema
-        };
-
-        let avro_schema = AvroSchema::try_from(projected_schema)?;
-
+        // TODO: Once `ReaderBuilder::with_projection` is available, we should use it instead.
+        //  This should be an easy change. We'd simply need to:
+        //      1. Use the full file schema to generate the reader `AvroSchema`.
+        //      2. Pass `&self.file_projection` into `ReaderBuilder::with_projection`.
+        //      3. Remove the `build_projected_reader_schema` methods.
         ReaderBuilder::new()
-            .with_reader_schema(avro_schema) // Used for projection on read.
+            .with_reader_schema(self.build_projected_reader_schema()?)
             .with_batch_size(self.batch_size.expect("Batch size must set before open"))
             .build(reader)
             .map_err(Into::into)
     }
+
+    fn build_projected_reader_schema(&self) -> Result<AvroSchema> {
+        let file_schema = self.table_schema.file_schema().as_ref();
+        // Fast path: no projection. If we have the original writer schema JSON
+        // in metadata, just reuse it as-is without parsing.
+        if self.file_projection.is_none() {
+            return if let Some(avro_json) =
+                file_schema.metadata().get(SCHEMA_METADATA_KEY)
+            {
+                Ok(AvroSchema::new(avro_json.clone()))
+            } else {
+                // Fall back to deriving Avro from the full Arrow file schema, should be ok
+                // if not using projection.
+                Ok(AvroSchema::try_from(file_schema)
+                    .map_err(Into::<DataFusionError>::into)?)
+            };
+        }
+        // Use the writer Avro schema JSON tagged upstream to build a projected reader schema
+        match file_schema.metadata().get(SCHEMA_METADATA_KEY) {
+            Some(avro_json) => {
+                let mut schema_json: Value =
+                    serde_json::from_str(avro_json).map_err(|e| {
+                        DataFusionError::Execution(format!(
+                            "Failed to parse Avro schema JSON from metadata: {e}"
+                        ))
+                    })?;
+                let obj = schema_json.as_object_mut().ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "Top-level Avro schema JSON must be an object".to_string(),
+                    )
+                })?;
+                let fields_val = obj.get_mut("fields").ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "Top-level Avro schema JSON must contain a `fields` array"
+                            .to_string(),
+                    )
+                })?;
+                let fields_arr = fields_val.as_array_mut().ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "Top-level Avro schema `fields` must be an array".to_string(),
+                    )
+                })?;
+                // Move existing fields out so we can rebuild them in projected order.
+                let original_fields = std::mem::take(fields_arr);
+                let mut by_name: HashMap<String, Value> =
+                    HashMap::with_capacity(original_fields.len());
+                for field in original_fields {
+                    if let Some(name) = field.get("name").and_then(|v| v.as_str()) {
+                        by_name.insert(name.to_string(), field);
+                    }
+                }
+                // Rebuild `fields` in the same order as the projected Arrow schema.
+                let projection = self.file_projection.as_ref().ok_or_else(|| {
+                    DataFusionError::Internal("checked file_projection is Some above".to_string())
+                })?;
+                let projected_schema = file_schema.project(projection)?;
+                let mut projected_fields =
+                    Vec::with_capacity(projected_schema.fields().len());
+                for arrow_field in projected_schema.fields() {
+                    let name = arrow_field.name();
+                    let field = by_name.remove(name).ok_or_else(|| {
+                        DataFusionError::Execution(format!(
+                            "Projected field `{name}` not found in Avro writer schema"
+                        ))
+                    })?;
+                    projected_fields.push(field);
+                }
+                *fields_val = Value::Array(projected_fields);
+                let projected_json =
+                    serde_json::to_string(&schema_json).map_err(|e| {
+                        DataFusionError::Execution(format!(
+                            "Failed to serialize projected Avro schema JSON: {e}"
+                        ))
+                    })?;
+                Ok(AvroSchema::new(projected_json))
+            }
+            None => Err(DataFusionError::Execution(format!(
+                "Avro schema metadata ({SCHEMA_METADATA_KEY}) is missing from file schema, but is required for projection"
+            ))),
+        }
+    }
+}
 }
 
 impl FileSource for AvroSource {
