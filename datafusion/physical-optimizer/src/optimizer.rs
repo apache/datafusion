@@ -87,8 +87,8 @@ pub trait PhysicalOptimizerRule: Debug {
     /// New implementations should override this method instead of `optimize()`.
     ///
     /// Once [`PhysicalOptimizerRule::optimize`] is deprecated and removed, this
-    /// default implementation will be removed and all implementations will be
-    /// required to implement this method.
+    /// default implementation will be removed and this method will become required.
+    /// This change is scheduled for DataFusion 54.0.0.
     fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
