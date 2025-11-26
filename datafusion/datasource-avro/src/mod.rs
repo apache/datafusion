@@ -34,9 +34,9 @@ pub mod source;
 use arrow::datatypes::Schema;
 pub use arrow_avro;
 use arrow_avro::reader::ReaderBuilder;
-pub use file_format::*;
 use arrow_avro::schema::SCHEMA_METADATA_KEY;
 use datafusion_common::DataFusionError;
+pub use file_format::*;
 use std::io::{BufReader, Read};
 use std::sync::Arc;
 

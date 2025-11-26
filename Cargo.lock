@@ -2040,6 +2040,7 @@ dependencies = [
  "bytes",
  "datafusion-common",
  "datafusion-datasource",
+ "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",

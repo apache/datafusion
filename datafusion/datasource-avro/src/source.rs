@@ -24,12 +24,13 @@ use std::sync::Arc;
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use arrow_avro::schema::{AvroSchema, SCHEMA_METADATA_KEY};
 use datafusion_common::error::Result;
-use datafusion_common::{DataFusionError, Statistics};
+use datafusion_common::DataFusionError;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::TableSchema;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use object_store::ObjectStore;
@@ -40,7 +41,7 @@ use serde_json::Value;
 pub struct AvroSource {
     table_schema: TableSchema,
     batch_size: Option<usize>,
-    projection: Option<Vec<usize>>,
+    projection: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
@@ -181,7 +182,7 @@ impl FileSource for AvroSource {
 
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.projection = config.file_column_projection_indices();
+        conf.projection = config.projected_file_column_names();
         Arc::new(conf)
     }
 
