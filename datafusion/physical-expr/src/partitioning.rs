@@ -208,7 +208,7 @@ impl Partitioning {
                             required_exprs,
                             eq_properties,
                         )
-                    }) || partition_labels_subset(required_exprs, partition_exprs)
+                    })
                 }
                 _ => false,
             },
@@ -290,26 +290,6 @@ fn normalize_partition_label(expr: &Arc<dyn PhysicalExpr>) -> Option<String> {
 
 fn strip_projection_suffix(name: &str) -> String {
     name.split('@').next().unwrap_or(name).to_string()
-}
-
-fn partition_labels_subset(
-    required_exprs: &[Arc<dyn PhysicalExpr>],
-    partition_exprs: &[Arc<dyn PhysicalExpr>],
-) -> bool {
-    let required_labels: Option<Vec<_>> = required_exprs
-        .iter()
-        .map(normalize_partition_label)
-        .collect();
-    let partition_labels: Option<Vec<_>> = partition_exprs
-        .iter()
-        .map(normalize_partition_label)
-        .collect();
-    match (required_labels, partition_labels) {
-        (Some(required), Some(partitions)) => partitions
-            .iter()
-            .all(|label| required.iter().any(|r| r == label)),
-        _ => false,
-    }
 }
 
 impl PartialEq for Partitioning {
