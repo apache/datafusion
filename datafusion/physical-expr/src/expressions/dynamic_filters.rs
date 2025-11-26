@@ -294,6 +294,16 @@ impl DynamicFilterPhysicalExpr {
             .await;
     }
 
+    /// Check if this dynamic filter is being actively used by any consumers.
+    ///
+    /// Returns `true` if there are references beyond the producer (e.g., the HashJoinExec
+    /// that created the filter). This is useful to avoid computing expensive filter
+    /// expressions when no consumer will actually use them.
+    pub fn is_used(self: &Arc<Self>) -> bool {
+        // Strong count > 1 means at least one consumer is holding a reference beyond the producer.
+        Arc::strong_count(self) > 1
+    }
+
     fn render(
         &self,
         f: &mut std::fmt::Formatter<'_>,
@@ -689,6 +699,48 @@ mod test {
         assert!(
             arr_2.eq(&expected_2),
             "Expected b + d = [1010, 2020, 3030], got {arr_2:?}",
+        );
+    }
+
+    #[test]
+    fn test_is_used() {
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+
+        // Initially, only one reference exists (the filter itself)
+        assert!(
+            !filter.is_used(),
+            "Filter should not be used with only one reference"
+        );
+
+        // Simulate a consumer holding a reference (e.g., ParquetExec)
+        let consumer1 = Arc::clone(&filter);
+        assert!(
+            filter.is_used(),
+            "Filter should be used with a consumer reference"
+        );
+
+        // Multiple consumers
+        let consumer2 = Arc::clone(&filter);
+        assert!(
+            filter.is_used(),
+            "Filter should still be used with multiple consumers"
+        );
+
+        // Drop one consumer
+        drop(consumer1);
+        assert!(
+            filter.is_used(),
+            "Filter should still be used with remaining consumer"
+        );
+
+        // Drop all consumers
+        drop(consumer2);
+        assert!(
+            !filter.is_used(),
+            "Filter should not be used after all consumers dropped"
         );
     }
 }
