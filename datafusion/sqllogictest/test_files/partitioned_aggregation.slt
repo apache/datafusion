@@ -283,6 +283,88 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
 08)--------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[part_col], file_type=parquet
 
+# Test 8: Verify optimization works regardless of target_partitions setting
+# With target_partitions=16 (more than the 4 partition files), SinglePartitioned should still be used
+statement ok
+SET datafusion.execution.listing_table_preserve_partition_values = true;
+
+statement ok
+SET datafusion.execution.target_partitions = 16;
+
+statement ok
+CREATE EXTERNAL TABLE single_col_16_target (
+    part_col INT,
+    val INT
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/partitioned_aggregation/'
+PARTITIONED BY (part_col);
+
+query TT
+EXPLAIN SELECT part_col, count(*) FROM single_col_16_target GROUP BY part_col ORDER BY part_col
+----
+logical_plan
+01)Sort: single_col_16_target.part_col ASC NULLS LAST
+02)--Projection: single_col_16_target.part_col, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[single_col_16_target.part_col]], aggr=[[count(Int64(1))]]
+04)------TableScan: single_col_16_target projection=[part_col]
+physical_plan
+01)SortPreservingMergeExec: [part_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[part_col@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[part_col@0 as part_col, count(Int64(1))@1 as count(*)]
+04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
+05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[part_col], file_type=parquet
+
+query II
+SELECT part_col, count(*) FROM single_col_16_target GROUP BY part_col ORDER BY part_col
+----
+1 3
+2 2
+3 1
+4 1
+
+# Test 9: Verify optimization works when target_partitions < partition count
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE EXTERNAL TABLE single_col_2_target (
+    part_col INT,
+    val INT
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/partitioned_aggregation/'
+PARTITIONED BY (part_col);
+
+query TT
+EXPLAIN SELECT part_col, count(*) FROM single_col_2_target GROUP BY part_col ORDER BY part_col
+----
+logical_plan
+01)Sort: single_col_2_target.part_col ASC NULLS LAST
+02)--Projection: single_col_2_target.part_col, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[single_col_2_target.part_col]], aggr=[[count(Int64(1))]]
+04)------TableScan: single_col_2_target projection=[part_col]
+physical_plan
+01)SortPreservingMergeExec: [part_col@0 ASC NULLS LAST]
+02)--SortExec: expr=[part_col@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[part_col@0 as part_col, count(Int64(1))@1 as count(*)]
+04)------AggregateExec: mode=SinglePartitioned, gby=[part_col@0 as part_col], aggr=[count(Int64(1))]
+05)--------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=1/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=2/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=3/2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/partitioned_aggregation/part_col=4/3.parquet]]}, projection=[part_col], file_type=parquet
+
+query II
+SELECT part_col, count(*) FROM single_col_2_target GROUP BY part_col ORDER BY part_col
+----
+1 3
+2 2
+3 1
+4 1
+
+statement ok
+DROP TABLE single_col_16_target;
+
+statement ok
+DROP TABLE single_col_2_target;
+
 # Cleanup
 statement ok
 DROP TABLE single_col_table;

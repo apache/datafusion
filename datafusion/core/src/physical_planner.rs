@@ -88,7 +88,7 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::{Column, Literal};
+use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
@@ -100,6 +100,7 @@ use datafusion_physical_plan::metrics::MetricType;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
+use datafusion_physical_plan::Distribution;
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
@@ -802,33 +803,13 @@ impl DefaultPhysicalPlanner {
                 let grouping_input_exprs = groups.input_exprs();
                 let output_partitioning = initial_aggr.properties().output_partitioning();
 
-                // Check if the data is partitioned on the grouping columns.
-                // If all partition columns are present in the GROUP BY, we can avoid repartitioning.
-                let key_partition_on_group = if groups.is_single()
+                let key_partition_on_group = groups.is_single()
                     && !groups.expr().is_empty()
-                {
-                    if let Partitioning::KeyPartitioned(ref partition_exprs, _) =
-                        output_partitioning
-                    {
-                        partition_exprs.iter().all(|part_expr| {
-                            let Some(part_col) =
-                                part_expr.as_any().downcast_ref::<Column>()
-                            else {
-                                return false;
-                            };
-
-                            grouping_input_exprs.iter().any(|group_expr| {
-                                group_expr.as_any().downcast_ref::<Column>().is_some_and(
-                                    |group_col| group_col.name() == part_col.name(),
-                                )
-                            })
-                        })
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                    && matches!(output_partitioning, Partitioning::KeyPartitioned(..))
+                    && output_partitioning.satisfy(
+                        &Distribution::HashPartitioned(grouping_input_exprs),
+                        initial_aggr.properties().equivalence_properties(),
+                    );
 
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
@@ -843,16 +824,19 @@ impl DefaultPhysicalPlanner {
                     groups.expr().is_empty() || has_ordered_aggregate;
 
                 // Determine if we can use parallel final aggregation:
-                //   1. The scan is already KeyPartitioned on the grouping keys with >1 partitions
-                //   2. We are allowed to insert a hash repartition before the final stage
+                //   1. KeyPartitioned on grouping keys with multiple partitions
+                //   2. Hash repartition enabled (only if not already KeyPartitioned)
                 let child_partition_count = output_partitioning.partition_count();
                 let key_partition_supports_parallel =
                     key_partition_on_group && child_partition_count > 1;
-                let hash_repartition_enabled = !groups.is_empty()
+                // Only enable hash repartition if we're NOT already KeyPartitioned on the group keys
+                let hash_repartition_enabled = !key_partition_on_group
+                    && !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations();
                 let use_partitioned_final = !requires_single_partition
                     && (key_partition_supports_parallel || hash_repartition_enabled);
+
                 let next_partition_mode = if use_partitioned_final {
                     // construct a second aggregation with 'AggregateMode::FinalPartitioned'
                     AggregateMode::FinalPartitioned

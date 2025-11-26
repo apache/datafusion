@@ -1070,6 +1070,9 @@ struct RepartitionRequirementStatus {
     roundrobin_beneficial_stats: bool,
     /// Designates whether hash partitioning is necessary.
     hash_necessary: bool,
+    /// Designates whether the input is already KeyPartitioned on the required keys,
+    /// satisfying the HashPartitioned requirement without repartitioning.
+    key_partitioned_satisfies_hash: bool,
 }
 
 /// Calculates the `RepartitionRequirementStatus` for each children to generate
@@ -1125,36 +1128,44 @@ fn get_repartition_requirement_status(
             Precision::Absent => true,
         };
         let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
-        // Hash re-partitioning is necessary when the input has more than one
-        // partitions:
         let multi_partitions = child.output_partitioning().partition_count() > 1;
+
+        let key_partitioned_satisfies_hash = matches!(
+            child.output_partitioning(),
+            Partitioning::KeyPartitioned(..)
+        ) && child
+            .output_partitioning()
+            .satisfy(&requirement, child.equivalence_properties());
+
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
-        needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
+        needs_alignment |= is_hash
+            && (multi_partitions || roundrobin_sensible)
+            && !key_partitioned_satisfies_hash;
         repartition_status_flags.push((
             is_hash,
+            key_partitioned_satisfies_hash,
             RepartitionRequirementStatus {
                 requirement,
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
-                hash_necessary: is_hash && multi_partitions,
+                hash_necessary: is_hash
+                    && multi_partitions
+                    && !key_partitioned_satisfies_hash,
+                key_partitioned_satisfies_hash,
             },
         ));
     }
-    // Align hash necessary flags for hash partitions to generate consistent
-    // hash partitions at each children:
+    // Align hash partitioning requirements across children, skipping KeyPartitioned inputs
     if needs_alignment {
-        // When there is at least one hash requirement that is necessary or
-        // beneficial according to statistics, make all children require hash
-        // repartitioning:
-        for (is_hash, status) in &mut repartition_status_flags {
-            if *is_hash {
+        for (is_hash, key_satisfies, status) in &mut repartition_status_flags {
+            if *is_hash && !*key_satisfies {
                 status.hash_necessary = true;
             }
         }
     }
     Ok(repartition_status_flags
         .into_iter()
-        .map(|(_, status)| status)
+        .map(|(_, _, status)| status)
         .collect())
 }
 
@@ -1244,14 +1255,14 @@ pub fn ensure_distribution(
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
                 hash_necessary,
+                key_partitioned_satisfies_hash,
             },
         )| {
             let add_roundrobin = enable_round_robin
-                // Operator benefits from partitioning (e.g. filter):
                 && roundrobin_beneficial
                 && roundrobin_beneficial_stats
-                // Unless partitioning increases the partition count, it is not beneficial:
-                && child.plan.output_partitioning().partition_count() < target_partitions;
+                && child.plan.output_partitioning().partition_count() < target_partitions
+                && !key_partitioned_satisfies_hash;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
@@ -1274,15 +1285,13 @@ pub fn ensure_distribution(
                 }
                 Distribution::HashPartitioned(exprs) => {
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
-                    if add_roundrobin && !hash_necessary {
-                        // Add round-robin repartitioning on top of the operator
-                        // to increase parallelism.
-                        child = add_roundrobin_on_top(child, target_partitions)?;
-                    }
-                    // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
+                        // Hash repartition required to satisfy distribution requirement
                         child =
                             add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                    } else if add_roundrobin {
+                        // Add round-robin repartitioning to increase parallelism
+                        child = add_roundrobin_on_top(child, target_partitions)?;
                     }
                 }
                 Distribution::KeyPartitioned(_) => {

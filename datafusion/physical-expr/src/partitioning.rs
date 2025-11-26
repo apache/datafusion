@@ -222,30 +222,27 @@ impl Partitioning {
         mapping: &ProjectionMapping,
         input_eq_properties: &EquivalenceProperties,
     ) -> Self {
-        if let Partitioning::Hash(exprs, part) = self {
-            let normalized_exprs = input_eq_properties
-                .project_expressions(exprs, mapping)
-                .zip(exprs)
-                .map(|(proj_expr, expr)| {
-                    proj_expr.unwrap_or_else(|| {
-                        Arc::new(UnKnownColumn::new(&expr.to_string()))
+        match self {
+            Partitioning::Hash(exprs, part)
+            | Partitioning::KeyPartitioned(exprs, part) => {
+                let normalized_exprs = input_eq_properties
+                    .project_expressions(exprs, mapping)
+                    .zip(exprs)
+                    .map(|(proj_expr, expr)| {
+                        proj_expr.unwrap_or_else(|| {
+                            Arc::new(UnKnownColumn::new(&expr.to_string()))
+                        })
                     })
-                })
-                .collect();
-            Partitioning::Hash(normalized_exprs, *part)
-        } else if let Partitioning::KeyPartitioned(exprs, part) = self {
-            let normalized_exprs = input_eq_properties
-                .project_expressions(exprs, mapping)
-                .zip(exprs)
-                .map(|(proj_expr, expr)| {
-                    proj_expr.unwrap_or_else(|| {
-                        Arc::new(UnKnownColumn::new(&expr.to_string()))
-                    })
-                })
-                .collect();
-            Partitioning::KeyPartitioned(normalized_exprs, *part)
-        } else {
-            self.clone()
+                    .collect();
+                match self {
+                    Partitioning::Hash(..) => Partitioning::Hash(normalized_exprs, *part),
+                    Partitioning::KeyPartitioned(..) => {
+                        Partitioning::KeyPartitioned(normalized_exprs, *part)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => self.clone(),
         }
     }
 }
