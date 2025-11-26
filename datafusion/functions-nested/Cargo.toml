@@ -59,7 +59,7 @@ datafusion-macros = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
-paste = "1.0.14"
+paste = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
@@ -71,7 +71,15 @@ name = "array_expression"
 
 [[bench]]
 harness = false
+name = "array_has"
+
+[[bench]]
+harness = false
 name = "array_reverse"
+
+[[bench]]
+harness = false
+name = "array_slice"
 
 [[bench]]
 harness = false

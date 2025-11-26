@@ -72,5 +72,5 @@ datafusion-functions-window = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
 itertools = { workspace = true }
-paste = "^1.0"
+paste = { workspace = true }
 rstest = { workspace = true }

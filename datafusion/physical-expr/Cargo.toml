@@ -53,7 +53,7 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 parking_lot = { workspace = true }
-paste = "^1.0"
+paste = { workspace = true }
 petgraph = "0.8.3"
 tokio = { workspace = true }
 

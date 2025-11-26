@@ -1524,6 +1524,14 @@ impl Extensions {
         let e = self.0.get_mut(T::PREFIX)?;
         e.0.as_any_mut().downcast_mut()
     }
+
+    /// Iterates all the config extension entries yielding their prefix and their
+    /// [ExtensionOptions] implementation.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &Box<dyn ExtensionOptions>)> {
+        self.0.iter().map(|(k, v)| (*k, &v.0))
+    }
 }
 
 #[derive(Debug)]
@@ -3035,6 +3043,16 @@ mod tests {
             kafka_config.properties.get("bootstrap.servers").unwrap(),
             "asd"
         );
+    }
+
+    #[test]
+    fn iter_test_extension_config() {
+        let mut extension = Extensions::new();
+        extension.insert(TestExtensionConfig::default());
+        let table_config = TableOptions::new().with_extensions(extension);
+        let extensions = table_config.extensions.iter().collect::<Vec<_>>();
+        assert_eq!(extensions.len(), 1);
+        assert_eq!(extensions[0].0, TestExtensionConfig::PREFIX);
     }
 
     #[test]
