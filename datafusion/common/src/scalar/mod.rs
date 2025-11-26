@@ -21,8 +21,6 @@ mod cache;
 mod consts;
 mod struct_builder;
 
-use arrow::buffer::MutableBuffer;
-use arrow::buffer::NullBuffer;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
@@ -63,15 +61,15 @@ use arrow::array::{
     Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
     DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
-    PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array, UnionArray,
+    FixedSizeBinaryBuilder, FixedSizeListArray, Float16Array, Float32Array, Float64Array,
+    GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
+    MutableArrayData, OffsetSizeTrait, PrimitiveArray, Scalar, StringArray,
+    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{cast_with_options, CastOptions};
@@ -3061,14 +3059,9 @@ impl ScalarValue {
                     // TODO: Replace with FixedSizeBinaryArray::new_null once a fix for
                     // https://github.com/apache/arrow-rs/issues/8900 is in the used arrow-rs
                     // version.
-                    let capacity_in_bytes =
-                        s.to_usize().unwrap().checked_mul(size).unwrap();
-                    Arc::new(FixedSizeBinaryArray::try_new(
-                        *s,
-                        // MutableBuffer::new_null is in bits.
-                        MutableBuffer::new_null(capacity_in_bytes * 8).into(),
-                        Some(NullBuffer::new_null(size)),
-                    )?)
+                    let mut builder = FixedSizeBinaryBuilder::new(*s);
+                    builder.append_nulls(size);
+                    Arc::new(builder.finish())
                 }
             },
             ScalarValue::LargeBinary(e) => match e {
