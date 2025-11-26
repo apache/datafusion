@@ -510,7 +510,7 @@ mod tests {
                         reference_type: Some(substrait::proto::expression::field_reference::ReferenceType::DirectReference(
                             substrait::proto::expression::ReferenceSegment {
                                 reference_type: Some(substrait::proto::expression::reference_segment::ReferenceType::StructField(
-                                    Box::new(substrait::proto::expression::reference_segment::StructField { // <--- Added Box::new here
+                                    Box::new(substrait::proto::expression::reference_segment::StructField {
                                         field: 0,
                                         child: None,
                                     })
@@ -547,11 +547,11 @@ mod tests {
             .await?;
 
         if let Expr::Like(like) = result {
-            assert_eq!(like.negated, false);
-            assert_eq!(like.case_insensitive, false);
+            assert!(!like.negated);
+            assert!(!like.case_insensitive);
             assert_eq!(format!("{}", like.pattern), "Utf8(\"foo\")");
         } else {
-            panic!("Expected Expr::Like, got {:?}", result);
+            panic!("Expected Expr::Like, got {result:?}");
         }
 
         // 4. Test "like_not_match" (NOT LIKE)
@@ -566,10 +566,10 @@ mod tests {
             .await?;
 
         if let Expr::Like(like) = result {
-            assert_eq!(like.negated, true); // Should be true
-            assert_eq!(like.case_insensitive, false);
+            assert!(like.negated);
+            assert!(!like.case_insensitive);
         } else {
-            panic!("Expected Expr::Like (negated), got {:?}", result);
+            panic!("Expected Expr::Like (negated), got {result:?}");
         }
 
         Ok(())
