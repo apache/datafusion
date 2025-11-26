@@ -29,7 +29,7 @@ You can see the current [status of the `52.0.0`release here](https://github.com/
 
 To permit more efficient planning, several methods on `DFSchema` have been
 changed to return references to the underlying [`&FieldRef`] rather than
-[`&Field`[. This allows planners to more cheaply copy the references via
+[`&Field`]. This allows planners to more cheaply copy the references via
 `Arc::clone` rather than cloning the entire `Field` structure.
 
 You may need to change code to use `Arc::clone` instead of `.as_ref().clone()`
