@@ -40,9 +40,8 @@ use serde_json::Value;
 pub struct AvroSource {
     table_schema: TableSchema,
     batch_size: Option<usize>,
-    file_projection: Option<Vec<usize>>,
+    projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -52,9 +51,8 @@ impl AvroSource {
         Self {
             table_schema: table_schema.into(),
             batch_size: None,
-            file_projection: None,
+            projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            projected_statistics: None,
             schema_adapter_factory: None,
         }
     }
@@ -63,7 +61,7 @@ impl AvroSource {
         // TODO: Once `ReaderBuilder::with_projection` is available, we should use it instead.
         //  This should be an easy change. We'd simply need to:
         //      1. Use the full file schema to generate the reader `AvroSchema`.
-        //      2. Pass `&self.file_projection` into `ReaderBuilder::with_projection`.
+        //      2. Pass `&self.projection` into `ReaderBuilder::with_projection`.
         //      3. Remove the `build_projected_reader_schema` methods.
         ReaderBuilder::new()
             .with_reader_schema(self.build_projected_reader_schema()?)
@@ -76,7 +74,7 @@ impl AvroSource {
         let file_schema = self.table_schema.file_schema().as_ref();
         // Fast path: no projection. If we have the original writer schema JSON
         // in metadata, just reuse it as-is without parsing.
-        if self.file_projection.is_none() {
+        if self.projection.is_none() {
             return if let Some(avro_json) =
                 file_schema.metadata().get(SCHEMA_METADATA_KEY)
             {
@@ -123,8 +121,8 @@ impl AvroSource {
                     }
                 }
                 // Rebuild `fields` in the same order as the projected Arrow schema.
-                let projection = self.file_projection.as_ref().ok_or_else(|| {
-                    DataFusionError::Internal("checked file_projection is Some above".to_string())
+                let projection = self.projection.as_ref().ok_or_else(|| {
+                    DataFusionError::Internal("checked projection is Some above".to_string())
                 })?;
                 let projected_schema = file_schema.project(projection)?;
                 let mut projected_fields =
@@ -181,15 +179,9 @@ impl FileSource for AvroSource {
         Arc::new(conf)
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.file_projection = config.file_column_projection_indices();
+        conf.projection = config.file_column_projection_indices();
         Arc::new(conf)
     }
 
@@ -197,15 +189,18 @@ impl FileSource for AvroSource {
         &self.metrics
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set"))
-    }
-
     fn file_type(&self) -> &str {
         "avro"
+    }
+
+    fn repartitioned(
+        &self,
+        _target_partitions: usize,
+        _repartition_file_min_size: usize,
+        _output_ordering: Option<LexOrdering>,
+        _config: &FileScanConfig,
+    ) -> Result<Option<FileScanConfig>> {
+        Ok(None)
     }
 
     fn with_schema_adapter_factory(

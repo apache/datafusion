@@ -74,8 +74,8 @@ use crate::{Documentation, Signature};
 /// [aggregate function]: https://en.wikipedia.org/wiki/Aggregate_function
 /// [`Accumulator`]: Accumulator
 /// [`create_udaf`]: crate::expr_fn::create_udaf
-/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 #[derive(Debug, Clone, PartialOrd)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
@@ -360,7 +360,7 @@ where
 /// See [`advanced_udaf.rs`] for a full example with complete implementation and
 /// [`AggregateUDF`] for other available options.
 ///
-/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 ///
 /// # Basic Example
 /// ```
@@ -740,10 +740,14 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         ScalarValue::try_from(data_type)
     }
 
-    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
-    /// If the function does not, return false
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` SQL clause,
+    /// return `true`. Otherwise, return `false` which will cause an error to be
+    /// raised during SQL parsing if these clauses are detected for this function.
+    ///
+    /// Functions which implement this as `true` are expected to handle the resulting
+    /// null handling config present in [`AccumulatorArgs`], `ignore_nulls`.
     fn supports_null_handling_clause(&self) -> bool {
-        true
+        false
     }
 
     /// If this function supports the `WITHIN GROUP (ORDER BY column [ASC|DESC])`

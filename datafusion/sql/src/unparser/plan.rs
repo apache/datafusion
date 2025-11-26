@@ -39,7 +39,7 @@ use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_expr
 use crate::unparser::{ast::UnnestRelationBuilder, rewrite::rewrite_qualify};
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
-    internal_err, not_impl_err,
+    assert_or_internal_err, internal_err, not_impl_err,
     tree_node::{TransformedResult, TreeNode},
     Column, DataFusionError, Result, ScalarValue, TableReference,
 };
@@ -887,9 +887,10 @@ impl Unparser<'_> {
                     .map(|input| self.select_to_sql_expr(input, query))
                     .collect::<Result<Vec<_>>>()?;
 
-                if input_exprs.len() < 2 {
-                    return internal_err!("UNION operator requires at least 2 inputs");
-                }
+                assert_or_internal_err!(
+                    input_exprs.len() >= 2,
+                    "UNION operator requires at least 2 inputs"
+                );
 
                 let set_quantifier =
                     if query.as_ref().is_some_and(|q| q.is_distinct_union()) {
@@ -957,12 +958,11 @@ impl Unparser<'_> {
                 }
             }
             LogicalPlan::Unnest(unnest) => {
-                if !unnest.struct_type_columns.is_empty() {
-                    return internal_err!(
-                        "Struct type columns are not currently supported in UNNEST: {:?}",
-                        unnest.struct_type_columns
-                    );
-                }
+                assert_or_internal_err!(
+                    unnest.struct_type_columns.is_empty(),
+                    "Struct type columns are not currently supported in UNNEST: {:?}",
+                    unnest.struct_type_columns
+                );
 
                 // In the case of UNNEST, the Unnest node is followed by a duplicate Projection node that we should skip.
                 // Otherwise, there will be a duplicate SELECT clause.

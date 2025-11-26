@@ -76,6 +76,7 @@ fn prepare_accumulator() -> Box<dyn Accumulator> {
     count_fn.accumulator(accumulator_args).unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn convert_to_state_bench(
     c: &mut Criterion,
     name: &str,

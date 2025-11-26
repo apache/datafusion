@@ -33,11 +33,11 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::AggregateExec;
 use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Stream, StreamExt};
-
-use super::AggregateExec;
 
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
@@ -68,14 +68,14 @@ impl AggregateStream {
     /// Create a new AggregateStream
     pub fn new(
         agg: &AggregateExec,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
         let agg_filter_expr = agg.filter_expr.clone();
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
-        let input = agg.input.execute(partition, Arc::clone(&context))?;
+        let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
@@ -115,7 +115,7 @@ impl AggregateStream {
                         let timer = elapsed_compute.timer();
                         let result = aggregate_batch(
                             &this.mode,
-                            batch,
+                            &batch,
                             &mut this.accumulators,
                             &this.aggregate_expressions,
                             &this.filter_expressions,
@@ -195,7 +195,7 @@ impl RecordBatchStream for AggregateStream {
 /// TODO: Make this a member function
 fn aggregate_batch(
     mode: &AggregateMode,
-    batch: RecordBatch,
+    batch: &RecordBatch,
     accumulators: &mut [AccumulatorItem],
     expressions: &[Vec<Arc<dyn PhysicalExpr>>],
     filters: &[Option<Arc<dyn PhysicalExpr>>],
@@ -215,17 +215,12 @@ fn aggregate_batch(
         .try_for_each(|((accum, expr), filter)| {
             // 1.2
             let batch = match filter {
-                Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
-                None => Cow::Borrowed(&batch),
+                Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
+                None => Cow::Borrowed(batch),
             };
 
-            let n_rows = batch.num_rows();
-
             // 1.3
-            let values = expr
-                .iter()
-                .map(|e| e.evaluate(&batch).and_then(|v| v.into_array(n_rows)))
-                .collect::<Result<Vec<_>>>()?;
+            let values = evaluate_expressions_to_arrays(expr, batch.as_ref())?;
 
             // 1.4
             let size_pre = accum.size();

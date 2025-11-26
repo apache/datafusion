@@ -31,7 +31,9 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_datafusion_err, internal_err, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, internal_datafusion_err, DataFusionError, Result,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -192,11 +194,11 @@ impl ExecutionPlan for WorkTableExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // WorkTable streams must be the plan base.
-        if partition != 0 {
-            return internal_err!(
-                "WorkTableExec got an invalid partition {partition} (expected 0)"
-            );
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "WorkTableExec got an invalid partition {partition} (expected 0)"
+        );
         let batch = self.work_table.take()?;
 
         let stream =
