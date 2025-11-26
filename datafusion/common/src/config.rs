@@ -694,6 +694,11 @@ config_namespace! {
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false
 
+        /// (reading) Number of row groups to prefetch while scanning parquet files.
+        /// Set to 0 to disable prefetching. A value of 1 prefetches the next row
+        /// group while the current one is being processed.
+        pub prefetch_row_groups: usize, default = 1
+
         /// (reading) If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query

@@ -17,6 +17,8 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
+mod prefetch;
+
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
@@ -45,10 +47,12 @@ use datafusion_physical_plan::metrics::{
 };
 use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 
+use crate::opener::prefetch::EagerRowGroupPrefetchStream;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
+use futures::stream::BoxStream;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
@@ -111,6 +115,8 @@ pub(super) struct ParquetOpener {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
+    /// Number of row groups to prefetch
+    pub prefetch_row_groups: usize,
 }
 
 impl FileOpener for ParquetOpener {
@@ -162,6 +168,7 @@ impl FileOpener for ParquetOpener {
         #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
+        let prefetch_row_groups = self.prefetch_row_groups;
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -448,6 +455,12 @@ impl FileOpener for ParquetOpener {
                 .with_row_groups(row_group_indexes)
                 .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
+
+            let stream: BoxStream<Result<RecordBatch>> = if prefetch_row_groups == 0 {
+                stream.map_err(DataFusionError::from).boxed()
+            } else {
+                EagerRowGroupPrefetchStream::new(stream, prefetch_row_groups).boxed()
+            };
 
             let files_ranges_pruned_statistics =
                 file_metrics.files_ranges_pruned_statistics.clone();
@@ -754,13 +767,16 @@ fn should_enable_page_index(
 
 #[cfg(test)]
 mod test {
+    use std::ops::Range;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
 
     use arrow::{
         compute::cast,
         datatypes::{DataType, Field, Schema, SchemaRef},
     };
-    use bytes::{BufMut, BytesMut};
+    use bytes::{BufMut, Bytes, BytesMut};
     use datafusion_common::{
         assert_batches_eq, record_batch, stats::Precision, ColumnStatistics,
         DataFusionError, ScalarValue, Statistics,
@@ -779,11 +795,19 @@ mod test {
     };
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-    use futures::{Stream, StreamExt};
+    use futures::{future::BoxFuture, FutureExt, Stream, StreamExt};
     use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use parquet::arrow::arrow_reader::ArrowReaderOptions;
+    use parquet::arrow::async_reader::AsyncFileReader;
     use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    use tokio::sync::{mpsc, Semaphore};
 
-    use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
+    use crate::{
+        opener::ParquetOpener, DefaultParquetFileReaderFactory, ParquetFileReaderFactory,
+    };
 
     async fn count_batches_and_rows(
         mut stream: std::pin::Pin<
@@ -833,6 +857,168 @@ mod test {
         let data_len = data.len();
         store.put(&Path::from(filename), data.into()).await.unwrap();
         data_len
+    }
+
+    async fn write_parquet_with_properties(
+        store: Arc<dyn ObjectStore>,
+        filename: &str,
+        batch: arrow::record_batch::RecordBatch,
+        properties: WriterProperties,
+    ) -> (usize, Bytes) {
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut out, batch.schema(), Some(properties)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        let data = out.into_inner().freeze();
+        let data_len = data.len();
+        store
+            .put(&Path::from(filename), data.clone().into())
+            .await
+            .unwrap();
+        (data_len, data)
+    }
+
+    fn row_group_ranges(data: &Bytes) -> Vec<Range<u64>> {
+        let reader =
+            SerializedFileReader::new(data.clone()).expect("reading parquet metadata");
+        reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|row_group| {
+                row_group
+                    .columns()
+                    .iter()
+                    .fold((u64::MAX, 0), |(start, end), column| {
+                        let (col_start, len) = column.byte_range();
+                        (start.min(col_start), end.max(col_start + len))
+                    })
+            })
+            .map(|(start, end)| start..end)
+            .collect()
+    }
+
+    #[derive(Debug)]
+    struct RowGroupGateState {
+        ranges: Vec<Range<u64>>,
+        started: Vec<AtomicBool>,
+        permits: Vec<Semaphore>,
+        start_tx: mpsc::UnboundedSender<usize>,
+    }
+
+    impl RowGroupGateState {
+        fn new(ranges: Vec<Range<u64>>, start_tx: mpsc::UnboundedSender<usize>) -> Self {
+            let started = (0..ranges.len()).map(|_| AtomicBool::new(false)).collect();
+            let permits = (0..ranges.len()).map(|_| Semaphore::new(0)).collect();
+            Self {
+                ranges,
+                started,
+                permits,
+                start_tx,
+            }
+        }
+
+        fn row_group_for_range(&self, range: &Range<u64>) -> Option<usize> {
+            self.ranges
+                .iter()
+                .position(|row_group_range| row_group_range.contains(&range.start))
+        }
+
+        async fn notify_row_group(&self, idx: usize) {
+            if !self.started[idx].swap(true, Ordering::SeqCst) {
+                let _ = self.start_tx.send(idx);
+                // Wait until this row group is allowed to proceed
+                self.permits[idx].acquire().await.unwrap().forget();
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct GatedParquetFileReaderFactory {
+        inner: DefaultParquetFileReaderFactory,
+        gates: Arc<RowGroupGateState>,
+    }
+
+    impl GatedParquetFileReaderFactory {
+        fn new(store: Arc<dyn ObjectStore>, gates: Arc<RowGroupGateState>) -> Self {
+            Self {
+                inner: DefaultParquetFileReaderFactory::new(store),
+                gates,
+            }
+        }
+    }
+
+    impl ParquetFileReaderFactory for GatedParquetFileReaderFactory {
+        fn create_reader(
+            &self,
+            partition_index: usize,
+            partitioned_file: PartitionedFile,
+            metadata_size_hint: Option<usize>,
+            metrics: &ExecutionPlanMetricsSet,
+        ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+            let reader = self.inner.create_reader(
+                partition_index,
+                partitioned_file,
+                metadata_size_hint,
+                metrics,
+            )?;
+            Ok(Box::new(GatedAsyncFileReader {
+                inner: reader,
+                gates: Arc::clone(&self.gates),
+            }))
+        }
+    }
+
+    struct GatedAsyncFileReader {
+        inner: Box<dyn AsyncFileReader + Send>,
+        gates: Arc<RowGroupGateState>,
+    }
+
+    impl AsyncFileReader for GatedAsyncFileReader {
+        fn get_bytes(
+            &mut self,
+            range: Range<u64>,
+        ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+            let gates = Arc::clone(&self.gates);
+            let inner = &mut self.inner;
+            async move {
+                if let Some(idx) = gates.row_group_for_range(&range) {
+                    gates.notify_row_group(idx).await;
+                }
+                inner.get_bytes(range).await
+            }
+            .boxed()
+        }
+
+        fn get_byte_ranges(
+            &mut self,
+            ranges: Vec<Range<u64>>,
+        ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
+            let gates = Arc::clone(&self.gates);
+            let inner = &mut self.inner;
+            async move {
+                for range in &ranges {
+                    if let Some(idx) = gates.row_group_for_range(range) {
+                        gates.notify_row_group(idx).await;
+                    }
+                }
+                inner.get_byte_ranges(ranges).await
+            }
+            .boxed()
+        }
+
+        fn get_metadata<'a>(
+            &'a mut self,
+            options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<
+            'a,
+            parquet::errors::Result<Arc<parquet::file::metadata::ParquetMetaData>>,
+        > {
+            self.inner.get_metadata(options)
+        }
     }
 
     fn make_dynamic_expr(expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
@@ -898,6 +1084,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                prefetch_row_groups: 1,
             }
         };
 
@@ -971,6 +1158,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                prefetch_row_groups: 1,
             }
         };
 
@@ -1060,6 +1248,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                prefetch_row_groups: 1,
             }
         };
 
@@ -1152,6 +1341,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                prefetch_row_groups: 1,
             }
         };
 
@@ -1244,6 +1434,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                prefetch_row_groups: 1,
             }
         };
 
@@ -1263,6 +1454,179 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_row_group_prefetch_config_enabled() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let writer_properties = WriterProperties::builder()
+            .set_max_row_group_size(1)
+            .build();
+        let (data_size, data) = write_parquet_with_properties(
+            Arc::clone(&store),
+            "prefetch_enabled.parquet",
+            batch.clone(),
+            writer_properties,
+        )
+        .await;
+        let ranges = row_group_ranges(&data);
+        assert!(ranges.len() > 1);
+
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "prefetch_enabled.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let (start_tx, mut start_rx) = mpsc::unbounded_channel();
+        let gates = Arc::new(RowGroupGateState::new(ranges, start_tx));
+        gates.permits[0].add_permits(1);
+
+        let opener = ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 1024,
+            limit: None,
+            predicate: Some(logical2physical(&col("a"), &schema)),
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(GatedParquetFileReaderFactory::new(
+                Arc::clone(&store),
+                Arc::clone(&gates),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            prefetch_row_groups: 1,
+        };
+
+        let mut stream = opener.open(file).unwrap().await.unwrap();
+        let first_row_group =
+            tokio::time::timeout(Duration::from_secs(1), start_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(first_row_group, 0);
+        let first_batch = stream.next().await.unwrap().unwrap();
+        assert_eq!(first_batch.num_rows(), 1);
+
+        let second_row_group =
+            tokio::time::timeout(Duration::from_secs(1), start_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(second_row_group, 1);
+
+        for permit in gates.permits.iter().skip(1) {
+            permit.add_permits(1);
+        }
+
+        let mut remaining = vec![];
+        while let Some(batch) = stream.next().await {
+            remaining.push(batch.unwrap());
+        }
+        assert_eq!(remaining.len(), gates.permits.len() - 1);
+    }
+
+    #[tokio::test]
+    async fn test_row_group_prefetch_can_be_disabled() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let writer_properties = WriterProperties::builder()
+            .set_max_row_group_size(1)
+            .build();
+        let (data_size, data) = write_parquet_with_properties(
+            Arc::clone(&store),
+            "prefetch_disabled.parquet",
+            batch.clone(),
+            writer_properties,
+        )
+        .await;
+        let ranges = row_group_ranges(&data);
+        assert!(ranges.len() > 1);
+
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "prefetch_disabled.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let (start_tx, mut start_rx) = mpsc::unbounded_channel();
+        let gates = Arc::new(RowGroupGateState::new(ranges, start_tx));
+        gates.permits[0].add_permits(1);
+
+        let opener = ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 1024,
+            limit: None,
+            predicate: Some(logical2physical(&col("a"), &schema)),
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(GatedParquetFileReaderFactory::new(
+                Arc::clone(&store),
+                Arc::clone(&gates),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            prefetch_row_groups: 0,
+        };
+
+        let mut stream = opener.open(file).unwrap().await.unwrap();
+        let first_row_group =
+            tokio::time::timeout(Duration::from_secs(1), start_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(first_row_group, 0);
+        let first_batch = stream.next().await.unwrap().unwrap();
+        assert_eq!(first_batch.num_rows(), 1);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(start_rx.try_recv().is_err());
+
+        for permit in gates.permits.iter().skip(1) {
+            permit.add_permits(1);
+        }
+
+        let second_row_group =
+            tokio::time::timeout(Duration::from_secs(1), start_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(second_row_group, 1);
+
+        let mut remaining = vec![];
+        while let Some(batch) = stream.next().await {
+            remaining.push(batch.unwrap());
+        }
+        assert_eq!(remaining.len(), gates.permits.len() - 1);
     }
 
     fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
@@ -1394,6 +1758,7 @@ mod test {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             max_predicate_cache_size: None,
+            prefetch_row_groups: 1,
         };
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);
