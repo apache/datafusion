@@ -428,6 +428,17 @@ pub fn serialize_partitioning(
                 )),
             }
         }
+        Partitioning::KeyPartitioned(exprs, partition_count) => {
+            let serialized_exprs = serialize_physical_exprs(exprs, codec)?;
+            protobuf::Partitioning {
+                partition_method: Some(protobuf::partitioning::PartitionMethod::Key(
+                    protobuf::PhysicalKeyPartition {
+                        key_expr: serialized_exprs,
+                        partition_count: *partition_count as u64,
+                    },
+                )),
+            }
+        }
         Partitioning::UnknownPartitioning(partition_count) => protobuf::Partitioning {
             partition_method: Some(protobuf::partitioning::PartitionMethod::Unknown(
                 *partition_count as u64,
@@ -555,6 +566,7 @@ pub fn serialize_file_scan_config(
             .collect::<Vec<_>>(),
         constraints: Some(conf.constraints.clone().into()),
         batch_size: conf.batch_size.map(|s| s as u64),
+        preserve_partition_values: conf.preserve_partition_values,
     })
 }
 

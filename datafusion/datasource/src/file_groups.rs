@@ -18,10 +18,11 @@
 //! Logic for managing groups of [`PartitionedFile`]s in DataFusion
 
 use crate::{FileRange, PartitionedFile};
-use datafusion_common::Statistics;
+use datafusion_common::{ScalarValue, Statistics};
 use itertools::Itertools;
+use log::debug;
 use std::cmp::{min, Ordering};
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::iter::repeat_with;
 use std::mem;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -436,6 +437,68 @@ impl FileGroup {
         self.statistics.as_mut().map(Arc::make_mut)
     }
 
+    /// Split this file group so that each resulting group contains files that
+    /// share the same partition column values. If any file is missing
+    /// partition values, this method falls back to returning a single group
+    /// containing all files.
+    pub fn split_by_partition_values(self) -> Vec<FileGroup> {
+        if self.is_empty() {
+            return vec![];
+        }
+
+        let mut groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+        let mut has_unpartitioned = false;
+
+        for file in self.files {
+            if file.partition_values.is_empty() {
+                debug!(
+                    "File {:?} has no partition values, will fall back to single group",
+                    file.path(),
+                );
+                has_unpartitioned = true;
+                groups.entry(vec![]).or_default().push(file);
+            } else {
+                groups
+                    .entry(file.partition_values.clone())
+                    .or_default()
+                    .push(file);
+            }
+        }
+
+        if has_unpartitioned && groups.len() > 1 {
+            debug!(
+                "Mixed partitioned/non-partitioned files detected, falling back to single file group"
+            );
+            let all_files = groups.into_values().flatten().collect();
+            return vec![FileGroup::new(all_files)];
+        }
+
+        let mut entries: Vec<_> = groups.into_iter().collect();
+        entries.sort_by(|(left, _), (right, _)| compare_partition_keys(left, right));
+        entries
+            .into_iter()
+            .map(|(_, files)| FileGroup::new(files))
+            .collect()
+    }
+
+    /// Returns the unique set of partition values represented by this group,
+    /// if and only if all files share the same values.
+    pub fn unique_partition_values(&self) -> Option<&[ScalarValue]> {
+        let first = self.files.first()?;
+        if first.partition_values.is_empty() {
+            return None;
+        }
+
+        if self.files[1..]
+            .iter()
+            .all(|file| file.partition_values == first.partition_values)
+        {
+            Some(&first.partition_values)
+        } else {
+            None
+        }
+    }
+
     /// Partition the list of files into `n` groups
     pub fn split_files(mut self, n: usize) -> Vec<FileGroup> {
         if self.is_empty() {
@@ -501,6 +564,23 @@ impl Default for FileGroup {
     fn default() -> Self {
         Self::new(Vec::new())
     }
+}
+
+fn compare_partition_keys(left: &[ScalarValue], right: &[ScalarValue]) -> Ordering {
+    for (l, r) in left.iter().zip(right.iter()) {
+        match l.partial_cmp(r) {
+            Some(Ordering::Less) => return Ordering::Less,
+            Some(Ordering::Greater) => return Ordering::Greater,
+            Some(Ordering::Equal) => continue,
+            None => {
+                let ord = l.to_string().cmp(&r.to_string());
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+    }
+    left.len().cmp(&right.len())
 }
 
 /// Tracks how a individual file will be repartitioned
