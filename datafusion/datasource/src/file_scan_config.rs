@@ -328,7 +328,8 @@ impl FileScanConfigBuilder {
         let Some(projection_exprs) = projection_exprs else {
             return Ok(self);
         };
-        let new_source = self.file_source
+        let new_source = self
+            .file_source
             .try_pushdown_projection(&projection_exprs)
             .map_err(|e| {
                 internal_datafusion_err!(

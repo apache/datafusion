@@ -17,8 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
-use arrow_schema::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
     Result, ScalarValue,
@@ -292,9 +291,9 @@ impl SplitProjection {
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{record_batch, AsArray};
-    use arrow_schema::{self, DataType, SchemaRef};
-    use datafusion_common::{DFSchema, ScalarValue};
+    use arrow::array::AsArray;
+    use arrow::datatypes::{DataType, SchemaRef};
+    use datafusion_common::{record_batch, DFSchema, ScalarValue};
     use datafusion_expr::{col, execution_props::ExecutionProps, Expr};
     use datafusion_physical_expr::{create_physical_exprs, projection::ProjectionExpr};
     use itertools::Itertools;
@@ -319,7 +318,7 @@ mod test {
     #[test]
     fn test_split_projection_with_partition_columns() {
         use arrow::array::AsArray;
-        use arrow_schema::Field;
+        use arrow::datatypes::Field;
         // Simulate the avro_exec_with_partition test scenario:
         // file_schema has 3 fields
         let file_schema = Arc::new(Schema::new(vec![
@@ -356,9 +355,9 @@ mod test {
 
         // Now create a batch with only the file columns
         let file_batch = record_batch!(
-            ("id", Int32, [4]),
-            ("bool_col", Boolean, [true]),
-            ("tinyint_col", Int8, [0])
+            ("id", Int32, vec![4]),
+            ("bool_col", Boolean, vec![true]),
+            ("tinyint_col", Int8, vec![0])
         )
         .unwrap();
 
@@ -418,7 +417,7 @@ mod test {
         file_cols: usize,
         partition_cols: usize,
     ) -> (SchemaRef, SchemaRef) {
-        use arrow_schema::Field;
+        use arrow::datatypes::Field;
 
         let file_fields: Vec<_> = (0..file_cols)
             .map(|i| Field::new(format!("col_{i}"), DataType::Int32, false))
@@ -520,7 +519,7 @@ mod test {
 
     #[test]
     fn test_split_projection_expression_with_file_and_partition_columns() {
-        use arrow_schema::Field;
+        use arrow::datatypes::Field;
 
         // Create schemas: 2 file columns, 1 partition column
         let file_schema = Arc::new(Schema::new(vec![
@@ -580,7 +579,8 @@ mod test {
 
     #[test]
     fn test_inject_partition_columns_multiple_partitions() {
-        let data = record_batch!(("col_0", Int32, [1]), ("col_1", Int32, [2])).unwrap();
+        let data =
+            record_batch!(("col_0", Int32, vec![1]), ("col_1", Int32, vec![2])).unwrap();
 
         // Create projection that references file columns and partition columns
         let (file_schema, table_schema) = create_test_schemas(2, 2);

@@ -2030,7 +2030,6 @@ name = "datafusion-datasource"
 version = "51.0.0"
 dependencies = [
  "arrow",
- "arrow-schema",
  "async-compression",
  "async-trait",
  "bytes",

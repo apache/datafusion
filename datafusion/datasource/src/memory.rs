@@ -40,7 +40,7 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns
+    all_alias_free_columns, new_projections_for_columns,
 };
 use datafusion_physical_plan::{
     common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
