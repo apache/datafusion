@@ -129,6 +129,28 @@ pub trait FileSource: Send + Sync {
         ))
     }
 
+    /// Try to push down a projection into a this FileSource.
+    /// 
+    /// `FileSource` implementations that support projection pushdown should
+    /// override this method and return a new `FileSource` instance with the
+    /// projection incorporated.
+    /// 
+    /// If a `FileSource` does accept a projection it is expected to handle
+    /// the projection in it's entirety, including partition columns.
+    /// For example, the `FileSource` may translate that projection into a
+    /// file format specific projection (e.g. Parquet can push down struct field access,
+    /// some other file formats like Vortex can push down computed expressions into un-decoded data)
+    /// and also need to handle partition column projection (generally done by replacing partition column
+    /// references with literal values derived from each files partition values).
+    /// 
+    /// Not all FileSource's can handle complex expression pushdowns. For example,
+    /// a CSV file source may only support simple column selections. In such cases,
+    /// the `FileSource` can use [`SplitProjection`] and [`ProjectionOpener`]
+    /// to split the projection into a pushdownable part and a non-pushdownable part.
+    /// These helpers also handle partition column projection.
+    /// 
+    /// [`SplitProjection`]: crate::projection::SplitProjection
+    /// [`ProjectionOpener`]: crate::projection::ProjectionOpener
     fn try_pushdown_projection(
         &self,
         _projection: &ProjectionExprs,

@@ -44,7 +44,6 @@ use datafusion_physical_expr::{split_conjunction, EquivalenceProperties, Partiti
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::projection::ProjectionExpr;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     filter_pushdown::FilterPushdownPropagation,
@@ -326,22 +325,23 @@ impl FileScanConfigBuilder {
                 self.file_source.table_schema().table_schema(),
             )
         });
-        if let Some(projection_exprs) = projection_exprs {
-            let new_source = self.file_source
-                .try_pushdown_projection(&projection_exprs)
-                .map_err(|e| {
-                    internal_datafusion_err!(
-                        "Failed to push down projection in FileScanConfigBuilder::build: {e}"
-                    )
-                })?;
-            if let Some(new_source) = new_source {
-                self.file_source = new_source;
-            } else {
-                internal_err!(
-                    "FileSource {} does not support projection pushdown",
-                    self.file_source.file_type()
-                )?;
-            }
+        let Some(projection_exprs) = projection_exprs else {
+            return Ok(self);
+        };
+        let new_source = self.file_source
+            .try_pushdown_projection(&projection_exprs)
+            .map_err(|e| {
+                internal_datafusion_err!(
+                    "Failed to push down projection in FileScanConfigBuilder::build: {e}"
+                )
+            })?;
+        if let Some(new_source) = new_source {
+            self.file_source = new_source;
+        } else {
+            internal_err!(
+                "FileSource {} does not support projection pushdown",
+                self.file_source.file_type()
+            )?;
         }
         Ok(self)
     }
@@ -694,9 +694,8 @@ impl DataSource for FileScanConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &[ProjectionExpr],
+        projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
-        let projection = ProjectionExprs::new(projection.to_vec()); // TODO: update signature of this method
         match self.file_source.try_pushdown_projection(&projection)? {
             Some(new_source) => {
                 let mut new_file_scan_config = self.clone();
@@ -1241,6 +1240,7 @@ mod tests {
     use datafusion_expr::{Operator, SortExpr};
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+    use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     #[test]
@@ -1771,11 +1771,12 @@ mod tests {
 
         // Simulate projection being updated. Since the filter has already been pushed down,
         // the new projection won't include the filtered column.
+        let exprs = ProjectionExprs::new(vec![ProjectionExpr::new(
+            col("c1", &file_schema).unwrap(),
+            "c1".to_string(),
+        )]);
         let data_source = config
-            .try_swapping_with_projection(&[ProjectionExpr::new(
-                col("c3", &file_schema).unwrap(),
-                "c3".to_string(),
-            )])
+            .try_swapping_with_projection(&exprs)
             .unwrap()
             .unwrap();
 
