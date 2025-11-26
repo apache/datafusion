@@ -54,13 +54,13 @@ pub struct GroupedTopKAggregateStream {
 impl GroupedTopKAggregateStream {
     pub fn new(
         aggr: &AggregateExec,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         partition: usize,
         limit: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = aggr.group_by.clone();
-        let input = aggr.input.execute(partition, Arc::clone(&context))?;
+        let input = aggr.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
         let aggregate_arguments =
@@ -97,11 +97,12 @@ impl RecordBatchStream for GroupedTopKAggregateStream {
 }
 
 impl GroupedTopKAggregateStream {
-    fn intern(&mut self, ids: ArrayRef, vals: ArrayRef) -> Result<()> {
+    fn intern(&mut self, ids: &ArrayRef, vals: &ArrayRef) -> Result<()> {
         let _timer = self.group_by_metrics.time_calculating_group_ids.timer();
 
         let len = ids.len();
-        self.priority_map.set_batch(ids, Arc::clone(&vals));
+        self.priority_map
+            .set_batch(Arc::clone(ids), Arc::clone(vals));
 
         let has_nulls = vals.null_count() > 0;
         for row_idx in 0..len {
@@ -167,7 +168,7 @@ impl Stream for GroupedTopKAggregateStream {
                     let input_values = Arc::clone(&input_values[0][0]);
 
                     // iterate over each column of group_by values
-                    (*self).intern(group_by_values, input_values)?;
+                    (*self).intern(&group_by_values, &input_values)?;
                 }
                 // inner is done, emit all rows and switch to producing output
                 None => {

@@ -561,7 +561,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [result@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], file_type=csv, has_header=true
 
 statement ok
@@ -592,7 +592,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [db15@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@0, 1659537600000000000) as db15]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=false
 
 query TT
@@ -607,7 +607,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [dt_day@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[date_trunc(DAY, ts@0) as dt_day]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/timestamps.csv]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=csv, has_header=false
 
 statement ok
@@ -650,7 +650,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [atan_c11@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[atan(c11@0) as atan_c11]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 query TT
@@ -665,7 +665,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [ceil_c11@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[ceil(c11@0) as ceil_c11]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11], output_ordering=[c11@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 query TT
@@ -680,7 +680,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [log_c11_base_c12@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[log(c12@1, c11@0) as log_c11_base_c12]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
 
 query TT
@@ -695,7 +695,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [log_c12_base_c11@0 DESC NULLS LAST]
 02)--ProjectionExec: expr=[log(c11@0, c12@1) as log_c12_base_c11]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c11, c12], output_orderings=[[c11@0 ASC NULLS LAST], [c12@1 DESC NULLS LAST]], file_type=csv, has_header=true
 
 statement ok
@@ -1143,7 +1143,7 @@ physical_plan
 01)SortPreservingMergeExec: [c_str@0 ASC NULLS LAST], fetch=5
 02)--SortExec: TopK(fetch=5), expr=[c_str@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[CAST(c@0 AS Utf8View) as c_str]
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 
@@ -1173,7 +1173,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [c_bigint@0 ASC NULLS LAST], fetch=5
 02)--ProjectionExec: expr=[CAST(c@0 AS Int64) as c_bigint]
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
@@ -1209,7 +1209,7 @@ physical_plan
 01)SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
 02)--SortExec: TopK(fetch=5), expr=[abs_c@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[abs(c@0) as abs_c]
-04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
@@ -1243,7 +1243,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [abs_c@0 ASC NULLS LAST], fetch=5
 02)--ProjectionExec: expr=[abs(c@0) as abs_c]
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 # Boolean to integer casts preserve the order.
@@ -1269,7 +1269,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [c@0 ASC NULLS LAST]
 02)--ProjectionExec: expr=[CAST(inc_col@0 > desc_col@1 AS Int32) as c]
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_1.csv]]}, projection=[inc_col, desc_col], output_orderings=[[inc_col@0 ASC NULLS LAST], [desc_col@1 DESC]], file_type=csv, has_header=true
 
 # Union a query with the actual data and one with a constant
@@ -1292,7 +1292,7 @@ logical_plan
 03)----TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
-02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 03)----SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], file_type=csv, has_header=true
 
@@ -1331,7 +1331,7 @@ logical_plan
 03)----TableScan: ordered_table projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 + b@1 as sum1]
-02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 03)----SortExec: TopK(fetch=1), expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], file_type=csv, has_header=true
 

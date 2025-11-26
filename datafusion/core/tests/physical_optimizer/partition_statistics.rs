@@ -627,7 +627,7 @@ mod test {
 
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Absent,
+            total_byte_size: Precision::Inexact(110),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
@@ -645,7 +645,7 @@ mod test {
 
         let expected_p1_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Absent,
+            total_byte_size: Precision::Inexact(110),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
@@ -878,9 +878,9 @@ mod test {
             partition_row_counts.push(total_rows);
         }
         assert_eq!(partition_row_counts.len(), 3);
-        assert_eq!(partition_row_counts[0], 2);
+        assert_eq!(partition_row_counts[0], 1);
         assert_eq!(partition_row_counts[1], 2);
-        assert_eq!(partition_row_counts[2], 0);
+        assert_eq!(partition_row_counts[2], 1);
 
         Ok(())
     }
