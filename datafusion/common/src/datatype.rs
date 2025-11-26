@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`DataTypeExt`] and [`FieldExt`] extension trait for working with DataTypes to Fields
+//! [`DataTypeExt`] and [`FieldExt`] extension trait for working with Arrow [`DataType`] and [`Field`]s
 
 use crate::arrow::datatypes::{DataType, Field, FieldRef};
 use crate::metadata::FieldMetadata;
