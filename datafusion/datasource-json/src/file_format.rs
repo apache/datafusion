@@ -373,6 +373,7 @@ impl FileSink for JsonSink {
             context,
             serializer,
             self.writer_options.compression.into(),
+            self.writer_options.compression_level,
             object_store,
             demux_task,
             file_stream_rx,

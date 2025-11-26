@@ -155,25 +155,63 @@ impl FileCompressionType {
     }
 
     /// Wrap the given `BufWriter` so that it performs compressed writes
-    /// according to this `FileCompressionType`.
+    /// according to this `FileCompressionType` using the default compression level.
     pub fn convert_async_writer(
         &self,
         w: BufWriter,
     ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+        self.convert_async_writer_with_level(w, None)
+    }
+
+    /// Wrap the given `BufWriter` so that it performs compressed writes
+    /// according to this `FileCompressionType`.
+    ///
+    /// If `compression_level` is `Some`, the encoder will use the specified
+    /// compression level. If `None`, the default level for each algorithm is used.
+    pub fn convert_async_writer_with_level(
+        &self,
+        w: BufWriter,
+        compression_level: Option<u32>,
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+        #[cfg(feature = "compression")]
+        use async_compression::Level;
+
         Ok(match self.variant {
             #[cfg(feature = "compression")]
-            GZIP => Box::new(GzipEncoder::new(w)),
+            GZIP => match compression_level {
+                Some(level) => {
+                    Box::new(GzipEncoder::with_quality(w, Level::Precise(level as i32)))
+                }
+                None => Box::new(GzipEncoder::new(w)),
+            },
             #[cfg(feature = "compression")]
-            BZIP2 => Box::new(BzEncoder::new(w)),
+            BZIP2 => match compression_level {
+                Some(level) => {
+                    Box::new(BzEncoder::with_quality(w, Level::Precise(level as i32)))
+                }
+                None => Box::new(BzEncoder::new(w)),
+            },
             #[cfg(feature = "compression")]
-            XZ => Box::new(XzEncoder::new(w)),
+            XZ => match compression_level {
+                Some(level) => {
+                    Box::new(XzEncoder::with_quality(w, Level::Precise(level as i32)))
+                }
+                None => Box::new(XzEncoder::new(w)),
+            },
             #[cfg(feature = "compression")]
-            ZSTD => Box::new(ZstdEncoder::new(w)),
+            ZSTD => match compression_level {
+                Some(level) => {
+                    Box::new(ZstdEncoder::with_quality(w, Level::Precise(level as i32)))
+                }
+                None => Box::new(ZstdEncoder::new(w)),
+            },
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
+                // compression_level is not used when compression feature is disabled
+                let _ = compression_level;
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
-                ))
+                ));
             }
             UNCOMPRESSED => Box::new(w),
         })

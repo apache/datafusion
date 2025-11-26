@@ -1666,6 +1666,9 @@ impl serde::Serialize for CsvOptions {
         if !self.truncated_rows.is_empty() {
             len += 1;
         }
+        if self.compression_level.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1743,6 +1746,9 @@ impl serde::Serialize for CsvOptions {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("truncatedRows", pbjson::private::base64::encode(&self.truncated_rows).as_str())?;
         }
+        if let Some(v) = self.compression_level.as_ref() {
+            struct_ser.serialize_field("compressionLevel", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -1783,6 +1789,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "terminator",
             "truncated_rows",
             "truncatedRows",
+            "compression_level",
+            "compressionLevel",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1805,6 +1813,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             NewlinesInValues,
             Terminator,
             TruncatedRows,
+            CompressionLevel,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1844,6 +1853,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
                             "terminator" => Ok(GeneratedField::Terminator),
                             "truncatedRows" | "truncated_rows" => Ok(GeneratedField::TruncatedRows),
+                            "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1881,6 +1891,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut newlines_in_values__ = None;
                 let mut terminator__ = None;
                 let mut truncated_rows__ = None;
+                let mut compression_level__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2011,6 +2022,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::CompressionLevel => {
+                            if compression_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compressionLevel"));
+                            }
+                            compression_level__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2032,6 +2051,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
                     terminator: terminator__.unwrap_or_default(),
                     truncated_rows: truncated_rows__.unwrap_or_default(),
+                    compression_level: compression_level__,
                 })
             }
         }
@@ -4548,6 +4568,9 @@ impl serde::Serialize for JsonOptions {
         if self.schema_infer_max_rec.is_some() {
             len += 1;
         }
+        if self.compression_level.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.JsonOptions", len)?;
         if self.compression != 0 {
             let v = CompressionTypeVariant::try_from(self.compression)
@@ -4558,6 +4581,9 @@ impl serde::Serialize for JsonOptions {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.compression_level.as_ref() {
+            struct_ser.serialize_field("compressionLevel", v)?;
         }
         struct_ser.end()
     }
@@ -4572,12 +4598,15 @@ impl<'de> serde::Deserialize<'de> for JsonOptions {
             "compression",
             "schema_infer_max_rec",
             "schemaInferMaxRec",
+            "compression_level",
+            "compressionLevel",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Compression,
             SchemaInferMaxRec,
+            CompressionLevel,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -4601,6 +4630,7 @@ impl<'de> serde::Deserialize<'de> for JsonOptions {
                         match value {
                             "compression" => Ok(GeneratedField::Compression),
                             "schemaInferMaxRec" | "schema_infer_max_rec" => Ok(GeneratedField::SchemaInferMaxRec),
+                            "compressionLevel" | "compression_level" => Ok(GeneratedField::CompressionLevel),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -4622,6 +4652,7 @@ impl<'de> serde::Deserialize<'de> for JsonOptions {
             {
                 let mut compression__ = None;
                 let mut schema_infer_max_rec__ = None;
+                let mut compression_level__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Compression => {
@@ -4638,11 +4669,20 @@ impl<'de> serde::Deserialize<'de> for JsonOptions {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::CompressionLevel => {
+                            if compression_level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("compressionLevel"));
+                            }
+                            compression_level__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(JsonOptions {
                     compression: compression__.unwrap_or_default(),
                     schema_infer_max_rec: schema_infer_max_rec__,
+                    compression_level: compression_level__,
                 })
             }
         }

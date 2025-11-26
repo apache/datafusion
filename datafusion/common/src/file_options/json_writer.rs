@@ -27,11 +27,26 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct JsonWriterOptions {
     pub compression: CompressionTypeVariant,
+    pub compression_level: Option<u32>,
 }
 
 impl JsonWriterOptions {
     pub fn new(compression: CompressionTypeVariant) -> Self {
-        Self { compression }
+        Self {
+            compression,
+            compression_level: None,
+        }
+    }
+
+    /// Create a new `JsonWriterOptions` with the specified compression and level.
+    pub fn new_with_level(
+        compression: CompressionTypeVariant,
+        compression_level: u32,
+    ) -> Self {
+        Self {
+            compression,
+            compression_level: Some(compression_level),
+        }
     }
 }
 
@@ -41,6 +56,7 @@ impl TryFrom<&JsonOptions> for JsonWriterOptions {
     fn try_from(value: &JsonOptions) -> Result<Self> {
         Ok(JsonWriterOptions {
             compression: value.compression,
+            compression_level: value.compression_level,
         })
     }
 }
