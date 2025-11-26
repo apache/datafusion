@@ -697,7 +697,7 @@ impl DataSource for FileScanConfig {
         &self,
         projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
-        match self.file_source.try_pushdown_projection(&projection)? {
+        match self.file_source.try_pushdown_projection(projection)? {
             Some(new_source) => {
                 let mut new_file_scan_config = self.clone();
                 new_file_scan_config.file_source = new_source;
