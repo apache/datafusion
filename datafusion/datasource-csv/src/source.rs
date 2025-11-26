@@ -39,7 +39,7 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use datafusion_physical_plan::{
     DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
 };
@@ -213,6 +213,7 @@ pub struct CsvOpener {
     config: Arc<CsvSource>,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+    partition_index: usize,
 }
 
 impl CsvOpener {
@@ -226,6 +227,7 @@ impl CsvOpener {
             config,
             file_compression_type,
             object_store,
+            partition_index: 0,
         }
     }
 }
@@ -241,12 +243,13 @@ impl FileSource for CsvSource {
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
-        _partition: usize,
+        partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
             object_store,
+            partition_index: partition,
         })
     }
 
@@ -352,6 +355,9 @@ impl FileOpener for CsvOpener {
         let store = Arc::clone(&self.object_store);
         let terminator = self.config.terminator();
 
+        let baseline_metrics =
+            BaselineMetrics::new(&self.config.metrics, self.partition_index);
+
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
 
@@ -391,7 +397,17 @@ impl FileOpener for CsvOpener {
                         )?
                     };
 
-                    Ok(futures::stream::iter(config.open(decoder)?)
+                    let mut reader = config.open(decoder)?;
+
+                    // Use std::iter::from_fn to wrap execution of iterator's next() method.
+                    let iterator = std::iter::from_fn(move || {
+                        let mut timer = baseline_metrics.elapsed_compute().timer();
+                        let result = reader.next();
+                        timer.stop();
+                        result
+                    });
+
+                    Ok(futures::stream::iter(iterator)
                         .map(|r| r.map_err(Into::into))
                         .boxed())
                 }
