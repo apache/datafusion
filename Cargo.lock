@@ -2095,6 +2095,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "object_store",
+ "serde_json",
 ]
 
 [[package]]

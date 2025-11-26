@@ -18,12 +18,13 @@
 //! Execution plan for reading line-delimited Avro files
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_avro::reader::{Reader, ReaderBuilder};
-use arrow_avro::schema::AvroSchema;
+use arrow_avro::schema::{AvroSchema, SCHEMA_METADATA_KEY};
 use datafusion_common::error::Result;
-use datafusion_common::Statistics;
+use datafusion_common::{DataFusionError, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
@@ -32,6 +33,7 @@ use datafusion_datasource::TableSchema;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 use object_store::ObjectStore;
+use serde_json::Value;
 
 /// AvroSource holds the extra configuration that is necessary for opening avro files
 #[derive(Clone)]
@@ -150,7 +152,6 @@ impl AvroSource {
             ))),
         }
     }
-}
 }
 
 impl FileSource for AvroSource {
