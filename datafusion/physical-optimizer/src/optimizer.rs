@@ -39,7 +39,7 @@ use crate::update_aggr_exprs::OptimizeAggregateOrder;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, Result};
-use datafusion_execution::config::{Extensions, SessionConfig};
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// Context for optimizing physical plans.
@@ -47,7 +47,7 @@ use datafusion_physical_plan::ExecutionPlan;
 /// This context provides access to session configuration and optimizer extensions.
 ///
 /// Similar to [`TaskContext`] which provides context during execution,
-/// `OptimizerContext` provides context during optimization.
+/// [`OptimizerContext`] provides context during optimization.
 ///
 /// [`TaskContext`]: https://docs.rs/datafusion/latest/datafusion/execution/struct.TaskContext.html
 #[derive(Debug, Clone)]
@@ -65,19 +65,6 @@ impl OptimizerContext {
     /// Return a reference to the session configuration
     pub fn session_config(&self) -> &SessionConfig {
         &self.session_config
-    }
-
-    /// Return a reference to the configuration options
-    ///
-    /// This is a convenience method that returns the [`ConfigOptions`]
-    /// from the [`SessionConfig`].
-    pub fn options(&self) -> &Arc<ConfigOptions> {
-        self.session_config.options()
-    }
-
-    /// Return a reference to the extensions
-    pub fn extensions(&self) -> &Arc<Extensions> {
-        self.session_config.extensions()
     }
 }
 
@@ -109,7 +96,7 @@ pub trait PhysicalOptimizerRule: Debug {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Default implementation: delegate to the old method for backwards compatibility
         #[allow(deprecated)]
-        self.optimize(plan, context.options())
+        self.optimize(plan, context.session_config().options())
     }
 
     /// Rewrite `plan` to an optimized form

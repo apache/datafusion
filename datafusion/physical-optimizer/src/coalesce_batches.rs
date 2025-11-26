@@ -49,7 +49,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.options();
+        let config = context.session_config().options();
         if !config.execution.coalesce_batches {
             return Ok(plan);
         }

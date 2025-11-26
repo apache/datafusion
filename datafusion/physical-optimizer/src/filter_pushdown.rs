@@ -423,7 +423,7 @@ impl PhysicalOptimizerRule for FilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.options();
+        let config = context.session_config().options();
         Ok(
             push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
                 .updated_node
