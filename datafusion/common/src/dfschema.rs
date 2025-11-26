@@ -352,19 +352,21 @@ impl DFSchema {
         self.field_qualifiers.extend(qualifiers);
     }
 
-    /// Get a list of fields
+    /// Get a list of fields for this schema
     pub fn fields(&self) -> &Fields {
         &self.inner.fields
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected using an
-    /// offset within the internal `fields` vector
+    /// Returns a reference to [`FieldRef`] for a column at specific index
+    /// within the schema.
+    ///
+    /// See also [Self::qualified_field] to get both qualifier and field
     pub fn field(&self, i: usize) -> &FieldRef {
         &self.inner.fields[i]
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected using an
-    /// offset within the internal `fields` vector and its qualifier
+    /// Returns the qualifier (if any) and [`FieldRef`] for a column at specific
+    /// index within the schema.
     pub fn qualified_field(&self, i: usize) -> (Option<&TableReference>, &FieldRef) {
         (self.field_qualifiers[i].as_ref(), self.field(i))
     }
@@ -416,7 +418,7 @@ impl DFSchema {
             .is_some()
     }
 
-    /// Find the field with the given name
+    /// Find the [`FieldRef`] with the given name and optional qualifier
     pub fn field_with_name(
         &self,
         qualifier: Option<&TableReference>,
