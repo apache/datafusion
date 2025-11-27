@@ -27,7 +27,7 @@ use datafusion_common::{assert_eq_or_internal_err, DataFusionError};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
     async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
-    joins::HashJoinExec, repartition::RepartitionExec, ExecutionPlan,
+    repartition::RepartitionExec, ExecutionPlan,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
