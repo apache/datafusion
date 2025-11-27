@@ -804,6 +804,9 @@ impl FileSource for ParquetSource {
         self.schema_adapter_factory.clone()
     }
 
+    /// When push down to parquet source of a sort operation is possible,
+    /// create a new ParquetSource with reverse_scan enabled.
+    /// TODO support more policies in addition to reversing the scan.
     fn try_pushdown_sort(
         &self,
         _order: &[PhysicalSortExpr],
