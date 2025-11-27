@@ -200,7 +200,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 ///     Field::new("c1", DataType::Int32, false),
 ///     Field::new("c2", DataType::Float64, false),
 /// ]);
-/// // DFSchema is a an Arrow schema with optional relation name
+/// // DFSchema is an Arrow schema with optional relation name
 /// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
 ///
 /// // Form Vec<Expr> with an expression for each column in the schema
@@ -286,7 +286,7 @@ impl From<sqlparser::ast::NullTreatment> for NullTreatment {
 /// assert!(scalars.contains(&ScalarValue::Int32(Some(6))));
 /// ```
 ///
-/// Rewrite an expression, replacing references to column "a" in an
+/// Rewrite an expression, replacing references to column "a" in an Expr
 /// to the literal `42`:
 ///
 ///  ```
@@ -1483,6 +1483,9 @@ impl Expr {
                 spans: _,
             }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
+            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+                expr.qualified_name()
+            }
             _ => (None, self.schema_name().to_string()),
         }
     }
@@ -3503,6 +3506,9 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
     match expr {
         Expr::Column(col) => Ok(col.name.clone()),
         Expr::Alias(alias) => Ok(alias.name.clone()),
+        Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+            physical_name(expr)
+        }
         _ => Ok(expr.schema_name().to_string()),
     }
 }

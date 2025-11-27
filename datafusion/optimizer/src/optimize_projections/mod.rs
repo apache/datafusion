@@ -583,7 +583,8 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
             .zip(original_names)
             .map(|(expr, original_name)| original_name.restore(expr))
             .collect::<Vec<_>>();
-        Projection::try_new(new_exprs, prev_projection.input).map(Transformed::yes)
+        Projection::try_new_with_schema(new_exprs, prev_projection.input, schema)
+            .map(Transformed::yes)
     } else {
         // not rewritten, so put the projection back together
         let input = Arc::new(LogicalPlan::Projection(prev_projection));
@@ -833,7 +834,7 @@ fn rewrite_projection_given_requirements(
     config: &dyn OptimizerConfig,
     indices: &RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
-    let Projection { expr, input, .. } = proj;
+    let Projection { expr, input, schema, .. } = proj;
 
     let exprs_used = indices.get_at_indices(&expr);
 
@@ -847,9 +848,17 @@ fn rewrite_projection_given_requirements(
             if is_projection_unnecessary(&input, &exprs_used)? {
                 Ok(Transformed::yes(input))
             } else {
-                Projection::try_new(exprs_used, Arc::new(input))
-                    .map(LogicalPlan::Projection)
-                    .map(Transformed::yes)
+                // Preserve the original schema when all expressions are retained
+                if exprs_used.len() == schema.fields().len() {
+                    Projection::try_new_with_schema(exprs_used, Arc::new(input), schema)
+                        .map(LogicalPlan::Projection)
+                        .map(Transformed::yes)
+                } else {
+                    // Subset of expressions - need to recompute schema
+                    Projection::try_new(exprs_used, Arc::new(input))
+                        .map(LogicalPlan::Projection)
+                        .map(Transformed::yes)
+                }
             }
         })
 }
