@@ -58,14 +58,14 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         plan.transform_up(|plan| {
             let plan_any = plan.as_any();
             let wrap_in_coalesce = plan_any
-                    .downcast_ref::<RepartitionExec>()
-                    .map(|repart_exec| {
-                        !matches!(
-                            repart_exec.partitioning().clone(),
-                            Partitioning::RoundRobinBatch(_)
-                        )
-                    })
-                    .unwrap_or(false);
+                .downcast_ref::<RepartitionExec>()
+                .map(|repart_exec| {
+                    !matches!(
+                        repart_exec.partitioning().clone(),
+                        Partitioning::RoundRobinBatch(_)
+                    )
+                })
+                .unwrap_or(false);
 
             if wrap_in_coalesce {
                 Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(

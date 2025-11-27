@@ -306,17 +306,17 @@ logical_plan
 10)------TableScan: t1 projection=[id, name]
 physical_plan
 01)UnionExec
-02)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, CAST(t2.id AS Int32)@2), (name@1, name@1)], NullsEqual: true
+02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], NullsEqual: true
 03)----CoalescePartitionsExec
-04)------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-05)--------CoalesceBatchesExec: target_batch_size=2
-06)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
-10)----ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-11)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)--------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+08)------CoalesceBatchesExec: target_batch_size=2
+09)--------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+10)----------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+11)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 13)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
 14)----HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1], NullsEqual: true
 15)------CoalescePartitionsExec

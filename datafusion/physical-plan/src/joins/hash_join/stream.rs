@@ -393,7 +393,10 @@ impl HashJoinStream {
         loop {
             // First, check if we have any completed batches ready to emit
             if let Some(batch) = self.output_buffer.next_completed_batch() {
-                return self.join_metrics.baseline.record_poll(Poll::Ready(Some(Ok(batch))));
+                return self
+                    .join_metrics
+                    .baseline
+                    .record_poll(Poll::Ready(Some(Ok(batch))));
             }
 
             return match self.state {
@@ -415,9 +418,9 @@ impl HashJoinStream {
                 HashJoinStreamState::Completed => {
                     // Flush any remaining buffered data
                     if !self.output_buffer.is_empty() {
-                        self.output_buffer
-                            .finish_buffered_batch()
-                            .map_err(|e| -> datafusion_common::DataFusionError { e.into() })?;
+                        self.output_buffer.finish_buffered_batch().map_err(
+                            |e| -> datafusion_common::DataFusionError { e.into() },
+                        )?;
                         // Continue loop to emit the flushed batch
                         continue;
                     }
@@ -655,11 +658,12 @@ impl HashJoinStream {
         )?;
 
         // Build output batch and push to coalescer
-        let (build_batch, probe_batch, join_side) = if self.join_type == JoinType::RightMark {
-            (&state.batch, build_side.left_data.batch(), JoinSide::Right)
-        } else {
-            (build_side.left_data.batch(), &state.batch, JoinSide::Left)
-        };
+        let (build_batch, probe_batch, join_side) =
+            if self.join_type == JoinType::RightMark {
+                (&state.batch, build_side.left_data.batch(), JoinSide::Right)
+            } else {
+                (build_side.left_data.batch(), &state.batch, JoinSide::Left)
+            };
 
         let batch = build_batch_from_indices(
             &self.schema,
