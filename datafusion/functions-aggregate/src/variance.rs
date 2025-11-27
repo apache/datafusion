@@ -203,16 +203,24 @@ fn create_decimal_variance_groups_accumulator(
 ) -> Result<Option<Box<dyn GroupsAccumulator>>> {
     let accumulator = match data_type {
         DataType::Decimal32(_, scale) => Some(Box::new(
-            DecimalVarianceGroupsAccumulator::<Decimal32Type>::new(*scale, stats_type),
+            DecimalVarianceGroupsAccumulator::<Decimal32Type>::try_new(
+                *scale, stats_type,
+            )?,
         ) as Box<dyn GroupsAccumulator>),
         DataType::Decimal64(_, scale) => Some(Box::new(
-            DecimalVarianceGroupsAccumulator::<Decimal64Type>::new(*scale, stats_type),
+            DecimalVarianceGroupsAccumulator::<Decimal64Type>::try_new(
+                *scale, stats_type,
+            )?,
         ) as Box<dyn GroupsAccumulator>),
         DataType::Decimal128(_, scale) => Some(Box::new(
-            DecimalVarianceGroupsAccumulator::<Decimal128Type>::new(*scale, stats_type),
+            DecimalVarianceGroupsAccumulator::<Decimal128Type>::try_new(
+                *scale, stats_type,
+            )?,
         ) as Box<dyn GroupsAccumulator>),
         DataType::Decimal256(_, scale) => Some(Box::new(
-            DecimalVarianceGroupsAccumulator::<Decimal256Type>::new(*scale, stats_type),
+            DecimalVarianceGroupsAccumulator::<Decimal256Type>::try_new(
+                *scale, stats_type,
+            )?,
         ) as Box<dyn GroupsAccumulator>),
         _ => None,
     };
@@ -323,7 +331,12 @@ impl DecimalVarianceState {
             .checked_sub(sum_squared)
             .ok_or_else(decimal_overflow_err)?;
 
-        let numerator = if numerator < i256::ZERO {
+        let negative_numerator = numerator < i256::ZERO;
+        debug_assert!(
+            !negative_numerator,
+            "Decimal variance numerator became negative: {numerator:?}. This indicates precision loss or overflow in intermediate calculations."
+        );
+        let numerator = if negative_numerator {
             i256::ZERO
         } else {
             numerator
@@ -479,13 +492,20 @@ where
     T: DecimalType + ArrowNumericType + Debug,
     T::Native: DecimalNative,
 {
-    fn new(scale: i8, stats_type: StatsType) -> Self {
-        Self {
+    fn try_new(scale: i8, stats_type: StatsType) -> Result<Self> {
+        if scale > DECIMAL256_MAX_SCALE {
+            return exec_err!(
+                "Decimal variance does not support scale {} greater than {}",
+                scale,
+                DECIMAL256_MAX_SCALE
+            );
+        }
+        Ok(Self {
             states: Vec::new(),
             scale,
             stats_type,
             _marker: PhantomData,
-        }
+        })
     }
 
     fn resize(&mut self, total_num_groups: usize) {
@@ -512,7 +532,7 @@ where
         self.resize(total_num_groups);
         for (row, group_index) in group_indices.iter().enumerate() {
             if let Some(filter) = opt_filter {
-                if !filter.value(row) {
+                if !filter.is_valid(row) || !filter.value(row) {
                     continue;
                 }
             }
@@ -1169,7 +1189,8 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::Decimal128Builder;
+    use arrow::array::{Decimal128Array, Decimal128Builder, Float64Array};
+    use arrow::datatypes::DECIMAL256_MAX_PRECISION;
     use datafusion_expr::EmitTo;
     use std::sync::Arc;
 
@@ -1194,16 +1215,136 @@ mod tests {
         let decimal_array = builder.finish().with_precision_and_scale(10, 3).unwrap();
         let array: ArrayRef = Arc::new(decimal_array);
 
-        let mut pop_acc = VarianceAccumulator::try_new(StatsType::Population)?;
+        let mut pop_acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
+            3,
+            StatsType::Population,
+        )?;
         let pop_input = [Arc::clone(&array)];
         pop_acc.update_batch(&pop_input)?;
         assert_variance(pop_acc.evaluate()?, 11025.9450285);
 
-        let mut sample_acc = VarianceAccumulator::try_new(StatsType::Sample)?;
+        let mut sample_acc =
+            DecimalVarianceAccumulator::<Decimal128Type>::try_new(3, StatsType::Sample)?;
         let sample_input = [array];
         sample_acc.update_batch(&sample_input)?;
         assert_variance(sample_acc.evaluate()?, 11606.257924736841);
 
+        Ok(())
+    }
+
+    #[test]
+    fn variance_decimal_handles_nulls() -> Result<()> {
+        let mut builder = Decimal128Builder::with_capacity(3);
+        builder.append_value(100);
+        builder.append_null();
+        builder.append_value(300);
+        let array = builder.finish().with_precision_and_scale(10, 2).unwrap();
+        let array: ArrayRef = Arc::new(array);
+
+        let mut acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
+            2,
+            StatsType::Population,
+        )?;
+        acc.update_batch(&[Arc::clone(&array)])?;
+        assert_variance(acc.evaluate()?, 1.0);
+        Ok(())
+    }
+
+    #[test]
+    fn variance_decimal_empty_input() -> Result<()> {
+        let array = Decimal128Array::from(Vec::<Option<i128>>::new())
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let array: ArrayRef = Arc::new(array);
+
+        let mut acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
+            2,
+            StatsType::Population,
+        )?;
+        acc.update_batch(&[array])?;
+        match acc.evaluate()? {
+            ScalarValue::Float64(None) => Ok(()),
+            other => panic!("expected NULL variance for empty input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn variance_decimal_single_value_sample() -> Result<()> {
+        let array = Decimal128Array::from(vec![Some(500)])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let array: ArrayRef = Arc::new(array);
+        let mut acc =
+            DecimalVarianceAccumulator::<Decimal128Type>::try_new(2, StatsType::Sample)?;
+        acc.update_batch(&[array])?;
+        match acc.evaluate()? {
+            ScalarValue::Float64(None) => Ok(()),
+            other => {
+                panic!("expected NULL sample variance for single value, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn variance_decimal_groups_mixed_values() -> Result<()> {
+        let array =
+            Decimal128Array::from(vec![Some(100), Some(300), Some(-200), Some(-400)])
+                .with_precision_and_scale(10, 2)
+                .unwrap();
+        let array: ArrayRef = Arc::new(array);
+        let mut groups = DecimalVarianceGroupsAccumulator::<Decimal128Type>::try_new(
+            2,
+            StatsType::Population,
+        )?;
+        let group_indices = vec![0, 0, 1, 1];
+        groups.update_batch(&[Arc::clone(&array)], &group_indices, None, 2)?;
+        let result = groups.evaluate(EmitTo::All)?;
+        let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert!((result.value(0) - 1.0).abs() < 1e-9);
+        assert!((result.value(1) - 1.0).abs() < 1e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn variance_decimal_max_scale() -> Result<()> {
+        let values = vec![
+            ScalarValue::Decimal256(
+                Some(i256::from_i128(1)),
+                DECIMAL256_MAX_PRECISION,
+                DECIMAL256_MAX_SCALE,
+            ),
+            ScalarValue::Decimal256(
+                Some(i256::from_i128(-1)),
+                DECIMAL256_MAX_PRECISION,
+                DECIMAL256_MAX_SCALE,
+            ),
+        ];
+        let array = ScalarValue::iter_to_array(values).unwrap();
+        let mut acc = DecimalVarianceAccumulator::<Decimal256Type>::try_new(
+            DECIMAL256_MAX_SCALE,
+            StatsType::Population,
+        )?;
+        acc.update_batch(&[array])?;
+        assert_variance(acc.evaluate()?, 1e-152);
+        Ok(())
+    }
+
+    #[test]
+    fn variance_decimal_retract_batch() -> Result<()> {
+        let update = Decimal128Array::from(vec![Some(100), Some(200), Some(300)])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let retract = Decimal128Array::from(vec![Some(100), Some(200)])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+
+        let mut acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
+            2,
+            StatsType::Population,
+        )?;
+        acc.update_batch(&[Arc::new(update)])?;
+        acc.retract_batch(&[Arc::new(retract)])?;
+        assert_variance(acc.evaluate()?, 0.0);
         Ok(())
     }
 
