@@ -45,8 +45,8 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, plan_err, DataFusionError, JoinSide,
-    JoinType, NullEquality, Result,
+    assert_eq_or_internal_err, internal_err, plan_err, JoinSide, JoinType, NullEquality,
+    Result,
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;

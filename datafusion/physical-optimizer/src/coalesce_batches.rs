@@ -23,9 +23,7 @@ use crate::PhysicalOptimizerRule;
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
-use datafusion_common::{
-    assert_eq_or_internal_err, config::ConfigOptions, DataFusionError,
-};
+use datafusion_common::{assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
     async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,

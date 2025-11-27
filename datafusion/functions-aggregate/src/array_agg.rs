@@ -32,9 +32,7 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{
     compare_rows, get_row_at_idx, take_function_args, SingleRowListArrayBuilder,
 };
-use datafusion_common::{
-    assert_eq_or_internal_err, exec_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{assert_eq_or_internal_err, exec_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{

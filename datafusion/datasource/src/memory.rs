@@ -30,8 +30,7 @@ use crate::source::{DataSource, DataSourceExec};
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
-    assert_or_internal_err, plan_err, project_schema, DataFusionError, Result,
-    ScalarValue,
+    assert_or_internal_err, plan_err, project_schema, Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::project_orderings;

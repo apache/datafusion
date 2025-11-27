@@ -46,7 +46,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_or_internal_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+    assert_or_internal_err, exec_err, internal_datafusion_err, Result,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{calculate_union, EquivalenceProperties, PhysicalExpr};
