@@ -333,33 +333,27 @@ impl PhysicalExpr for BinaryExpr {
         let right_interval = children[1];
 
         if self.op.eq(&Operator::And) {
-            if interval.eq(&Interval::CERTAINLY_TRUE) {
+            if interval.eq(&Interval::TRUE) {
                 // A certainly true logical conjunction can only derive from possibly
                 // true operands. Otherwise, we prove infeasibility.
-                Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
-                    && !right_interval.eq(&Interval::CERTAINLY_FALSE))
-                .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
-            } else if interval.eq(&Interval::CERTAINLY_FALSE) {
+                Ok((!left_interval.eq(&Interval::FALSE)
+                    && !right_interval.eq(&Interval::FALSE))
+                .then(|| vec![Interval::TRUE, Interval::TRUE]))
+            } else if interval.eq(&Interval::FALSE) {
                 // If the logical conjunction is certainly false, one of the
                 // operands must be false. However, it's not always possible to
                 // determine which operand is false, leading to different scenarios.
 
                 // If one operand is certainly true and the other one is uncertain,
                 // then the latter must be certainly false.
-                if left_interval.eq(&Interval::CERTAINLY_TRUE)
-                    && right_interval.eq(&Interval::UNCERTAIN)
+                if left_interval.eq(&Interval::TRUE)
+                    && right_interval.eq(&Interval::TRUE_OR_FALSE)
                 {
-                    Ok(Some(vec![
-                        Interval::CERTAINLY_TRUE,
-                        Interval::CERTAINLY_FALSE,
-                    ]))
-                } else if right_interval.eq(&Interval::CERTAINLY_TRUE)
-                    && left_interval.eq(&Interval::UNCERTAIN)
+                    Ok(Some(vec![Interval::TRUE, Interval::FALSE]))
+                } else if right_interval.eq(&Interval::TRUE)
+                    && left_interval.eq(&Interval::TRUE_OR_FALSE)
                 {
-                    Ok(Some(vec![
-                        Interval::CERTAINLY_FALSE,
-                        Interval::CERTAINLY_TRUE,
-                    ]))
+                    Ok(Some(vec![Interval::FALSE, Interval::TRUE]))
                 }
                 // If both children are uncertain, or if one is certainly false,
                 // we cannot conclusively refine their intervals. In this case,
@@ -373,33 +367,27 @@ impl PhysicalExpr for BinaryExpr {
                 Ok(Some(vec![]))
             }
         } else if self.op.eq(&Operator::Or) {
-            if interval.eq(&Interval::CERTAINLY_FALSE) {
+            if interval.eq(&Interval::FALSE) {
                 // A certainly false logical disjunction can only derive from certainly
                 // false operands. Otherwise, we prove infeasibility.
-                Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
-                    && !right_interval.eq(&Interval::CERTAINLY_TRUE))
-                .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))
-            } else if interval.eq(&Interval::CERTAINLY_TRUE) {
+                Ok((!left_interval.eq(&Interval::TRUE)
+                    && !right_interval.eq(&Interval::TRUE))
+                .then(|| vec![Interval::FALSE, Interval::FALSE]))
+            } else if interval.eq(&Interval::TRUE) {
                 // If the logical disjunction is certainly true, one of the
                 // operands must be true. However, it's not always possible to
                 // determine which operand is true, leading to different scenarios.
 
                 // If one operand is certainly false and the other one is uncertain,
                 // then the latter must be certainly true.
-                if left_interval.eq(&Interval::CERTAINLY_FALSE)
-                    && right_interval.eq(&Interval::UNCERTAIN)
+                if left_interval.eq(&Interval::FALSE)
+                    && right_interval.eq(&Interval::TRUE_OR_FALSE)
                 {
-                    Ok(Some(vec![
-                        Interval::CERTAINLY_FALSE,
-                        Interval::CERTAINLY_TRUE,
-                    ]))
-                } else if right_interval.eq(&Interval::CERTAINLY_FALSE)
-                    && left_interval.eq(&Interval::UNCERTAIN)
+                    Ok(Some(vec![Interval::FALSE, Interval::TRUE]))
+                } else if right_interval.eq(&Interval::FALSE)
+                    && left_interval.eq(&Interval::TRUE_OR_FALSE)
                 {
-                    Ok(Some(vec![
-                        Interval::CERTAINLY_TRUE,
-                        Interval::CERTAINLY_FALSE,
-                    ]))
+                    Ok(Some(vec![Interval::TRUE, Interval::FALSE]))
                 }
                 // If both children are uncertain, or if one is certainly true,
                 // we cannot conclusively refine their intervals. In this case,

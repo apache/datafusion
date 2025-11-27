@@ -18,7 +18,7 @@
 use arrow::array::RecordBatch;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
 
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
 ///
@@ -88,11 +88,10 @@ impl LimitedBatchCoalescer {
     /// Returns an error if called after [`Self::finish`] or if the internal push
     /// operation fails.
     pub fn push_batch(&mut self, batch: RecordBatch) -> Result<PushBatchStatus> {
-        if self.finished {
-            return internal_err!(
-                "LimitedBatchCoalescer: cannot push batch after finish"
-            );
-        }
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
 
         // if we are at the limit, return LimitReached
         if let Some(fetch) = self.fetch {

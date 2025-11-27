@@ -20,7 +20,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use crate::metrics::{
-    value::{PruningMetrics, RatioMetrics},
+    value::{PruningMetrics, RatioMergeStrategy, RatioMetrics},
     MetricType,
 };
 
@@ -283,7 +283,17 @@ impl<'a> MetricBuilder<'a> {
         name: impl Into<Cow<'static, str>>,
         partition: usize,
     ) -> RatioMetrics {
-        let ratio_metrics = RatioMetrics::new();
+        self.ratio_metrics_with_strategy(name, partition, RatioMergeStrategy::default())
+    }
+
+    /// Consumes self and creates a new [`RatioMetrics`] with a specific merge strategy
+    pub fn ratio_metrics_with_strategy(
+        self,
+        name: impl Into<Cow<'static, str>>,
+        partition: usize,
+        merge_strategy: RatioMergeStrategy,
+    ) -> RatioMetrics {
+        let ratio_metrics = RatioMetrics::new().with_merge_strategy(merge_strategy);
         self.with_partition(partition).build(MetricValue::Ratio {
             name: name.into(),
             ratio_metrics: ratio_metrics.clone(),

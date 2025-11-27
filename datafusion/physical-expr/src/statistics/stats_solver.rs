@@ -156,7 +156,7 @@ impl ExprStatisticsGraph {
                 // If the given statistics enable us to obtain a more precise
                 // range for the root, update it:
                 let subset = root_range.contains(given_range)?;
-                self.graph[self.root].dist = if subset == Interval::CERTAINLY_TRUE {
+                self.graph[self.root].dist = if subset == Interval::TRUE {
                     // Given statistics is strictly more informative, use it as is:
                     given_stats
                 } else {

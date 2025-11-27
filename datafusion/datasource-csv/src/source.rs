@@ -34,12 +34,12 @@ use datafusion_datasource::{
 
 use arrow::csv;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use datafusion_physical_plan::{
     DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
 };
@@ -90,7 +90,6 @@ pub struct CsvSource {
     table_schema: TableSchema,
     file_projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
-    projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
@@ -103,7 +102,6 @@ impl CsvSource {
             batch_size: None,
             file_projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            projected_statistics: None,
             schema_adapter_factory: None,
         }
     }
@@ -215,6 +213,7 @@ pub struct CsvOpener {
     config: Arc<CsvSource>,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+    partition_index: usize,
 }
 
 impl CsvOpener {
@@ -228,6 +227,7 @@ impl CsvOpener {
             config,
             file_compression_type,
             object_store,
+            partition_index: 0,
         }
     }
 }
@@ -243,12 +243,13 @@ impl FileSource for CsvSource {
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
-        _partition: usize,
+        partition: usize,
     ) -> Arc<dyn FileOpener> {
         Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
             object_store,
+            partition_index: partition,
         })
     }
 
@@ -266,12 +267,6 @@ impl FileSource for CsvSource {
         Arc::new(conf)
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.file_projection = config.file_column_projection_indices();
@@ -281,12 +276,7 @@ impl FileSource for CsvSource {
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
     }
-    fn statistics(&self) -> Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        Ok(statistics
-            .clone()
-            .expect("projected_statistics must be set"))
-    }
+
     fn file_type(&self) -> &str {
         "csv"
     }
@@ -365,6 +355,9 @@ impl FileOpener for CsvOpener {
         let store = Arc::clone(&self.object_store);
         let terminator = self.config.terminator();
 
+        let baseline_metrics =
+            BaselineMetrics::new(&self.config.metrics, self.partition_index);
+
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
 
@@ -404,7 +397,17 @@ impl FileOpener for CsvOpener {
                         )?
                     };
 
-                    Ok(futures::stream::iter(config.open(decoder)?)
+                    let mut reader = config.open(decoder)?;
+
+                    // Use std::iter::from_fn to wrap execution of iterator's next() method.
+                    let iterator = std::iter::from_fn(move || {
+                        let mut timer = baseline_metrics.elapsed_compute().timer();
+                        let result = reader.next();
+                        timer.stop();
+                        result
+                    });
+
+                    Ok(futures::stream::iter(iterator)
                         .map(|r| r.map_err(Into::into))
                         .boxed())
                 }

@@ -24,7 +24,10 @@ use crate::type_coercion::binary::binary_numeric_coercion;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::DataType;
 use datafusion_common::rounding::alter_fp_rounding_mode;
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_ne_or_internal_err, assert_or_internal_err,
+    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 
 /// This object defines probabilistic distributions that encode uncertain
 /// information about a single, scalar value. Currently, we support five core
@@ -159,9 +162,9 @@ impl Distribution {
     /// - A [`Uniform`] distribution's range is simply its interval.
     /// - An [`Exponential`] distribution's range is `[offset, +∞)`.
     /// - A [`Gaussian`] distribution's range is unbounded.
-    /// - A [`Bernoulli`] distribution's range is [`Interval::UNCERTAIN`], if
-    ///   `p` is neither `0` nor `1`. Otherwise, it is [`Interval::CERTAINLY_FALSE`]
-    ///   and [`Interval::CERTAINLY_TRUE`], respectively.
+    /// - A [`Bernoulli`] distribution's range is [`Interval::TRUE_OR_FALSE`], if
+    ///   `p` is neither `0` nor `1`. Otherwise, it is [`Interval::FALSE`]
+    ///   and [`Interval::TRUE`], respectively.
     /// - A [`Generic`] distribution is unbounded by default, but more information
     ///   may be present.
     pub fn range(&self) -> Result<Interval> {
@@ -275,11 +278,11 @@ pub struct GenericDistribution {
 
 impl UniformDistribution {
     fn try_new(interval: Interval) -> Result<Self> {
-        if interval.data_type().eq(&DataType::Boolean) {
-            return internal_err!(
-                "Construction of a boolean `Uniform` distribution is prohibited, create a `Bernoulli` distribution instead."
-            );
-        }
+        assert_ne_or_internal_err!(
+            interval.data_type(),
+            DataType::Boolean,
+            "Construction of a boolean `Uniform` distribution is prohibited, create a `Bernoulli` distribution instead."
+        );
 
         Ok(Self { interval })
     }
@@ -337,21 +340,29 @@ impl ExponentialDistribution {
         positive_tail: bool,
     ) -> Result<Self> {
         let dt = rate.data_type();
-        if offset.data_type() != dt {
-            internal_err!("Rate and offset must have the same data type")
-        } else if offset.is_null() {
-            internal_err!("Offset of an `ExponentialDistribution` cannot be null")
-        } else if rate.is_null() {
-            internal_err!("Rate of an `ExponentialDistribution` cannot be null")
-        } else if rate.le(&ScalarValue::new_zero(&dt)?) {
-            internal_err!("Rate of an `ExponentialDistribution` must be positive")
-        } else {
-            Ok(Self {
-                rate,
-                offset,
-                positive_tail,
-            })
-        }
+        assert_eq_or_internal_err!(
+            offset.data_type(),
+            dt,
+            "Rate and offset must have the same data type"
+        );
+        assert_or_internal_err!(
+            !offset.is_null(),
+            "Offset of an `ExponentialDistribution` cannot be null"
+        );
+        assert_or_internal_err!(
+            !rate.is_null(),
+            "Rate of an `ExponentialDistribution` cannot be null"
+        );
+        let zero = ScalarValue::new_zero(&dt)?;
+        assert_or_internal_err!(
+            !rate.le(&zero),
+            "Rate of an `ExponentialDistribution` must be positive"
+        );
+        Ok(Self {
+            rate,
+            offset,
+            positive_tail,
+        })
     }
 
     pub fn data_type(&self) -> DataType {
@@ -412,15 +423,21 @@ impl ExponentialDistribution {
 impl GaussianDistribution {
     fn try_new(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
         let dt = mean.data_type();
-        if variance.data_type() != dt {
-            internal_err!("Mean and variance must have the same data type")
-        } else if variance.is_null() {
-            internal_err!("Variance of a `GaussianDistribution` cannot be null")
-        } else if variance.lt(&ScalarValue::new_zero(&dt)?) {
-            internal_err!("Variance of a `GaussianDistribution` must be positive")
-        } else {
-            Ok(Self { mean, variance })
-        }
+        assert_eq_or_internal_err!(
+            variance.data_type(),
+            dt,
+            "Mean and variance must have the same data type"
+        );
+        assert_or_internal_err!(
+            !variance.is_null(),
+            "Variance of a `GaussianDistribution` cannot be null"
+        );
+        let zero = ScalarValue::new_zero(&dt)?;
+        assert_or_internal_err!(
+            !variance.lt(&zero),
+            "Variance of a `GaussianDistribution` must be positive"
+        );
+        Ok(Self { mean, variance })
     }
 
     pub fn data_type(&self) -> DataType {
@@ -447,19 +464,16 @@ impl GaussianDistribution {
 impl BernoulliDistribution {
     fn try_new(p: ScalarValue) -> Result<Self> {
         if p.is_null() {
-            Ok(Self { p })
-        } else {
-            let dt = p.data_type();
-            let zero = ScalarValue::new_zero(&dt)?;
-            let one = ScalarValue::new_one(&dt)?;
-            if p.ge(&zero) && p.le(&one) {
-                Ok(Self { p })
-            } else {
-                internal_err!(
-                    "Success probability of a `BernoulliDistribution` must be in [0, 1]"
-                )
-            }
+            return Ok(Self { p });
         }
+        let dt = p.data_type();
+        let zero = ScalarValue::new_zero(&dt)?;
+        let one = ScalarValue::new_one(&dt)?;
+        assert_or_internal_err!(
+            p.ge(&zero) && p.le(&one),
+            "Success probability of a `BernoulliDistribution` must be in [0, 1]"
+        );
+        Ok(Self { p })
     }
 
     pub fn data_type(&self) -> DataType {
@@ -505,11 +519,11 @@ impl BernoulliDistribution {
         // Unwraps are safe as the constructor guarantees that the data type
         // supports zero and one values.
         if ScalarValue::new_zero(&dt).unwrap().eq(&self.p) {
-            Interval::CERTAINLY_FALSE
+            Interval::FALSE
         } else if ScalarValue::new_one(&dt).unwrap().eq(&self.p) {
-            Interval::CERTAINLY_TRUE
+            Interval::TRUE
         } else {
-            Interval::UNCERTAIN
+            Interval::TRUE_OR_FALSE
         }
     }
 }
@@ -521,11 +535,11 @@ impl GenericDistribution {
         variance: ScalarValue,
         range: Interval,
     ) -> Result<Self> {
-        if range.data_type().eq(&DataType::Boolean) {
-            return internal_err!(
-                "Construction of a boolean `Generic` distribution is prohibited, create a `Bernoulli` distribution instead."
-            );
-        }
+        assert_ne_or_internal_err!(
+            range.data_type(),
+            DataType::Boolean,
+            "Construction of a boolean `Generic` distribution is prohibited, create a `Bernoulli` distribution instead."
+        );
 
         let validate_location = |m: &ScalarValue| -> Result<bool> {
             // Checks whether the given location estimate is within the range.
@@ -536,20 +550,24 @@ impl GenericDistribution {
             }
         };
 
-        if !validate_location(&mean)?
-            || !validate_location(&median)?
-            || (!variance.is_null()
-                && variance.lt(&ScalarValue::new_zero(&variance.data_type())?))
-        {
-            internal_err!("Tried to construct an invalid `GenericDistribution` instance")
+        let locations_valid = validate_location(&mean)? && validate_location(&median)?;
+        let variance_non_negative = if variance.is_null() {
+            true
         } else {
-            Ok(Self {
-                mean,
-                median,
-                variance,
-                range,
-            })
-        }
+            let zero = ScalarValue::new_zero(&variance.data_type())?;
+            !variance.lt(&zero)
+        };
+        assert_or_internal_err!(
+            locations_valid && variance_non_negative,
+            "Tried to construct an invalid `GenericDistribution` instance"
+        );
+
+        Ok(Self {
+            mean,
+            median,
+            variance,
+            range,
+        })
     }
 
     pub fn data_type(&self) -> DataType {
@@ -718,11 +736,11 @@ pub fn create_bernoulli_from_comparison(
     }
     let (li, ri) = (left.range()?, right.range()?);
     let range_evaluation = apply_operator(op, &li, &ri)?;
-    if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
+    if range_evaluation.eq(&Interval::FALSE) {
         Distribution::new_bernoulli(ScalarValue::from(0.0))
-    } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
+    } else if range_evaluation.eq(&Interval::TRUE) {
         Distribution::new_bernoulli(ScalarValue::from(1.0))
-    } else if range_evaluation.eq(&Interval::UNCERTAIN) {
+    } else if range_evaluation.eq(&Interval::TRUE_OR_FALSE) {
         Distribution::new_bernoulli(ScalarValue::try_from(&DataType::Float64)?)
     } else {
         internal_err!("This function must be called with a comparison operator")
@@ -879,7 +897,7 @@ mod tests {
             })
         );
 
-        assert!(Distribution::new_uniform(Interval::UNCERTAIN).is_err());
+        assert!(Distribution::new_uniform(Interval::TRUE_OR_FALSE).is_err());
         Ok(())
     }
 
@@ -992,7 +1010,7 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Null,
-                    Interval::UNCERTAIN,
+                    Interval::TRUE_OR_FALSE,
                 ),
                 false,
             ),
