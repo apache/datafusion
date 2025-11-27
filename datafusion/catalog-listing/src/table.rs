@@ -47,6 +47,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::ExecutionPlan;
 use futures::{future, stream, Stream, StreamExt, TryStreamExt};
+use log::debug;
 use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::HashMap;
@@ -457,32 +458,42 @@ impl TableProvider for ListingTable {
         }
 
         let output_ordering = self.try_create_output_ordering(state.execution_props())?;
-        match state
-            .config_options()
-            .execution
-            .split_file_groups_by_statistics
-            .then(|| {
-                output_ordering.first().map(|output_ordering| {
-                    FileScanConfig::split_groups_by_statistics_with_target_partitions(
-                        &self.table_schema,
-                        &partitioned_file_lists,
-                        output_ordering,
-                        self.options.target_partitions,
-                    )
+        if !self.options.preserve_partition_values {
+            // Split file groups by statistics to optimize sorted scans
+            match state
+                .config_options()
+                .execution
+                .split_file_groups_by_statistics
+                .then(|| {
+                    output_ordering.first().map(|output_ordering| {
+                        FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                            &self.table_schema,
+                            &partitioned_file_lists,
+                            output_ordering,
+                            self.options.target_partitions,
+                        )
+                    })
                 })
-            })
-            .flatten()
-        {
-            Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
-            Some(Ok(new_groups)) => {
-                if new_groups.len() <= self.options.target_partitions {
-                    partitioned_file_lists = new_groups;
-                } else {
-                    log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
+                .flatten()
+            {
+                Some(Err(e)) => {
+                    log::debug!("failed to split file groups by statistics: {e}")
                 }
-            }
-            None => {} // no ordering required
-        };
+                Some(Ok(new_groups)) => {
+                    if new_groups.len() <= self.options.target_partitions {
+                        partitioned_file_lists = new_groups;
+                    } else {
+                        log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
+                    }
+                }
+                None => {} // no ordering required
+            };
+        } else {
+            debug!(
+                "Skipping statistics-based file splitting because preserve_partition_values is enabled. \
+                 File groups will respect partition boundaries instead of sort statistics."
+            );
+        }
 
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
@@ -508,6 +519,9 @@ impl TableProvider for ListingTable {
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())
+                    .with_preserve_partition_values(
+                        self.options.preserve_partition_values,
+                    )
                     .build(),
             )
             .await?;
@@ -653,7 +667,12 @@ impl ListingTable {
         let (file_group, inexact_stats) =
             get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
-        let file_groups = file_group.split_files(self.options.target_partitions);
+        let target_partitions = self.options.target_partitions.max(1);
+        let file_groups = if self.options.preserve_partition_values {
+            file_group.split_by_partition_values()
+        } else {
+            file_group.split_files(target_partitions)
+        };
         let (mut file_groups, mut stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),

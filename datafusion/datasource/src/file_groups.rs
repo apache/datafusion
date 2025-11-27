@@ -18,10 +18,11 @@
 //! Logic for managing groups of [`PartitionedFile`]s in DataFusion
 
 use crate::{FileRange, PartitionedFile};
-use datafusion_common::Statistics;
+use datafusion_common::{ScalarValue, Statistics};
 use itertools::Itertools;
+use log::debug;
 use std::cmp::{min, Ordering};
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::iter::repeat_with;
 use std::mem;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -436,6 +437,68 @@ impl FileGroup {
         self.statistics.as_mut().map(Arc::make_mut)
     }
 
+    /// Split this file group so that each resulting group contains files that
+    /// share the same partition column values. If any file is missing
+    /// partition values, this method falls back to returning a single group
+    /// containing all files.
+    pub fn split_by_partition_values(self) -> Vec<FileGroup> {
+        if self.is_empty() {
+            return vec![];
+        }
+
+        let mut groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+        let mut has_unpartitioned = false;
+
+        for file in self.files {
+            if file.partition_values.is_empty() {
+                debug!(
+                    "File {:?} has no partition values, will fall back to single group",
+                    file.path(),
+                );
+                has_unpartitioned = true;
+                groups.entry(vec![]).or_default().push(file);
+            } else {
+                groups
+                    .entry(file.partition_values.clone())
+                    .or_default()
+                    .push(file);
+            }
+        }
+
+        if has_unpartitioned && groups.len() > 1 {
+            debug!(
+                "Mixed partitioned/non-partitioned files detected, falling back to single file group"
+            );
+            let all_files = groups.into_values().flatten().collect();
+            return vec![FileGroup::new(all_files)];
+        }
+
+        let mut entries: Vec<_> = groups.into_iter().collect();
+        entries.sort_by(|(left, _), (right, _)| compare_partition_keys(left, right));
+        entries
+            .into_iter()
+            .map(|(_, files)| FileGroup::new(files))
+            .collect()
+    }
+
+    /// Returns the unique set of partition values represented by this group,
+    /// if and only if all files share the same values.
+    pub fn unique_partition_values(&self) -> Option<&[ScalarValue]> {
+        let first = self.files.first()?;
+        if first.partition_values.is_empty() {
+            return None;
+        }
+
+        if self.files[1..]
+            .iter()
+            .all(|file| file.partition_values == first.partition_values)
+        {
+            Some(&first.partition_values)
+        } else {
+            None
+        }
+    }
+
     /// Partition the list of files into `n` groups
     pub fn split_files(mut self, n: usize) -> Vec<FileGroup> {
         if self.is_empty() {
@@ -501,6 +564,23 @@ impl Default for FileGroup {
     fn default() -> Self {
         Self::new(Vec::new())
     }
+}
+
+fn compare_partition_keys(left: &[ScalarValue], right: &[ScalarValue]) -> Ordering {
+    for (l, r) in left.iter().zip(right.iter()) {
+        match l.partial_cmp(r) {
+            Some(Ordering::Less) => return Ordering::Less,
+            Some(Ordering::Greater) => return Ordering::Greater,
+            Some(Ordering::Equal) => continue,
+            None => {
+                let ord = l.to_string().cmp(&r.to_string());
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+        }
+    }
+    left.len().cmp(&right.len())
 }
 
 /// Tracks how a individual file will be repartitioned
@@ -1012,5 +1092,128 @@ mod test {
 
         assert_partitioned_files(repartitioned.clone(), repartitioned_preserving_sort);
         repartitioned
+    }
+
+    #[test]
+    fn test_split_by_partition_values() {
+        use datafusion_common::ScalarValue;
+
+        // Helper to create file with partition values
+        fn pfile_with_parts(
+            path: &str,
+            size: u64,
+            values: Vec<ScalarValue>,
+        ) -> PartitionedFile {
+            let mut file = pfile(path, size);
+            file.partition_values = values;
+            file
+        }
+
+        // Case 1: Empty group returns empty vec
+        let empty_group = FileGroup::new(vec![]);
+        assert_eq!(empty_group.split_by_partition_values().len(), 0);
+
+        // Case 2: Single partition with multiple files
+        let file1 = pfile_with_parts("a", 100, vec![ScalarValue::Int32(Some(1))]);
+        let file2 = pfile_with_parts("b", 100, vec![ScalarValue::Int32(Some(1))]);
+        let file3 = pfile_with_parts("c", 100, vec![ScalarValue::Int32(Some(1))]);
+        let single_partition = FileGroup::new(vec![file1, file2, file3]);
+        let result = single_partition.split_by_partition_values();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 3);
+
+        // Case 3: Multiple partitions, verify sorting
+        let file_p3 = pfile_with_parts("p3", 100, vec![ScalarValue::Int32(Some(3))]);
+        let file_p1 = pfile_with_parts("p1", 100, vec![ScalarValue::Int32(Some(1))]);
+        let file_p2 = pfile_with_parts("p2", 100, vec![ScalarValue::Int32(Some(2))]);
+        let multi_partition = FileGroup::new(vec![file_p3, file_p1, file_p2]);
+        let result = multi_partition.split_by_partition_values();
+        assert_eq!(result.len(), 3);
+        // Verify sorted order
+        assert_eq!(
+            result[0].files()[0].partition_values,
+            vec![ScalarValue::Int32(Some(1))]
+        );
+        assert_eq!(
+            result[1].files()[0].partition_values,
+            vec![ScalarValue::Int32(Some(2))]
+        );
+        assert_eq!(
+            result[2].files()[0].partition_values,
+            vec![ScalarValue::Int32(Some(3))]
+        );
+
+        // Case 4: Multi-column partition keys
+        let file_1a = pfile_with_parts(
+            "1a",
+            100,
+            vec![
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Utf8(Some("a".to_string())),
+            ],
+        );
+        let file_1b = pfile_with_parts(
+            "1b",
+            100,
+            vec![
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Utf8(Some("b".to_string())),
+            ],
+        );
+        let file_2a = pfile_with_parts(
+            "2a",
+            100,
+            vec![
+                ScalarValue::Int32(Some(2)),
+                ScalarValue::Utf8(Some("a".to_string())),
+            ],
+        );
+        let multi_col = FileGroup::new(vec![file_2a, file_1a, file_1b]);
+        let result = multi_col.split_by_partition_values();
+        assert_eq!(result.len(), 3);
+        // Verify lexicographic ordering
+        assert_eq!(
+            result[0].files()[0].partition_values,
+            vec![
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Utf8(Some("a".to_string()))
+            ]
+        );
+        assert_eq!(
+            result[1].files()[0].partition_values,
+            vec![
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Utf8(Some("b".to_string()))
+            ]
+        );
+
+        // Case 5: Mixed partitioned/unpartitioned files - should fallback
+        let partitioned = pfile_with_parts("p", 100, vec![ScalarValue::Int32(Some(1))]);
+        let unpartitioned = pfile("u", 100); // no partition values
+        let mixed = FileGroup::new(vec![partitioned, unpartitioned]);
+        let result = mixed.split_by_partition_values();
+        // Should fallback to single group containing all files
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 2);
+
+        // Case 6: unique_partition_values - all same
+        let file1 = pfile_with_parts("a", 100, vec![ScalarValue::Int32(Some(42))]);
+        let file2 = pfile_with_parts("b", 100, vec![ScalarValue::Int32(Some(42))]);
+        let group = FileGroup::new(vec![file1, file2]);
+        assert_eq!(
+            group.unique_partition_values(),
+            Some(&[ScalarValue::Int32(Some(42))][..])
+        );
+
+        // Case 7: unique_partition_values - different values
+        let file1 = pfile_with_parts("a", 100, vec![ScalarValue::Int32(Some(1))]);
+        let file2 = pfile_with_parts("b", 100, vec![ScalarValue::Int32(Some(2))]);
+        let group = FileGroup::new(vec![file1, file2]);
+        assert_eq!(group.unique_partition_values(), None);
+
+        // Case 8: unique_partition_values - no partition values
+        let file1 = pfile("a", 100);
+        let group = FileGroup::new(vec![file1]);
+        assert_eq!(group.unique_partition_values(), None);
     }
 }

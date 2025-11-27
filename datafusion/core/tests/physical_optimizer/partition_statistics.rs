@@ -77,6 +77,10 @@ mod test {
         target_partition: Option<usize>,
     ) -> Arc<dyn ExecutionPlan> {
         let mut session_config = SessionConfig::new().with_collect_statistics(true);
+        session_config
+            .options_mut()
+            .execution
+            .listing_table_preserve_partition_values = false;
         if let Some(partition) = target_partition {
             session_config = session_config.with_target_partitions(partition);
         }
