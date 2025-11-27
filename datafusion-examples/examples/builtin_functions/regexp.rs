@@ -18,8 +18,7 @@
 
 //! See `main.rs` for how to run it.
 
-use std::fs::File;
-use std::io::Write;
+use std::{fs::File, io::Write};
 
 use datafusion::common::{assert_batches_eq, assert_contains};
 use datafusion::error::Result;

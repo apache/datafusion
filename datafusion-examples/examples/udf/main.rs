@@ -70,7 +70,7 @@ impl AsRef<str> for ExampleKind {
             Self::AsyncUdf => "async_udf",
             Self::Udf => "udf",
             Self::Udaf => "udaf",
-            Self::Udwf => "udwt",
+            Self::Udwf => "udwf",
             Self::Udtf => "udtf",
         }
     }
