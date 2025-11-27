@@ -260,7 +260,7 @@ fn optimize_projections(
                 projection,
                 filters,
                 fetch,
-                fetch_order_sensitive,
+                preserve_order,
                 projected_schema: _,
             } = table_scan;
 
@@ -272,7 +272,7 @@ fn optimize_projections(
             };
             let mut new_scan =
                 TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
-            new_scan.fetch_order_sensitive = fetch_order_sensitive;
+            new_scan.preserve_order = preserve_order;
 
             return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }
