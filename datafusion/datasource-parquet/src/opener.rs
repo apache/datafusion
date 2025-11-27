@@ -1993,25 +1993,33 @@ mod test {
 
     #[test]
     fn test_parquet_source_with_projection_preserves_reverse_scan() {
-        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-        use datafusion_execution::object_store::ObjectStoreUrl;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_physical_plan::projection::{ProjectionExpr, ProjectionExprs};
+        use datafusion_physical_expr::expressions::Column;
+        use std::sync::Arc;
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
         ]));
 
-        let source = Arc::new(ParquetSource::new(schema.clone()).with_reverse_scan(true));
+        let source = ParquetSource::new(schema.clone()).with_reverse_scan(true);
 
-        let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            source.clone(),
-        )
-        .build();
+        // Create a projection that selects columns 0 and 2 (a and c)
+        let projection = ProjectionExprs::from(vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
+        ]);
 
-        let projected = source.with_projection(&config);
+        let projected_result = source
+            .try_pushdown_projection(&projection)
+            .expect("Failed to push down projection");
 
-        let projected_source = projected
+        assert!(projected_result.is_some());
+
+        let projected_arc = projected_result.unwrap();
+        let projected_source = projected_arc
             .as_any()
             .downcast_ref::<ParquetSource>()
             .expect("Failed to downcast to ParquetSource");
