@@ -2683,9 +2683,8 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
-    /// If the fetch is order-sensitive, it'll be true.
-    /// And the limit pruning will be enabled.
-    pub fetch_order_sensitive: bool,
+    /// If should keep the output rows in order
+    pub preserve_order: bool,
 }
 
 impl Debug for TableScan {
@@ -2708,7 +2707,7 @@ impl PartialEq for TableScan {
             && self.projected_schema == other.projected_schema
             && self.filters == other.filters
             && self.fetch == other.fetch
-            && self.fetch_order_sensitive == other.fetch_order_sensitive
+            && self.preserve_order == other.preserve_order
     }
 }
 
@@ -2729,21 +2728,21 @@ impl PartialOrd for TableScan {
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
             /// Whether the fetch is order-sensitive
-            pub fetch_order_sensitive: bool,
+            pub preserve_order: bool,
         }
         let comparable_self = ComparableTableScan {
             table_name: &self.table_name,
             projection: &self.projection,
             filters: &self.filters,
             fetch: &self.fetch,
-            fetch_order_sensitive: self.fetch_order_sensitive,
+            preserve_order: self.preserve_order,
         };
         let comparable_other = ComparableTableScan {
             table_name: &other.table_name,
             projection: &other.projection,
             filters: &other.filters,
             fetch: &other.fetch,
-            fetch_order_sensitive: other.fetch_order_sensitive,
+            preserve_order: other.preserve_order,
         };
         comparable_self
             .partial_cmp(&comparable_other)
@@ -2759,7 +2758,7 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
-        self.fetch_order_sensitive.hash(state);
+        self.preserve_order.hash(state);
     }
 }
 
@@ -2813,7 +2812,7 @@ impl TableScan {
             projected_schema,
             filters,
             fetch,
-            fetch_order_sensitive: false,
+            preserve_order: false,
         })
     }
 }
@@ -4978,7 +4977,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
-            fetch_order_sensitive: false,
+            preserve_order: false,
         }));
         let col = schema.field_names()[0].clone();
 
@@ -5009,7 +5008,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
-            fetch_order_sensitive: false,
+            preserve_order: false,
         }));
         let col = schema.field_names()[0].clone();
 
