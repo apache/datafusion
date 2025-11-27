@@ -35,6 +35,7 @@ use datafusion::{
 };
 use datafusion_catalog::memory::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::JoinType;
 use datafusion_datasource::{
     file_groups::FileGroup, file_scan_config::FileScanConfigBuilder, PartitionedFile,
 };
@@ -55,6 +56,7 @@ use datafusion_physical_plan::{
     coalesce_partitions::CoalescePartitionsExec,
     collect,
     filter::FilterExec,
+    joins::{HashJoinExec, PartitionMode},
     repartition::RepartitionExec,
     sorts::sort::SortExec,
     ExecutionPlan,
@@ -2608,4 +2610,54 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
         "+----+---+----+---+-----+",
     ];
     assert_batches_eq!(&expected, &batches);
+}
+
+#[test]
+fn test_hash_join_dynamic_filter_with_unsupported_scan() {
+    // This test verifies that HashJoin doesn't create dynamic filters when the probe side
+    // returns Unsupported (e.g., a scan that can't use filters at all)
+    let schema = schema();
+
+    // Build side
+    let build_scan = TestScanBuilder::new(schema.clone())
+        .with_support(true)
+        .build();
+
+    // Probe side: scan that doesn't support pushdown
+    let probe_scan = TestScanBuilder::new(schema.clone())
+        .with_support(false) // This will create a test node that doesn't support filter pushdown
+        .build();
+
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            vec![(
+                Arc::new(Column::new_with_schema("a", &schema).unwrap()),
+                Arc::new(Column::new_with_schema("a", &schema).unwrap()),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+        )
+        .unwrap(),
+    );
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    let rule = FilterPushdown::new_post_optimization();
+    let plan = rule.optimize(join, &config).unwrap();
+
+    // Optimized plan should not have a DynamicFilter placeholder in the probe node.
+    insta::assert_snapshot!(
+        format_plan_for_test(&plan),
+        @r"
+    - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+    "
+    );
 }
