@@ -699,6 +699,60 @@ select lcm(2, 9223372036854775803);
 query error DataFusion error: Arrow error: Arithmetic overflow: Overflow happened on: 2107754225 \^ 1221660777
 select power(2107754225, 1221660777);
 
+query R rowsort
+select power(base::double, exponent::double)
+from values
+  (2.0, 2.0),
+  (5.0, 4.0),
+  (2.0, 3.0),
+  (3.0, 4.0) as t(base, exponent);
+----
+4
+625
+8
+81
+
+query I rowsort
+select power(base::bigint, exponent::bigint)
+from values
+  (2, 2),
+  (5, 4),
+  (2, 3),
+  (3, 4),
+  (2, NULL) as t(base, exponent);
+----
+4
+625
+8
+81
+NULL
+
+query RT rowsort
+select
+  power(base::decimal(38, 0), exponent::decimal(38, 0)),
+  arrow_typeof(power(base::decimal(38, 0), exponent::decimal(38, 0)))
+from values
+  (0, 4),
+  (5, 0),
+  (2, 2),
+  (5, 4),
+  (2, 3),
+  (3, 4) as t(base, exponent);
+----
+0 Decimal128(38, 0)
+1 Decimal128(38, 0)
+4 Decimal128(38, 0)
+625 Decimal128(38, 0)
+8 Decimal128(38, 0)
+81 Decimal128(38, 0)
+
+query RT
+select
+  pow(2.5::decimal(2, 1), 4::bigint),
+  arrow_typeof(pow(2.5::decimal(2, 1), 4::bigint));
+----
+39 Decimal128(2, 1)
+
 # factorial overflow
 query error DataFusion error: Arrow error: Compute error: Overflow happened on FACTORIAL\(350943270\)
 select FACTORIAL(350943270);
