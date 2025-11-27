@@ -570,6 +570,32 @@ struct ParquetProjection {
     projection: ProjectionExprs,
 }
 
+/// Try to extract a merged ColumnPath from a get_field(ColumnPathPlaceholder, "field_name") expression.
+fn try_merge_get_field_path(func: &ScalarFunctionExpr) -> Option<ColumnPath> {
+    if func.name() != "get_field" {
+        return None;
+    }
+    let args = func.args();
+    if args.len() != 2 {
+        return None;
+    }
+    let input = &args[0];
+    let field = &args[1];
+
+    let lit = field.as_any().downcast_ref::<Literal>()?;
+    let field_name = match lit.value() {
+        ScalarValue::Utf8(Some(s))
+        | ScalarValue::Utf8View(Some(s))
+        | ScalarValue::LargeUtf8(Some(s)) => s,
+        _ => return None,
+    };
+
+    let path = input.as_any().downcast_ref::<ColumnPathPlaceholder>()?;
+    let mut new_path = path.path.clone();
+    new_path.append(vec![field_name.to_string()]);
+    Some(new_path)
+}
+
 /// Iterate through all of the expressions in this [`ProjectionExprs`] and:
 /// 1. For each column reference or struct field access find the appropriate leaf column in the Parquet schema.
 /// 2. Rewrite the column reference or struct field access to match the index that will be read out of the Parquet stream.
@@ -591,39 +617,10 @@ fn build_projection_mask(
                     })))
                 } else if let Some(func) = e.as_any().downcast_ref::<ScalarFunctionExpr>()
                 {
-                    if func.name() == "get_field" {
-                        let args = func.args();
-                        if args.len() == 2 {
-                            let input = Arc::clone(&args[0]);
-                            let field = Arc::clone(&args[1]);
-                            if let Some(lit) = field.as_any().downcast_ref::<Literal>() {
-                                if let ScalarValue::Utf8(Some(field_name))
-                                | ScalarValue::Utf8View(Some(field_name))
-                                | ScalarValue::LargeUtf8(Some(field_name)) =
-                                    lit.value()
-                                {
-                                    if let Some(path) = input
-                                        .as_any()
-                                        .downcast_ref::<ColumnPathPlaceholder>(
-                                    ) {
-                                        // Merge the paths, replace the entire expression
-                                        let mut new_path = path.path.clone();
-                                        new_path.append(vec![field_name.to_string()]);
-                                        Ok(Transformed::yes(Arc::new(
-                                            ColumnPathPlaceholder { path: new_path },
-                                        )))
-                                    } else {
-                                        Ok(Transformed::no(e))
-                                    }
-                                } else {
-                                    Ok(Transformed::no(e))
-                                }
-                            } else {
-                                Ok(Transformed::no(e))
-                            }
-                        } else {
-                            Ok(Transformed::no(e))
-                        }
+                    if let Some(new_path) = try_merge_get_field_path(func) {
+                        Ok(Transformed::yes(Arc::new(ColumnPathPlaceholder {
+                            path: new_path,
+                        })))
                     } else {
                         Ok(Transformed::no(e))
                     }
