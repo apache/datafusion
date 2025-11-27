@@ -460,7 +460,7 @@ impl DefaultPhysicalPlanner {
                 projection,
                 filters,
                 fetch,
-                fetch_order_sensitive,
+                preserve_order,
                 ..
             }) => {
                 let source = source_as_provider(source)?;
@@ -473,7 +473,7 @@ impl DefaultPhysicalPlanner {
                     .with_projection(projection.as_deref())
                     .with_filters(Some(&filters_vec))
                     .with_limit(*fetch)
-                    .with_limit_order_sensitive(*fetch_order_sensitive);
+                    .with_preserve_order(*preserve_order);
                 let res = source.scan_with_args(session_state, opts).await?;
                 Arc::clone(res.plan())
             }

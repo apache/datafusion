@@ -548,7 +548,7 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
-            limit_order_sensitive: base_config.limit_order_sensitive,
+            preserve_order: base_config.preserve_order,
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
