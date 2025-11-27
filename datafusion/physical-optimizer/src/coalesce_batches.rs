@@ -58,9 +58,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         let target_batch_size = config.execution.batch_size;
         plan.transform_up(|plan| {
             let plan_any = plan.as_any();
-            let wrap_in_coalesce = plan_any.downcast_ref::<HashJoinExec>().is_some()
-                // Don't need to add CoalesceBatchesExec after a round robin RepartitionExec
-                || plan_any
+            let wrap_in_coalesce = plan_any
                     .downcast_ref::<RepartitionExec>()
                     .map(|repart_exec| {
                         !matches!(
