@@ -810,23 +810,16 @@ impl FileSource for ParquetSource {
     ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
         // Note: We ignore the specific `order` parameter here because the decision
         // about whether we can reverse is made at the FileScanConfig level.
-        // This method simply creates a new ParquetSource with reverse_scan=true,
+        // This method creates a reversed version of the current ParquetSource,
         // and the FileScanConfig will reverse both the file list and the declared ordering.
 
-        let new_source = ParquetSource::new(self.table_schema().clone())
-            .with_metadata_size_hint(
-                self.table_parquet_options()
-                    .global
-                    .metadata_size_hint
-                    .unwrap_or(512 * 1024),
-            )
-            .with_reverse_scan(true);
-
-        let new_source = if let Some(predicate) = self.filter() {
-            new_source.with_predicate(predicate)
-        } else {
-            new_source
-        };
+        // Clone the entire source to preserve ALL configuration including:
+        // - projection (CRITICAL: prevents schema mismatch)
+        // - predicate
+        // - batch_size
+        // - table_parquet_options
+        // - all other settings
+        let new_source = self.clone().with_reverse_scan(true);
 
         Ok(Some(Arc::new(new_source)))
     }
