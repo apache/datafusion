@@ -220,12 +220,12 @@ impl FileSource for TestSource {
                 ..self.clone()
             });
             Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::Yes; filters.len()],
+                vec![PushedDown::Exact; filters.len()],
             )
             .with_updated_node(new_node))
         } else {
             Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
+                vec![PushedDown::Unsupported; filters.len()],
             ))
         }
     }
@@ -542,8 +542,8 @@ impl ExecutionPlan for TestNode {
             let first_pushdown_result = self_pushdown_result[0].clone();
 
             match &first_pushdown_result.discriminant {
-                PushedDown::No => {
-                    // We have a filter to push down
+                PushedDown::Unsupported | PushedDown::Inexact => {
+                    // We have a filter that wasn't exactly pushed down, so we need to apply it
                     let new_child = FilterExec::try_new(
                         Arc::clone(&first_pushdown_result.predicate),
                         Arc::clone(&self.input),
@@ -555,7 +555,8 @@ impl ExecutionPlan for TestNode {
                     res.updated_node = Some(Arc::new(new_self) as Arc<dyn ExecutionPlan>);
                     Ok(res)
                 }
-                PushedDown::Yes => {
+                PushedDown::Exact => {
+                    // Filter was exactly pushed down, no need to apply it again
                     let res = FilterPushdownPropagation::if_all(child_pushdown_result);
                     Ok(res)
                 }

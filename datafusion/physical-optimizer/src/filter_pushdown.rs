@@ -495,9 +495,10 @@ fn push_down_filters(
         let mut all_predicates = self_filtered.items().to_vec();
 
         // Apply second filter pass: collect indices of parent filters that can be pushed down
-        let parent_filters_for_child = parent_filtered
-            .chain_filter_slice(&parent_filters, |filter| {
-                matches!(filter.discriminant, PushedDown::Yes)
+        // Push down filters that are either Exact or Inexact (both mean the child will use them)
+        let parent_filters_for_child =
+            parent_filtered.chain_filter_slice(&parent_filters, |filter| {
+                matches!(filter.discriminant, PushedDown::Exact | PushedDown::Inexact)
             });
 
         // Add the filtered parent predicates to all_predicates
@@ -535,7 +536,7 @@ fn push_down_filters(
             .collect_vec();
         // Map the results from filtered self filters back to their original positions using FilteredVec
         let mapped_self_results =
-            self_filtered.map_results_to_original(all_filters, PushedDown::No);
+            self_filtered.map_results_to_original(all_filters, PushedDown::Unsupported);
 
         // Wrap each result with its corresponding expression
         let self_filter_results: Vec<_> = mapped_self_results
@@ -548,7 +549,7 @@ fn push_down_filters(
 
         // Start by marking all parent filters as unsupported for this child
         for parent_filter_pushdown_support in parent_filter_pushdown_supports.iter_mut() {
-            parent_filter_pushdown_support.push(PushedDown::No);
+            parent_filter_pushdown_support.push(PushedDown::Unsupported);
             assert_eq!(
                 parent_filter_pushdown_support.len(),
                 child_idx + 1,
@@ -557,7 +558,7 @@ fn push_down_filters(
         }
         // Map results from pushed-down filters back to original parent filter indices
         let mapped_parent_results = parent_filters_for_child
-            .map_results_to_original(parent_filters, PushedDown::No);
+            .map_results_to_original(parent_filters, PushedDown::Unsupported);
 
         // Update parent_filter_pushdown_supports with the mapped results
         // mapped_parent_results already has the results at their original indices

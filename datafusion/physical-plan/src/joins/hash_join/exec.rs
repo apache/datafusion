@@ -24,7 +24,7 @@ use std::{any::Any, vec};
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    FilterPushdownPropagation, PushedDown,
 };
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, SharedBuildAccumulator,
@@ -915,16 +915,7 @@ impl ExecutionPlan for HashJoinExec {
         // - A dynamic filter exists
         // - At least one consumer is holding a reference to it, this avoids expensive filter
         //   computation when disabled or when no consumer will use it.
-        let enable_dynamic_filter_pushdown = context
-            .session_config()
-            .options()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown
-            && self
-                .dynamic_filter
-                .as_ref()
-                .map(|df| df.filter.is_used())
-                .unwrap_or(false);
+        let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
@@ -1173,34 +1164,38 @@ impl ExecutionPlan for HashJoinExec {
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
                                                                                // We expect 0 or 1 self filters
         if let Some(filter) = right_child_self_filters.first() {
-            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
-            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
-            let predicate = Arc::clone(&filter.predicate);
-            if let Ok(dynamic_filter) =
-                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
-            {
-                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let new_node = Arc::new(HashJoinExec {
-                    left: Arc::clone(&self.left),
-                    right: Arc::clone(&self.right),
-                    on: self.on.clone(),
-                    filter: self.filter.clone(),
-                    join_type: self.join_type,
-                    join_schema: Arc::clone(&self.join_schema),
-                    left_fut: Arc::clone(&self.left_fut),
-                    random_state: self.random_state.clone(),
-                    mode: self.mode,
-                    metrics: ExecutionPlanMetricsSet::new(),
-                    projection: self.projection.clone(),
-                    column_indices: self.column_indices.clone(),
-                    null_equality: self.null_equality,
-                    cache: self.cache.clone(),
-                    dynamic_filter: Some(HashJoinExecDynamicFilter {
-                        filter: dynamic_filter,
-                        build_accumulator: OnceLock::new(),
-                    }),
-                });
-                result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
+            // Only create the dynamic filter if the probe side will actually use it (Exact or Inexact).
+            // If it's Unsupported, don't compute the filter since it won't be used.
+            let will_be_used = !matches!(filter.discriminant, PushedDown::Unsupported);
+
+            if will_be_used {
+                let predicate = Arc::clone(&filter.predicate);
+                if let Ok(dynamic_filter) =
+                    Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
+                {
+                    // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
+                    let new_node = Arc::new(HashJoinExec {
+                        left: Arc::clone(&self.left),
+                        right: Arc::clone(&self.right),
+                        on: self.on.clone(),
+                        filter: self.filter.clone(),
+                        join_type: self.join_type,
+                        join_schema: Arc::clone(&self.join_schema),
+                        left_fut: Arc::clone(&self.left_fut),
+                        random_state: self.random_state.clone(),
+                        mode: self.mode,
+                        metrics: ExecutionPlanMetricsSet::new(),
+                        projection: self.projection.clone(),
+                        column_indices: self.column_indices.clone(),
+                        null_equality: self.null_equality,
+                        cache: self.cache.clone(),
+                        dynamic_filter: Some(HashJoinExecDynamicFilter {
+                            filter: dynamic_filter,
+                            build_accumulator: OnceLock::new(),
+                        }),
+                    });
+                    result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
+                }
             }
         }
         Ok(result)

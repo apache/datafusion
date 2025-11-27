@@ -521,10 +521,11 @@ impl ExecutionPlan for FilterExec {
         if !matches!(phase, FilterPushdownPhase::Pre) {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
-        // We absorb any parent filters that were not handled by our children
+        // We absorb any parent filters that were not handled by our children with exact filtering
         let unsupported_parent_filters =
             child_pushdown_result.parent_filters.iter().filter_map(|f| {
-                matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
+                // Keep filters that weren't handled with exact filtering (Inexact or Unsupported)
+                (!matches!(f.all(), PushedDown::Exact)).then_some(Arc::clone(&f.filter))
             });
         let unsupported_self_filters = child_pushdown_result
             .self_filters
@@ -532,8 +533,8 @@ impl ExecutionPlan for FilterExec {
             .expect("we have exactly one child")
             .iter()
             .filter_map(|f| match f.discriminant {
-                PushedDown::Yes => None,
-                PushedDown::No => Some(&f.predicate),
+                PushedDown::Exact => None,
+                PushedDown::Inexact | PushedDown::Unsupported => Some(&f.predicate),
             })
             .cloned();
 
@@ -592,8 +593,11 @@ impl ExecutionPlan for FilterExec {
             Some(Arc::new(new) as _)
         };
 
+        // FilterExec always applies filters exactly.
+        // Even if the child returned Inexact or Unsupported, we absorb those filters
+        // and apply them, so from the parent's perspective, the filter is handled exactly.
         Ok(FilterPushdownPropagation {
-            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
+            filters: vec![PushedDown::Exact; child_pushdown_result.parent_filters.len()],
             updated_node,
         })
     }

@@ -121,8 +121,9 @@ pub trait FileSource: Send + Sync {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+        // Default implementation: don't support filter pushdown
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            vec![PushedDown::No; filters.len()],
+            vec![PushedDown::Unsupported; filters.len()],
         ))
     }
 

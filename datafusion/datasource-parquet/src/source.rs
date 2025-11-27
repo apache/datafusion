@@ -707,6 +707,9 @@ impl FileSource for ParquetSource {
             .into_iter()
             .map(|filter| {
                 if can_expr_be_pushed_down_with_schemas(&filter, table_schema) {
+                    // When pushdown_filters is true, filters will be used for row-level filtering
+                    // When pushdown_filters is false, filters will be used for stats pruning only
+                    // We'll mark them as supported here and adjust later based on pushdown_filters
                     PushedDownPredicate::supported(filter)
                 } else {
                     PushedDownPredicate::unsupported(filter)
@@ -715,19 +718,19 @@ impl FileSource for ParquetSource {
             .collect();
         if filters
             .iter()
-            .all(|f| matches!(f.discriminant, PushedDown::No))
+            .all(|f| matches!(f.discriminant, PushedDown::Unsupported))
         {
             // No filters can be pushed down, so we can just return the remaining filters
             // and avoid replacing the source in the physical plan.
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
+                vec![PushedDown::Unsupported; filters.len()],
             ));
         }
         let allowed_filters = filters
             .iter()
             .filter_map(|f| match f.discriminant {
-                PushedDown::Yes => Some(Arc::clone(&f.predicate)),
-                PushedDown::No => None,
+                PushedDown::Exact => Some(Arc::clone(&f.predicate)),
+                PushedDown::Inexact | PushedDown::Unsupported => None,
             })
             .collect_vec();
         let predicate = match source.predicate {
@@ -740,13 +743,24 @@ impl FileSource for ParquetSource {
         source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
-        // even if we updated the predicate to include the filters (they will only be used for stats pruning).
+        // even though we updated the predicate to include the filters (they will be used for stats pruning only).
+        // In this case, we return Inexact for filters that can be pushed down (used for stats pruning)
+        // and Unsupported for filters that cannot be pushed down at all.
         if !pushdown_filters {
+            let result_discriminants = filters
+                .iter()
+                .map(|f| match f.discriminant {
+                    PushedDown::Exact => PushedDown::Inexact, // Downgrade to Inexact (stats pruning only)
+                    PushedDown::Unsupported => PushedDown::Unsupported, // Keep as Unsupported
+                    _ => unreachable!("Only Exact or Unsupported expected at this point"),
+                })
+                .collect();
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
+                result_discriminants,
             )
             .with_updated_node(source));
         }
+        // If pushdown_filters is true, we return the original discriminants (Exact for supported filters)
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             filters.iter().map(|f| f.discriminant).collect(),
         )
