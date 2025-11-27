@@ -46,5 +46,5 @@ for dir in */; do
     fi
 
     echo "Running example group: $example_name"
-    cargo run --profile ci --example "$example_name" all
+    cargo run --profile ci --example "$example_name" -- all
 done

@@ -54,7 +54,7 @@ enum ExampleKind {
     CustomFileCasts,
     CustomFileFormat,
     DefaultColumnValues,
-    FileFtreamProvider,
+    FileStreamProvider,
 }
 
 impl AsRef<str> for ExampleKind {
@@ -67,7 +67,7 @@ impl AsRef<str> for ExampleKind {
             Self::CustomFileCasts => "custom_file_casts",
             Self::CustomFileFormat => "custom_file_format",
             Self::DefaultColumnValues => "default_column_values",
-            Self::FileFtreamProvider => "file_stream_provider",
+            Self::FileStreamProvider => "file_stream_provider",
         }
     }
 }
@@ -84,7 +84,7 @@ impl FromStr for ExampleKind {
             "custom_file_casts" => Ok(Self::CustomFileCasts),
             "custom_file_format" => Ok(Self::CustomFileFormat),
             "default_column_values" => Ok(Self::DefaultColumnValues),
-            "file_stream_provider" => Ok(Self::FileFtreamProvider),
+            "file_stream_provider" => Ok(Self::FileStreamProvider),
             _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
         }
     }
@@ -99,7 +99,7 @@ impl ExampleKind {
         Self::CustomFileCasts,
         Self::CustomFileFormat,
         Self::DefaultColumnValues,
-        Self::FileFtreamProvider,
+        Self::FileStreamProvider,
     ];
 
     const RUNNABLE_VARIANTS: [Self; 7] = [
@@ -109,7 +109,7 @@ impl ExampleKind {
         Self::CustomFileCasts,
         Self::CustomFileFormat,
         Self::DefaultColumnValues,
-        Self::FileFtreamProvider,
+        Self::FileStreamProvider,
     ];
 
     const EXAMPLE_NAME: &str = "custom_data_source";
@@ -139,7 +139,7 @@ impl ExampleKind {
             ExampleKind::DefaultColumnValues => {
                 default_column_values::default_column_values().await?
             }
-            ExampleKind::FileFtreamProvider => {
+            ExampleKind::FileStreamProvider => {
                 file_stream_provider::file_stream_provider().await?
             }
             ExampleKind::All => unreachable!("`All` should be handled in main"),
