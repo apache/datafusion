@@ -125,8 +125,7 @@ impl OptimizerRule for PushDownLimit {
                 })),
 
             LogicalPlan::Sort(mut sort) => {
-                let marked_input =
-                    mark_fetch_order_sensitive(Arc::unwrap_or_clone(sort.input))?;
+                let marked_input = mark_preserve_order(Arc::unwrap_or_clone(sort.input))?;
                 sort.input = Arc::new(marked_input);
                 let new_fetch = {
                     let sort_fetch = skip + fetch;
@@ -272,10 +271,10 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     Transformed::yes(join)
 }
 
-fn mark_fetch_order_sensitive(plan: LogicalPlan) -> Result<LogicalPlan> {
+fn mark_preserve_order(plan: LogicalPlan) -> Result<LogicalPlan> {
     plan.transform_down(|node| match node {
         LogicalPlan::TableScan(mut scan) => {
-            scan.fetch_order_sensitive = true;
+            scan.preserve_order = true;
             Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
         }
         _ => Ok(Transformed::no(node)),
@@ -1148,11 +1147,11 @@ mod test {
         )
     }
 
-    fn has_fetch_order_sensitive_scan(plan: &LogicalPlan) -> bool {
+    fn has_preserve_order_scan(plan: &LogicalPlan) -> bool {
         let mut found = false;
         plan.apply(|node| {
             if let LogicalPlan::TableScan(scan) = node {
-                if scan.fetch_order_sensitive {
+                if scan.preserve_order {
                     found = true;
                     return Ok(TreeNodeRecursion::Stop);
                 }
@@ -1178,7 +1177,7 @@ mod test {
         let optimized_plan =
             Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
 
-        assert!(has_fetch_order_sensitive_scan(&optimized_plan));
+        assert!(has_preserve_order_scan(&optimized_plan));
 
         Ok(())
     }
