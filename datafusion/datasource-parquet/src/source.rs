@@ -31,6 +31,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
@@ -51,6 +52,7 @@ use datafusion_physical_plan::filter_pushdown::{
 };
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::projection::ProjectionExprs;
 use datafusion_physical_plan::DisplayFormatType;
 
 #[cfg(feature = "parquet_encryption")]
@@ -241,7 +243,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).
 ///
-/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_parquet_index.rs
+/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/parquet_advanced_index.rs
 ///
 /// # Execution Overview
 ///
@@ -287,6 +289,8 @@ pub struct ParquetSource {
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
+    /// Projection information for column pushdown
+    pub(crate) projection: SplitProjection,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
     /// If true, read files in reverse order and reverse batches.
@@ -301,8 +305,10 @@ impl ParquetSource {
     /// Uses default `TableParquetOptions`.
     /// To set custom options, use [ParquetSource::with_table_parquet_options`].
     pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
-            table_schema: table_schema.into(),
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,
@@ -526,10 +532,8 @@ impl FileSource for ParquetSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        let projection = base_config
-            .file_column_projection_indices()
-            .unwrap_or_else(|| (0..base_config.file_schema().fields().len()).collect());
+    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+        let split_projection = self.projection.clone();
 
         let (expr_adapter_factory, schema_adapter_factory) = match (
             base_config.expr_adapter_factory.as_ref(),
@@ -590,9 +594,9 @@ impl FileSource for ParquetSource {
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
-        Arc::new(ParquetOpener {
+        let mut opener = Arc::new(ParquetOpener {
             partition_index: partition,
-            projection: Arc::from(projection),
+            projection: Arc::from(split_projection.file_indices.clone()),
             batch_size: self
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
@@ -617,7 +621,13 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             reverse_scan: self.reverse_scan,
-        })
+        }) as Arc<dyn FileOpener>;
+        opener = ProjectionOpener::try_new(
+            split_projection.clone(),
+            Arc::clone(&opener),
+            self.table_schema.file_schema(),
+        )?;
+        Ok(opener)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -638,8 +648,20 @@ impl FileSource for ParquetSource {
         Arc::new(conf)
     }
 
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        let new_projection = self.projection.source.try_merge(projection)?;
+        let split_projection =
+            SplitProjection::new(self.table_schema.file_schema(), &new_projection);
+        source.projection = split_projection;
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection.source)
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {

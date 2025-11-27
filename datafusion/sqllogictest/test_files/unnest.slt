@@ -1021,8 +1021,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=1)@0 as UNNEST(t.column1), column2@1 as column2]
 02)--UnnestExec
-03)----ProjectionExec: expr=[column1@0 as __unnest_placeholder(t.column1), column2@1 as column2]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_array.parquet]]}, projection=[column1, column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_array.parquet]]}, projection=[column1@0 as __unnest_placeholder(t.column1), column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
 
 # Explain should have a SortExec at the top because we order by the output of the unnest (i.e. discarding the ordering)
 query TT
@@ -1038,8 +1037,7 @@ physical_plan
 01)SortExec: expr=[unnested@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=1)@0 as unnested, column2@1 as column2]
 03)----UnnestExec
-04)------ProjectionExec: expr=[column1@0 as __unnest_placeholder(t.column1), column2@1 as column2]
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_array.parquet]]}, projection=[column1, column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_array.parquet]]}, projection=[column1@0 as __unnest_placeholder(t.column1), column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
 
 # cleanup
 statement ok
@@ -1084,8 +1082,7 @@ logical_plan
 physical_plan
 01)SortExec: expr=[__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--UnnestExec
-03)----ProjectionExec: expr=[struct(column1@0, column2@1, column3@2) as __unnest_placeholder(struct(t.column1,t.column2,t.column3))]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_tuples.parquet]]}, projection=[column1, column2, column3], output_ordering=[column1@0 ASC NULLS LAST], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_tuples.parquet]]}, projection=[struct(column1@0, column2@1, column3@2) as __unnest_placeholder(struct(t.column1,t.column2,t.column3))], file_type=parquet
 
 # cleanup
 statement ok
@@ -1136,8 +1133,7 @@ logical_plan
 04)------TableScan: t projection=[column1, column2]
 physical_plan
 01)UnnestExec
-02)--ProjectionExec: expr=[column1@0 as __unnest_placeholder(t.column1), column2@1 as column2]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct.parquet]]}, projection=[column1, column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct.parquet]]}, projection=[column1@0 as __unnest_placeholder(t.column1), column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
 
 # cleanup
 statement ok
@@ -1207,8 +1203,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=2)@0 as UNNEST(UNNEST(t.column1)), __unnest_placeholder(t.column2,depth=1)@1 as UNNEST(t.column2), __unnest_placeholder(t.column3).s1@2 as __unnest_placeholder(t.column3).s1, __unnest_placeholder(t.column3).s2@3 as __unnest_placeholder(t.column3).s2, __unnest_placeholder(t.column3).s3@4 as __unnest_placeholder(t.column3).s3, column4@5 as column4]
 02)--UnnestExec
-03)----ProjectionExec: expr=[column1@0 as __unnest_placeholder(t.column1), column2@1 as __unnest_placeholder(t.column2), column3@2 as __unnest_placeholder(t.column3), column4@3 as column4]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct_arrays.parquet]]}, projection=[column1, column2, column3, column4], output_ordering=[column4@3 ASC NULLS LAST], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_struct_arrays.parquet]]}, projection=[column1@0 as __unnest_placeholder(t.column1), column2@1 as __unnest_placeholder(t.column2), column3@2 as __unnest_placeholder(t.column3), column4], output_ordering=[column4@3 ASC NULLS LAST], file_type=parquet
 
 # cleanup
 statement ok

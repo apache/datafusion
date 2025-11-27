@@ -18,14 +18,12 @@
 //! CoalesceBatches optimizer that groups batches together rows
 //! in bigger batches to avoid overhead with small batches
 
-use crate::PhysicalOptimizerRule;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
-use datafusion_common::{
-    assert_eq_or_internal_err, config::ConfigOptions, DataFusionError,
-};
+use datafusion_common::{assert_eq_or_internal_err, DataFusionError};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
     async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
@@ -46,11 +44,12 @@ impl CoalesceBatches {
     }
 }
 impl PhysicalOptimizerRule for CoalesceBatches {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.session_config().options();
         if !config.execution.coalesce_batches {
             return Ok(plan);
         }

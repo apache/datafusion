@@ -152,6 +152,7 @@ async fn run_query_substrait_round_trip(
         | LogicalPlan::Explain(_)
         | LogicalPlan::Dml(_)
         | LogicalPlan::Copy(_)
+        | LogicalPlan::DescribeTable(_)
         | LogicalPlan::Statement(_) => df.logical_plan().clone(),
         // For any other plan, convert to Substrait
         logical_plan => {
