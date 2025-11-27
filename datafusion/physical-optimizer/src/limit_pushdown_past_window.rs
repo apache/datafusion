@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::PhysicalOptimizerRule;
-use datafusion_common::config::ConfigOptions;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{LimitEffect, WindowFrameBound, WindowFrameUnits};
@@ -71,11 +70,12 @@ impl TraverseState {
 }
 
 impl PhysicalOptimizerRule for LimitPushPastWindows {
-    fn optimize(
+    fn optimize_plan(
         &self,
         original: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let config = context.session_config().options();
         if !config.optimizer.enable_window_limits {
             return Ok(original);
         }
