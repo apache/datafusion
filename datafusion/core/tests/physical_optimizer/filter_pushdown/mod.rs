@@ -48,7 +48,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::{
-    filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
+    filter_pushdown::FilterPushdown, OptimizerContext, PhysicalOptimizerRule,
 };
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
@@ -246,8 +246,10 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     config.execution.parquet.pushdown_filters = true;
 
     // Apply the FilterPushdown optimizer rule
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(Arc::clone(&plan), &config)
+        .optimize_plan(Arc::clone(&plan), &optimizer_context)
         .unwrap();
 
     // Test that filters are pushed down correctly to each side of the join
@@ -723,8 +725,10 @@ async fn test_topk_dynamic_filter_pushdown() {
     // Actually apply the optimization to the plan and put some data through it to check that the filter is updated to reflect the TopK state
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize_plan(plan, &optimizer_context)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
@@ -806,8 +810,10 @@ async fn test_topk_dynamic_filter_pushdown_multi_column_sort() {
     // Actually apply the optimization to the plan and put some data through it to check that the filter is updated to reflect the TopK state
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize_plan(plan, &optimizer_context)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
@@ -1050,8 +1056,10 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize_plan(plan, &optimizer_context)
         .unwrap();
 
     // Test for https://github.com/apache/datafusion/pull/17371: dynamic filter linking survives `with_new_children`
@@ -1278,8 +1286,10 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize_plan(plan, &optimizer_context)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(10);
     let session_ctx = SessionContext::new_with_config(config);
@@ -1475,8 +1485,10 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
+        .optimize_plan(plan, &optimizer_context)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(10);
     let session_ctx = SessionContext::new_with_config(config);
@@ -1647,8 +1659,10 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let plan = FilterPushdown::new_post_optimization()
-        .optimize(outer_join, &config)
+        .optimize_plan(outer_join, &optimizer_context)
         .unwrap();
     let config = SessionConfig::new().with_batch_size(10);
     let session_ctx = SessionContext::new_with_config(config);
@@ -2428,7 +2442,8 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
     let optimizer = FilterPushdown::new_post_optimization();
-    let plan = optimizer.optimize(plan, config.options()).unwrap();
+    let ctx = OptimizerContext::new(config.clone());
+    let plan = optimizer.optimize_plan(plan, &ctx).unwrap();
 
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
@@ -2565,7 +2580,8 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
     let optimizer = FilterPushdown::new_post_optimization();
-    let plan = optimizer.optimize(plan, config.options()).unwrap();
+    let ctx = OptimizerContext::new(config.clone());
+    let plan = optimizer.optimize_plan(plan, &ctx).unwrap();
 
     insta::assert_snapshot!(
         format_plan_for_test(&plan),

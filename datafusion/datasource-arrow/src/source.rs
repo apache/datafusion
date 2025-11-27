@@ -34,22 +34,27 @@
 use std::sync::Arc;
 use std::{any::Any, io::Cursor};
 
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+};
 use datafusion_datasource::{as_file_source, TableSchema};
 
 use arrow::buffer::Buffer;
+use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::projection::ProjectionExprs;
 
 use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::file_stream::FileOpener;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 
@@ -66,6 +71,8 @@ enum ArrowFormat {
 pub(crate) struct ArrowStreamFileOpener {
     object_store: Arc<dyn ObjectStore>,
     projection: Option<Vec<usize>>,
+    projected_schema: Option<SchemaRef>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl FileOpener for ArrowStreamFileOpener {
@@ -77,27 +84,52 @@ impl FileOpener for ArrowStreamFileOpener {
         }
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
+        let projected_schema = self.projected_schema.clone();
+        let schema_adapter_factory = self.schema_adapter_factory.clone();
+
         Ok(Box::pin(async move {
             let r = object_store
                 .get(&partitioned_file.object_meta.location)
                 .await?;
-            match r.payload {
+
+            let stream = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(file, _) => Ok(futures::stream::iter(
+                GetResultPayload::File(file, _) => futures::stream::iter(
                     StreamReader::try_new(file.try_clone()?, projection.clone())?,
                 )
                 .map(|r| r.map_err(Into::into))
-                .boxed()),
+                .boxed(),
                 GetResultPayload::Stream(_) => {
                     let bytes = r.bytes().await?;
                     let cursor = Cursor::new(bytes);
-                    Ok(futures::stream::iter(StreamReader::try_new(
+                    futures::stream::iter(StreamReader::try_new(
                         cursor,
                         projection.clone(),
                     )?)
                     .map(|r| r.map_err(Into::into))
-                    .boxed())
+                    .boxed()
                 }
+            };
+
+            // If we have a schema adapter factory and projected schema, use them to normalize the schema
+            if let (Some(factory), Some(proj_schema)) =
+                (schema_adapter_factory, projected_schema)
+            {
+                Ok(stream
+                    .and_then(move |batch| {
+                        let factory = Arc::clone(&factory);
+                        let proj_schema = Arc::clone(&proj_schema);
+                        async move {
+                            let schema_adapter =
+                                factory.create_with_projected_schema(proj_schema);
+                            let (schema_mapper, _) =
+                                schema_adapter.map_schema(batch.schema().as_ref())?;
+                            schema_mapper.map_batch(batch)
+                        }
+                    })
+                    .boxed())
+            } else {
+                Ok(stream)
             }
         }))
     }
@@ -107,12 +139,17 @@ impl FileOpener for ArrowStreamFileOpener {
 pub(crate) struct ArrowFileOpener {
     object_store: Arc<dyn ObjectStore>,
     projection: Option<Vec<usize>>,
+    projected_schema: Option<SchemaRef>,
+    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl FileOpener for ArrowFileOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
+        let projected_schema = self.projected_schema.clone();
+        let schema_adapter_factory = self.schema_adapter_factory.clone();
+
         Ok(Box::pin(async move {
             let range = partitioned_file.range.clone();
             match range {
@@ -120,23 +157,44 @@ impl FileOpener for ArrowFileOpener {
                     let r = object_store
                         .get(&partitioned_file.object_meta.location)
                         .await?;
-                    match r.payload {
+                    let stream = match r.payload {
                         #[cfg(not(target_arch = "wasm32"))]
-                        GetResultPayload::File(file, _) => Ok(futures::stream::iter(
+                        GetResultPayload::File(file, _) => futures::stream::iter(
                             FileReader::try_new(file.try_clone()?, projection.clone())?,
                         )
                         .map(|r| r.map_err(Into::into))
-                        .boxed()),
+                        .boxed(),
                         GetResultPayload::Stream(_) => {
                             let bytes = r.bytes().await?;
                             let cursor = Cursor::new(bytes);
-                            Ok(futures::stream::iter(FileReader::try_new(
+                            futures::stream::iter(FileReader::try_new(
                                 cursor,
                                 projection.clone(),
                             )?)
                             .map(|r| r.map_err(Into::into))
-                            .boxed())
+                            .boxed()
                         }
+                    };
+
+                    // Apply schema adaptation if available
+                    if let (Some(factory), Some(proj_schema)) =
+                        (schema_adapter_factory, projected_schema)
+                    {
+                        Ok(stream
+                            .and_then(move |batch| {
+                                let factory = Arc::clone(&factory);
+                                let proj_schema = Arc::clone(&proj_schema);
+                                async move {
+                                    let schema_adapter =
+                                        factory.create_with_projected_schema(proj_schema);
+                                    let (schema_mapper, _) = schema_adapter
+                                        .map_schema(batch.schema().as_ref())?;
+                                    schema_mapper.map_batch(batch)
+                                }
+                            })
+                            .boxed())
+                    } else {
+                        Ok(stream)
                     }
                 }
                 Some(range) => {
@@ -226,7 +284,7 @@ impl FileOpener for ArrowFileOpener {
                         )
                         .await?;
 
-                    Ok(futures::stream::iter(
+                    let stream = futures::stream::iter(
                         recordbatches
                             .into_iter()
                             .zip(recordbatch_results)
@@ -237,7 +295,29 @@ impl FileOpener for ArrowFileOpener {
                             }),
                     )
                     .map(|r| r.map_err(Into::into))
-                    .boxed())
+                    .boxed();
+
+                    // Apply schema adaptation if available
+                    if let (Some(factory), Some(proj_schema)) =
+                        (schema_adapter_factory, projected_schema)
+                    {
+                        Ok(stream
+                            .and_then(move |batch| {
+                                let factory = Arc::clone(&factory);
+                                let proj_schema = Arc::clone(&proj_schema);
+                                async move {
+                                    let schema_adapter =
+                                        factory.create_with_projected_schema(proj_schema);
+                                    let (schema_mapper, projection) = schema_adapter
+                                        .map_schema(batch.schema().as_ref())?;
+                                    let batch = batch.project(&projection)?;
+                                    schema_mapper.map_batch(batch)
+                                }
+                            })
+                            .boxed())
+                    } else {
+                        Ok(stream)
+                    }
                 }
             }
         }))
@@ -248,29 +328,34 @@ impl FileOpener for ArrowFileOpener {
 #[derive(Clone)]
 pub struct ArrowSource {
     format: ArrowFormat,
-    table_schema: TableSchema,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    projection: SplitProjection,
+    table_schema: TableSchema,
 }
 
 impl ArrowSource {
     /// Creates an [`ArrowSource`] for file format
     pub fn new_file_source(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
             format: ArrowFormat::File,
-            table_schema: table_schema.into(),
             metrics: ExecutionPlanMetricsSet::new(),
             schema_adapter_factory: None,
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
         }
     }
 
     /// Creates an [`ArrowSource`] for stream format
     pub fn new_stream_file_source(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
             format: ArrowFormat::Stream,
-            table_schema: table_schema.into(),
             metrics: ExecutionPlanMetricsSet::new(),
             schema_adapter_factory: None,
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
         }
     }
 }
@@ -279,19 +364,43 @@ impl FileSource for ArrowSource {
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
+        _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        match self.format {
+    ) -> Result<Arc<dyn FileOpener>> {
+        let split_projection = self.projection.clone();
+        // For schema adaptation, we only use the file schema (not partition columns)
+        let projected_file_schema = SchemaRef::from(
+            self.table_schema
+                .file_schema()
+                .project(&split_projection.file_indices)?,
+        );
+
+        // Use provided schema adapter factory, or default to DefaultSchemaAdapterFactory
+        // This ensures schema normalization (removing metadata differences) happens during execution
+        let schema_adapter_factory = self
+            .schema_adapter_factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
+
+        let opener: Arc<dyn FileOpener> = match self.format {
             ArrowFormat::File => Arc::new(ArrowFileOpener {
                 object_store,
-                projection: base_config.file_column_projection_indices(),
+                projection: Some(split_projection.file_indices.clone()),
+                projected_schema: Some(Arc::clone(&projected_file_schema)),
+                schema_adapter_factory: Some(schema_adapter_factory),
             }),
             ArrowFormat::Stream => Arc::new(ArrowStreamFileOpener {
                 object_store,
-                projection: base_config.file_column_projection_indices(),
+                projection: Some(split_projection.file_indices.clone()),
+                projected_schema: Some(projected_file_schema),
+                schema_adapter_factory: Some(schema_adapter_factory),
             }),
-        }
+        };
+        ProjectionOpener::try_new(
+            split_projection,
+            opener,
+            self.table_schema.file_schema(),
+        )
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -299,10 +408,6 @@ impl FileSource for ArrowSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
@@ -381,6 +486,22 @@ impl FileSource for ArrowSource {
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
     }
+
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        source.projection = SplitProjection::new(
+            self.table_schema().file_schema(),
+            &source.projection.source.try_merge(projection)?,
+        );
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection.source)
+    }
 }
 
 /// `FileOpener` wrapper for both Arrow IPC file and stream formats
@@ -408,6 +529,8 @@ impl ArrowOpener {
             inner: Arc::new(ArrowFileOpener {
                 object_store,
                 projection,
+                projected_schema: None,
+                schema_adapter_factory: None,
             }),
         }
     }
@@ -420,6 +543,8 @@ impl ArrowOpener {
             inner: Arc::new(ArrowStreamFileOpener {
                 object_store,
                 projection,
+                projected_schema: None,
+                schema_adapter_factory: None,
             }),
         }
     }
@@ -479,7 +604,7 @@ mod tests {
             )
             .build();
 
-            let file_opener = source.create_file_opener(object_store, &scan_config, 0);
+            let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
             let mut stream = file_opener.open(partitioned_file)?.await?;
 
             assert!(stream.next().await.is_some());
@@ -521,7 +646,7 @@ mod tests {
         )
         .build();
 
-        let file_opener = source.create_file_opener(object_store, &scan_config, 0);
+        let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
         let mut stream = file_opener.open(partitioned_file)?.await?;
 
         assert!(stream.next().await.is_some());
@@ -562,7 +687,7 @@ mod tests {
         )
         .build();
 
-        let file_opener = source.create_file_opener(object_store, &scan_config, 0);
+        let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
         let result = file_opener.open(partitioned_file);
         assert!(result.is_err());
 
@@ -615,6 +740,8 @@ mod tests {
         let opener = ArrowStreamFileOpener {
             object_store,
             projection: Some(vec![0]), // just the first column
+            projected_schema: None,
+            schema_adapter_factory: None,
         };
 
         let mut stream = opener.open(partitioned_file)?.await?;
