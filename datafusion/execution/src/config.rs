@@ -113,6 +113,10 @@ impl Default for SessionConfig {
     }
 }
 
+/// A type map for storing extensions.
+/// 
+/// Extensions are indexed by their type `T`. If multiple values of the same type are provided, only the last one
+/// will be kept.
 #[derive(Clone, Debug)]
 pub struct Extensions {
     inner: AnyMap,
