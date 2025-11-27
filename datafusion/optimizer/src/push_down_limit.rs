@@ -18,6 +18,7 @@
 //! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan
 
 use std::cmp::min;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
@@ -33,12 +34,17 @@ use datafusion_expr::{FetchType, SkipType, lit};
 /// Optimization rule that tries to push down `LIMIT`.
 //. It will push down through projection, limits (taking the smaller limit)
 #[derive(Default, Debug)]
-pub struct PushDownLimit {}
+pub struct PushDownLimit {
+    /// Flag to track whether we're currently under a Sort node that requires order preservation
+    preserve_order: AtomicBool,
+}
 
 impl PushDownLimit {
     #[expect(missing_docs)]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            preserve_order: AtomicBool::new(false),
+        }
     }
 }
 
@@ -54,6 +60,27 @@ impl OptimizerRule for PushDownLimit {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let _ = config.options();
+        if let LogicalPlan::TableScan(mut scan) = plan {
+            if self.preserve_order.load(Ordering::Relaxed) && !scan.preserve_order {
+                scan.preserve_order = true;
+                return Ok(Transformed::yes(LogicalPlan::TableScan(scan)));
+            }
+            return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
+        }
+
+        if matches!(
+            plan,
+            LogicalPlan::Aggregate(_)
+                | LogicalPlan::Join(_)
+                | LogicalPlan::Union(_)
+                | LogicalPlan::Window(_)
+                | LogicalPlan::Distinct(_)
+        ) {
+            // These operations will break the order, so the downstream TableScan does not need to preserve order
+            self.preserve_order.store(false, Ordering::Relaxed);
+            return Ok(Transformed::no(plan));
+        }
+
         let LogicalPlan::Limit(mut limit) = plan else {
             return Ok(Transformed::no(plan));
         };
@@ -125,8 +152,7 @@ impl OptimizerRule for PushDownLimit {
                 })),
 
             LogicalPlan::Sort(mut sort) => {
-                let marked_input = mark_preserve_order(Arc::unwrap_or_clone(sort.input))?;
-                sort.input = Arc::new(marked_input);
+                self.preserve_order.store(true, Ordering::Relaxed);
                 let new_fetch = {
                     let sort_fetch = skip + fetch;
                     Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
@@ -271,17 +297,6 @@ fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     Transformed::yes(join)
 }
 
-fn mark_preserve_order(plan: LogicalPlan) -> Result<LogicalPlan> {
-    plan.transform_down(|node| match node {
-        LogicalPlan::TableScan(mut scan) => {
-            scan.preserve_order = true;
-            Ok(Transformed::yes(LogicalPlan::TableScan(scan)))
-        }
-        _ => Ok(Transformed::no(node)),
-    })
-    .map(|t| t.data)
-}
-
 #[cfg(test)]
 mod test {
     use std::cmp::Ordering;
@@ -293,8 +308,9 @@ mod test {
     use crate::{assert_optimized_plan_eq_snapshot, Optimizer};
 
     use crate::OptimizerContext;
-    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion_common::DFSchemaRef;
+    use datafusion_expr::expr::WindowFunctionParams;
     use datafusion_expr::{
         Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
         logical_plan::builder::LogicalPlanBuilder,
@@ -1163,7 +1179,7 @@ mod test {
     }
 
     #[test]
-    fn limit_push_down_sort_marks_scans_order_sensitive() -> Result<()> {
+    fn limit_push_down_sort_marks_scans_preserev_order() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -1178,6 +1194,330 @@ mod test {
             Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
 
         assert!(has_preserve_order_scan(&optimized_plan));
+
+        Ok(())
+    }
+
+    // Helper function to count how many TableScans have preserve_order = true
+    fn count_preserve_order_scans(plan: &LogicalPlan) -> usize {
+        let mut count = 0;
+        plan.apply(|node| {
+            if let LogicalPlan::TableScan(scan) = node {
+                if scan.preserve_order {
+                    count += 1;
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("plan traversal");
+        count
+    }
+
+    #[test]
+    fn limit_push_down_sort_marks_scans_preserve_order() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(has_preserve_order_scan(&optimized_plan));
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_with_projection_marks_scans() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            has_preserve_order_scan(&optimized_plan),
+            "Projection preserves order, scan should be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_with_filter_marks_scans() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").gt(lit(5)))?
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            has_preserve_order_scan(&optimized_plan),
+            "Filter preserves order, scan should be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_with_aggregate_does_not_mark_scans() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![max(col("b"))])?
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            !has_preserve_order_scan(&optimized_plan),
+            "Aggregate breaks order, scan should NOT be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_with_join_does_not_mark_scans() -> Result<()> {
+        let table_scan_1 = test_table_scan()?;
+        let table_scan_2 = test_table_scan_with_name("test2")?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1)
+            .join(
+                LogicalPlanBuilder::from(table_scan_2).build()?,
+                JoinType::Inner,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_by(vec![col("test.a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert_eq!(
+            count_preserve_order_scans(&optimized_plan),
+            0,
+            "Join breaks order, scans should NOT be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_with_union_does_not_mark_scans() -> Result<()> {
+        let table_scan_1 = test_table_scan()?;
+        let table_scan_2 = test_table_scan_with_name("test2")?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1)
+            .union(LogicalPlanBuilder::from(table_scan_2).build()?)?
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert_eq!(
+            count_preserve_order_scans(&optimized_plan),
+            0,
+            "Union breaks order, scans should NOT be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_with_window_does_not_mark_scans() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window_expr =
+            Expr::WindowFunction(Box::new(datafusion_expr::expr::WindowFunction {
+                fun: datafusion_expr::WindowFunctionDefinition::AggregateUDF(
+                    datafusion_functions_aggregate::sum::sum_udaf(),
+                ),
+                params: WindowFunctionParams {
+                    args: vec![col("b")],
+                    partition_by: vec![col("a")],
+                    order_by: vec![],
+                    window_frame: datafusion_expr::WindowFrame::new(None),
+                    null_treatment: None,
+                    filter: None,
+                    distinct: false,
+                },
+            }));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window_expr.alias("sum_b")])?
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            !has_preserve_order_scan(&optimized_plan),
+            "Window function breaks order, scan should NOT be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_with_distinct_does_not_mark_scans() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .distinct()?
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            !has_preserve_order_scan(&optimized_plan),
+            "Distinct breaks order, scan should NOT be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_through_multiple_order_preserving_ops() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .filter(col("a").gt(lit(5)))?
+            .limit(0, Some(100))?
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            has_preserve_order_scan(&optimized_plan),
+            "Multiple order-preserving ops, scan should be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_without_sort_does_not_mark_scans() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            !has_preserve_order_scan(&optimized_plan),
+            "Limit without Sort should NOT mark scan"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_with_subquery_alias_marks_scans() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .alias("subquery")?
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            has_preserve_order_scan(&optimized_plan),
+            "SubqueryAlias preserves order, scan should be marked"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn limit_push_down_sort_complex_aggregate_case() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![max(col("b")).alias("max_b")])?
+            .sort_by(vec![col("max_b")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+            vec![Arc::new(PushDownLimit::new())];
+        let optimized_plan =
+            Optimizer::with_rules(rules).optimize(plan, &optimizer_ctx, |_, _| {})?;
+
+        assert!(
+            !has_preserve_order_scan(&optimized_plan),
+            "Sort on aggregate result should NOT mark input scan"
+        );
 
         Ok(())
     }
