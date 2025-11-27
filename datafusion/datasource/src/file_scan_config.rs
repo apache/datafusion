@@ -29,7 +29,10 @@ use crate::{
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_datafusion_err, exec_err, internal_datafusion_err, internal_err, ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue, Statistics};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, internal_datafusion_err, internal_err,
+    ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue, Statistics,
+};
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };

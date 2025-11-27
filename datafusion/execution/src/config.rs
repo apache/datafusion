@@ -114,10 +114,10 @@ impl Default for SessionConfig {
 }
 
 /// A type map for storing extensions.
-/// 
+///
 /// Extensions are indexed by their type `T`. If multiple values of the same type are provided, only the last one
 /// will be kept.
-/// 
+///
 /// Extensions are opaque objects that are unknown to DataFusion itself but can be downcast by optimizer rules,
 /// execution plans, or other components that have access to the session config.
 /// They provide a flexible way to attach extra data or behavior to the session config.

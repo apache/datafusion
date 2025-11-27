@@ -1994,8 +1994,8 @@ mod test {
     #[test]
     fn test_parquet_source_with_projection_preserves_reverse_scan() {
         use arrow::datatypes::{DataType, Field, Schema};
-        use datafusion_physical_plan::projection::{ProjectionExpr, ProjectionExprs};
         use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_plan::projection::{ProjectionExpr, ProjectionExprs};
         use std::sync::Arc;
 
         let schema = Arc::new(Schema::new(vec![
