@@ -2661,11 +2661,10 @@ fn test_hash_join_dynamic_filter_with_unsupported_scan() {
         .unwrap(),
     );
 
-    let mut config = ConfigOptions::default();
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-
+    let config = SessionConfig::new();
     let rule = FilterPushdown::new_post_optimization();
-    let plan = rule.optimize(join, &config).unwrap();
+    let ctx = OptimizerContext::new(config.clone());
+    let plan = rule.optimize_plan(join, &ctx).unwrap();
 
     // Optimized plan should not have a DynamicFilter placeholder in the probe node.
     insta::assert_snapshot!(
