@@ -99,6 +99,7 @@ fn create_args_with_count<O: OffsetSizeTrait>(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn invoke_substr_with_args(
     args: Vec<ColumnarValue>,
     number_rows: usize,

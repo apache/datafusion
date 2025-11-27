@@ -419,7 +419,7 @@ impl HashJoinExec {
         let cache = Self::compute_properties(
             &left,
             &right,
-            Arc::clone(&join_schema),
+            &join_schema,
             *join_type,
             &on,
             partition_mode,
@@ -550,7 +550,7 @@ impl HashJoinExec {
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         join_type: JoinType,
         on: JoinOnRef,
         mode: PartitionMode,
@@ -561,7 +561,7 @@ impl HashJoinExec {
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            Arc::clone(&schema),
+            Arc::clone(schema),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
@@ -605,9 +605,8 @@ impl HashJoinExec {
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
-            let projection_mapping =
-                ProjectionMapping::from_indices(projection, &schema)?;
-            let out_schema = project_schema(&schema, Some(projection))?;
+            let projection_mapping = ProjectionMapping::from_indices(projection, schema)?;
+            let out_schema = project_schema(schema, Some(projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
@@ -852,7 +851,7 @@ impl ExecutionPlan for HashJoinExec {
             cache: Self::compute_properties(
                 &children[0],
                 &children[1],
-                Arc::clone(&self.join_schema),
+                &self.join_schema,
                 self.join_type,
                 &self.on,
                 self.mode,
@@ -1045,7 +1044,7 @@ impl ExecutionPlan for HashJoinExec {
         let stats = estimate_join_statistics(
             self.left.partition_statistics(None)?,
             self.right.partition_statistics(None)?,
-            self.on.clone(),
+            &self.on,
             &self.join_type,
             &self.join_schema,
         )?;
@@ -1065,6 +1064,7 @@ impl ExecutionPlan for HashJoinExec {
             return Ok(None);
         }
 
+        let schema = self.schema();
         if let Some(JoinData {
             projected_left_child,
             projected_right_child,
@@ -1075,7 +1075,7 @@ impl ExecutionPlan for HashJoinExec {
             self.left(),
             self.right(),
             self.on(),
-            self.schema(),
+            &schema,
             self.filter(),
         )? {
             Ok(Some(Arc::new(HashJoinExec::try_new(
@@ -1299,10 +1299,8 @@ impl BuildSideState {
             bounds_accumulators: should_compute_dynamic_filters
                 .then(|| {
                     on_left
-                        .iter()
-                        .map(|expr| {
-                            CollectLeftAccumulator::try_new(Arc::clone(expr), schema)
-                        })
+                        .into_iter()
+                        .map(|expr| CollectLeftAccumulator::try_new(expr, schema))
                         .collect::<Result<Vec<_>>>()
                 })
                 .transpose()?,

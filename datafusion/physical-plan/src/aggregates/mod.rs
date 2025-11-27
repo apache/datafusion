@@ -626,7 +626,7 @@ impl AggregateExec {
     fn execute_typed(
         &self,
         partition: usize,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
         // no group by at all
         if self.group_by.expr.is_empty() {
@@ -761,7 +761,7 @@ impl AggregateExec {
         &self.input_order_mode
     }
 
-    fn statistics_inner(&self, child_statistics: Statistics) -> Result<Statistics> {
+    fn statistics_inner(&self, child_statistics: &Statistics) -> Result<Statistics> {
         // TODO stats: group expressions:
         // - once expressions will be able to compute their own stats, use it here
         // - case where we group by on a column for which with have the `distinct` stat
@@ -792,10 +792,13 @@ impl AggregateExec {
             AggregateMode::Final | AggregateMode::FinalPartitioned
                 if self.group_by.expr.is_empty() =>
             {
+                let total_byte_size =
+                    Self::calculate_scaled_byte_size(child_statistics, 1);
+
                 Ok(Statistics {
                     num_rows: Precision::Exact(1),
                     column_statistics,
-                    total_byte_size: Precision::Absent,
+                    total_byte_size,
                 })
             }
             _ => {
@@ -815,12 +818,46 @@ impl AggregateExec {
                 } else {
                     Precision::Absent
                 };
+
+                let total_byte_size = num_rows
+                    .get_value()
+                    .and_then(|&output_rows| {
+                        Self::calculate_scaled_byte_size(child_statistics, output_rows)
+                            .get_value()
+                            .map(|&bytes| Precision::Inexact(bytes))
+                    })
+                    .unwrap_or(Precision::Absent);
+
                 Ok(Statistics {
                     num_rows,
                     column_statistics,
-                    total_byte_size: Precision::Absent,
+                    total_byte_size,
                 })
             }
+        }
+    }
+
+    /// Calculate scaled byte size based on row count ratio.
+    /// Returns `Precision::Absent` if input statistics are insufficient.
+    /// Returns `Precision::Inexact` with the scaled value otherwise.
+    ///
+    /// This is a simple heuristic that assumes uniform row sizes.
+    #[inline]
+    fn calculate_scaled_byte_size(
+        input_stats: &Statistics,
+        target_row_count: usize,
+    ) -> Precision<usize> {
+        match (
+            input_stats.num_rows.get_value(),
+            input_stats.total_byte_size.get_value(),
+        ) {
+            (Some(&input_rows), Some(&input_bytes)) if input_rows > 0 => {
+                let bytes_per_row = input_bytes as f64 / input_rows as f64;
+                let scaled_bytes =
+                    (bytes_per_row * target_row_count as f64).ceil() as usize;
+                Precision::Inexact(scaled_bytes)
+            }
+            _ => Precision::Absent,
         }
     }
 }
@@ -1020,7 +1057,7 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, context)
+        self.execute_typed(partition, &context)
             .map(|stream| stream.into())
     }
 
@@ -1033,7 +1070,8 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.statistics_inner(self.input().partition_statistics(partition)?)
+        let child_statistics = self.input().partition_statistics(partition)?;
+        self.statistics_inner(&child_statistics)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -1920,6 +1958,10 @@ mod tests {
             input_schema,
         )?);
 
+        // Verify statistics are preserved proportionally through aggregation
+        let final_stats = merged_aggregate.partition_statistics(None)?;
+        assert!(final_stats.total_byte_size.get_value().is_some());
+
         let task_ctx = if spill {
             // enlarge memory limit to let the final aggregation finish
             new_spill_ctx(2, 2600)
@@ -2220,7 +2262,7 @@ mod tests {
                 Arc::clone(&input_schema),
             )?);
 
-            let stream = partial_aggregate.execute_typed(0, Arc::clone(&task_ctx))?;
+            let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
 
             // ensure that we really got the version we wanted
             match version {
@@ -3143,6 +3185,79 @@ mod tests {
         run_test_with_spill_pool_if_necessary(2_000, true).await?;
         // test without spill
         run_test_with_spill_pool_if_necessary(20_000, false).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_statistics_edge_cases() -> Result<()> {
+        use crate::test::exec::StatisticsExec;
+        use datafusion_common::ColumnStatistics;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        // Test 1: Absent statistics remain absent
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Exact(100),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![
+                    ColumnStatistics::new_unknown(),
+                    ColumnStatistics::new_unknown(),
+                ],
+            },
+            (*schema).clone(),
+        )) as Arc<dyn ExecutionPlan>;
+
+        let agg = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("COUNT(a)")
+                    .build()?,
+            )],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+
+        let stats = agg.partition_statistics(None)?;
+        assert_eq!(stats.total_byte_size, Precision::Absent);
+
+        // Test 2: Zero rows returns Absent (can't estimate output size from zero input)
+        let input_zero = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Exact(0),
+                total_byte_size: Precision::Exact(0),
+                column_statistics: vec![
+                    ColumnStatistics::new_unknown(),
+                    ColumnStatistics::new_unknown(),
+                ],
+            },
+            (*schema).clone(),
+        )) as Arc<dyn ExecutionPlan>;
+
+        let agg_zero = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("COUNT(a)")
+                    .build()?,
+            )],
+            vec![None],
+            input_zero,
+            Arc::clone(&schema),
+        )?);
+
+        let stats_zero = agg_zero.partition_statistics(None)?;
+        assert_eq!(stats_zero.total_byte_size, Precision::Absent);
+
         Ok(())
     }
 }

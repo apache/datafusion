@@ -569,6 +569,7 @@ impl TimeSum {
         Self { sum: 0, test_state }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>, name: &str) {
         let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
         let input_type = vec![timestamp_type.clone()];

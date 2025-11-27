@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::MemTable;
 use datafusion::common::config::CsvOptions;
 use datafusion::common::parsers::CompressionTypeVariant;
-use datafusion::common::DataFusionError;
 use datafusion::common::ScalarValue;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
@@ -39,6 +40,7 @@ use tempfile::tempdir;
 /// * [read_parquet]: execute queries against parquet files
 /// * [read_csv]: execute queries against csv files
 /// * [read_memory]: execute queries against in-memory arrow data
+/// * [read_memory_macro]: execute queries against in-memory arrow data using macro
 ///
 /// # Writing out to local storage
 ///
@@ -53,12 +55,7 @@ use tempfile::tempdir;
 /// * [where_scalar_subquery]: execute a scalar subquery
 /// * [where_in_subquery]: execute a subquery with an IN clause
 /// * [where_exist_subquery]: execute a subquery with an EXISTS clause
-///
-/// # Querying data
-///
-/// * [query_to_date]: execute queries against parquet files
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn dataframe_example() -> Result<()> {
     env_logger::init();
     // The SessionContext is the main high level API for interacting with DataFusion
     let ctx = SessionContext::new();
@@ -199,7 +196,7 @@ async fn read_memory_macro() -> Result<()> {
 /// 2. Write out a DataFrame to a parquet file
 /// 3. Write out a DataFrame to a csv file
 /// 4. Write out a DataFrame to a json file
-async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionError> {
+async fn write_out(ctx: &SessionContext) -> Result<()> {
     let array = StringViewArray::from(vec!["a", "b", "c"]);
     let schema = Arc::new(Schema::new(vec![Field::new(
         "tablecol1",

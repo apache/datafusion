@@ -85,7 +85,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// `ExecutionPlan` with memory tracking and spilling support.
 ///
 /// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
-/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
+/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
@@ -1118,6 +1118,7 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
 ///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+#[expect(clippy::needless_pass_by_value)]
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
     plan.properties().evaluation_type == EvaluationType::Eager
 }
@@ -1172,6 +1173,10 @@ pub async fn collect(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1236,6 +1241,10 @@ pub async fn collect_partitioned(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1267,6 +1276,10 @@ pub fn execute_stream_partitioned(
 /// violate the `not null` constraints specified in the `sink_schema`. If there are
 /// such columns, it wraps the resulting stream to enforce the `not null` constraints
 /// by invoking the [`check_not_null_constraints`] function on each batch of the stream.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_input_stream(
     input: Arc<dyn ExecutionPlan>,
     sink_schema: SchemaRef,

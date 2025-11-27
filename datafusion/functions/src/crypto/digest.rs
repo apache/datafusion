@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! "crypto" DataFusion functions
-use super::basic::{digest, utf8_or_binary_to_binary_type};
+use crate::crypto::basic::{digest_process, DigestAlgorithm};
+
 use arrow::datatypes::DataType;
 use datafusion_common::{
+    exec_err, not_impl_err,
     types::{logical_binary, logical_string},
+    utils::take_function_args,
     Result,
 };
 use datafusion_expr::{
@@ -36,16 +38,16 @@ use std::any::Any;
     syntax_example = "digest(expression, algorithm)",
     sql_example = r#"```sql
 > select digest('foo', 'sha256');
-+------------------------------------------+
-| digest(Utf8("foo"), Utf8("sha256"))      |
-+------------------------------------------+
-| <binary_hash_result>                     |
-+------------------------------------------+
++------------------------------------------------------------------+
+| digest(Utf8("foo"),Utf8("sha256"))                               |
++------------------------------------------------------------------+
+| 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae |
++------------------------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "String"),
     argument(
         name = "algorithm",
-        description = "String expression specifying algorithm to use. Must be one of:       
+        description = "String expression specifying algorithm to use. Must be one of:
     - md5
     - sha224
     - sha256
@@ -60,6 +62,7 @@ use std::any::Any;
 pub struct DigestFunc {
     signature: Signature,
 }
+
 impl Default for DigestFunc {
     fn default() -> Self {
         Self::new()
@@ -85,6 +88,7 @@ impl DigestFunc {
         }
     }
 }
+
 impl ScalarUDFImpl for DigestFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -98,14 +102,35 @@ impl ScalarUDFImpl for DigestFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_or_binary_to_binary_type(&arg_types[0], self.name())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Binary)
     }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        digest(&args.args)
+        let [data, digest_algorithm] = take_function_args(self.name(), &args.args)?;
+        digest(data, digest_algorithm)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// Compute binary hash of the given `data` (String or Binary array), according
+/// to the specified `digest_algorithm`. See [`DigestAlgorithm`] for supported
+/// algorithms.
+fn digest(
+    data: &ColumnarValue,
+    digest_algorithm: &ColumnarValue,
+) -> Result<ColumnarValue> {
+    let digest_algorithm = match digest_algorithm {
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(Some(method)) => method.parse::<DigestAlgorithm>(),
+            _ => exec_err!("Unsupported data type {scalar:?} for function digest"),
+        },
+        ColumnarValue::Array(_) => {
+            not_impl_err!("Digest using dynamically decided method is not yet supported")
+        }
+    }?;
+    digest_process(data, digest_algorithm)
 }
