@@ -456,14 +456,14 @@ impl TypeSignatureClass {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ArrayFunctionSignature {
-    /// A function takes at least one List/LargeList/FixedSizeList argument.
+    /// A function takes at least one List/LargeList/FixedSizeList/ListView/LargeListView argument.
     Array {
         /// A full list of the arguments accepted by this function.
         arguments: Vec<ArrayFunctionArgument>,
         /// Additional information about how array arguments should be coerced.
         array_coercion: Option<ListCoercion>,
     },
-    /// A function takes a single argument that must be a List/LargeList/FixedSizeList
+    /// A function takes a single argument that must be a List/LargeList/FixedSizeList/ListView/LargeListView
     /// which gets coerced to List, with element type recursively coerced to List too if it is list-like.
     RecursiveArray,
     /// Specialized Signature for MapArray
@@ -500,8 +500,8 @@ pub enum ArrayFunctionArgument {
     Element,
     /// An Int64 index argument.
     Index,
-    /// An argument of type List/LargeList/FixedSizeList. All Array arguments must be coercible
-    /// to the same type.
+    /// An argument of type List/LargeList/FixedSizeList/ListView/LargeListView.
+    /// All Array arguments must be coercible to the same type.
     Array,
     // A Utf8 argument.
     String,
