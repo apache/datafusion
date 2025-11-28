@@ -253,14 +253,14 @@ impl AggregateStream {
     /// Create a new AggregateStream
     pub fn new(
         agg: &AggregateExec,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
         let agg_filter_expr = agg.filter_expr.clone();
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
-        let input = agg.input.execute(partition, Arc::clone(&context))?;
+        let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
@@ -320,7 +320,7 @@ impl AggregateStream {
                             let _timer = elapsed_compute.timer(); // Stops on drop
                             aggregate_batch(
                                 &this.mode,
-                                batch,
+                                &batch,
                                 &mut this.accumulators,
                                 &this.aggregate_expressions,
                                 &this.filter_expressions,
@@ -404,7 +404,7 @@ impl RecordBatchStream for AggregateStream {
 /// TODO: Make this a member function
 fn aggregate_batch(
     mode: &AggregateMode,
-    batch: RecordBatch,
+    batch: &RecordBatch,
     accumulators: &mut [AccumulatorItem],
     expressions: &[Vec<Arc<dyn PhysicalExpr>>],
     filters: &[Option<Arc<dyn PhysicalExpr>>],
@@ -424,8 +424,8 @@ fn aggregate_batch(
         .try_for_each(|((accum, expr), filter)| {
             // 1.2
             let batch = match filter {
-                Some(filter) => Cow::Owned(batch_filter(&batch, filter)?),
-                None => Cow::Borrowed(&batch),
+                Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
+                None => Cow::Borrowed(batch),
             };
 
             // 1.3

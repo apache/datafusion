@@ -366,3 +366,52 @@ RESET datafusion.execution.batches_size
 # reset invalid variable - extra suffix on valid field
 statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar usize and does not have nested field "bar"
 RESET datafusion.execution.batch_size.bar
+
+############
+## Test runtime configuration variables
+############
+
+# Test SHOW runtime.memory_limit (default value)
+query TT
+SHOW datafusion.runtime.memory_limit
+----
+datafusion.runtime.memory_limit unlimited
+
+# Test SET and SHOW runtime.memory_limit
+statement ok
+SET datafusion.runtime.memory_limit = '100M'
+
+query TT
+SHOW datafusion.runtime.memory_limit
+----
+datafusion.runtime.memory_limit 100M
+
+# Test SET and SHOW runtime.max_temp_directory_size
+statement ok
+SET datafusion.runtime.max_temp_directory_size = '10G'
+
+query TT
+SHOW datafusion.runtime.max_temp_directory_size
+----
+datafusion.runtime.max_temp_directory_size 10G
+
+# Test SET and SHOW runtime.metadata_cache_limit
+statement ok
+SET datafusion.runtime.metadata_cache_limit = '200M'
+
+query TT
+SHOW datafusion.runtime.metadata_cache_limit
+----
+datafusion.runtime.metadata_cache_limit 200M
+
+# Note: runtime.temp_directory shows the actual temp directory path with a unique suffix,
+# so we cannot test the exact value. We verify it exists in information_schema instead.
+
+# Test that all runtime variables appear in information_schema.df_settings
+query T
+SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.runtime.%' ORDER BY name
+----
+datafusion.runtime.max_temp_directory_size
+datafusion.runtime.memory_limit
+datafusion.runtime.metadata_cache_limit
+datafusion.runtime.temp_directory

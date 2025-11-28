@@ -48,7 +48,6 @@ parquet_encryption = [
     "parquet/encryption",
     "dep:hex",
 ]
-pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
 parquet = ["dep:parquet"]
@@ -73,8 +72,7 @@ libc = "0.2.177"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
-paste = "1.0.15"
-pyo3 = { version = "0.26", optional = true }
+paste = { workspace = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true, optional = true }
 tokio = { workspace = true }

@@ -17,6 +17,8 @@
 
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
+use datafusion::functions_nested::map::map;
+use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
@@ -26,6 +28,7 @@ use std::cmp::Ordering;
 use std::mem::size_of_val;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+use datafusion::common::tree_node::Transformed;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
@@ -314,6 +317,26 @@ async fn aggregate_grouping_rollup() -> Result<()> {
         Projection: data.a, data.c, data.e, avg(data.b)
           Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]
             TableScan: data projection=[a, b, c, e]
+        "#
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_grouping_cube() -> Result<()> {
+    let plan = generate_plan_from_sql(
+        "SELECT a, c, avg(b) FROM data GROUP BY CUBE (a, c)",
+        true,
+        true,
+    )
+    .await?;
+
+    assert_snapshot!(
+    plan,
+    @r#"
+        Projection: data.a, data.c, avg(data.b)
+          Aggregate: groupBy=[[GROUPING SETS ((), (data.a), (data.c), (data.a, data.c))]], aggr=[[avg(data.b)]]
+            TableScan: data projection=[a, b, c]
         "#
     );
     Ok(())
@@ -1267,6 +1290,34 @@ async fn roundtrip_values_no_columns() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_values_with_scalar_function() -> Result<()> {
+    let ctx = create_context().await?;
+    //  datafusion::functions_nested::map::map;
+    let expr = map(vec![lit("a")], vec![lit(1)]);
+    let plan = LogicalPlanBuilder::values(vec![vec![expr]])?.build()?;
+    let expected = ctx.state().optimize(&plan)?;
+
+    let actual = substrait_roundtrip(&plan, &ctx).await?;
+
+    let strip_aliases_from_values = |plan: &LogicalPlan| -> LogicalPlan {
+        plan.clone()
+            .map_expressions(|expr| Ok(Transformed::yes(expr.unalias())))
+            .map(|t| t.data)
+            .unwrap_or_else(|_| plan.clone())
+    };
+
+    let normalized_expected = strip_aliases_from_values(&expected);
+    let normalized_actual = strip_aliases_from_values(&actual);
+
+    assert_eq!(
+        format!("{normalized_expected}"),
+        format!("{normalized_actual}")
+    );
+    assert_eq!(normalized_expected.schema(), normalized_actual.schema());
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_values_empty_relation() -> Result<()> {
     roundtrip("SELECT * FROM (VALUES ('a')) LIMIT 0").await
 }
@@ -1449,9 +1500,7 @@ async fn roundtrip_repartition_roundrobin() -> Result<()> {
         partitioning_scheme: Partitioning::RoundRobinBatch(8),
     });
 
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     assert_eq!(format!("{plan}"), format!("{plan2}"));
     Ok(())
@@ -1466,9 +1515,7 @@ async fn roundtrip_repartition_hash() -> Result<()> {
         partitioning_scheme: Partitioning::Hash(vec![col("data.a")], 8),
     });
 
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     assert_eq!(format!("{plan}"), format!("{plan2}"));
     Ok(())
@@ -1650,9 +1697,7 @@ async fn assert_expected_plan(
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     if assert_schema {
         assert_eq!(plan.schema(), plan2.schema());
@@ -1694,9 +1739,7 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     // Format plan string and replace all None's with 0
     let plan1str = format!("{plan}").replace("None", "0");
@@ -1706,6 +1749,18 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
 
     assert_eq!(plan.schema(), plan2.schema());
     Ok(())
+}
+
+/// Converts a logical plan to Substrait and back, applying optimization.
+/// Returns the roundtripped and optimized logical plan.
+async fn substrait_roundtrip(
+    plan: &LogicalPlan,
+    ctx: &SessionContext,
+) -> Result<LogicalPlan> {
+    let proto = to_substrait_plan(plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+    Ok(plan2)
 }
 
 async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
@@ -1735,8 +1790,7 @@ async fn roundtrip_logical_plan_with_ctx(
     ctx: SessionContext,
 ) -> Result<Box<Plan>> {
     let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
-    let plan2 = ctx.state().optimize(&plan2)?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     let plan1str = format!("{plan}");
     let plan2str = format!("{plan2}");

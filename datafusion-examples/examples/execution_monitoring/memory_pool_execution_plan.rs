@@ -142,6 +142,7 @@ impl ExternalBatchBufferer {
         }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     fn add_batch(&mut self, batch_data: Vec<u8>) -> Result<()> {
         let additional_memory = batch_data.len();
 
