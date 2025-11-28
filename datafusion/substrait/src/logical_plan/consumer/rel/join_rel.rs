@@ -22,6 +22,7 @@ use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
 };
+use datafusion::scalar::ScalarValue;
 
 use substrait::proto::{join_rel, JoinRel};
 
@@ -75,15 +76,22 @@ pub async fn from_join_rel(
             .build()
         }
         None => {
-            let on: Vec<String> = vec![];
-            left.join_detailed(
-                right.build()?,
-                join_type,
-                (on.clone(), on),
-                None,
-                NullEquality::NullEqualsNothing,
-            )?
-            .build()
+            // For joins without conditions, use cross_join if inner, otherwise use a filter with Boolean(true)
+            if join_type == JoinType::Inner {
+                left.cross_join(right.build()?)?.build()
+            } else {
+                // For outer joins without equi-join conditions, use a Boolean(true) filter
+                // This is semantically equivalent to having no condition (all rows match)
+                let on: Vec<String> = vec![];
+                left.join_detailed(
+                    right.build()?,
+                    join_type,
+                    (on.clone(), on),
+                    Some(Expr::Literal(ScalarValue::Boolean(Some(true)), None)),
+                    NullEquality::NullEqualsNothing,
+                )?
+                .build()
+            }
         }
     }
 }
