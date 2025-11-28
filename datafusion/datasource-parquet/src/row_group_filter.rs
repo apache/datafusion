@@ -202,7 +202,7 @@ impl RowGroupAccessPlanFilter {
 
                 // Check if any of the matched row groups are fully contained by the predicate
                 self.identify_fully_matched_row_groups(
-                    fully_contained_candidates_original_idx,
+                    &fully_contained_candidates_original_idx,
                     arrow_schema,
                     parquet_schema,
                     groups,
@@ -228,7 +228,7 @@ impl RowGroupAccessPlanFilter {
     /// Note: This optimization is relatively inexpensive for a limited number of row groups.
     fn identify_fully_matched_row_groups(
         &mut self,
-        candidate_row_group_indices: Vec<usize>,
+        candidate_row_group_indices: &[usize],
         arrow_schema: &Schema,
         parquet_schema: &SchemaDescriptor,
         groups: &[RowGroupMetaData],
