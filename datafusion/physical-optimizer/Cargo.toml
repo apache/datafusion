@@ -52,7 +52,6 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-pruning = { workspace = true }
 itertools = { workspace = true }
-parking_lot = { workspace = true }
 recursive = { workspace = true, optional = true }
 
 [dev-dependencies]
