@@ -94,10 +94,15 @@ impl ExampleKind {
 
     async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
+            ExampleKind::All => {
+                for example in ExampleKind::RUNNABLE_VARIANTS {
+                    println!("Running example: {}", example.as_ref());
+                    Box::pin(example.run()).await?;
+                }
+            }
             ExampleKind::Client => client::client().await?,
             ExampleKind::Server => server::server().await?,
             ExampleKind::SqlServer => sql_server::sql_server().await?,
-            ExampleKind::All => unreachable!("`All` should be handled in main"),
         }
         Ok(())
     }
@@ -116,15 +121,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::All => {
-            for example in ExampleKind::RUNNABLE_VARIANTS {
-                println!("Running example: {}", example.as_ref());
-                example.run().await?;
-            }
-        }
-        example => example.run().await?,
-    }
-
-    Ok(())
+    let example = arg.parse::<ExampleKind>()?;
+    example.run().await
 }

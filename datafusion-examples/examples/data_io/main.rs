@@ -144,6 +144,12 @@ impl ExampleKind {
 
     async fn run(&self) -> Result<()> {
         match self {
+            ExampleKind::All => {
+                for example in ExampleKind::RUNNABLE_VARIANTS {
+                    println!("Running example: {}", example.as_ref());
+                    Box::pin(example.run()).await?;
+                }
+            }
             ExampleKind::Catalog => catalog::catalog().await?,
             ExampleKind::JsonShredding => json_shredding::json_shredding().await?,
             ExampleKind::ParquetAdvIdx => {
@@ -162,7 +168,6 @@ impl ExampleKind {
             ExampleKind::ParquetIdx => parquet_index::parquet_index().await?,
             ExampleKind::QueryHttpCsv => query_http_csv::query_http_csv().await?,
             ExampleKind::RemoteCatalog => remote_catalog::remote_catalog().await?,
-            ExampleKind::All => unreachable!("`All` should be handled in main"),
         }
         Ok(())
     }
@@ -181,15 +186,6 @@ async fn main() -> Result<()> {
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::All => {
-            for example in ExampleKind::RUNNABLE_VARIANTS {
-                println!("Running example: {}", example.as_ref());
-                example.run().await?;
-            }
-        }
-        example => example.run().await?,
-    }
-
-    Ok(())
+    let example = arg.parse::<ExampleKind>()?;
+    example.run().await
 }

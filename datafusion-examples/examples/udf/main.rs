@@ -130,6 +130,12 @@ impl ExampleKind {
 
     async fn run(&self) -> Result<()> {
         match self {
+            ExampleKind::All => {
+                for example in ExampleKind::RUNNABLE_VARIANTS {
+                    println!("Running example: {}", example.as_ref());
+                    Box::pin(example.run()).await?;
+                }
+            }
             ExampleKind::AdvUdaf => advanced_udaf::advanced_udaf().await?,
             ExampleKind::AdvUdf => advanced_udf::advanced_udf().await?,
             ExampleKind::AdvUdwf => advanced_udwf::advanced_udwf().await?,
@@ -138,8 +144,8 @@ impl ExampleKind {
             ExampleKind::Udf => simple_udf::simple_udf().await?,
             ExampleKind::Udtf => simple_udtf::simple_udtf().await?,
             ExampleKind::Udwf => simple_udwf::simple_udwf().await?,
-            ExampleKind::All => unreachable!("`All` should be handled in main"),
         }
+
         Ok(())
     }
 }
@@ -157,15 +163,6 @@ async fn main() -> Result<()> {
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::All => {
-            for example in ExampleKind::RUNNABLE_VARIANTS {
-                println!("Running example: {}", example.as_ref());
-                example.run().await?;
-            }
-        }
-        example => example.run().await?,
-    }
-
-    Ok(())
+    let example = arg.parse::<ExampleKind>()?;
+    example.run().await
 }

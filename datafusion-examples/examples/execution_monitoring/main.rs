@@ -95,6 +95,12 @@ impl ExampleKind {
 
     async fn run(&self) -> Result<()> {
         match self {
+            ExampleKind::All => {
+                for example in ExampleKind::RUNNABLE_VARIANTS {
+                    println!("Running example: {}", example.as_ref());
+                    Box::pin(example.run()).await?;
+                }
+            }
             ExampleKind::MemoryPoolExecutionPlan => {
                 memory_pool_execution_plan::memory_pool_execution_plan().await?
             }
@@ -102,7 +108,6 @@ impl ExampleKind {
                 memory_pool_tracking::mem_pool_tracking().await?
             }
             ExampleKind::Tracing => tracing::tracing().await?,
-            ExampleKind::All => unreachable!("`All` should be handled in main"),
         }
         Ok(())
     }
@@ -121,15 +126,6 @@ async fn main() -> Result<()> {
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::All => {
-            for example in ExampleKind::RUNNABLE_VARIANTS {
-                println!("Running example: {}", example.as_ref());
-                example.run().await?;
-            }
-        }
-        example => example.run().await?,
-    }
-
-    Ok(())
+    let example = arg.parse::<ExampleKind>()?;
+    example.run().await
 }

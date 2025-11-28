@@ -123,6 +123,12 @@ impl ExampleKind {
 
     async fn run(&self) -> Result<()> {
         match self {
+            ExampleKind::All => {
+                for example in ExampleKind::RUNNABLE_VARIANTS {
+                    println!("Running example: {}", example.as_ref());
+                    Box::pin(example.run()).await?;
+                }
+            }
             ExampleKind::CsvJsonOpener => csv_json_opener::csv_json_opener().await?,
             ExampleKind::CsvSqlStreaming => {
                 csv_sql_streaming::csv_sql_streaming().await?
@@ -142,7 +148,6 @@ impl ExampleKind {
             ExampleKind::FileStreamProvider => {
                 file_stream_provider::file_stream_provider().await?
             }
-            ExampleKind::All => unreachable!("`All` should be handled in main"),
         }
         Ok(())
     }
@@ -161,15 +166,6 @@ async fn main() -> Result<()> {
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::All => {
-            for example in ExampleKind::RUNNABLE_VARIANTS {
-                println!("Running example: {}", example.as_ref());
-                example.run().await?;
-            }
-        }
-        example => example.run().await?,
-    }
-
-    Ok(())
+    let example = arg.parse::<ExampleKind>()?;
+    example.run().await
 }

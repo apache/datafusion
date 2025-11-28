@@ -130,6 +130,12 @@ impl ExampleKind {
 
     async fn run(&self) -> Result<()> {
         match self {
+            ExampleKind::All => {
+                for example in ExampleKind::RUNNABLE_VARIANTS {
+                    println!("Running example: {}", example.as_ref());
+                    Box::pin(example.run()).await?;
+                }
+            }
             ExampleKind::AnalyzerRule => analyzer_rule::analyzer_rule().await?,
             ExampleKind::ExprApi => expr_api::expr_api().await?,
             ExampleKind::OptimizerRule => optimizer_rule::optimizer_rule().await?,
@@ -138,7 +144,6 @@ impl ExampleKind {
             ExampleKind::PlannerApi => planner_api::planner_api().await?,
             ExampleKind::Pruning => pruning::pruning().await?,
             ExampleKind::ThreadPools => thread_pools::thread_pools().await?,
-            ExampleKind::All => unreachable!("`All` should be handled in main"),
         }
         Ok(())
     }
@@ -157,15 +162,6 @@ async fn main() -> Result<()> {
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::All => {
-            for example in ExampleKind::RUNNABLE_VARIANTS {
-                println!("Running example: {}", example.as_ref());
-                example.run().await?;
-            }
-        }
-        example => example.run().await?,
-    }
-
-    Ok(())
+    let example = arg.parse::<ExampleKind>()?;
+    example.run().await
 }
