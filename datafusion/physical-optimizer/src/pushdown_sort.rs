@@ -22,7 +22,6 @@
 use crate::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -254,8 +253,8 @@ fn try_pushdown_sort(
     required_ordering: &[PhysicalSortExpr],
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Base case: Check if the plan can natively handle the sort requirement
-    if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-        return data_source_exec.try_pushdown_sort(required_ordering);
+    if let Some(optimized) = plan.try_pushdown_sort(required_ordering)? {
+        return Ok(Some(optimized));
     }
 
     // Recursive case: Try to push through transparent nodes
