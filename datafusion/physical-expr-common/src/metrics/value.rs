@@ -379,13 +379,24 @@ impl Display for PruningMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let matched = self.matched.load(Ordering::Relaxed);
         let total = self.pruned.load(Ordering::Relaxed) + matched;
+        let fully_matched = self.fully_matched.load(Ordering::Relaxed);
 
-        write!(
-            f,
-            "{} total → {} matched",
-            human_readable_count(total),
-            human_readable_count(matched)
-        )
+        if fully_matched != 0 {
+            write!(
+                f,
+                "{} total → {} matched -> {} fully matched",
+                human_readable_count(total),
+                human_readable_count(matched),
+                human_readable_count(fully_matched)
+            )
+        } else {
+            write!(
+                f,
+                "{} total → {} matched",
+                human_readable_count(total),
+                human_readable_count(matched)
+            )
+        }
     }
 }
 
@@ -920,8 +931,11 @@ impl MetricValue {
             ) => {
                 let pruned = other_pruning_metrics.pruned.load(Ordering::Relaxed);
                 let matched = other_pruning_metrics.matched.load(Ordering::Relaxed);
+                let fully_matched =
+                    other_pruning_metrics.fully_matched.load(Ordering::Relaxed);
                 pruning_metrics.add_pruned(pruned);
                 pruning_metrics.add_matched(matched);
+                pruning_metrics.add_fully_matched(fully_matched);
             }
             (
                 Self::Ratio { ratio_metrics, .. },
