@@ -115,7 +115,7 @@ impl<R> Drop for SpawnedTask<R> {
 mod tests {
     use super::*;
 
-    use std::future::{pending, Pending};
+    use std::future::{Pending, pending};
 
     use tokio::{runtime::Runtime, sync::oneshot};
 
