@@ -19,8 +19,7 @@
 //!
 //! This enhanced version supports pushing sorts through multiple layers of transparent nodes.
 
-use crate::PhysicalOptimizerRule;
-use datafusion_common::config::ConfigOptions;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_datasource::source::DataSourceExec;
@@ -57,13 +56,18 @@ impl PushdownSort {
 }
 
 impl PhysicalOptimizerRule for PushdownSort {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check if sort pushdown optimization is enabled
-        let enable_sort_pushdown = config.execution.parquet.enable_sort_pushdown;
+        let enable_sort_pushdown = context
+            .session_config()
+            .options()
+            .execution
+            .parquet
+            .enable_sort_pushdown;
 
         // Return early if not enabled
         if !enable_sort_pushdown {

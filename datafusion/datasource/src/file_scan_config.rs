@@ -30,8 +30,8 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_datafusion_err, internal_err,
-    ColumnStatistics, Constraints, DataFusionError, Result, ScalarValue, Statistics,
+    internal_datafusion_err, internal_err, ColumnStatistics, Constraints,
+    DataFusionError, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
@@ -39,7 +39,7 @@ use datafusion_execution::{
 use datafusion_expr::Operator;
 
 use datafusion_physical_expr::equivalence::project_orderings;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, EquivalenceProperties, Partitioning};
@@ -48,9 +48,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
-use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
-};
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     filter_pushdown::FilterPushdownPropagation,
@@ -58,10 +55,7 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
 };
 use log::{debug, warn};
-use std::{
-    any::Any, borrow::Cow, collections::HashMap, fmt::Debug, fmt::Formatter,
-    fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
-};
+use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
