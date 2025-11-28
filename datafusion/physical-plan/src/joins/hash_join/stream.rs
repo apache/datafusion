@@ -207,6 +207,10 @@ pub(super) struct HashJoinStream {
     batch_size: usize,
     /// Scratch space for computing hashes
     hashes_buffer: Vec<u64>,
+    /// Scratch space for probe indices during hash lookup
+    probe_indices_buffer: Vec<u32>,
+    /// Scratch space for build indices during hash lookup
+    build_indices_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
     /// Shared build accumulator for coordinating dynamic filter updates (collects hash maps and/or bounds, optional)
@@ -285,20 +289,34 @@ pub(super) fn lookup_join_hashmap(
     hashes_buffer: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
+    probe_indices_buffer: &mut Vec<u32>,
+    build_indices_buffer: &mut Vec<u64>,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
-    let (probe_indices, build_indices, next_offset) =
-        build_hashmap.get_matched_indices_with_limit_offset(hashes_buffer, limit, offset);
+    let next_offset = build_hashmap.get_matched_indices_with_limit_offset(
+        hashes_buffer,
+        limit,
+        offset,
+        probe_indices_buffer,
+        build_indices_buffer,
+    );
 
-    let build_indices: UInt64Array = build_indices.into();
-    let probe_indices: UInt32Array = probe_indices.into();
+    let build_indices_unfiltered: UInt64Array =
+        std::mem::take(build_indices_buffer).into();
+    let probe_indices_unfiltered: UInt32Array =
+        std::mem::take(probe_indices_buffer).into();
 
+    // TODO: optimize equal_rows_arr to avoid allocation of new buffers
     let (build_indices, probe_indices) = equal_rows_arr(
-        &build_indices,
-        &probe_indices,
+        &build_indices_unfiltered,
+        &probe_indices_unfiltered,
         build_side_values,
         probe_side_values,
         null_equality,
     )?;
+
+    // Reclaim buffers
+    *build_indices_buffer = build_indices_unfiltered.into_parts().1.into();
+    *probe_indices_buffer = probe_indices_unfiltered.into_parts().1.into();
 
     Ok((build_indices, probe_indices, next_offset))
 }
@@ -376,6 +394,8 @@ impl HashJoinStream {
             build_side,
             batch_size,
             hashes_buffer,
+            probe_indices_buffer: Vec::with_capacity(batch_size),
+            build_indices_buffer: Vec::with_capacity(batch_size),
             right_side_ordered,
             build_accumulator,
             build_waiter: None,
@@ -581,6 +601,8 @@ impl HashJoinStream {
             &self.hashes_buffer,
             self.batch_size,
             state.offset,
+            &mut self.probe_indices_buffer,
+            &mut self.build_indices_buffer,
         )?;
 
         let distinct_right_indices_count = count_distinct_sorted_indices(&right_indices);

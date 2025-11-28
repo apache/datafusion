@@ -3487,6 +3487,8 @@ mod tests {
         let mut hashes_buffer = vec![0; right.num_rows()];
         create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
@@ -3495,6 +3497,8 @@ mod tests {
             &hashes_buffer,
             8192,
             (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
         )?;
 
         let left_ids: UInt64Array = vec![0, 1].into();
@@ -3544,6 +3548,8 @@ mod tests {
         let mut hashes_buffer = vec![0; right.num_rows()];
         create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
@@ -3552,6 +3558,8 @@ mod tests {
             &hashes_buffer,
             8192,
             (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
         )?;
 
         // We still expect to match rows 0 and 1 on both sides
