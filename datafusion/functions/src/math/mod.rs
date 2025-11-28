@@ -25,6 +25,7 @@ pub mod abs;
 pub mod bounds;
 pub mod ceil;
 pub mod cot;
+mod decimal;
 pub mod factorial;
 pub mod floor;
 pub mod gcd;
