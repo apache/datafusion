@@ -784,6 +784,10 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
             Ok(Expr::from(Column::from((qualifier, field))))
         }
+        Expr::Cast(_) | Expr::TryCast(_) => {
+            let (relation, name) = expr.qualified_name();
+            Ok(Expr::Column(Column::new(relation, name)))
+        }
         _ => Ok(Expr::Column(Column::from_name(
             expr.schema_name().to_string(),
         ))),

@@ -729,17 +729,29 @@ async fn roundtrip_outer_join() -> Result<()> {
 async fn roundtrip_self_join() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
-    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
-    roundtrip("SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.a = right.a").await?;
-    roundtrip("SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.b = right.b").await
+    // Temporary aliases (like a__temp__0) may appear in the plan to avoid name collisions.
+    assert_expected_plan(
+        "SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.a = right.a",
+        "Projection: left.a AS left_a, left.b, right.a AS a__temp__0 AS right_a, right.c\n  Inner Join: left.a = right.a\n    SubqueryAlias: left\n      TableScan: data projection=[a, b]\n    SubqueryAlias: right\n      TableScan: data projection=[a, c]",
+        true,
+    ).await?;
+    assert_expected_plan(
+        "SELECT left.a as left_a, left.b, right.a as right_a, right.c FROM data AS left JOIN data AS right ON left.b = right.b",
+        "Projection: left.a AS left_a, left.b, right.a AS a__temp__0 AS right_a, right.c\n  Inner Join: left.b = right.b\n    SubqueryAlias: left\n      TableScan: data projection=[a, b]\n    SubqueryAlias: right\n      TableScan: data projection=[a, b, c]",
+        true,
+    ).await
 }
 
 #[tokio::test]
 async fn roundtrip_self_implicit_cross_join() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
-    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
-    roundtrip("SELECT left.a left_a, left.b, right.a right_a, right.c FROM data AS left, data AS right").await
+    // Temporary aliases (like a__temp__0) may appear in the plan to avoid name collisions.
+    assert_expected_plan(
+        "SELECT left.a left_a, left.b, right.a right_a, right.c FROM data AS left, data AS right",
+        "Projection: left.a AS left_a, left.b, right.a AS a__temp__0 AS right_a, right.c\n  Cross Join: \n    SubqueryAlias: left\n      TableScan: data projection=[a, b]\n    SubqueryAlias: right\n      TableScan: data projection=[a, c]",
+        true,
+    ).await
 }
 
 #[tokio::test]
@@ -1306,14 +1318,16 @@ async fn roundtrip_values_empty_relation() -> Result<()> {
 async fn roundtrip_values_duplicate_column_join() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
-    // This roundtrip works because we set aliases to what the Substrait consumer will generate.
-    roundtrip(
+    // Temporary aliases (like column1__temp__0) may appear in the plan to avoid name collisions.
+    assert_expected_plan(
         "SELECT left.column1 as c1, right.column1 as c2 \
     FROM \
         (VALUES (1)) AS left \
     JOIN \
         (VALUES (2)) AS right \
     ON left.column1 == right.column1",
+        "Projection: left.column1 AS c1, right.column1 AS column1__temp__0 AS c2\n  Inner Join: left.column1 = right.column1\n    SubqueryAlias: left\n      Values: (Int64(1))\n    SubqueryAlias: right\n      Values: (Int64(2))",
+        true,
     )
     .await
 }
