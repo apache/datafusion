@@ -58,5 +58,34 @@ pub extern "C" fn version() -> u64 {
     version.major
 }
 
+static LIBRARY_MARKER: u8 = 0;
+
+/// This utility is used to determine if two FFI structs are within
+/// the same library. It is possible that the interplay between
+/// foreign and local functions calls create one FFI struct that
+/// references another. It is helpful to determine if a foreign
+/// struct in the same library or called from a different one.
+/// If we are in the same library, then we can access the underlying
+/// types directly.
+///
+/// This function works by checking the address of the library
+/// marker. Each library that implements the FFI code will have
+/// a different address for the marker. By checking the marker
+/// address we can determine if a struct is truly foreign or is
+/// actually within the same originating library.
+///
+/// See the crate's `README.md` for additional information.
+pub extern "C" fn get_library_marker_id() -> usize {
+    &LIBRARY_MARKER as *const u8 as usize
+}
+
+/// For unit testing in this crate we need to trick the providers
+/// into thinking we have a foreign call. We do this by overwriting
+/// their `library_marker_id` function to return a different value.
+#[cfg(test)]
+pub(crate) extern "C" fn mock_foreign_marker_id() -> usize {
+    get_library_marker_id() + 1
+}
+
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);

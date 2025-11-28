@@ -82,6 +82,7 @@ Here are some example systems built using DataFusion:
 - Streaming data platforms such as [Synnada]
 - Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]
 - Native Spark runtime replacement such as [Auron]
+- Distributed data cache to boost GPU utilization of AI workloads with [Kubeflow Trainer](https://www.kubeflow.org/docs/components/trainer/user-guides/data-cache/)
 
 By using DataFusion, projects are freed to focus on their specific
 features, and avoid reimplementing general (but still necessary)
@@ -114,6 +115,8 @@ Here are some active projects using DataFusion:
 - [Iceberg-rust](https://github.com/apache/iceberg-rust) Rust implementation of Apache Iceberg
 - [InfluxDB] Time Series Database
 - [Kamu] Planet-scale streaming data pipeline
+- [Kubeflow Trainer](https://github.com/kubeflow/trainer) Kubernetes-native project designed for
+  scalable LLMs fine-tuning and distributed AI model training.
 - [LakeSoul](https://github.com/lakesoul-io/LakeSoul) Open source LakeHouse framework with native IO in Rust.
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
 - [OpenObserve] Distributed cloud native observability platform

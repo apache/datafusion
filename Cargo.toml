@@ -107,6 +107,7 @@ arrow-schema = { version = "57.0.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
+bzip2 = "0.6.1"
 chrono = { version = "0.4.42", default-features = false }
 criterion = "0.7"
 ctor = "0.6.1"
@@ -151,11 +152,13 @@ datafusion-substrait = { path = "datafusion/substrait", version = "51.0.0" }
 
 doc-comment = "0.3"
 env_logger = "0.11"
+flate2 = "1.1.5"
 futures = "0.3"
+glob = "0.3.0"
 half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
-indexmap = "2.12.0"
+indexmap = "2.12.1"
 insta = { version = "1.43.2", features = ["glob", "filters"] }
 itertools = "0.14"
 liblzma = { version = "0.4.4", features = ["static"] }
@@ -168,6 +171,7 @@ parquet = { version = "57.0.0", default-features = false, features = [
     "async",
     "object_store",
 ] }
+paste = "1.0.15"
 pbjson = { version = "0.8.0" }
 pbjson-types = "0.8"
 # Should match arrow-flight's version of prost.
@@ -183,6 +187,7 @@ testcontainers = { version = "0.25.2", features = ["default"] }
 testcontainers-modules = { version = "0.13" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
+zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
@@ -192,6 +197,7 @@ or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
 inefficient_to_string = "warn"
+needless_pass_by_value = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

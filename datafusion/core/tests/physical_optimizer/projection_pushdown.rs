@@ -28,6 +28,7 @@ use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::TableSchema;
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{
@@ -44,7 +45,7 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -397,6 +398,7 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
         })
         .with_file(PartitionedFile::new("x".to_string(), 100))
         .with_projection_indices(Some(vec![0, 1, 2, 3, 4]))
+        .unwrap()
         .build();
 
     DataSourceExec::from_data_source(config)
@@ -421,6 +423,7 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
         })
         .with_file(PartitionedFile::new("x".to_string(), 100))
         .with_projection_indices(Some(vec![3, 2, 1]))
+        .unwrap()
         .build();
 
     DataSourceExec::from_data_source(config)
@@ -459,8 +462,10 @@ fn test_csv_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -497,8 +502,10 @@ fn test_memory_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -593,8 +600,10 @@ fn test_streaming_table_after_projection() -> Result<()> {
         Arc::new(streaming_table) as _,
     )?) as _;
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let result = after_optimize
         .as_any()
@@ -693,8 +702,10 @@ fn test_projection_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(top_projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(top_projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -703,10 +714,7 @@ fn test_projection_after_projection() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r"
-    ProjectionExec: expr=[b@1 as new_b, c@2 + e@4 as binary, b@1 as newest_b]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-    "
+        @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[b@1 as new_b, c@2 + e@4 as binary, b@1 as newest_b], file_type=csv, has_header=false"
     );
 
     Ok(())
@@ -761,8 +769,10 @@ fn test_output_req_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -773,8 +783,7 @@ fn test_output_req_after_projection() -> Result<()> {
         actual,
         @r"
     OutputRequirementExec: order_by=[(b@2, asc), (c@0 + new_a@1, asc)], dist_by=HashPartitioned[[new_a@1, b@2]])
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
 
@@ -852,8 +861,10 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -864,8 +875,7 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
         actual,
         @r"
     CoalescePartitionsExec
-      ProjectionExec: expr=[b@1 as b, a@0 as a_new, d@3 as d]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[b, a@0 as a_new, d], file_type=csv, has_header=false
     "
     );
 
@@ -910,8 +920,10 @@ fn test_filter_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -922,8 +934,7 @@ fn test_filter_after_projection() -> Result<()> {
         actual,
         @r"
     FilterExec: b@1 - a_new@0 > d@2 - a_new@0
-      ProjectionExec: expr=[a@0 as a_new, b@1 as b, d@3 as d]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a@0 as a_new, b, d], file_type=csv, has_header=false
     "
     );
 
@@ -1013,8 +1024,10 @@ fn test_join_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1025,10 +1038,8 @@ fn test_join_after_projection() -> Result<()> {
         actual,
         @r"
     SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b_from_left@1, c_from_right@1)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2
-      ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-      ProjectionExec: expr=[a@0 as a_from_right, c@2 as c_from_right]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a@0 as a_from_right, c@2 as c_from_right], file_type=csv, has_header=false
     "
     );
 
@@ -1143,8 +1154,10 @@ fn test_join_after_required_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1221,8 +1234,10 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize_string =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
     let after_optimize_string = displayable(after_optimize_string.as_ref())
         .indent(true)
         .to_string();
@@ -1318,8 +1333,10 @@ fn test_hash_join_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
         .to_string();
@@ -1346,8 +1363,10 @@ fn test_hash_join_after_projection() -> Result<()> {
         join.clone(),
     )?);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
         .to_string();
@@ -1399,8 +1418,10 @@ fn test_repartition_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1410,8 +1431,7 @@ fn test_repartition_after_projection() -> Result<()> {
         actual,
         @r"
     RepartitionExec: partitioning=Hash([a@1, b_new@0, d_new@2], 6), input_partitions=1
-      ProjectionExec: expr=[b@1 as b_new, a@0 as a, d@3 as d_new]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[b@1 as b_new, a, d@3 as d_new], file_type=csv, has_header=false
     "
     );
 
@@ -1470,8 +1490,10 @@ fn test_sort_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1481,8 +1503,7 @@ fn test_sort_after_projection() -> Result<()> {
         actual,
         @r"
     SortExec: expr=[b@2 ASC, c@0 + new_a@1 ASC], preserve_partitioning=[false]
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
 
@@ -1524,8 +1545,10 @@ fn test_sort_preserving_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1535,8 +1558,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
         actual,
         @r"
     SortPreservingMergeExec: [b@2 ASC, c@0 + new_a@1 ASC]
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
 
@@ -1569,8 +1591,10 @@ fn test_union_after_projection() -> Result<()> {
     "
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1580,12 +1604,9 @@ fn test_union_after_projection() -> Result<()> {
         actual,
         @r"
     UnionExec
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
 
@@ -1616,6 +1637,7 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection_indices(Some(vec![0, 1, 2]))
+    .unwrap()
     .build();
 
     DataSourceExec::from_data_source(config)
@@ -1644,8 +1666,10 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
         source,
     )?);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1653,10 +1677,7 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
-        @r"
-    ProjectionExec: expr=[string_col@1 as string_col, partition_col@2 as partition_col, int_col@0 as int_col]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[int_col, string_col, partition_col], file_type=csv, has_header=false
-    "
+        @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[string_col, partition_col, int_col], file_type=csv, has_header=false"
     );
 
     Ok(())
@@ -1690,8 +1711,10 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
         source,
     )?);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1699,10 +1722,7 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
-        @r"
-    ProjectionExec: expr=[string_col@1 as string_col, CAST(partition_col@2 AS Utf8View) as partition_col, int_col@0 as int_col]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[int_col, string_col, partition_col], file_type=csv, has_header=false
-    "
+        @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[string_col, CAST(partition_col@2 AS Utf8View) as partition_col, int_col], file_type=csv, has_header=false"
     );
 
     Ok(())
