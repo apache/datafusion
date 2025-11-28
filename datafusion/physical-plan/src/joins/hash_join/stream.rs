@@ -438,9 +438,7 @@ impl HashJoinStream {
                 HashJoinStreamState::Completed => {
                     // Flush any remaining buffered data
                     if !self.output_buffer.is_empty() {
-                        self.output_buffer.finish_buffered_batch().map_err(
-                            |e| -> datafusion_common::DataFusionError { e.into() },
-                        )?;
+                        self.output_buffer.finish_buffered_batch()?;
                         // Continue loop to emit the flushed batch
                         continue;
                     }
