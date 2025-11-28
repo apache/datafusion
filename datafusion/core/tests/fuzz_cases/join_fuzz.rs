@@ -975,8 +975,8 @@ impl JoinFuzzTestCase {
                     .zip(&hj_formatted_sorted)
                     .enumerate()
                 {
-                    if nlj_line == "+---+---+---+---+" && hj_line == "++"
-                        || (nlj_line == "++" && hj_line == "+---+---+---+---+")
+                    if nlj_line == &"+---+---+---+---+" && hj_line == &"++"
+                        || (nlj_line == &"++" && hj_line == &"+---+---+---+---+")
                     {
                         // both are empty results
                     }
