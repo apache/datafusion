@@ -46,6 +46,7 @@ pub trait ExprSchemable {
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool>;
 
     /// Given a schema, return the expr's optional metadata
+    #[deprecated(since = "51.0.0", note = "Use new API instead")]
     fn metadata(&self, schema: &dyn ExprSchema) -> Result<FieldMetadata>;
 
     /// Convert to a field with respect to a schema
@@ -489,7 +490,7 @@ impl ExprSchemable for Expr {
             }) => {
                 let field = expr.to_field(schema).map(|(_, f)| f.as_ref().clone())?;
 
-                let mut combined_metadata = expr.metadata(schema)?;
+                let mut combined_metadata = FieldMetadata::from(field.metadata());
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
@@ -1080,17 +1081,15 @@ mod tests {
             .with_data_type(DataType::Int32)
             .with_metadata(meta.clone());
 
+        let (_, field) = expr.to_field(&schema).unwrap();
+        let metadata = FieldMetadata::from(field.metadata());
         // col, alias, and cast should be metadata-preserving
-        assert_eq!(meta, expr.metadata(&schema).unwrap());
-        assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
-        assert_eq!(
-            meta,
-            expr.clone()
-                .cast_to(&DataType::Int64, &schema)
-                .unwrap()
-                .metadata(&schema)
-                .unwrap()
-        );
+        assert_eq!(meta, metadata);
+        let (_, bar_field) = expr.clone().alias("bar").to_field(&schema).unwrap();
+        assert_eq!(meta, FieldMetadata::from(bar_field.metadata()));
+        let casted_expr = expr.clone().cast_to(&DataType::Int64, &schema).unwrap();
+        let (_, casted_field) = casted_expr.to_field(&schema).unwrap();
+        assert_eq!(meta, FieldMetadata::from(casted_field.metadata()));
 
         let schema = DFSchema::from_unqualified_fields(
             vec![meta.add_to_field(Field::new("foo", DataType::Int32, true))].into(),
@@ -1099,7 +1098,8 @@ mod tests {
         .unwrap();
 
         // verify to_field method populates metadata
-        assert_eq!(meta, expr.metadata(&schema).unwrap());
+        let (_, expr_field) = expr.to_field(&schema).unwrap();
+        assert_eq!(meta, FieldMetadata::from(expr_field.metadata()));
 
         // outer ref constructed by `out_ref_col_with_metadata` should be metadata-preserving
         let outer_ref = out_ref_col_with_metadata(
@@ -1107,7 +1107,8 @@ mod tests {
             meta.to_hashmap(),
             Column::from_name("foo"),
         );
-        assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
+        let (_, outer_field) = outer_ref.to_field(&schema).unwrap();
+        assert_eq!(meta, FieldMetadata::from(outer_field.metadata()));
     }
 
     #[test]
@@ -1131,14 +1132,20 @@ mod tests {
             expr.data_type_and_nullable(&schema).unwrap(),
             (DataType::Utf8, true)
         );
-        assert_eq!(placeholder_meta, expr.metadata(&schema).unwrap());
+        let metadata = expr
+            .to_field(&schema)
+            .map(|(_, field)| FieldMetadata::from(field.metadata()));
+        assert_eq!(placeholder_meta, metadata.unwrap());
 
         let expr_alias = expr.alias("a placeholder by any other name");
         assert_eq!(
             expr_alias.data_type_and_nullable(&schema).unwrap(),
             (DataType::Utf8, true)
         );
-        assert_eq!(placeholder_meta, expr_alias.metadata(&schema).unwrap());
+        let metadata = expr_alias
+            .to_field(&schema)
+            .map(|(_, field)| FieldMetadata::from(field.metadata()));
+        assert_eq!(placeholder_meta, metadata.unwrap());
 
         // Non-nullable placeholder field should remain non-nullable
         let expr = Expr::Placeholder(Placeholder::new_with_field(
