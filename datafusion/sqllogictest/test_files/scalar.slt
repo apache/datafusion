@@ -317,6 +317,16 @@ select ceil(100.1234, 1)
 query error DataFusion error: This feature is not implemented: CEIL with datetime is not supported
 select ceil(100.1234 to year)
 
+# ceil with decimal argument
+query RRRR
+select
+  ceil(arrow_cast(1.23,'Decimal128(10,2)')),
+  ceil(arrow_cast(-1.23,'Decimal128(10,2)')),
+  ceil(arrow_cast(123.00,'Decimal128(10,2)')),
+  ceil(arrow_cast(-123.00,'Decimal128(10,2)'));
+----
+2 -1 123 -123
+
 ## degrees
 
 # degrees scalar function
@@ -463,6 +473,16 @@ select floor(a, 1)
 # floor with datetime parameter ( not supported)
 query error DataFusion error: This feature is not implemented: FLOOR with datetime is not supported
 select floor(a to year)
+
+# floor with decimal argument
+query RRRR
+select
+  floor(arrow_cast(1.23,'Decimal128(10,2)')),
+  floor(arrow_cast(-1.23,'Decimal128(10,2)')),
+  floor(arrow_cast(123.00,'Decimal128(10,2)')),
+  floor(arrow_cast(-123.00,'Decimal128(10,2)'));
+----
+1 -2 123 -123
 
 ## ln
 
