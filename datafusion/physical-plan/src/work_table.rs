@@ -42,7 +42,6 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 #[derive(Debug)]
 pub(super) struct ReservedBatches {
     batches: Vec<RecordBatch>,
-    #[allow(dead_code)]
     reservation: MemoryReservation,
 }
 

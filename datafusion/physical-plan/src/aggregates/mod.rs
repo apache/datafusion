@@ -376,7 +376,7 @@ impl PartialEq for PhysicalGroupBy {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHash(GroupedHashAggregateStream),
@@ -484,7 +484,6 @@ impl AggregateExec {
     /// a rule may re-write aggregate expressions (e.g. reverse them) during
     /// initialization, field names may change inadvertently if one re-creates
     /// the schema in such cases.
-    #[allow(clippy::too_many_arguments)]
     fn try_new_with_schema(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,

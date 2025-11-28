@@ -1474,20 +1474,6 @@ mod tests {
         Ok(results)
     }
 
-    /// Execute the [ExecutionPlan] and collect the results in memory
-    #[allow(dead_code)]
-    pub async fn collect_bonafide(
-        plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
-    ) -> Result<Vec<RecordBatch>> {
-        let stream = execute_stream(plan, context)?;
-        let mut results = vec![];
-
-        collect_stream(stream, &mut results).await?;
-
-        Ok(results)
-    }
-
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("sn", DataType::UInt64, true),

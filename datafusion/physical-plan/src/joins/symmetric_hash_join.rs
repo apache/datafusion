@@ -207,7 +207,7 @@ impl SymmetricHashJoinExec {
     /// - It is not possible to join the left and right sides on keys `on`, or
     /// - It fails to construct `SortedFilterExpr`s, or
     /// - It fails to create the [ExprIntervalGraph].
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -957,7 +957,7 @@ pub(crate) fn build_side_determined_results(
 ///
 /// A [Result] containing an optional record batch if the join type is not one of `LeftAnti`, `RightAnti`, `LeftSemi` or `RightSemi`.
 /// If the join type is one of the above four, the function will return [None].
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn join_with_probe_batch(
     build_hash_joiner: &mut OneSideHashJoiner,
     probe_hash_joiner: &mut OneSideHashJoiner,
@@ -1055,7 +1055,7 @@ pub(crate) fn join_with_probe_batch(
 ///
 /// A [Result] containing a tuple with two equal length arrays, representing indices of rows from build and probe side,
 /// matched by join key columns.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn lookup_join_hashmap(
     build_hashmap: &PruningJoinHashMap,
     build_batch: &RecordBatch,
