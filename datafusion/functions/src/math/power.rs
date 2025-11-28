@@ -289,7 +289,7 @@ impl ScalarUDFImpl for PowerFunc {
     }
 
     /// Simplify the `power` function by the relevant rules:
-    /// 1. Power(a, 0) ===> 0
+    /// 1. Power(a, 0) ===> 1
     /// 2. Power(a, 1) ===> a
     /// 3. Power(a, Log(a, b)) ===> b
     fn simplify(
