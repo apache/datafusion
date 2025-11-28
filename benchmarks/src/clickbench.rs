@@ -199,7 +199,7 @@ impl RunOpt {
             ctx.sql(sql)
                 .await?
                 .explain_with_options(
-                    ExplainOption::default().with_format(ExplainFormat::Tree),
+                    ExplainOption::default().with_format(ExplainFormat::Tree).with_analyze(true).with_verbose(true),
                 )?
                 .show()
                 .await?;

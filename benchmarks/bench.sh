@@ -332,7 +332,7 @@ main() {
             else
                 QUERY=${EXTRA_ARGS[0]}
                 if [ -n "$QUERY" ]; then
-                    QUERY_ARG="--query ${QUERY}"
+                    QUERY_ARG="--query ${QUERY} --debug"
                 fi
             fi
             BRANCH_NAME=$(cd "${DATAFUSION_DIR}" && git rev-parse --abbrev-ref HEAD)
