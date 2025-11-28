@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, fmt::Display, hash::Hash, sync::Arc};
 
 use arrow::datatypes::{DataType, Field};
 use hashbrown::HashMap;
 
-use crate::{error::_plan_err, DataFusionError, ScalarValue};
+use crate::{datatype::SerializedTypeView, DataFusionError, ScalarValue};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialOrd)]
 pub struct ScalarAndMetadata {
     pub value: ScalarValue,
     pub metadata: Option<FieldMetadata>,
@@ -72,72 +72,74 @@ impl From<ScalarValue> for ScalarAndMetadata {
     }
 }
 
-/// Assert equality of data types where one or both sides may have field metadata
-///
-/// This currently compares absent metadata (e.g., one side was a DataType) and
-/// empty metadata (e.g., one side was a field where the field had no metadata)
-/// as equal and uses byte-for-byte comparison for the keys and values of the
-/// fields, even though this is potentially too strict for some cases (e.g.,
-/// extension types where extension metadata is represented by JSON, or cases
-/// where field metadata is orthogonal to the interpretation of the data type).
-///
-/// Returns a planning error with suitably formatted type representations if
-/// actual and expected do not compare to equal.
-pub fn check_metadata_with_storage_equal(
-    actual: (
-        &DataType,
-        Option<&std::collections::HashMap<String, String>>,
-    ),
-    expected: (
-        &DataType,
-        Option<&std::collections::HashMap<String, String>>,
-    ),
-    what: &str,
-    context: &str,
-) -> Result<(), DataFusionError> {
-    if actual.0 != expected.0 {
-        return _plan_err!(
-            "Expected {what} of type {}, got {}{context}",
-            format_type_and_metadata(expected.0, expected.1),
-            format_type_and_metadata(actual.0, actual.1)
-        );
-    }
+impl Display for ScalarAndMetadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let storage_type = self.value.data_type();
+        let serialized_type = SerializedTypeView::from((&storage_type, self.metadata()));
 
-    let metadata_equal = match (actual.1, expected.1) {
-        (None, None) => true,
-        (None, Some(expected_metadata)) => expected_metadata.is_empty(),
-        (Some(actual_metadata), None) => actual_metadata.is_empty(),
-        (Some(actual_metadata), Some(expected_metadata)) => {
-            actual_metadata == expected_metadata
+        let metadata_without_extension_info = self
+            .metadata
+            .as_ref()
+            .map(|metadata| {
+                metadata
+                    .inner()
+                    .iter()
+                    .filter(|(k, _)| {
+                        *k != "ARROW:extension:name" && *k != "ARROW:extension:metadata"
+                    })
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+
+        match (
+            serialized_type.extension_name(),
+            serialized_type.extension_metadata(),
+        ) {
+            (Some(name), None) => write!(f, "{name}<{:?}>", self.value())?,
+            (Some(name), Some(metadata)) => {
+                write!(f, "{name}({metadata})<{:?}>", self.value())?
+            }
+            _ => write!(f, "{:?}", self.value())?,
         }
-    };
 
-    if !metadata_equal {
-        return _plan_err!(
-            "Expected {what} of type {}, got {}{context}",
-            format_type_and_metadata(expected.0, expected.1),
-            format_type_and_metadata(actual.0, actual.1)
-        );
+        if !metadata_without_extension_info.is_empty() {
+            write!(
+                f,
+                " {:?}",
+                FieldMetadata::new(metadata_without_extension_info)
+            )
+        } else {
+            Ok(())
+        }
     }
-
-    Ok(())
 }
 
-/// Given a data type represented by storage and optional metadata, generate
-/// a user-facing string
-///
-/// This function exists to reduce the number of Field debug strings that are
-/// used to communicate type information in error messages and plan explain
-/// renderings.
-pub fn format_type_and_metadata(
-    data_type: &DataType,
-    metadata: Option<&std::collections::HashMap<String, String>>,
-) -> String {
-    match metadata {
-        Some(metadata) if !metadata.is_empty() => {
-            format!("{data_type}<{metadata:?}>")
+impl From<ScalarValue> for ScalarAndMetadata {
+    fn from(value: ScalarValue) -> Self {
+        ScalarAndMetadata::new(value, None)
+    }
+}
+
+impl PartialEq<ScalarAndMetadata> for ScalarAndMetadata {
+    fn eq(&self, other: &ScalarAndMetadata) -> bool {
+        let metadata_equal = match (self.metadata(), other.metadata()) {
+            (None, None) => true,
+            (None, Some(other_meta)) => other_meta.is_empty(),
+            (Some(meta), None) => meta.is_empty(),
+            (Some(meta), Some(other_meta)) => meta == other_meta,
+        };
+
+        metadata_equal && self.value() == other.value()
+    }
+}
+
+impl Hash for ScalarAndMetadata {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+        if let Some(metadata) = self.metadata() {
+            metadata.hash(state);
         }
-        _ => data_type.to_string(),
     }
 }
 
