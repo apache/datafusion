@@ -407,11 +407,6 @@ fn seconds_as_i32(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
     }
 }
 
-/// Invoke [`date_part`] on an `array` (e.g. Timestamp) and convert the
-/// result to a total number of seconds, milliseconds, microseconds or
-/// nanoseconds
-///
-/// Given epoch return f64, this is a duplicated function to optimize for f64 type
 // Converts seconds to f64 with the specified time unit.
 // Used for Interval and Duration types that need floating-point precision.
 fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
