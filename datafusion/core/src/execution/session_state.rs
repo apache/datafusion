@@ -1988,6 +1988,12 @@ impl FunctionRegistry for SessionState {
     }
 }
 
+impl datafusion_execution::TaskContextProvider for SessionState {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        SessionState::task_ctx(self)
+    }
+}
+
 impl OptimizerConfig for SessionState {
     fn query_execution_start_time(&self) -> DateTime<Utc> {
         self.execution_props.query_execution_start_time

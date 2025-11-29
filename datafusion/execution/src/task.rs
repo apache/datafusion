@@ -211,6 +211,11 @@ impl FunctionRegistry for TaskContext {
     }
 }
 
+/// Produce the [`TaskContext`].
+pub trait TaskContextProvider {
+    fn task_ctx(&self) -> Arc<TaskContext>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

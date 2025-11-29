@@ -1860,6 +1860,12 @@ impl FunctionRegistry for SessionContext {
     }
 }
 
+impl datafusion_execution::TaskContextProvider for SessionContext {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        SessionContext::task_ctx(self)
+    }
+}
+
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {

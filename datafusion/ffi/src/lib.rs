@@ -30,6 +30,7 @@
 pub mod arrow_wrappers;
 pub mod catalog_provider;
 pub mod catalog_provider_list;
+pub mod execution;
 pub mod execution_plan;
 pub mod insert_op;
 pub mod plan_properties;
