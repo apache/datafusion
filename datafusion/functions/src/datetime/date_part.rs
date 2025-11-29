@@ -20,8 +20,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
-use arrow::array::{Array, ArrayRef, Float64Array, Int32Array,
-                   PrimitiveBuilder};
+use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, PrimitiveBuilder};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{

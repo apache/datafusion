@@ -21,8 +21,7 @@ use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::ArrowTimestampType;
-use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond,
-                                 Second};
+use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use std::ops::Add;
