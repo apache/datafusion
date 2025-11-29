@@ -97,6 +97,7 @@ pub(crate) enum CheckColumnsMustReferenceAggregatePurpose {
     Projection,
     Having,
     Qualify,
+    OrderBy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,9 @@ impl CheckColumnsSatisfyExprsPurpose {
             }
             Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Qualify) => {
                 "Column in QUALIFY must be in GROUP BY or an aggregate function"
+            }
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::OrderBy) => {
+                "Column in ORDER BY must be in GROUP BY or an aggregate function"
             }
         }
     }
