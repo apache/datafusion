@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`DataTypeExt`] and [`FieldExt`] extension trait for working with DataTypes to Fields
+//! [`DataTypeExt`] and [`FieldExt`] extension trait for working with Arrow [`DataType`] and [`Field`]s
 
 use crate::arrow::datatypes::{DataType, Field, FieldRef};
+use crate::metadata::FieldMetadata;
 use std::sync::Arc;
 
 /// DataFusion extension methods for Arrow [`DataType`]
@@ -61,7 +62,54 @@ impl DataTypeExt for DataType {
 }
 
 /// DataFusion extension methods for Arrow [`Field`] and [`FieldRef`]
+///
+/// This trait is implemented for both [`Field`] and [`FieldRef`] and
+/// provides convenience methods for efficiently working with both types.
+///
+/// For [`FieldRef`], the methods will attempt to unwrap the `Arc`
+/// to avoid unnecessary cloning when possible.
 pub trait FieldExt {
+    /// Ensure the field is named `new_name`, returning the given field if the
+    /// name matches, and a new field if not.
+    ///
+    /// This method avoids `clone`ing fields and names if the name is the same
+    /// as the field's existing name.
+    ///
+    /// Example:
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::datatype::FieldExt;
+    /// let int_field = Field::new("my_int", DataType::Int32, true);
+    /// // rename to "your_int"
+    /// let renamed_field = int_field.renamed("your_int");
+    /// assert_eq!(renamed_field.name(), "your_int");
+    /// ```
+    fn renamed(self, new_name: &str) -> Self;
+
+    /// Ensure the field has the given data type
+    ///
+    /// Note this is different than simply calling [`Field::with_data_type`] as
+    /// it avoids copying if the data type is already the same.
+    ///
+    /// Example:
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::datatype::FieldExt;
+    /// let int_field = Field::new("my_int", DataType::Int32, true);
+    /// // change to Float64
+    /// let retyped_field = int_field.retyped(DataType::Float64);
+    /// assert_eq!(retyped_field.data_type(), &DataType::Float64);
+    /// ```
+    fn retyped(self, new_data_type: DataType) -> Self;
+
+    /// Add field metadata to the Field
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self;
+
+    /// Add optional field metadata,
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self;
+
     /// Returns a new Field representing a List of this Field's DataType.
     ///
     /// For example if input represents an `Int32`, the return value will
@@ -130,6 +178,32 @@ pub trait FieldExt {
 }
 
 impl FieldExt for Field {
+    fn renamed(self, new_name: &str) -> Self {
+        // check if this is a new name before allocating a new Field / copying
+        // the existing one
+        if self.name() != new_name {
+            self.with_name(new_name)
+        } else {
+            self
+        }
+    }
+
+    fn retyped(self, new_data_type: DataType) -> Self {
+        self.with_data_type(new_data_type)
+    }
+
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self {
+        metadata.add_to_field(self)
+    }
+
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self {
+        if let Some(metadata) = metadata {
+            self.with_field_metadata(metadata)
+        } else {
+            self
+        }
+    }
+
     fn into_list(self) -> Self {
         DataType::List(Arc::new(self.into_list_item())).into_nullable_field()
     }
@@ -149,6 +223,34 @@ impl FieldExt for Field {
 }
 
 impl FieldExt for Arc<Field> {
+    fn renamed(mut self, new_name: &str) -> Self {
+        if self.name() != new_name {
+            // avoid cloning if possible
+            Arc::make_mut(&mut self).set_name(new_name);
+        }
+        self
+    }
+
+    fn retyped(mut self, new_data_type: DataType) -> Self {
+        if self.data_type() != &new_data_type {
+            // avoid cloning if possible
+            Arc::make_mut(&mut self).set_data_type(new_data_type);
+        }
+        self
+    }
+
+    fn with_field_metadata(self, metadata: &FieldMetadata) -> Self {
+        metadata.add_to_field_ref(self)
+    }
+
+    fn with_field_metadata_opt(self, metadata: Option<&FieldMetadata>) -> Self {
+        if let Some(metadata) = metadata {
+            self.with_field_metadata(metadata)
+        } else {
+            self
+        }
+    }
+
     fn into_list(self) -> Self {
         DataType::List(self.into_list_item())
             .into_nullable_field()
@@ -161,13 +263,11 @@ impl FieldExt for Arc<Field> {
             .into()
     }
 
-    fn into_list_item(self) -> Self {
+    fn into_list_item(mut self) -> Self {
         if self.name() != Field::LIST_FIELD_DEFAULT_NAME {
-            Arc::unwrap_or_clone(self)
-                .with_name(Field::LIST_FIELD_DEFAULT_NAME)
-                .into()
-        } else {
-            self
+            // avoid cloning if possible
+            Arc::make_mut(&mut self).set_name(Field::LIST_FIELD_DEFAULT_NAME);
         }
+        self
     }
 }
