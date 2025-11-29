@@ -6331,7 +6331,7 @@ mod tests {
 
     #[test]
     // despite clippy claiming they are useless, the code doesn't compile otherwise.
-    #[allow(clippy::useless_vec)]
+    #[expect(clippy::useless_vec)]
     fn scalar_iter_to_array_boolean() {
         check_scalar_iter!(Boolean, BooleanArray, vec![Some(true), None, Some(false)]);
         check_scalar_iter!(Float32, Float32Array, vec![Some(1.9), None, Some(-2.1)]);
@@ -7766,7 +7766,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(arithmetic_overflow)] // we want to test them
     fn test_scalar_negative_overflows() -> Result<()> {
         macro_rules! test_overflow_on_value {
             ($($val:expr),* $(,)?) => {$(
