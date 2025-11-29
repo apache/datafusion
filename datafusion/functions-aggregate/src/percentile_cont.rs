@@ -35,9 +35,8 @@ use arrow::array::ArrowNativeTypeOp;
 
 use ahash::RandomState;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError,
-    HashSet, Result, ScalarValue,
-    utils::take_function_args,
+    assert_eq_or_internal_err, internal_datafusion_err, plan_err,
+    utils::take_function_args, DataFusionError, HashSet, Result, ScalarValue,
 };
 
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
@@ -57,6 +56,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
 
+use crate::min_max::{max_udaf, min_udaf};
 use crate::utils::validate_percentile_expr;
 
 /// Precision multiplier for linear interpolation calculations.
