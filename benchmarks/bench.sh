@@ -87,6 +87,9 @@ tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB),
 tpch_csv10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single csv file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 
+# TPC-DS Benchmarks
+tpcds:                  TPCDS inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
+
 # Extended TPC-H Benchmarks
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
@@ -215,6 +218,9 @@ main() {
                 tpch_mem10)
                     # same data as for tpch10
                     data_tpch "10"
+                    ;;
+                tpcds)
+                    data_tpcds
                     ;;
                 clickbench_1)
                     data_clickbench_1
@@ -384,6 +390,7 @@ main() {
                     run_external_aggr
                     run_nlj
                     run_hj
+                    run_tpcds
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -402,6 +409,9 @@ main() {
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
+                    ;;
+                tpcds)
+                    run_tpcds
                     ;;
                 cancellation)
                     run_cancellation
@@ -589,6 +599,20 @@ data_tpch() {
     fi
 }
 
+# Creates TPCDS data at a certain scale factor
+#
+# call like: data_tpcds($scale_factor)
+#
+# Creates data in $DATA_DIR/tpcds_sf1 for scale factor 1
+# Creates data in $DATA_DIR/tpcds_sf10 for scale factor 10
+# etc
+data_tpcds() {
+    echo ""
+    echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
+    echo "  git clone https://github.com/apache/datafusion-benchmarks"
+    echo ""
+}
+
 # Runs the tpch benchmark
 run_tpch() {
     SCALE_FACTOR=$1
@@ -620,6 +644,27 @@ run_tpch_mem() {
     echo "Running tpch_mem benchmark..."
     # -m means in memory
     debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the tpcds benchmark
+run_tpcds() {
+    TPCDS_DIR="${DATA_DIR}"
+
+    # Check if TPCDS data directory exists
+    if [ ! -d "${TPCDS_DIR}" ]; then
+        echo "Error: TPC-DS data directory does not exist: ${TPCDS_DIR}"
+        echo ""
+        echo "Please prepare TPC-DS data first by running:"
+        echo "  ./bench.sh data tpcds"
+        echo ""
+        return 1
+    fi
+
+    RESULTS_FILE="${RESULTS_DIR}/tpcds_sf1.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running tpcds benchmark..."
+
+    debug_run $CARGO_COMMAND --bin tpcds -- benchmark datafusion --iterations 5 --path "${TPCDS_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the compile profile benchmark helper
