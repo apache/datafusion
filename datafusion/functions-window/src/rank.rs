@@ -18,7 +18,6 @@
 //! Implementation of `rank`, `dense_rank`, and `percent_rank` window functions,
 //! which can be evaluated at runtime during query execution.
 
-use crate::define_udwf_and_expr;
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::{Float64Array, UInt64Array};

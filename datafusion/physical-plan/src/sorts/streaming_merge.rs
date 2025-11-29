@@ -27,7 +27,7 @@ use crate::sorts::{
 use crate::{SendableRecordBatchStream, SpillManager};
 use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{assert_or_internal_err, internal_err, DataFusionError, Result};
+use datafusion_common::{assert_or_internal_err, internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryPool, MemoryReservation,
