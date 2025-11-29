@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use std::sync::Arc;
 
+use arrow::array::timezone::Tz;
 use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
     StringArrayType, StringViewArray,
@@ -25,9 +29,10 @@ use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::DataType;
 use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, TimeZone, Utc};
 
 use datafusion_common::cast::as_generic_string_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     exec_datafusion_err, exec_err, unwrap_or_internal_err, DataFusionError, Result,
     ScalarType, ScalarValue,
@@ -40,6 +45,302 @@ const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented a
 /// Calls string_to_timestamp_nanos and converts the error type
 pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
     string_to_timestamp_nanos(s).map_err(|e| e.into())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ConfiguredZone {
+    Named(Tz),
+    Offset(FixedOffset),
+}
+
+#[derive(Clone)]
+pub(crate) struct ConfiguredTimeZone {
+    repr: Arc<str>,
+    zone: ConfiguredZone,
+}
+
+impl ConfiguredTimeZone {
+    pub(crate) fn utc() -> Self {
+        Self {
+            repr: Arc::from("+00:00"),
+            zone: ConfiguredZone::Offset(FixedOffset::east_opt(0).unwrap()),
+        }
+    }
+
+    pub(crate) fn parse(tz: &str) -> Result<Option<Self>> {
+        let tz = tz.trim();
+        if tz.is_empty() {
+            return Ok(None);
+        }
+
+        if let Ok(named) = Tz::from_str(tz) {
+            return Ok(Some(Self {
+                repr: Arc::from(tz),
+                zone: ConfiguredZone::Named(named),
+            }));
+        }
+
+        if let Some(offset) = parse_fixed_offset(tz) {
+            return Ok(Some(Self {
+                repr: Arc::from(tz),
+                zone: ConfiguredZone::Offset(offset),
+            }));
+        }
+
+        Err(exec_datafusion_err!(
+            "Invalid execution timezone '{tz}'. Please provide an IANA timezone name (e.g. 'America/New_York') or an offset in the form '+HH:MM'."
+        ))
+    }
+
+    pub(crate) fn from_config(config: &ConfigOptions) -> Self {
+        match Self::parse(config.execution.time_zone.as_deref().unwrap_or("")) {
+            Ok(Some(tz)) => tz,
+            _ => Self::utc(),
+        }
+    }
+
+    fn timestamp_from_naive(&self, naive: &NaiveDateTime) -> Result<i64> {
+        match self.zone {
+            ConfiguredZone::Named(tz) => {
+                local_datetime_to_timestamp(tz.from_local_datetime(naive), &self.repr)
+            }
+            ConfiguredZone::Offset(offset) => {
+                local_datetime_to_timestamp(offset.from_local_datetime(naive), &self.repr)
+            }
+        }
+    }
+
+    fn datetime_from_formatted(&self, s: &str, format: &str) -> Result<DateTime<Utc>> {
+        let datetime = match self.zone {
+            ConfiguredZone::Named(tz) => {
+                string_to_datetime_formatted(&tz, s, format)?.with_timezone(&Utc)
+            }
+            ConfiguredZone::Offset(offset) => {
+                string_to_datetime_formatted(&offset, s, format)?.with_timezone(&Utc)
+            }
+        };
+        Ok(datetime)
+    }
+}
+
+impl fmt::Debug for ConfiguredTimeZone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConfiguredTimeZone")
+            .field("repr", &self.repr)
+            .finish()
+    }
+}
+
+impl PartialEq for ConfiguredTimeZone {
+    fn eq(&self, other: &Self) -> bool {
+        self.repr == other.repr
+    }
+}
+
+impl Eq for ConfiguredTimeZone {}
+
+impl Hash for ConfiguredTimeZone {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.repr.hash(state);
+    }
+}
+
+fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
+    let tz = tz.trim();
+    if tz.eq_ignore_ascii_case("utc") || tz.eq_ignore_ascii_case("z") {
+        return FixedOffset::east_opt(0);
+    }
+
+    // Strict chrono-only path: normalize compact digit-only offsets
+    // (e.g. +05, +0500, +053045) into colon-separated forms and
+    // attempt parsing with chrono's Parsed API. Return None if chrono
+    // can't parse the provided string.
+    if let Some(first) = tz.chars().next() {
+        if first == '+' || first == '-' {
+            let sign = first;
+            let rest = &tz[1..];
+
+            let normalized = if rest.chars().all(|c| c.is_ascii_digit()) {
+                match rest.len() {
+                    2 => format!("{}{}:00", sign, &rest[0..2]),
+                    4 => format!("{}{}:{}", sign, &rest[0..2], &rest[2..4]),
+                    6 => {
+                        format!("{}{}:{}:{}", sign, &rest[0..2], &rest[2..4], &rest[4..6])
+                    }
+                    _ => tz.to_string(),
+                }
+            } else {
+                tz.to_string()
+            };
+
+            let try_formats = ["%::z", "%:z", "%z"];
+            for fmt in try_formats.iter() {
+                let mut parsed = Parsed::new();
+                if parse(&mut parsed, &normalized, StrftimeItems::new(fmt)).is_ok() {
+                    if let Ok(off) = parsed.to_fixed_offset() {
+                        return Some(off);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Converts a local datetime result to a UTC timestamp in nanoseconds.
+///
+/// # DST Transition Behavior
+///
+/// This function handles daylight saving time (DST) transitions by returning an error
+/// when the local time is ambiguous or invalid:
+///
+/// ## Ambiguous Times (Fall Back)
+/// When clocks "fall back" (e.g., 2:00 AM becomes 1:00 AM), times in the repeated hour
+/// exist twice. For example, in America/New_York on 2024-11-03:
+/// - `2024-11-03 01:30:00` occurs both at UTC 05:30 (EDT) and UTC 06:30 (EST)
+///
+/// DataFusion returns an error rather than silently choosing one interpretation,
+/// ensuring users are aware of the ambiguity.
+///
+/// ## Invalid Times (Spring Forward)
+/// When clocks "spring forward" (e.g., 2:00 AM becomes 3:00 AM), times in the skipped hour
+/// don't exist. For example, in America/New_York on 2024-03-10:
+/// - `2024-03-10 02:30:00` never occurred (clocks jumped from 02:00 to 03:00)
+///
+/// DataFusion returns an error for these non-existent times.
+///
+/// ## Workarounds
+/// To avoid ambiguity errors:
+/// 1. Use timestamps with explicit timezone offsets (e.g., `2024-11-03 01:30:00-05:00`)
+/// 2. Convert to UTC before processing
+/// 3. Use a timezone without DST (e.g., UTC, `America/Phoenix`)
+fn local_datetime_to_timestamp<T: TimeZone>(
+    result: LocalResult<DateTime<T>>,
+    tz_repr: &str,
+) -> Result<i64> {
+    match result {
+        Single(dt) => datetime_to_timestamp(dt.with_timezone(&Utc)),
+        LocalResult::Ambiguous(dt1, dt2) => Err(exec_datafusion_err!(
+            "The local time '{:?}' is ambiguous in timezone '{tz_repr}' (also corresponds to '{:?}').",
+            dt1.naive_local(),
+            dt2.naive_local()
+        )),
+        LocalResult::None => Err(exec_datafusion_err!(
+            "The local time is invalid in timezone '{tz_repr}'."
+        )),
+    }
+}
+
+fn datetime_to_timestamp(datetime: DateTime<Utc>) -> Result<i64> {
+    datetime
+        .timestamp_nanos_opt()
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
+}
+
+fn timestamp_to_naive(value: i64) -> Result<NaiveDateTime> {
+    let secs = value.div_euclid(1_000_000_000);
+    let nanos = value.rem_euclid(1_000_000_000) as u32;
+    DateTime::<Utc>::from_timestamp(secs, nanos)
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
+        .map(|dt| dt.naive_utc())
+}
+
+/// Detects whether a timestamp string contains explicit timezone information.
+///
+/// This function performs a single-pass scan to check for:
+/// 1. RFC3339-compatible format (via Arrow's parser)
+/// 2. Timezone offset markers (e.g., `+05:00`, `-0800`, `+05`)
+/// 3. Trailing 'Z' or 'z' suffix (UTC indicator)
+/// 4. Named timezone identifiers (e.g., `UTC`, `America/New_York`)
+///
+/// # Performance Considerations
+/// This function is called for every string value during timestamp parsing.
+/// The implementation uses a single-pass byte-level scan for efficiency.
+///
+/// # Examples
+/// ```ignore
+/// assert!(has_explicit_timezone("2020-09-08T13:42:29Z"));
+/// assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00"));
+/// assert!(has_explicit_timezone("2020-09-08T13:42:29 UTC"));
+/// assert!(!has_explicit_timezone("2020-09-08T13:42:29"));
+/// ```
+/// Heuristic-based explicit timezone detection (simplified).
+///
+/// Uses chrono for full RFC3339 parsing and a few lightweight heuristics
+/// for other common forms (trailing Z, numeric offsets, named tz tokens).
+fn has_explicit_timezone(value: &str) -> bool {
+    // Fast, cheap heuristics first (avoid expensive RFC3339 parse on common inputs)
+    let v = value.trim();
+
+    // trailing 'Z' or 'z' indicates UTC
+    if v.ends_with('Z') || v.ends_with('z') {
+        return true;
+    }
+
+    // Named timezones: IANA names often contain a slash, or common tokens like UTC/GMT
+    let up = v.to_uppercase();
+    if v.contains('/') || up.contains("UTC") || up.contains("GMT") {
+        return true;
+    }
+
+    // Common abbreviations like PST, EST, etc.
+    const COMMON_ABBREVIATIONS: [&str; 8] =
+        ["PST", "PDT", "EST", "EDT", "CST", "CDT", "MST", "MDT"];
+    for &abbr in COMMON_ABBREVIATIONS.iter() {
+        if up.contains(abbr) {
+            return true;
+        }
+    }
+
+    // Heuristic: trailing numeric offset like +0500, +05:00, -0330, etc.
+    if let Some(pos) = v.rfind(|c| ['+', '-'].contains(&c)) {
+        // Exclude scientific notation like 1.5e+10 (preceded by 'e' or 'E')
+        if !(pos > 0
+            && v.chars()
+                .nth(pos - 1)
+                .map(|c| c == 'e' || c == 'E')
+                .unwrap_or(false))
+        {
+            // Ensure the sign likely follows a time component. Look for a separator
+            // (space or 'T') before the sign and check for a ':' between that
+            // separator and the sign to avoid treating date dashes as offsets.
+            let sep_pos = v[..pos].rfind(|c| [' ', 'T', 't'].contains(&c));
+            let has_time_before_sign = if let Some(spos) = sep_pos {
+                v[spos + 1..pos].contains(':')
+            } else {
+                v[..pos].contains(':')
+            };
+
+            if has_time_before_sign {
+                let rest = &v[pos + 1..];
+                let digit_count = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+                if digit_count == 2 || digit_count == 4 || digit_count == 6 {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Last resort: try full RFC3339 parsing (covers additional valid cases)
+    if DateTime::parse_from_rfc3339(value).is_ok() {
+        return true;
+    }
+
+    false
+}
+
+pub(crate) fn string_to_timestamp_nanos_with_timezone(
+    timezone: &ConfiguredTimeZone,
+    s: &str,
+) -> Result<i64> {
+    let ts = string_to_timestamp_nanos_shim(s)?;
+    if has_explicit_timezone(s) {
+        Ok(ts)
+    } else {
+        let naive = timestamp_to_naive(ts)?;
+        timezone.timestamp_from_naive(&naive)
+    }
 }
 
 /// Checks that all the arguments from the second are of type [Utf8], [LargeUtf8] or [Utf8View]
@@ -150,6 +451,19 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
         .and_utc()
         .timestamp_nanos_opt()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
+}
+
+pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
+    timezone: &ConfiguredTimeZone,
+    s: &str,
+    format: &str,
+) -> Result<i64, DataFusionError> {
+    if has_explicit_timezone(s) {
+        return string_to_timestamp_nanos_formatted(s, format);
+    }
+
+    let datetime = timezone.datetime_from_formatted(s, format)?;
+    datetime_to_timestamp(datetime)
 }
 
 /// Accepts a string with a `chrono` format and converts it to a
@@ -441,4 +755,150 @@ where
 {
     // first map is the iterator, second is for the `Option<_>`
     array.iter().map(|x| x.map(&op).transpose()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{has_explicit_timezone, ConfiguredTimeZone};
+    use datafusion_common::config::ConfigOptions;
+
+    #[test]
+    fn parse_empty_timezone_returns_none() {
+        assert!(ConfiguredTimeZone::parse("   ").unwrap().is_none());
+    }
+
+    #[test]
+    fn from_config_blank_timezone_defaults_to_utc() {
+        let mut config = ConfigOptions::default();
+        config.execution.time_zone = None;
+
+        let timezone = ConfiguredTimeZone::from_config(&config);
+        assert_eq!(timezone, ConfiguredTimeZone::utc());
+    }
+
+    #[test]
+    fn detects_timezone_token_outside_tail() {
+        assert!(has_explicit_timezone("UTC 2024-01-01 12:00:00"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29UTC"));
+        assert!(has_explicit_timezone("America/New_York 2020-09-08"));
+    }
+
+    #[test]
+    fn detects_offsets_without_colons() {
+        // ISO-8601 formats with offsets (no colons)
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+0500"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-0330"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-08"));
+
+        // 4-digit offsets
+        assert!(has_explicit_timezone("2024-01-01T12:00:00+0000"));
+        assert!(has_explicit_timezone("2024-01-01T12:00:00-1200"));
+
+        // 6-digit offsets (with seconds)
+        assert!(has_explicit_timezone("2024-01-01T12:00:00+053045"));
+        assert!(has_explicit_timezone("2024-01-01T12:00:00-123045"));
+
+        // Lowercase 't' separator
+        assert!(has_explicit_timezone("2020-09-08t13:42:29+0500"));
+        assert!(has_explicit_timezone("2020-09-08t13:42:29-0330"));
+    }
+
+    #[test]
+    fn detects_offsets_with_colons() {
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29-03:30"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29+05:00:45"));
+    }
+
+    #[test]
+    fn detects_z_suffix() {
+        assert!(has_explicit_timezone("2020-09-08T13:42:29Z"));
+        assert!(has_explicit_timezone("2020-09-08T13:42:29z"));
+    }
+
+    #[test]
+    fn rejects_naive_timestamps() {
+        assert!(!has_explicit_timezone("2020-09-08T13:42:29"));
+        assert!(!has_explicit_timezone("2020-09-08 13:42:29"));
+        assert!(!has_explicit_timezone("2024-01-01 12:00:00"));
+
+        // Date formats with dashes that could be confused with offsets
+        assert!(!has_explicit_timezone("03:59:00.123456789 05-17-2023"));
+        assert!(!has_explicit_timezone("12:00:00 01-02-2024"));
+    }
+
+    #[test]
+    fn rejects_scientific_notation() {
+        // Should not treat scientific notation as timezone offset
+        assert!(!has_explicit_timezone("1.5e+10"));
+        assert!(!has_explicit_timezone("2.3E-05"));
+    }
+
+    #[test]
+    fn test_offset_without_colon_parsing() {
+        use super::{
+            string_to_timestamp_nanos_shim, string_to_timestamp_nanos_with_timezone,
+        };
+
+        // Test the exact case from the issue: 2020-09-08T13:42:29+0500
+        // This should parse correctly as having an explicit offset
+        let utc_tz = ConfiguredTimeZone::parse("UTC")
+            .unwrap()
+            .expect("UTC should parse");
+        let result_utc =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+0500")
+                .unwrap();
+
+        // Parse the equivalent RFC3339 format with colon to get the expected value
+        let expected =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
+        assert_eq!(result_utc, expected);
+
+        // Test with America/New_York timezone - should NOT double-adjust
+        // Because the timestamp has an explicit timezone, the session timezone should be ignored
+        let ny_tz = ConfiguredTimeZone::parse("America/New_York")
+            .unwrap()
+            .expect("America/New_York should parse");
+        let result_ny =
+            string_to_timestamp_nanos_with_timezone(&ny_tz, "2020-09-08T13:42:29+0500")
+                .unwrap();
+
+        // The result should be the same as UTC because the timestamp has an explicit timezone
+        assert_eq!(result_ny, expected);
+
+        // Test other offset formats without colons
+        let result2 =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29-0330")
+                .unwrap();
+        let expected2 =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29-03:30").unwrap();
+        assert_eq!(result2, expected2);
+
+        // Test 2-digit offsets
+        let result3 =
+            string_to_timestamp_nanos_with_timezone(&utc_tz, "2020-09-08T13:42:29+05")
+                .unwrap();
+        let expected3 =
+            string_to_timestamp_nanos_shim("2020-09-08T13:42:29+05:00").unwrap();
+        assert_eq!(result3, expected3);
+    }
+
+    #[test]
+    fn detects_named_timezones_with_trailing_offsets() {
+        use super::has_explicit_timezone;
+
+        // Named timezone tokens and trailing offsets should be detected by the
+        // simplified explicit-timezone heuristic.
+        assert!(has_explicit_timezone("America/Los_Angeles+8"));
+        assert!(has_explicit_timezone("PST+8"));
+        assert!(has_explicit_timezone("Europe/London-1"));
+        assert!(has_explicit_timezone("UTC+0"));
+
+        assert!(has_explicit_timezone(
+            "2024-01-01T12:00:00 Europe/London+05"
+        ));
+        assert!(has_explicit_timezone("Meeting at 12:00 PST+8"));
+        assert!(has_explicit_timezone("Event at 12:00 Europe/London-1"));
+    }
 }
