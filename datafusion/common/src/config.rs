@@ -2929,6 +2929,7 @@ config_namespace! {
 pub trait OutputFormatExt: Display {}
 
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "parquet", expect(clippy::large_enum_variant))]
 pub enum OutputFormat {
     CSV(CsvOptions),
     JSON(JsonOptions),
