@@ -239,7 +239,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         self
     }
 
-    #[allow(rustdoc::private_intra_doc_links)]
+    #[expect(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
