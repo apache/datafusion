@@ -978,7 +978,6 @@ mod tests {
         // Precision<ScalarValue> is not copy (requires .clone())
         let precision: Precision<ScalarValue> =
             Precision::Exact(ScalarValue::Int64(Some(42)));
-        // Clippy would complain about this if it were Copy
         let p2 = precision.clone();
         assert_eq!(precision, p2);
     }
