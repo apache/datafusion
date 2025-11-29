@@ -35,7 +35,7 @@ use std::sync::Arc;
 /// functions such as `rank` ignore the values in the window frame,
 /// but others such as `first_value`, `last_value`, and
 /// `nth_value` need the value.
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 pub trait StandardWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns the aggregate expression as [`Any`] so that it can be
     /// downcast to a specific implementation.
