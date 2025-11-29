@@ -337,7 +337,7 @@ impl FileGroupPartitioner {
 
             let last_group = new_groups.len() - 1;
             let (mut range_start, file_end) = original_file.range();
-            let mut range_end = range_size;
+            let mut range_end = range_start + range_size;
             for (i, group_index) in new_groups.into_iter().enumerate() {
                 let target_group = &mut file_groups[group_index];
                 assert!(target_group.is_empty());
@@ -662,6 +662,26 @@ mod test {
     }
 
     #[test]
+    fn repartition_single_file_with_incomplete_range() {
+        // Single file, single partition into multiple partitions
+        let single_partition =
+            vec![FileGroup::new(vec![pfile("a", 123).with_range(10, 100)])];
+
+        let actual = FileGroupPartitioner::new()
+            .with_target_partitions(4)
+            .with_repartition_file_min_size(10)
+            .repartition_file_groups(&single_partition);
+
+        let expected = Some(vec![
+            FileGroup::new(vec![pfile("a", 123).with_range(10, 33)]),
+            FileGroup::new(vec![pfile("a", 123).with_range(33, 56)]),
+            FileGroup::new(vec![pfile("a", 123).with_range(56, 79)]),
+            FileGroup::new(vec![pfile("a", 123).with_range(79, 100)]),
+        ]);
+        assert_partitioned_files(expected, actual);
+    }
+
+    #[test]
     fn repartition_single_file_duplicated_with_range() {
         // Single file, two partitions into multiple partitions
         let single_partition = vec![FileGroup::new(vec![
@@ -932,6 +952,34 @@ mod test {
             FileGroup::new(vec![pfile("b", 30).with_range(0, 30)]),
             // second half of first "a"
             FileGroup::new(vec![pfile("a", 100).with_range(25, 50)]),
+        ]);
+        assert_partitioned_files(expected, actual);
+    }
+
+    #[test]
+    fn repartition_ordered_one_large_one_small_file_with_non_full_range() {
+        // "Rebalance" the single large file across empty partitions, but can't split
+        // small file
+        let source_partitions = vec![
+            FileGroup::new(vec![pfile("a", 100).with_range(20, 80)]),
+            FileGroup::new(vec![pfile("b", 30).with_range(5, 25)]),
+        ];
+
+        let actual = FileGroupPartitioner::new()
+            .with_preserve_order_within_groups(true)
+            .with_target_partitions(4)
+            .with_repartition_file_min_size(10)
+            .repartition_file_groups(&source_partitions);
+
+        let expected = Some(vec![
+            // scan first third of "a"
+            FileGroup::new(vec![pfile("a", 100).with_range(20, 40)]),
+            // only b in this group (can't split this)
+            FileGroup::new(vec![pfile("b", 30).with_range(5, 25)]),
+            // second third of "a"
+            FileGroup::new(vec![pfile("a", 100).with_range(40, 60)]),
+            // final third of "a"
+            FileGroup::new(vec![pfile("a", 100).with_range(60, 80)]),
         ]);
         assert_partitioned_files(expected, actual);
     }
