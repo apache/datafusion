@@ -46,7 +46,7 @@ pub trait ExprSchemable {
     fn nullable(&self, input_schema: &dyn ExprSchema) -> Result<bool>;
 
     /// Given a schema, return the expr's optional metadata
-    #[deprecated(since = "51.0.0", note = "Use new API instead")]
+    #[deprecated(since = "52.0.0", note = "Use to_field() and extract metadata via FieldMetadata::from(field.metadata()) instead")]
     fn metadata(&self, schema: &dyn ExprSchema) -> Result<FieldMetadata>;
 
     /// Convert to a field with respect to a schema
