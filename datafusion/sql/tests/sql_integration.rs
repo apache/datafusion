@@ -4210,6 +4210,35 @@ fn test_select_distinct_order_by() {
 }
 
 #[test]
+fn test_select_sort_by() {
+    let sql = "SELECT id,age from person SORT BY id";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: person.id ASC NULLS LAST, preserve_ordering=true
+  Projection: person.id, person.age
+    TableScan: person
+"#
+    );
+}
+
+#[test]
+fn test_select_cluster_by() {
+    let sql = "SELECT id,age  from person CLUSTER BY id";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Sort: person.id ASC NULLS LAST, preserve_ordering=true
+  Repartition: DistributeBy(person.id)
+    Projection: person.id, person.age
+      TableScan: person
+"#
+    );
+}
+
+#[test]
 fn test_select_qualify_basic() {
     let sql = "SELECT person.id, ROW_NUMBER() OVER (PARTITION BY person.age ORDER BY person.id) as rn FROM person QUALIFY rn = 1";
     let plan = logical_plan(sql).unwrap();
@@ -4312,10 +4341,6 @@ Projection: person.id, person.age, row_number() PARTITION BY [person.age] ORDER 
 }
 
 #[rstest]
-#[case::select_cluster_by_unsupported(
-    "SELECT customer_name, sum(order_total) as total_order_amount FROM orders CLUSTER BY customer_name",
-    "This feature is not implemented: CLUSTER BY"
-)]
 #[case::select_lateral_view_unsupported(
     "SELECT id, number FROM person LATERAL VIEW explode(numbers) exploded_table AS number",
     "This feature is not implemented: LATERAL VIEWS"
@@ -4323,10 +4348,6 @@ Projection: person.id, person.age, row_number() PARTITION BY [person.age] ORDER 
 #[case::select_top_unsupported(
     "SELECT TOP (5) * FROM person",
     "This feature is not implemented: TOP"
-)]
-#[case::select_sort_by_unsupported(
-    "SELECT * FROM person SORT BY id",
-    "This feature is not implemented: SORT BY"
 )]
 #[test]
 fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str) {

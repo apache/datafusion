@@ -884,6 +884,7 @@ impl LogicalPlan {
             LogicalPlan::Sort(Sort {
                 expr: sort_expr,
                 fetch,
+                preserve_partitioning,
                 ..
             }) => {
                 let input = self.only_input(inputs)?;
@@ -895,6 +896,7 @@ impl LogicalPlan {
                         .collect(),
                     input: Arc::new(input),
                     fetch: *fetch,
+                    preserve_partitioning: *preserve_partitioning,
                 }))
             }
             LogicalPlan::Join(Join {
@@ -1924,7 +1926,7 @@ impl LogicalPlan {
                         expr_vec_fmt!(group_expr),
                         expr_vec_fmt!(aggr_expr)
                     ),
-                    LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
+                    LogicalPlan::Sort(Sort { expr, fetch, preserve_partitioning, .. }) => {
                         write!(f, "Sort: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
@@ -1934,6 +1936,9 @@ impl LogicalPlan {
                         }
                         if let Some(a) = fetch {
                             write!(f, ", fetch={a}")?;
+                        }
+                        if *preserve_partitioning {
+                            write!(f, ", preserve_ordering={preserve_partitioning}")?;
                         }
 
                         Ok(())
@@ -3728,6 +3733,9 @@ pub struct Sort {
     pub input: Arc<LogicalPlan>,
     /// Optional fetch limit
     pub fetch: Option<usize>,
+    /// Preserve partitions of input plan. If false, the input partitions
+    /// will be sorted and merged into a single output partition.
+    pub preserve_partitioning: bool,
 }
 
 /// Join two logical plans on one or more join columns

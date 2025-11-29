@@ -912,10 +912,20 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<_>>>()?;
                         Partitioning::Hash(runtime_expr, *n)
                     }
-                    LogicalPartitioning::DistributeBy(_) => {
-                        return not_impl_err!(
-                            "Physical plan does not support DistributeBy partitioning"
-                        );
+                    LogicalPartitioning::DistributeBy(expr) => {
+                        let n =
+                            session_state.config().options().execution.target_partitions;
+                        let runtime_expr = expr
+                            .iter()
+                            .map(|e| {
+                                self.create_physical_expr(
+                                    e,
+                                    input_dfschema,
+                                    session_state,
+                                )
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        Partitioning::Hash(runtime_expr, n)
                     }
                 };
                 Arc::new(RepartitionExec::try_new(
@@ -924,7 +934,11 @@ impl DefaultPhysicalPlanner {
                 )?)
             }
             LogicalPlan::Sort(Sort {
-                expr, input, fetch, ..
+                expr,
+                input,
+                fetch,
+                preserve_partitioning,
+                ..
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
@@ -938,7 +952,9 @@ impl DefaultPhysicalPlanner {
                         "SortExec requires at least one sort expression"
                     );
                 };
-                let new_sort = SortExec::new(ordering, physical_input).with_fetch(*fetch);
+                let new_sort = SortExec::new(ordering, physical_input)
+                    .with_preserve_partitioning(*preserve_partitioning)
+                    .with_fetch(*fetch);
                 Arc::new(new_sort)
             }
             LogicalPlan::Subquery(_) => todo!(),
