@@ -46,7 +46,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::arrow_err;
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::error::Result;
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;

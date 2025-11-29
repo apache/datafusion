@@ -21,9 +21,7 @@ use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::cmp;
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
-use datafusion_common::{
-    assert_eq_or_internal_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{assert_eq_or_internal_err, Result, ScalarValue};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};

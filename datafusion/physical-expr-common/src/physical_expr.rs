@@ -31,8 +31,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    assert_eq_or_internal_err, exec_err, not_impl_err, DataFusionError, Result,
-    ScalarValue,
+    assert_eq_or_internal_err, exec_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;

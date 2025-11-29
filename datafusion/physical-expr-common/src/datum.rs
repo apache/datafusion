@@ -23,7 +23,6 @@ use arrow::compute::kernels::cmp::{
 };
 use arrow::compute::{ilike, like, nilike, nlike, SortOptions};
 use arrow::error::ArrowError;
-use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;

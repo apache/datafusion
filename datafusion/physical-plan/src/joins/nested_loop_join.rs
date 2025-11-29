@@ -62,8 +62,7 @@ use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
     arrow_err, assert_eq_or_internal_err, internal_datafusion_err, internal_err,
-    project_schema, unwrap_or_internal_err, DataFusionError, JoinSide, Result,
-    ScalarValue, Statistics,
+    project_schema, unwrap_or_internal_err, JoinSide, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;

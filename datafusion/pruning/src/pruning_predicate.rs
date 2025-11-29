@@ -40,7 +40,7 @@ use datafusion_common::{assert_eq_or_internal_err, Column, DFSchema};
 use datafusion_common::{
     internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
-    DataFusionError, ScalarValue,
+    ScalarValue,
 };
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};

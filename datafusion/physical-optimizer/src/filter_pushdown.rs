@@ -36,9 +36,7 @@ use std::sync::Arc;
 use crate::{OptimizerContext, PhysicalOptimizerRule};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{
-    assert_eq_or_internal_err, config::ConfigOptions, DataFusionError, Result,
-};
+use datafusion_common::{assert_eq_or_internal_err, config::ConfigOptions, Result};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{

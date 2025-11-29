@@ -30,8 +30,7 @@ use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
-    DataFusionError, Result,
+    assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args, Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,

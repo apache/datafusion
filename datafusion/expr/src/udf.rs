@@ -26,8 +26,7 @@ use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    assert_or_internal_err, not_impl_err, DataFusionError, ExprSchema, Result,
-    ScalarValue,
+    assert_or_internal_err, not_impl_err, ExprSchema, Result, ScalarValue,
 };
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;

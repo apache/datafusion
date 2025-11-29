@@ -18,7 +18,7 @@
 use arrow::array::RecordBatch;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
+use datafusion_common::{assert_or_internal_err, Result};
 
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
 ///

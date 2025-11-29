@@ -66,8 +66,8 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    assert_or_internal_err, plan_err, project_schema, DataFusionError, JoinSide,
-    JoinType, NullEquality, Result,
+    assert_or_internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality,
+    Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
