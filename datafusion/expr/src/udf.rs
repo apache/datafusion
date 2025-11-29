@@ -31,6 +31,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::operator::Operator;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -696,6 +697,35 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
+    /// Attempts to convert a literal value to the corresponding datatype
+    /// of a column expression so that a **preimage** can be computed for
+    /// pruning comparison predicates.
+    ///
+    /// This is used during predicate-pushdown optimization
+    /// (see `datafusion-optimizer-udf_preimage::preimage_in_comparison_for_binary`)
+    ///
+    /// Currently is only implemented by:
+    /// - `date_part(YEAR, expr)`
+    ///
+    /// # Arguments:
+    /// * `lit_value`:  The literal `&ScalarValue` used in comparison
+    /// * `target_type`: The datatype of the column expression inside the function
+    /// * `op`: The comparison `Operator` (e.g. `=`, `<`, `>=`).
+    ///
+    /// # Returns
+    ///
+    /// Returns a `ScalarValue` converted to the appropriate target type if a
+    /// preimage cast is supported for the given function/operator combination;
+    /// otherwise returns `None`.
+    fn preimage_cast(
+        &self,
+        _lit_value: &ScalarValue,
+        _target_type: &DataType,
+        _op: Operator,
+    ) -> Option<ScalarValue> {
+        None
+    }
+
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered.
     ///
@@ -924,6 +954,15 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
+    }
+
+    fn preimage_cast(
+        &self,
+        lit_value: &ScalarValue,
+        target_type: &DataType,
+        op: Operator,
+    ) -> Option<ScalarValue> {
+        self.inner.preimage_cast(lit_value, target_type, op)
     }
 
     fn conditional_arguments<'a>(
