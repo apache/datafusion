@@ -145,7 +145,7 @@ impl ScalarUDFImpl for RPadFunc {
     }
 }
 
-pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
+fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
@@ -163,21 +163,21 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
     ) {
         (2, Utf8View, _) => {
             rpad_impl::<&StringViewArray, &StringViewArray, StringArrayLen>(
-                args[0].as_string_view(),
+                &args[0].as_string_view(),
                 length_array,
                 None,
             )
         }
         (3, Utf8View, Some(Utf8View)) => {
             rpad_impl::<&StringViewArray, &StringViewArray, StringArrayLen>(
-                args[0].as_string_view(),
+                &args[0].as_string_view(),
                 length_array,
                 Some(args[2].as_string_view()),
             )
         }
         (3, Utf8View, Some(Utf8 | LargeUtf8)) => {
             rpad_impl::<&StringViewArray, &GenericStringArray<FillArrayLen>, StringArrayLen>(
-                args[0].as_string_view(),
+                &args[0].as_string_view(),
                 length_array,
                 Some(args[2].as_string::<FillArrayLen>()),
             )
@@ -187,7 +187,7 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
             &StringViewArray,
             StringArrayLen,
         >(
-            args[0].as_string::<StringArrayLen>(),
+            &args[0].as_string::<StringArrayLen>(),
             length_array,
             Some(args[2].as_string_view()),
         ),
@@ -196,7 +196,7 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
             &GenericStringArray<FillArrayLen>,
             StringArrayLen,
         >(
-            args[0].as_string::<StringArrayLen>(),
+            &args[0].as_string::<StringArrayLen>(),
             length_array,
             args.get(2).map(|arg| arg.as_string::<FillArrayLen>()),
         ),
@@ -205,8 +205,8 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
 
 /// Extends the string to length 'length' by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.
 /// rpad('hi', 5, 'xy') = 'hixyx'
-pub fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
-    string_array: StringArrType,
+fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
+    string_array: &StringArrType,
     length_array: &Int64Array,
     fill_array: Option<FillArrType>,
 ) -> Result<ArrayRef>

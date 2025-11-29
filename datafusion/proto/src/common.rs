@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_datafusion_err, internal_err, Result};
+use datafusion_common::{
+    assert_eq_or_internal_err, internal_datafusion_err, DataFusionError, Result,
+};
 
 pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
-    if s.len() != 1 {
-        return internal_err!(
-            "Invalid CSV {description}: expected single character, got {s}"
-        );
-    }
+    assert_eq_or_internal_err!(
+        s.len(),
+        1,
+        "Invalid CSV {description}: expected single character, got {s}"
+    );
     Ok(s.as_bytes()[0])
 }
 

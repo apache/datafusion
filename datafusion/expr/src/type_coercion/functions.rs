@@ -943,7 +943,8 @@ mod tests {
 
     use super::*;
     use arrow::datatypes::Field;
-    use datafusion_common::assert_contains;
+    use datafusion_common::{assert_contains, types::logical_binary};
+    use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
     #[test]
     fn test_string_conversion() {
@@ -1332,6 +1333,30 @@ mod tests {
                 DataType::new_list(DataType::new_large_list(DataType::Int64, true), true),
             ]]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_coercible_binary() -> Result<()> {
+        let signature = Signature::coercible(
+            vec![Coercion::new_exact(TypeSignatureClass::Native(
+                logical_binary(),
+            ))],
+            Volatility::Immutable,
+        );
+
+        // Binary types should stay their original selves
+        for t in [
+            DataType::Binary,
+            DataType::BinaryView,
+            DataType::LargeBinary,
+        ] {
+            assert_eq!(
+                get_valid_types("", &signature.type_signature, std::slice::from_ref(&t))?,
+                vec![vec![t]]
+            );
+        }
 
         Ok(())
     }

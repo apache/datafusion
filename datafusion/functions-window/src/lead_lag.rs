@@ -264,7 +264,7 @@ impl WindowUDFImpl for WindowShift {
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let shift_offset =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
-                .map(get_signed_integer)
+                .map(|v| get_signed_integer(&v))
                 .map_or(Ok(None), |v| v.map(Some))
                 .map(|n| self.kind.shift_offset(n))
                 .map(|offset| {

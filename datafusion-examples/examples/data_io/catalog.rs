@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! Simple example of a catalog/schema implementation.
 use async_trait::async_trait;
 use datafusion::{

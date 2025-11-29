@@ -122,7 +122,7 @@ impl ScalarUDFImpl for RightFunc {
 /// Returns last n characters in the string, or when n is negative, returns all but first |n| characters.
 /// right('abcde', 2) = 'de'
 /// The implementation uses UTF-8 code points as characters
-pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let n_array = as_int64_array(&args[1])?;
     if args[0].data_type() == &DataType::Utf8View {
         // string_view_right(args)

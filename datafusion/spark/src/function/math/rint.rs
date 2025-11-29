@@ -84,9 +84,7 @@ impl ScalarUDFImpl for SparkRint {
 }
 
 pub fn spark_rint(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        assert_eq_or_internal_err!(args.len(), 1, "`rint` expects exactly one argument");
-    }
+    assert_eq_or_internal_err!(args.len(), 1, "`rint` expects exactly one argument");
 
     let array: &dyn Array = args[0].as_ref();
     match args[0].data_type() {

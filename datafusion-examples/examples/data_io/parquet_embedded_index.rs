@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! Embedding and using a custom index in Parquet files
 //!
 //! # Background

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use datafusion::arrow::array::{UInt64Array, UInt8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -32,8 +34,7 @@ use std::sync::Arc;
 ///
 /// [`query_memtable`]: a simple query against a [`MemTable`]
 /// [`query_parquet`]: a simple query against a directory with multiple Parquet files
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn query() -> Result<()> {
     query_memtable().await?;
     query_parquet().await?;
     Ok(())

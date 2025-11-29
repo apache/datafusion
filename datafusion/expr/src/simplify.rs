@@ -48,7 +48,7 @@ pub trait SimplifyInfo {
 /// # Example
 /// See the `simplify_demo` in the [`expr_api` example]
 ///
-/// [`expr_api` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+/// [`expr_api` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
 #[derive(Debug, Clone)]
 pub struct SimplifyContext<'a> {
     schema: Option<DFSchemaRef>,

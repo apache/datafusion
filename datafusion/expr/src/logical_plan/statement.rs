@@ -39,6 +39,8 @@ pub enum Statement {
     TransactionEnd(TransactionEnd),
     /// Set a Variable
     SetVariable(SetVariable),
+    /// Reset a Variable
+    ResetVariable(ResetVariable),
     /// Prepare a statement and find any bind parameters
     /// (e.g. `?`). This is used to implement SQL-prepared statements.
     Prepare(Prepare),
@@ -66,6 +68,7 @@ impl Statement {
             Statement::TransactionStart(_) => "TransactionStart",
             Statement::TransactionEnd(_) => "TransactionEnd",
             Statement::SetVariable(_) => "SetVariable",
+            Statement::ResetVariable(_) => "ResetVariable",
             Statement::Prepare(_) => "Prepare",
             Statement::Execute(_) => "Execute",
             Statement::Deallocate(_) => "Deallocate",
@@ -108,6 +111,9 @@ impl Statement {
                         variable, value, ..
                     }) => {
                         write!(f, "SetVariable: set {variable:?} to {value:?}")
+                    }
+                    Statement::ResetVariable(ResetVariable { variable }) => {
+                        write!(f, "ResetVariable: reset {variable:?}")
                     }
                     Statement::Prepare(Prepare { name, fields, .. }) => {
                         write!(
@@ -194,6 +200,12 @@ pub struct SetVariable {
     pub value: String,
 }
 
+/// Reset a configuration variable to its default
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct ResetVariable {
+    /// The variable name
+    pub variable: String,
+}
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]

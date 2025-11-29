@@ -19,6 +19,9 @@ use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 
 use super::{error::Result, normalize, DFSqlLogicTestError};
+use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
+use crate::engines::output::{DFColumnType, DFOutput};
+use crate::is_spark_path;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
@@ -30,13 +33,11 @@ use log::{debug, log_enabled, warn};
 use sqllogictest::DBOutput;
 use tokio::time::Instant;
 
-use crate::engines::output::{DFColumnType, DFOutput};
-use crate::is_spark_path;
-
 pub struct DataFusion {
     ctx: SessionContext,
     relative_path: PathBuf,
     pb: ProgressBar,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
 }
 
 impl DataFusion {
@@ -45,6 +46,20 @@ impl DataFusion {
             ctx,
             relative_path,
             pb,
+            currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
+        }
+    }
+
+    /// Add a tracker that will track the currently executed SQL statement.
+    ///
+    /// This is useful for logging and debugging purposes.
+    pub fn with_currently_executing_sql_tracker(
+        self,
+        currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    ) -> Self {
+        Self {
+            currently_executing_sql_tracker,
+            ..self
         }
     }
 
@@ -79,9 +94,13 @@ impl sqllogictest::AsyncDB for DataFusion {
             );
         }
 
+        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
+
         let start = Instant::now();
         let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
         let duration = start.elapsed();
+
+        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 
         if duration.gt(&Duration::from_millis(500)) {
             self.update_slow_count();

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use datafusion_common::Result;
 use datafusion_physical_plan::ExecutionPlan;
 
-use datafusion_common::config::{ConfigOptions, OptimizerOptions};
+use datafusion_common::config::OptimizerOptions;
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
@@ -34,7 +34,7 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
-use crate::PhysicalOptimizerRule;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use itertools::izip;
 
@@ -54,11 +54,12 @@ impl SanityCheckPlan {
 }
 
 impl PhysicalOptimizerRule for SanityCheckPlan {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.session_config().options();
         plan.transform_up(|p| check_plan_sanity(p, &config.optimizer))
             .data()
     }

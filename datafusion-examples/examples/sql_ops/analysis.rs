@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! This example shows how to use the structures that DataFusion provides to perform
 //! Analysis on SQL queries and their plans.
 //!
@@ -32,141 +34,9 @@ use datafusion::{
 };
 use test_utils::tpcds::tpcds_schemas;
 
-/// Counts the total number of joins in a plan
-fn total_join_count(plan: &LogicalPlan) -> usize {
-    let mut total = 0;
-
-    // We can use the TreeNode API to walk over a LogicalPlan.
-    plan.apply(|node| {
-        // if we encounter a join we update the running count
-        if matches!(node, LogicalPlan::Join(_)) {
-            total += 1;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })
-    .unwrap();
-
-    total
-}
-
-/// Counts the total number of joins in a plan and collects every join tree in
-/// the plan with their respective join count.
-///
-/// Join Tree Definition: the largest subtree consisting entirely of joins
-///
-/// For example, this plan:
-///
-/// ```text
-///         JOIN
-///         /  \
-///       A   JOIN
-///            /  \
-///           B    C
-/// ```
-///
-/// has a single join tree `(A-B-C)` which will result in `(2, [2])`
-///
-/// This plan:
-///
-/// ```text
-///         JOIN
-///         /  \
-///       A   GROUP
-///              |
-///             JOIN
-///             /  \
-///            B    C
-/// ```
-///
-/// Has two join trees `(A-, B-C)` which will result in `(2, [1, 1])`
-fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
-    // this works the same way as `total_count`, but now when we encounter a Join
-    // we try to collect it's entire tree
-    let mut to_visit = vec![plan];
-    let mut total = 0;
-    let mut groups = vec![];
-
-    while let Some(node) = to_visit.pop() {
-        // if we encounter a join, we know were at the root of the tree
-        // count this tree and recurse on it's inputs
-        if matches!(node, LogicalPlan::Join(_)) {
-            let (group_count, inputs) = count_tree(node);
-            total += group_count;
-            groups.push(group_count);
-            to_visit.extend(inputs);
-        } else {
-            to_visit.extend(node.inputs());
-        }
-    }
-
-    (total, groups)
-}
-
-/// Count the entire join tree and return its inputs using TreeNode API
-///
-/// For example, if this function receives following plan:
-///
-/// ```text
-///         JOIN
-///         /  \
-///       A   GROUP
-///              |
-///             JOIN
-///             /  \
-///            B    C
-/// ```
-///
-/// It will return `(1, [A, GROUP])`
-fn count_tree(join: &LogicalPlan) -> (usize, Vec<&LogicalPlan>) {
-    let mut inputs = Vec::new();
-    let mut total = 0;
-
-    join.apply(|node| {
-        // Some extra knowledge:
-        //
-        // optimized plans have their projections pushed down as far as
-        // possible, which sometimes results in a projection going in between 2
-        // subsequent joins giving the illusion these joins are not "related",
-        // when in fact they are.
-        //
-        // This plan:
-        //   JOIN
-        //   /  \
-        // A   PROJECTION
-        //        |
-        //       JOIN
-        //       /  \
-        //      B    C
-        //
-        // is the same as:
-        //
-        //   JOIN
-        //   /  \
-        // A   JOIN
-        //     /  \
-        //    B    C
-        // we can continue the recursion in this case
-        if let LogicalPlan::Projection(_) = node {
-            return Ok(TreeNodeRecursion::Continue);
-        }
-
-        // any join we count
-        if matches!(node, LogicalPlan::Join(_)) {
-            total += 1;
-            Ok(TreeNodeRecursion::Continue)
-        } else {
-            inputs.push(node);
-            // skip children of input node
-            Ok(TreeNodeRecursion::Jump)
-        }
-    })
-    .unwrap();
-
-    (total, inputs)
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Demonstrates how to analyze a SQL query by counting JOINs and identifying
+/// join-trees using DataFusion’s `LogicalPlan` and `TreeNode` API.
+pub async fn analysis() -> Result<()> {
     // To show how we can count the joins in a sql query we'll be using query 88
     // from the TPC-DS benchmark.
     //
@@ -309,4 +179,137 @@ from
     );
 
     Ok(())
+}
+
+/// Counts the total number of joins in a plan
+fn total_join_count(plan: &LogicalPlan) -> usize {
+    let mut total = 0;
+
+    // We can use the TreeNode API to walk over a LogicalPlan.
+    plan.apply(|node| {
+        // if we encounter a join we update the running count
+        if matches!(node, LogicalPlan::Join(_)) {
+            total += 1;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .unwrap();
+
+    total
+}
+
+/// Counts the total number of joins in a plan and collects every join tree in
+/// the plan with their respective join count.
+///
+/// Join Tree Definition: the largest subtree consisting entirely of joins
+///
+/// For example, this plan:
+///
+/// ```text
+///         JOIN
+///         /  \
+///       A   JOIN
+///            /  \
+///           B    C
+/// ```
+///
+/// has a single join tree `(A-B-C)` which will result in `(2, [2])`
+///
+/// This plan:
+///
+/// ```text
+///         JOIN
+///         /  \
+///       A   GROUP
+///              |
+///             JOIN
+///             /  \
+///            B    C
+/// ```
+///
+/// Has two join trees `(A-, B-C)` which will result in `(2, [1, 1])`
+fn count_trees(plan: &LogicalPlan) -> (usize, Vec<usize>) {
+    // this works the same way as `total_count`, but now when we encounter a Join
+    // we try to collect it's entire tree
+    let mut to_visit = vec![plan];
+    let mut total = 0;
+    let mut groups = vec![];
+
+    while let Some(node) = to_visit.pop() {
+        // if we encounter a join, we know were at the root of the tree
+        // count this tree and recurse on it's inputs
+        if matches!(node, LogicalPlan::Join(_)) {
+            let (group_count, inputs) = count_tree(node);
+            total += group_count;
+            groups.push(group_count);
+            to_visit.extend(inputs);
+        } else {
+            to_visit.extend(node.inputs());
+        }
+    }
+
+    (total, groups)
+}
+
+/// Count the entire join tree and return its inputs using TreeNode API
+///
+/// For example, if this function receives following plan:
+///
+/// ```text
+///         JOIN
+///         /  \
+///       A   GROUP
+///              |
+///             JOIN
+///             /  \
+///            B    C
+/// ```
+///
+/// It will return `(1, [A, GROUP])`
+fn count_tree(join: &LogicalPlan) -> (usize, Vec<&LogicalPlan>) {
+    let mut inputs = Vec::new();
+    let mut total = 0;
+
+    join.apply(|node| {
+        // Some extra knowledge:
+        //
+        // optimized plans have their projections pushed down as far as
+        // possible, which sometimes results in a projection going in between 2
+        // subsequent joins giving the illusion these joins are not "related",
+        // when in fact they are.
+        //
+        // This plan:
+        //   JOIN
+        //   /  \
+        // A   PROJECTION
+        //        |
+        //       JOIN
+        //       /  \
+        //      B    C
+        //
+        // is the same as:
+        //
+        //   JOIN
+        //   /  \
+        // A   JOIN
+        //     /  \
+        //    B    C
+        // we can continue the recursion in this case
+        if let LogicalPlan::Projection(_) = node {
+            return Ok(TreeNodeRecursion::Continue);
+        }
+
+        // any join we count
+        if matches!(node, LogicalPlan::Join(_)) {
+            total += 1;
+            Ok(TreeNodeRecursion::Continue)
+        } else {
+            inputs.push(node);
+            // skip children of input node
+            Ok(TreeNodeRecursion::Jump)
+        }
+    })
+    .unwrap();
+
+    (total, inputs)
 }

@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use crate::{
+    _internal_datafusion_err, DataFusionError, Result,
     config::{ParquetOptions, TableParquetOptions},
-    DataFusionError, Result, _internal_datafusion_err,
 };
 
 use arrow::datatypes::Schema;
@@ -34,8 +34,8 @@ use parquet::{
     file::{
         metadata::KeyValue,
         properties::{
-            EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
-            DEFAULT_STATISTICS_ENABLED,
+            DEFAULT_STATISTICS_ENABLED, EnabledStatistics, WriterProperties,
+            WriterPropertiesBuilder, WriterVersion,
         },
     },
     schema::types::ColumnPath,
@@ -106,7 +106,9 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
         if !global.skip_arrow_metadata
             && !key_value_metadata.contains_key(ARROW_SCHEMA_META_KEY)
         {
-            return Err(_internal_datafusion_err!("arrow schema was not added to the kv_metadata, even though it is required by configuration settings"));
+            return Err(_internal_datafusion_err!(
+                "arrow schema was not added to the kv_metadata, even though it is required by configuration settings"
+            ));
         }
 
         // add kv_meta, if any
@@ -408,8 +410,8 @@ mod tests {
     };
     use parquet::basic::Compression;
     use parquet::file::properties::{
-        BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
-        DEFAULT_BLOOM_FILTER_NDV,
+        BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
+        EnabledStatistics,
     };
     use std::collections::HashMap;
 
@@ -674,8 +676,7 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         let default_parquet_opts = ParquetOptions::default();
         assert_eq!(
-            default_table_writer_opts.global,
-            default_parquet_opts,
+            default_table_writer_opts.global, default_parquet_opts,
             "should have matching defaults for TableParquetOptions.global and ParquetOptions",
         );
 
@@ -699,7 +700,9 @@ mod tests {
             "should have different created_by sources",
         );
         assert!(
-            default_writer_props.created_by().starts_with("parquet-rs version"),
+            default_writer_props
+                .created_by()
+                .starts_with("parquet-rs version"),
             "should indicate that writer_props defaults came from the extern parquet crate",
         );
         assert!(
@@ -733,8 +736,7 @@ mod tests {
         from_extern_parquet.global.skip_arrow_metadata = true;
 
         assert_eq!(
-            default_table_writer_opts,
-            from_extern_parquet,
+            default_table_writer_opts, from_extern_parquet,
             "the default writer_props should have the same configuration as the session's default TableParquetOptions",
         );
     }

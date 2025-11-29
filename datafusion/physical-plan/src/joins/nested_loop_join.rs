@@ -219,7 +219,7 @@ impl NestedLoopJoinExec {
         let cache = Self::compute_properties(
             &left,
             &right,
-            Arc::clone(&join_schema),
+            &join_schema,
             *join_type,
             projection.as_ref(),
         )?;
@@ -266,7 +266,7 @@ impl NestedLoopJoinExec {
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         join_type: JoinType,
         projection: Option<&Vec<usize>>,
     ) -> Result<PlanProperties> {
@@ -275,7 +275,7 @@ impl NestedLoopJoinExec {
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            Arc::clone(&schema),
+            Arc::clone(schema),
             &Self::maintains_input_order(join_type),
             None,
             // No on columns in nested loop join
@@ -310,9 +310,8 @@ impl NestedLoopJoinExec {
 
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
-            let projection_mapping =
-                ProjectionMapping::from_indices(projection, &schema)?;
-            let out_schema = project_schema(&schema, Some(projection))?;
+            let projection_mapping = ProjectionMapping::from_indices(projection, schema)?;
+            let out_schema = project_schema(schema, Some(projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
@@ -555,10 +554,11 @@ impl ExecutionPlan for NestedLoopJoinExec {
         if partition.is_some() {
             return Ok(Statistics::new_unknown(&self.schema()));
         }
+        let join_columns = Vec::new();
         estimate_join_statistics(
             self.left.partition_statistics(None)?,
             self.right.partition_statistics(None)?,
-            vec![],
+            &join_columns,
             &self.join_type,
             &self.schema(),
         )
@@ -576,6 +576,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             return Ok(None);
         }
 
+        let schema = self.schema();
         if let Some(JoinData {
             projected_left_child,
             projected_right_child,
@@ -586,7 +587,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             self.left(),
             self.right(),
             &[],
-            self.schema(),
+            &schema,
             self.filter(),
         )? {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
@@ -1656,11 +1657,12 @@ impl NestedLoopJoinStream {
         }
         let bitmap_sliced = BooleanArray::new(bitmap_sliced.finish(), None);
 
+        let right_schema = self.right_data.schema();
         build_unmatched_batch(
-            Arc::clone(&self.output_schema),
+            &self.output_schema,
             &left_batch_sliced,
             bitmap_sliced,
-            self.right_data.schema(),
+            &right_schema,
             &self.column_indices,
             self.join_type,
             JoinSide::Left,
@@ -1683,10 +1685,10 @@ impl NestedLoopJoinStream {
         let left_schema = left_data.batch().schema();
 
         let res = build_unmatched_batch(
-            Arc::clone(&self.output_schema),
+            &self.output_schema,
             &cur_right_batch,
             right_batch_bitmap,
-            left_schema,
+            &left_schema,
             &self.column_indices,
             self.join_type,
             JoinSide::Right,
@@ -1973,7 +1975,7 @@ fn build_row_join_batch(
 /// If Some, that's the result batch
 /// If None, it's not for this special case. Continue execution.
 fn build_unmatched_batch_empty_schema(
-    output_schema: SchemaRef,
+    output_schema: &SchemaRef,
     batch_bitmap: &BooleanArray,
     // For left/right/full joins, it needs to fill nulls for another side
     join_type: JoinType,
@@ -1991,7 +1993,7 @@ fn build_unmatched_batch_empty_schema(
 
     if output_schema.fields().is_empty() {
         Ok(Some(create_record_batch_with_empty_schema(
-            Arc::clone(&output_schema),
+            Arc::clone(output_schema),
             result_size,
         )?))
     } else {
@@ -2051,11 +2053,11 @@ fn create_record_batch_with_empty_schema(
 /// Null(bool) Null(Int32) 1
 /// Null(bool) Null(Int32) 3
 fn build_unmatched_batch(
-    output_schema: SchemaRef,
+    output_schema: &SchemaRef,
     batch: &RecordBatch,
     batch_bitmap: BooleanArray,
     // For left/right/full joins, it needs to fill nulls for another side
-    another_side_schema: SchemaRef,
+    another_side_schema: &SchemaRef,
     col_indices: &[ColumnIndex],
     join_type: JoinType,
     batch_side: JoinSide,
@@ -2065,11 +2067,9 @@ fn build_unmatched_batch(
     debug_assert_ne!(batch_side, JoinSide::None);
 
     // Handle special case (see function comment)
-    if let Some(batch) = build_unmatched_batch_empty_schema(
-        Arc::clone(&output_schema),
-        &batch_bitmap,
-        join_type,
-    )? {
+    if let Some(batch) =
+        build_unmatched_batch_empty_schema(output_schema, &batch_bitmap, join_type)?
+    {
         return Ok(Some(batch));
     }
 
@@ -2116,7 +2116,7 @@ fn build_unmatched_batch(
             debug_assert_ne!(batch_side, JoinSide::None);
             let opposite_side = batch_side.negate();
 
-            build_row_join_batch(&output_schema, &left_null_batch, 0, batch, Some(flipped_bitmap), col_indices, opposite_side)
+            build_row_join_batch(output_schema, &left_null_batch, 0, batch, Some(flipped_bitmap), col_indices, opposite_side)
 
         },
         JoinType::RightSemi | JoinType::RightAnti | JoinType::LeftSemi | JoinType::LeftAnti => {
@@ -2149,7 +2149,7 @@ fn build_unmatched_batch(
                 columns.push(filtered_col);
             }
 
-            Ok(Some(RecordBatch::try_new(Arc::clone(&output_schema), columns)?))
+            Ok(Some(RecordBatch::try_new(Arc::clone(output_schema), columns)?))
         },
         JoinType::RightMark | JoinType::LeftMark => {
             if join_type == JoinType::RightMark {
@@ -2181,7 +2181,7 @@ fn build_unmatched_batch(
                 }
             }
 
-            Ok(Some(RecordBatch::try_new(Arc::clone(&output_schema), columns)?))
+            Ok(Some(RecordBatch::try_new(Arc::clone(output_schema), columns)?))
         }
         _ => internal_err!("If batch is at right side, this function must be handling Full/Right/RightSemi/RightAnti/RightMark joins"),
     }
@@ -2246,7 +2246,8 @@ pub(crate) mod tests {
             source = source.try_with_sort_information(vec![ordering]).unwrap();
         }
 
-        Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
+        let source = Arc::new(source);
+        Arc::new(TestMemoryExec::update_cache(&source))
     }
 
     fn build_left_table() -> Arc<dyn ExecutionPlan> {

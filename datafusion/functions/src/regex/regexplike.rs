@@ -56,7 +56,7 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 | true                                             |
 +--------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
     standard_argument(name = "regexp", prefix = "Regular"),

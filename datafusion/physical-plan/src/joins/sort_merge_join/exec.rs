@@ -532,7 +532,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         estimate_join_statistics(
             self.left.partition_statistics(None)?,
             self.right.partition_statistics(None)?,
-            self.on.clone(),
+            &self.on,
             &self.join_type,
             &self.schema,
         )

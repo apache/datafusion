@@ -257,7 +257,10 @@ async fn bad_selection() {
     .await
     .unwrap_err();
     let err_string = err.to_string();
-    assert_contains!(&err_string, "Internal error: Invalid ParquetAccessPlan Selection. Row group 0 has 5 rows but selection only specifies 4 rows");
+    assert_contains!(
+        &err_string,
+        "Row group 0 has 5 rows but selection only specifies 4 rows."
+    );
 }
 
 /// Return a RowSelection of 1 rows from a row group of 5 rows

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{plan_err, TableReference};
 use datafusion::config::ConfigOptions;
@@ -44,7 +46,7 @@ use std::sync::Arc;
 ///
 /// In this example, we demonstrate how to use the lower level APIs directly,
 /// which only requires the `datafusion-sql` dependency.
-pub fn main() -> Result<()> {
+pub fn frontend() -> Result<()> {
     // First, we parse the SQL string. Note that we use the DataFusion
     // Parser, which wraps the `sqlparser-rs` SQL parser and adds DataFusion
     // specific syntax such as `CREATE EXTERNAL TABLE`

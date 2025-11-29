@@ -127,6 +127,8 @@ The following regular expression functions are supported:"#,
     pub const DOC_SECTION_UNION: DocSection = DocSection {
         include: true,
         label: "Union Functions",
-        description: Some("Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator"),
+        description: Some(
+            "Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator",
+        ),
     };
 }

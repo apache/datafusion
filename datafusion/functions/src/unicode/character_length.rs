@@ -111,21 +111,21 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            character_length_general::<Int32Type, _>(string_array)
+            character_length_general::<Int32Type, _>(&string_array)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            character_length_general::<Int64Type, _>(string_array)
+            character_length_general::<Int64Type, _>(&string_array)
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
-            character_length_general::<Int32Type, _>(string_array)
+            character_length_general::<Int32Type, _>(&string_array)
         }
         _ => unreachable!("CharacterLengthFunc"),
     }
 }
 
-fn character_length_general<'a, T, V>(array: V) -> Result<ArrayRef>
+fn character_length_general<'a, T, V>(array: &V) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,

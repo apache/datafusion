@@ -66,8 +66,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 ///
 /// [`PartitionEvaluator`]: crate::PartitionEvaluator
 /// [`create_udwf`]: crate::expr_fn::create_udwf
-/// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 #[derive(Debug, Clone, PartialOrd)]
 pub struct WindowUDF {
     inner: Arc<dyn WindowUDFImpl>,
@@ -237,7 +237,7 @@ where
 /// [`WindowUDF`] for other available options.
 ///
 ///
-/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
@@ -355,7 +355,7 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// optimizations manually for specific UDFs.
     ///
     /// Example:
-    /// `advanced_udwf.rs`: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs>
+    /// `advanced_udwf.rs`: <https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs>
     ///
     /// # Returns
     /// [None] if simplify is not defined or,

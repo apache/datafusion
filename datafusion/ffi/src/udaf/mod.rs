@@ -19,7 +19,7 @@ use abi_stable::{
     std_types::{ROption, RResult, RStr, RString, RVec},
     StableAbi,
 };
-use accumulator::{FFI_Accumulator, ForeignAccumulator};
+use accumulator::FFI_Accumulator;
 use accumulator_args::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 use arrow::datatypes::{DataType, Field};
 use arrow::ffi::FFI_ArrowSchema;
@@ -39,7 +39,7 @@ use datafusion::{
 };
 use datafusion_common::exec_datafusion_err;
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
-use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
+use groups_accumulator::FFI_GroupsAccumulator;
 use std::hash::{Hash, Hasher};
 use std::{ffi::c_void, sync::Arc};
 
@@ -145,6 +145,11 @@ pub struct FFI_AggregateUDF {
     /// Internal data. This is only to be accessed by the provider of the udaf.
     /// A [`ForeignAggregateUDF`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_AggregateUDF {}
@@ -361,6 +366,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -400,18 +406,22 @@ impl Hash for ForeignAggregateUDF {
     }
 }
 
-impl TryFrom<&FFI_AggregateUDF> for ForeignAggregateUDF {
+impl TryFrom<&FFI_AggregateUDF> for Arc<dyn AggregateUDFImpl> {
     type Error = DataFusionError;
 
     fn try_from(udaf: &FFI_AggregateUDF) -> Result<Self, Self::Error> {
+        if (udaf.library_marker_id)() == crate::get_library_marker_id() {
+            return Ok(Arc::clone(unsafe { udaf.inner().inner() }));
+        }
+
         let signature = Signature::user_defined((&udaf.volatility).into());
         let aliases = udaf.aliases.iter().map(|s| s.to_string()).collect();
 
-        Ok(Self {
+        Ok(Arc::new(ForeignAggregateUDF {
             udaf: udaf.clone(),
             signature,
             aliases,
-        })
+        }))
     }
 }
 
@@ -453,9 +463,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let args = acc_args.try_into()?;
         unsafe {
-            df_result!((self.udaf.accumulator)(&self.udaf, args)).map(|accum| {
-                Box::new(ForeignAccumulator::from(accum)) as Box<dyn Accumulator>
-            })
+            df_result!((self.udaf.accumulator)(&self.udaf, args))
+                .map(<Box<dyn Accumulator>>::from)
         }
     }
 
@@ -517,12 +526,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         let args = FFI_AccumulatorArgs::try_from(args)?;
 
         unsafe {
-            df_result!((self.udaf.create_groups_accumulator)(&self.udaf, args)).map(
-                |accum| {
-                    Box::new(ForeignGroupsAccumulator::from(accum))
-                        as Box<dyn GroupsAccumulator>
-                },
-            )
+            df_result!((self.udaf.create_groups_accumulator)(&self.udaf, args))
+                .map(<Box<dyn GroupsAccumulator>>::from)
         }
     }
 
@@ -536,9 +541,8 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     ) -> Result<Box<dyn Accumulator>> {
         let args = args.try_into()?;
         unsafe {
-            df_result!((self.udaf.create_sliding_accumulator)(&self.udaf, args)).map(
-                |accum| Box::new(ForeignAccumulator::from(accum)) as Box<dyn Accumulator>,
-            )
+            df_result!((self.udaf.create_sliding_accumulator)(&self.udaf, args))
+                .map(<Box<dyn Accumulator>>::from)
         }
     }
 
@@ -554,10 +558,10 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
             .into_option();
 
             let result = result
-                .map(|func| ForeignAggregateUDF::try_from(&func))
+                .map(|func| <Arc<dyn AggregateUDFImpl>>::try_from(&func))
                 .transpose()?;
 
-            Ok(result.map(|func| Arc::new(func) as Arc<dyn AggregateUDFImpl>))
+            Ok(result)
         }
     }
 
@@ -613,6 +617,7 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::datatypes::Schema;
     use datafusion::{
         common::create_array, functions_aggregate::sum::Sum,
@@ -621,8 +626,6 @@ mod tests {
     };
     use std::any::Any;
     use std::collections::HashMap;
-
-    use super::*;
 
     #[derive(Default, Debug, Hash, Eq, PartialEq)]
     struct SumWithCopiedMetadata {
@@ -661,10 +664,11 @@ mod tests {
     ) -> Result<AggregateUDF> {
         let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
 
-        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        let mut local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        local_udaf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        Ok(foreign_udaf.into())
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;
+        Ok(AggregateUDF::new_from_shared_impl(foreign_udaf))
     }
 
     #[test]
@@ -674,11 +678,12 @@ mod tests {
         let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
 
         // Convert to FFI format
-        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        let mut local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+        local_udaf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        let foreign_udaf: AggregateUDF = foreign_udaf.into();
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;
+        let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
         assert_eq!(original_name, foreign_udaf.name());
         Ok(())
@@ -731,8 +736,8 @@ mod tests {
         let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
 
         // Convert back to native format
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-        let foreign_udaf: AggregateUDF = foreign_udaf.into();
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).try_into()?;
+        let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
         let metadata: HashMap<String, String> =
             [("a_key".to_string(), "a_value".to_string())]
@@ -814,5 +819,27 @@ mod tests {
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::HardRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::SoftRequirement);
         test_round_trip_order_sensitivity(AggregateOrderSensitivity::Beneficial);
+    }
+
+    #[test]
+    fn test_ffi_udaf_local_bypass() -> Result<()> {
+        let original_udaf = Sum::new();
+        let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
+
+        let mut ffi_udaf = FFI_AggregateUDF::from(original_udaf);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&ffi_udaf).try_into()?;
+        assert!(foreign_udaf.as_any().downcast_ref::<Sum>().is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_udaf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&ffi_udaf).try_into()?;
+        assert!(foreign_udaf
+            .as_any()
+            .downcast_ref::<ForeignAggregateUDF>()
+            .is_some());
+
+        Ok(())
     }
 }

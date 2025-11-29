@@ -23,7 +23,7 @@
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::DataFusionError;
 use datafusion_common::{sql_err, Diagnostic, Span};
-use sqlparser::ast::{ExprWithAlias, OrderByOptions};
+use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -259,6 +259,21 @@ impl fmt::Display for CreateExternalTable {
     }
 }
 
+/// DataFusion extension for `RESET`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResetStatement {
+    /// Reset a single configuration variable (stored as provided)
+    Variable(ObjectName),
+}
+
+impl fmt::Display for ResetStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ResetStatement::Variable(name) => write!(f, "RESET {name}"),
+        }
+    }
+}
+
 /// DataFusion SQL Statement.
 ///
 /// This can either be a [`Statement`] from [`sqlparser`] from a
@@ -276,6 +291,8 @@ pub enum Statement {
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
     Explain(ExplainStatement),
+    /// Extension: `RESET`
+    Reset(ResetStatement),
 }
 
 impl fmt::Display for Statement {
@@ -285,6 +302,7 @@ impl fmt::Display for Statement {
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
+            Statement::Reset(stmt) => write!(f, "{stmt}"),
         }
     }
 }
@@ -521,6 +539,10 @@ impl<'a> DFParser<'a> {
                         self.parser.next_token(); // EXPLAIN
                         self.parse_explain()
                     }
+                    Keyword::RESET => {
+                        self.parser.next_token(); // RESET
+                        self.parse_reset()
+                    }
                     _ => {
                         // use sqlparser-rs parser
                         self.parse_and_handle_statement()
@@ -720,6 +742,47 @@ impl<'a> DFParser<'a> {
             verbose,
             format,
         }))
+    }
+
+    /// Parse a SQL `RESET`
+    pub fn parse_reset(&mut self) -> Result<Statement, DataFusionError> {
+        let mut parts: Vec<String> = Vec::new();
+        let mut expecting_segment = true;
+
+        loop {
+            let next_token = self.parser.peek_token();
+            match &next_token.token {
+                Token::Word(word) => {
+                    self.parser.next_token();
+                    parts.push(word.value.clone());
+                    expecting_segment = false;
+                }
+                Token::SingleQuotedString(s)
+                | Token::DoubleQuotedString(s)
+                | Token::EscapedStringLiteral(s) => {
+                    self.parser.next_token();
+                    parts.push(s.clone());
+                    expecting_segment = false;
+                }
+                Token::Period => {
+                    self.parser.next_token();
+                    if expecting_segment || parts.is_empty() {
+                        return self.expected("configuration parameter", &next_token);
+                    }
+                    expecting_segment = true;
+                }
+                Token::EOF | Token::SemiColon => break,
+                _ => return self.expected("configuration parameter", &next_token),
+            }
+        }
+
+        if parts.is_empty() || expecting_segment {
+            return self.expected("configuration parameter", &self.parser.peek_token());
+        }
+
+        let idents: Vec<Ident> = parts.into_iter().map(Ident::new).collect();
+        let variable = ObjectName::from(idents);
+        Ok(Statement::Reset(ResetStatement::Variable(variable)))
     }
 
     pub fn parse_explain_format(&mut self) -> Result<Option<String>, DataFusionError> {

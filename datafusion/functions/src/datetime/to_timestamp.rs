@@ -55,7 +55,7 @@ Note: `to_timestamp` returns `Timestamp(ns)`. The supported range for integer in
 | 2023-05-17T03:59:00.123456789                                                                          |
 +--------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -89,7 +89,7 @@ pub struct ToTimestampFunc {
 | 2023-05-17T03:59:00                                                                                            |
 +----------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -123,7 +123,7 @@ pub struct ToTimestampSecondsFunc {
 | 2023-05-17T03:59:00.123                                                                                       |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -157,7 +157,7 @@ pub struct ToTimestampMillisFunc {
 | 2023-05-17T03:59:00.123456                                                                                    |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -191,7 +191,7 @@ pub struct ToTimestampMicrosFunc {
 | 2023-05-17T03:59:00.123456789                                                                                |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",

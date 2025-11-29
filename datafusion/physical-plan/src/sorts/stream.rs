@@ -99,8 +99,8 @@ impl ReusableRows {
         })
     }
     // save the Rows
-    fn save(&mut self, stream_idx: usize, rows: Arc<Rows>) {
-        self.inner[stream_idx][1] = Some(Arc::clone(&rows));
+    fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) {
+        self.inner[stream_idx][1] = Some(Arc::clone(rows));
         // swap the current with the previous one, so that the next poll can reuse the Rows from the previous poll
         let [a, b] = &mut self.inner[stream_idx];
         std::mem::swap(a, b);
@@ -177,7 +177,7 @@ impl RowCursorStream {
 
         let rows = Arc::new(rows);
 
-        self.rows.save(stream_idx, Arc::clone(&rows));
+        self.rows.save(stream_idx, &rows);
 
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();

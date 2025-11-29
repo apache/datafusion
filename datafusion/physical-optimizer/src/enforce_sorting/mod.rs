@@ -49,7 +49,7 @@ use crate::enforce_sorting::sort_pushdown::{
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
-    is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
+    is_repartition, is_sort, is_sort_preserving_merge, is_window,
 };
 use crate::PhysicalOptimizerRule;
 
@@ -516,10 +516,7 @@ pub fn ensure_sorting(
                 );
                 child = update_sort_ctx_children_data(child, true)?;
             }
-        } else if physical_ordering.is_none()
-            || !plan.maintains_input_order()[idx]
-            || is_union(plan)
-        {
+        } else if physical_ordering.is_none() || !plan.maintains_input_order()[idx] {
             // We have a `SortExec` whose effect may be neutralized by another
             // order-imposing operator, remove this sort:
             child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;

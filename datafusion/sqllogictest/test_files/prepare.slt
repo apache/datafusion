@@ -361,3 +361,15 @@ SET datafusion.explain.logical_plan_only=false;
 
 statement ok
 DEALLOCATE my_plan
+
+
+statement ok
+PREPARE my_plan AS SELECT a, b FROM (VALUES ($1, $2)) AS t(a, b);
+
+query II
+EXECUTE my_plan(1, 2)
+----
+1 2
+
+statement ok
+DEALLOCATE my_plan

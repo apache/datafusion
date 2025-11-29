@@ -20,7 +20,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use arrow::datatypes::{DataType, Field};
 use hashbrown::HashMap;
 
-use crate::{error::_plan_err, DataFusionError, ScalarValue};
+use crate::{DataFusionError, ScalarValue, error::_plan_err};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
 #[derive(Debug, Clone)]

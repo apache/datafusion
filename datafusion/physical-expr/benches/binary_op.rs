@@ -286,6 +286,7 @@ fn generate_test_strings(num_rows: usize) -> (Vec<String>, Vec<String>) {
 /// Creates record batches with boolean arrays that test different short-circuit scenarios.
 /// When TEST_ALL_FALSE = true: creates data for AND operator benchmarks (needs early false exit)
 /// When TEST_ALL_FALSE = false: creates data for OR operator benchmarks (needs early true exit)
+#[expect(clippy::needless_pass_by_value)]
 fn create_record_batch<const TEST_ALL_FALSE: bool>(
     schema: Arc<Schema>,
     b_values: &[String],

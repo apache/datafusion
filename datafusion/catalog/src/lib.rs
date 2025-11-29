@@ -25,6 +25,7 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 //! Interfaces and default implementations of catalogs and schemas.
 //!

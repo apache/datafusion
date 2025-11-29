@@ -25,7 +25,10 @@ fn test_coercion_error() -> Result<()> {
     let result_type = coercer.get_input_types();
 
     let e = result_type.unwrap_err();
-    assert_eq!(e.strip_backtrace(), "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types");
+    assert_eq!(
+        e.strip_backtrace(),
+        "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types"
+    );
     Ok(())
 }
 
@@ -146,14 +149,18 @@ fn test_type_coercion_arithmetic() -> Result<()> {
     // (_, Float32) | (Float32, _) => Some(Float32)
     test_coercion_binary_rule_multiple!(
         Float32,
-        [Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
+        [
+            Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8
+        ],
         Operator::Plus,
         Float32
     );
     // (_, Float16) | (Float16, _) => Some(Float16)
     test_coercion_binary_rule_multiple!(
         Float16,
-        [Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
+        [
+            Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8
+        ],
         Operator::Plus,
         Float16
     );

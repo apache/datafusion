@@ -124,7 +124,7 @@ impl ScalarUDFImpl for RoundFunc {
 }
 
 /// Round SQL function
-pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
         return exec_err!(
             "round function requires one or two arguments, got {}",

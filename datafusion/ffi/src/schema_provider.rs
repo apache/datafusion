@@ -80,6 +80,11 @@ pub struct FFI_SchemaProvider {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignSchemaProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_SchemaProvider {}
@@ -191,6 +196,7 @@ unsafe extern "C" fn clone_fn_wrapper(
         register_table: register_table_fn_wrapper,
         deregister_table: deregister_table_fn_wrapper,
         table_exist: table_exist_fn_wrapper,
+        library_marker_id: crate::get_library_marker_id,
     }
 }
 
@@ -220,6 +226,7 @@ impl FFI_SchemaProvider {
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -234,9 +241,14 @@ pub struct ForeignSchemaProvider(pub FFI_SchemaProvider);
 unsafe impl Send for ForeignSchemaProvider {}
 unsafe impl Sync for ForeignSchemaProvider {}
 
-impl From<&FFI_SchemaProvider> for ForeignSchemaProvider {
+impl From<&FFI_SchemaProvider> for Arc<dyn SchemaProvider + Send> {
     fn from(provider: &FFI_SchemaProvider) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(unsafe { provider.inner() });
+        }
+
+        Arc::new(ForeignSchemaProvider(provider.clone()))
+            as Arc<dyn SchemaProvider + Send>
     }
 }
 
@@ -274,9 +286,7 @@ impl SchemaProvider for ForeignSchemaProvider {
             let table: Option<FFI_TableProvider> =
                 df_result!((self.0.table)(&self.0, name.into()).await)?.into();
 
-            let table = table.as_ref().map(|t| {
-                Arc::new(ForeignTableProvider::from(t)) as Arc<dyn TableProvider>
-            });
+            let table = table.as_ref().map(<Arc<dyn TableProvider>>::from);
 
             Ok(table)
         }
@@ -319,10 +329,9 @@ impl SchemaProvider for ForeignSchemaProvider {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::datatypes::Schema;
     use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
-
-    use super::*;
 
     fn empty_table() -> Arc<dyn TableProvider> {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
@@ -337,9 +346,10 @@ mod tests {
             .unwrap()
             .is_none());
 
-        let ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
+        let mut ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
+        ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_schema_provider: ForeignSchemaProvider =
+        let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =
             (&ffi_schema_provider).into();
 
         let prior_table_names = foreign_schema_provider.table_names();
@@ -381,5 +391,27 @@ mod tests {
             .expect("Unable to query table");
         assert!(returned_schema.is_some());
         assert!(foreign_schema_provider.table_exist("second_table"));
+    }
+
+    #[test]
+    fn test_ffi_schema_provider_local_bypass() {
+        let schema_provider = Arc::new(MemorySchemaProvider::new());
+
+        let mut ffi_schema = FFI_SchemaProvider::new(schema_provider, None);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();
+        assert!(foreign_schema
+            .as_any()
+            .downcast_ref::<MemorySchemaProvider>()
+            .is_some());
+
+        // Verify different library markers generate foreign providers
+        ffi_schema.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();
+        assert!(foreign_schema
+            .as_any()
+            .downcast_ref::<ForeignSchemaProvider>()
+            .is_some());
     }
 }

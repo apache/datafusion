@@ -36,10 +36,7 @@ use datafusion_proto::{
 use prost::Message;
 use tokio::runtime::Handle;
 
-use crate::{
-    df_result, rresult_return,
-    table_provider::{FFI_TableProvider, ForeignTableProvider},
-};
+use crate::{df_result, rresult_return, table_provider::FFI_TableProvider};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
@@ -63,6 +60,11 @@ pub struct FFI_TableFunction {
     /// Internal data. This is only to be accessed by the provider of the udtf.
     /// A [`ForeignTableFunction`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_TableFunction {}
@@ -131,6 +133,7 @@ impl FFI_TableFunction {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -147,6 +150,7 @@ impl From<Arc<dyn TableFunctionImpl>> for FFI_TableFunction {
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -169,9 +173,13 @@ pub struct ForeignTableFunction(FFI_TableFunction);
 unsafe impl Send for ForeignTableFunction {}
 unsafe impl Sync for ForeignTableFunction {}
 
-impl From<FFI_TableFunction> for ForeignTableFunction {
+impl From<FFI_TableFunction> for Arc<dyn TableFunctionImpl> {
     fn from(value: FFI_TableFunction) -> Self {
-        Self(value)
+        if (value.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(value.inner())
+        } else {
+            Arc::new(ForeignTableFunction(value))
+        }
     }
 }
 
@@ -186,25 +194,25 @@ impl TableFunctionImpl for ForeignTableFunction {
         let table_provider = unsafe { (self.0.call)(&self.0, filters_serialized) };
 
         let table_provider = df_result!(table_provider)?;
-        let table_provider: ForeignTableProvider = (&table_provider).into();
+        let table_provider: Arc<dyn TableProvider> = (&table_provider).into();
 
-        Ok(Arc::new(table_provider))
+        Ok(table_provider)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow::{
         array::{
             record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
         },
         datatypes::{DataType, Field, Schema},
     };
+    use datafusion::logical_expr::ptr_eq::arc_ptr_eq;
     use datafusion::{
         catalog::MemTable, common::exec_err, prelude::lit, scalar::ScalarValue,
     };
-
-    use super::*;
 
     #[derive(Debug)]
     struct TestUDTF {}
@@ -288,10 +296,11 @@ mod tests {
     async fn test_round_trip_udtf() -> Result<()> {
         let original_udtf = Arc::new(TestUDTF {}) as Arc<dyn TableFunctionImpl>;
 
-        let local_udtf: FFI_TableFunction =
+        let mut local_udtf: FFI_TableFunction =
             FFI_TableFunction::new(Arc::clone(&original_udtf), None);
+        local_udtf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udf: ForeignTableFunction = local_udtf.into();
+        let foreign_udf: Arc<dyn TableFunctionImpl> = local_udtf.into();
 
         let table = foreign_udf.call(&[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
 
@@ -314,6 +323,24 @@ mod tests {
             ("field-2", UInt64, [3, 3, 3, 3])
         )?;
         assert_eq!(returned_batches[1], expected_batch_1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udtf_local_bypass() -> Result<()> {
+        let original_udtf = Arc::new(TestUDTF {}) as Arc<dyn TableFunctionImpl>;
+
+        let mut ffi_udtf = FFI_TableFunction::from(Arc::clone(&original_udtf));
+
+        // Verify local libraries can be downcast to their original
+        let foreign_udtf: Arc<dyn TableFunctionImpl> = ffi_udtf.clone().into();
+        assert!(arc_ptr_eq(&original_udtf, &foreign_udtf));
+
+        // Verify different library markers generate foreign providers
+        ffi_udtf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udtf: Arc<dyn TableFunctionImpl> = ffi_udtf.into();
+        assert!(!arc_ptr_eq(&original_udtf, &foreign_udtf));
 
         Ok(())
     }

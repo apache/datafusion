@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::csv::reader::Format;
 use arrow::csv::ReaderBuilder;
 use async_trait::async_trait;

@@ -17,8 +17,8 @@
 
 //! This module provides a function to estimate the memory size of a HashTable prior to allocation
 
-use crate::error::_exec_datafusion_err;
 use crate::Result;
+use crate::error::_exec_datafusion_err;
 use std::mem::size_of;
 
 /// Estimates the memory size required for a hash table prior to allocation.

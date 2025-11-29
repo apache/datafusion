@@ -319,8 +319,8 @@ impl TrackedConsumer {
 ///
 /// For more examples of using `TrackConsumersPool`, see the [memory_pool_tracking.rs] example
 ///
-/// [memory_pool_tracking.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_tracking.rs
-/// [memory_pool_execution_plan.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
+/// [memory_pool_tracking.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_tracking.rs
+/// [memory_pool_execution_plan.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
 #[derive(Debug)]
 pub struct TrackConsumersPool<I> {
     /// The wrapped memory pool that actually handles reservation logic

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! This example demonstrates how to implement custom ExecutionPlans that properly
 //! use memory tracking through TrackConsumersPool.
 //!
@@ -44,8 +46,8 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Shows how to implement memory-aware ExecutionPlan with memory reservation and spilling
+pub async fn memory_pool_execution_plan() -> Result<()> {
     println!("=== DataFusion ExecutionPlan Memory Tracking Example ===\n");
 
     // Set up a runtime with memory tracking
@@ -140,6 +142,7 @@ impl ExternalBatchBufferer {
         }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     fn add_batch(&mut self, batch_data: Vec<u8>) -> Result<()> {
         let additional_memory = batch_data.len();
 

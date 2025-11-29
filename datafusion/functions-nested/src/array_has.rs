@@ -239,6 +239,7 @@ fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<A
     array_has_dispatch_for_array(haystack, needle)
 }
 
+#[derive(Copy, Clone)]
 enum ArrayWrapper<'a> {
     FixedSizeList(&'a arrow::array::FixedSizeListArray),
     List(&'a arrow::array::GenericListArray<i32>),
@@ -317,8 +318,8 @@ impl<'a> ArrayWrapper<'a> {
     }
 }
 
-fn array_has_dispatch_for_array(
-    haystack: ArrayWrapper<'_>,
+fn array_has_dispatch_for_array<'a>(
+    haystack: ArrayWrapper<'a>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -390,8 +391,8 @@ fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 // General row comparison for array_has_all and array_has_any
 fn general_array_has_for_all_and_any<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -402,8 +403,8 @@ fn general_array_has_for_all_and_any<'a>(
             let arr_values = converter.convert_columns(&[arr])?;
             let sub_arr_values = converter.convert_columns(&[sub_arr])?;
             boolean_builder.append_value(general_array_has_all_and_any_kernel(
-                arr_values,
-                sub_arr_values,
+                &arr_values,
+                &sub_arr_values,
                 comparison_type,
             ));
         } else {
@@ -416,8 +417,8 @@ fn general_array_has_for_all_and_any<'a>(
 
 // String comparison for array_has_all and array_has_any
 fn array_has_all_and_any_string_internal<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -427,8 +428,8 @@ fn array_has_all_and_any_string_internal<'a>(
                 let haystack_array = string_array_to_vec(&arr);
                 let needle_array = string_array_to_vec(&sub_arr);
                 boolean_builder.append_value(array_has_string_kernel(
-                    haystack_array,
-                    needle_array,
+                    &haystack_array,
+                    &needle_array,
                     comparison_type,
                 ));
             }
@@ -442,8 +443,8 @@ fn array_has_all_and_any_string_internal<'a>(
 }
 
 fn array_has_all_and_any_dispatch<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     if needle.values().is_empty() {
@@ -468,7 +469,7 @@ fn array_has_all_and_any_inner(
 ) -> Result<ArrayRef> {
     let haystack: ArrayWrapper = args[0].as_ref().try_into()?;
     let needle: ArrayWrapper = args[1].as_ref().try_into()?;
-    array_has_all_and_any_dispatch(&haystack, &needle, comparison_type)
+    array_has_all_and_any_dispatch(haystack, needle, comparison_type)
 }
 
 fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -633,8 +634,8 @@ enum ComparisonType {
 }
 
 fn array_has_string_kernel(
-    haystack: Vec<Option<&str>>,
-    needle: Vec<Option<&str>>,
+    haystack: &[Option<&str>],
+    needle: &[Option<&str>],
     comparison_type: ComparisonType,
 ) -> bool {
     match comparison_type {
@@ -650,8 +651,8 @@ fn array_has_string_kernel(
 }
 
 fn general_array_has_all_and_any_kernel(
-    haystack_rows: Rows,
-    needle_rows: Rows,
+    haystack_rows: &Rows,
+    needle_rows: &Rows,
     comparison_type: ComparisonType,
 ) -> bool {
     match comparison_type {

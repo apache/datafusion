@@ -19,7 +19,7 @@ use arrow::compute::kernels::numeric::add;
 use arrow::compute::kernels::{cmp::lt, numeric::rem, zip::zip};
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, DataFusionError, Result, ScalarValue,
+    assert_eq_or_internal_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -85,9 +85,11 @@ impl ScalarUDFImpl for SparkMod {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
-            return internal_err!("mod expects exactly two arguments");
-        }
+        assert_eq_or_internal_err!(
+            arg_types.len(),
+            2,
+            "mod expects exactly two arguments"
+        );
 
         // Return the same type as the first argument for simplicity
         // Arrow's rem function handles type promotion internally
@@ -133,9 +135,11 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
-            return internal_err!("pmod expects exactly two arguments");
-        }
+        assert_eq_or_internal_err!(
+            arg_types.len(),
+            2,
+            "pmod expects exactly two arguments"
+        );
 
         // Return the same type as the first argument for simplicity
         // Arrow's rem function handles type promotion internally

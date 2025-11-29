@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Assign the issue via a `take` comment
+name: Assign/unassign the issue via `take` or `untake` comment
 on:
   issue_comment:
     types: created
@@ -26,16 +26,30 @@ permissions:
 jobs:
   issue_assign:
     runs-on: ubuntu-latest
-    if: (!github.event.issue.pull_request) && github.event.comment.body == 'take'
+    if: (!github.event.issue.pull_request) && (github.event.comment.body == 'take' || github.event.comment.body == 'untake')
     concurrency:
       group: ${{ github.actor }}-issue-assign
     steps:
-      - run: |
-          CODE=$(curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -LI https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/assignees/${{ github.event.comment.user.login }} -o /dev/null -w '%{http_code}\n' -s)
-          if [ "$CODE" -eq "204" ]
+      - name: Take or untake issue
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          USER_LOGIN: ${{ github.event.comment.user.login }}
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$COMMENT_BODY" == "take" ]
           then
-            echo "Assigning issue ${{ github.event.issue.number }} to ${{ github.event.comment.user.login }}"
-            curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -d '{"assignees": ["${{ github.event.comment.user.login }}"]}' https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.issue.number }}/assignees
-          else
-            echo "Cannot assign issue ${{ github.event.issue.number }} to ${{ github.event.comment.user.login }}"
+            CODE=$(curl -H "Authorization: token $TOKEN" -LI https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER/assignees/$USER_LOGIN -o /dev/null -w '%{http_code}\n' -s)
+            if [ "$CODE" -eq "204" ]
+            then
+              echo "Assigning issue $ISSUE_NUMBER to $USER_LOGIN"
+              curl -X POST -H "Authorization: token $TOKEN" -H "Content-Type: application/json" -d "{\"assignees\": [\"$USER_LOGIN\"]}" https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER/assignees
+            else
+              echo "Cannot assign issue $ISSUE_NUMBER to $USER_LOGIN"
+            fi
+          elif [ "$COMMENT_BODY" == "untake" ]
+          then
+            echo "Unassigning issue $ISSUE_NUMBER from $USER_LOGIN"
+            curl -X DELETE -H "Authorization: token $TOKEN" -H "Content-Type: application/json" -d "{\"assignees\": [\"$USER_LOGIN\"]}" https://api.github.com/repos/$REPO/issues/$ISSUE_NUMBER/assignees
           fi

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::physical_optimizer::test_utils::parquet_exec;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::config::ConfigOptions;
+use datafusion_execution::config::SessionConfig;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
@@ -34,7 +34,7 @@ use datafusion_physical_expr::expressions::{col, lit};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -47,8 +47,9 @@ macro_rules! assert_optimized {
     ($PLAN: expr, @ $EXPECTED_LINES: literal $(,)?) => {
         // run optimizer
         let optimizer = CombinePartialFinalAggregate {};
-        let config = ConfigOptions::new();
-        let optimized = optimizer.optimize($PLAN, &config)?;
+        let session_config = SessionConfig::new();
+        let optimizer_context = OptimizerContext::new(session_config.clone());
+        let optimized = optimizer.optimize_plan($PLAN, &optimizer_context)?;
         // Now format correctly
         let plan = displayable(optimized.as_ref()).indent(true).to_string();
         let actual_lines = plan.trim();

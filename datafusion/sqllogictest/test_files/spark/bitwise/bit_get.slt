@@ -70,6 +70,31 @@ SELECT bit_get(NULL, 0);
 NULL
 
 query I
+SELECT bit_get(NULL::int, 0);
+----
+NULL
+
+query I
 SELECT bit_get(11, NULL);
 ----
 NULL
+
+query I
+SELECT bit_get(11, NULL::int);
+----
+NULL
+
+query I
+SELECT bit_get(11::tinyint, 0);
+----
+1
+
+query I
+SELECT bit_get(11::bigint, 0);
+----
+1
+
+query I
+SELECT bit_get(11, 3::bigint);
+----
+1

@@ -271,10 +271,9 @@ impl TestMemoryExec {
     }
 
     // Equivalent of `DataSourceExec::new`
-    pub fn update_cache(source: Arc<TestMemoryExec>) -> TestMemoryExec {
+    pub fn update_cache(source: &Arc<TestMemoryExec>) -> TestMemoryExec {
         let cache = source.compute_properties();
-        let source = &*source;
-        let mut source = source.clone();
+        let mut source = (**source).clone();
         source.cache = cache;
         source
     }

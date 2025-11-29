@@ -87,7 +87,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
             .map(|x| x.1)
     }
 
-    fn remove(&mut self, k: &Path) -> Option<Arc<Statistics>> {
+    fn remove(&self, k: &Path) -> Option<Arc<Statistics>> {
         self.statistics.remove(k).map(|x| x.1 .1)
     }
 
@@ -151,7 +151,7 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
         panic!("Not supported DefaultListFilesCache put_with_extra")
     }
 
-    fn remove(&mut self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn remove(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
         self.statistics.remove(k).map(|x| x.1)
     }
 
@@ -399,7 +399,7 @@ impl CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>> for DefaultFilesMetadataCa
         self.put(key, value)
     }
 
-    fn remove(&mut self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
+    fn remove(&self, k: &ObjectMeta) -> Option<Arc<dyn FileMetadata>> {
         let mut state = self.state.lock().unwrap();
         state.remove(k)
     }
@@ -542,7 +542,7 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = DefaultFilesMetadataCache::new(1024 * 1024);
+        let cache = DefaultFilesMetadataCache::new(1024 * 1024);
         assert!(cache.get(&object_meta).is_none());
 
         // put
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn test_default_file_metadata_cache_with_limit() {
-        let mut cache = DefaultFilesMetadataCache::new(1000);
+        let cache = DefaultFilesMetadataCache::new(1000);
         let (object_meta1, metadata1) = generate_test_metadata_with_size("1", 100);
         let (object_meta2, metadata2) = generate_test_metadata_with_size("2", 500);
         let (object_meta3, metadata3) = generate_test_metadata_with_size("3", 300);
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn test_default_file_metadata_cache_entries_info() {
-        let mut cache = DefaultFilesMetadataCache::new(1000);
+        let cache = DefaultFilesMetadataCache::new(1000);
         let (object_meta1, metadata1) = generate_test_metadata_with_size("1", 100);
         let (object_meta2, metadata2) = generate_test_metadata_with_size("2", 200);
         let (object_meta3, metadata3) = generate_test_metadata_with_size("3", 300);

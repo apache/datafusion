@@ -414,3 +414,20 @@ async fn test_select_no_projection() -> Result<()> {
     ");
     Ok(())
 }
+
+#[tokio::test]
+async fn test_select_cast_date_literal_to_timestamp_overflow() -> Result<()> {
+    let ctx = SessionContext::new();
+    let err = ctx
+        .sql("SELECT CAST(DATE '9999-12-31' AS TIMESTAMP)")
+        .await?
+        .collect()
+        .await
+        .unwrap_err();
+
+    assert_contains!(
+        err.to_string(),
+        "Cannot cast Date32 value 2932896 to Timestamp(ns): converted value exceeds the representable i64 range"
+    );
+    Ok(())
+}

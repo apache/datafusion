@@ -16,6 +16,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use datafusion::common::{assert_batches_eq, assert_contains};
 use datafusion::error::Result;
 use datafusion::prelude::*;

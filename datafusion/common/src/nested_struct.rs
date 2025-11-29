@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{Result, _plan_err};
+use crate::error::{_plan_err, Result};
 use arrow::{
-    array::{new_null_array, Array, ArrayRef, StructArray},
-    compute::{cast_with_options, CastOptions},
+    array::{Array, ArrayRef, StructArray, new_null_array},
+    compute::{CastOptions, cast_with_options},
     datatypes::{DataType::Struct, Field, FieldRef},
 };
 use std::sync::Arc;

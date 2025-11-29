@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! This example demonstrates the tracing injection feature for the DataFusion runtime.
 //! Tasks spawned on new threads behave differently depending on whether a tracer is injected.
 //! The log output clearly distinguishes the two cases.
@@ -61,8 +63,8 @@ use std::any::Any;
 use std::sync::Arc;
 use tracing::{info, instrument, Instrument, Level, Span};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Demonstrates the tracing injection feature for the DataFusion runtime
+pub async fn tracing() -> Result<()> {
     // Initialize tracing subscriber with thread info.
     tracing_subscriber::fmt()
         .with_thread_ids(true)

@@ -891,3 +891,52 @@ drop table t2;
 # return sql params back to default values
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;
+
+##########
+## Tests for equijoins with different column counts
+##########
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+DROP TABLE IF EXISTS t1;
+
+statement ok
+CREATE TABLE t1(a int, b int) AS VALUES (1, 100), (2, 200), (3, 300);
+
+statement ok
+DROP TABLE IF EXISTS t2;
+
+statement ok
+CREATE TABLE t2(a int, b int, c int) AS VALUES (4, 101, 1001), (3, 201, 2001), (2, 250, 3001);
+
+statement ok
+DROP TABLE IF EXISTS t3;
+
+statement ok
+CREATE TABLE t3(x int) AS VALUES (1);
+
+query IIIII
+SELECT * FROM t2 RIGHT JOIN t1 on t1.a = t2.a AND t1.b < t2.b
+----
+NULL NULL NULL 1 100
+2 250 3001 2 200
+NULL NULL NULL 3 300
+
+query IIIII
+SELECT * FROM t1 LEFT JOIN t2 on t1.a = t2.a AND t1.b < t2.b
+----
+1 100 NULL NULL NULL
+2 200 2 250 3001
+3 300 NULL NULL NULL
+
+# Small table for LeftMark
+
+# LeftMark equijoin with different columns count
+query III rowsort
+SELECT t2.a, t2.b, t2.c
+FROM t2
+WHERE t2.a > 3 OR t2.a IN (SELECT t3.x FROM t3 WHERE t2.b < 150)
+----
+4 101 1001

@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This lint violation is acceptable for tests, so suppress for now
+// Issue: <https://github.com/apache/datafusion/issues/18503>
+#![expect(clippy::needless_pass_by_value)]
+
 use std::any::Any;
 use std::hash::Hash;
 #[cfg(test)]

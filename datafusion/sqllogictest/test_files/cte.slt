@@ -58,18 +58,6 @@ WITH RECURSIVE nodes AS (
 statement ok
 set datafusion.execution.enable_recursive_ctes = true;
 
-
-# DISTINCT UNION is not supported
-query error DataFusion error: This feature is not implemented: Recursive queries with a distinct 'UNION' \(in which the previous iteration's results will be de\-duplicated\) is not supported
-WITH RECURSIVE nodes AS (
-    SELECT 1 as id
-    UNION
-    SELECT id + 1 as id
-    FROM nodes
-    WHERE id < 3
-) SELECT * FROM nodes
-
-
 # trivial recursive CTE works
 query I rowsort
 WITH RECURSIVE nodes AS (
@@ -120,6 +108,22 @@ physical_plan
 06)------FilterExec: id@0 < 10
 07)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)----------WorkTableExec: name=nodes
+
+# simple deduplicating recursive CTE works
+query I
+WITH RECURSIVE nodes AS (
+    SELECT id from (VALUES (1), (2)) nodes(id)
+    UNION
+    SELECT id + 1 as id
+    FROM nodes
+    WHERE id < 4
+)
+SELECT * FROM nodes
+----
+1
+2
+3
+4
 
 # setup
 statement ok
@@ -1043,6 +1047,66 @@ physical_plan
 04)------PlaceholderRowExec
 05)----SortExec: TopK(fetch=1), expr=[v@1 ASC NULLS LAST], preserve_partitioning=[false]
 06)------WorkTableExec: name=r
+
+# setup
+statement ok
+CREATE EXTERNAL TABLE closure STORED as CSV LOCATION '../core/tests/data/recursive_cte/closure.csv' OPTIONS ('format.has_header' 'true');
+
+# transitive closure with loop
+query II
+WITH RECURSIVE trans AS (
+    SELECT * FROM closure
+    UNION
+    SELECT l.start, r.end
+    FROM trans as l, closure AS r
+    WHERE l.end = r.start
+) SELECT * FROM trans ORDER BY start, end
+----
+1 1
+1 2
+1 3
+1 4
+2 1
+2 2
+2 3
+2 4
+4 1
+4 2
+4 3
+4 4
+
+query TT
+EXPLAIN WITH RECURSIVE trans AS (
+    SELECT * FROM closure
+    UNION
+    SELECT l.start, r.end
+    FROM trans as l, closure AS r
+    WHERE l.end = r.start
+) SELECT * FROM trans
+----
+logical_plan
+01)SubqueryAlias: trans
+02)--RecursiveQuery: is_distinct=true
+03)----Projection: closure.start, closure.end
+04)------TableScan: closure
+05)----Projection: l.start, r.end
+06)------Inner Join: l.end = r.start
+07)--------SubqueryAlias: l
+08)----------TableScan: trans
+09)--------SubqueryAlias: r
+10)----------TableScan: closure
+physical_plan
+01)RecursiveQueryExec: name=trans, is_distinct=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
+03)--CoalescePartitionsExec
+04)----CoalesceBatchesExec: target_batch_size=8182
+05)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(end@1, start@0)], projection=[start@0, end@3]
+06)--------CoalesceBatchesExec: target_batch_size=8182
+07)----------RepartitionExec: partitioning=Hash([end@1], 4), input_partitions=1
+08)------------WorkTableExec: name=trans
+09)--------CoalesceBatchesExec: target_batch_size=8182
+10)----------RepartitionExec: partitioning=Hash([start@0], 4), input_partitions=1
+11)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;

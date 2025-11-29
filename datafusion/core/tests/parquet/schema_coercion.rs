@@ -122,6 +122,7 @@ async fn multi_parquet_coercion_projection() {
     )
     .with_file_group(file_group)
     .with_projection_indices(Some(vec![1, 0, 2]))
+    .unwrap()
     .build();
 
     let parquet_exec = DataSourceExec::from_data_source(config);

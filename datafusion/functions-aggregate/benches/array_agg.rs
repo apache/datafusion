@@ -38,6 +38,7 @@ pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
     c.bench_function(name, |b| {

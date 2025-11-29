@@ -197,10 +197,10 @@ impl ScalarUDFImpl for GetFieldFunc {
         };
 
         fn process_map_array(
-            array: Arc<dyn Array>,
+            array: &dyn Array,
             key_array: Arc<dyn Array>,
         ) -> Result<ColumnarValue> {
-            let map_array = as_map_array(array.as_ref())?;
+            let map_array = as_map_array(array)?;
             let keys = if key_array.data_type().is_nested() {
                 let comparator = make_comparator(
                     map_array.keys().as_ref(),
@@ -246,14 +246,14 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         fn process_map_with_nested_key(
-            array: Arc<dyn Array>,
-            key_array: Arc<dyn Array>,
+            array: &dyn Array,
+            key_array: &dyn Array,
         ) -> Result<ColumnarValue> {
-            let map_array = as_map_array(array.as_ref())?;
+            let map_array = as_map_array(array)?;
 
             let comparator = make_comparator(
                 map_array.keys().as_ref(),
-                key_array.as_ref(),
+                key_array,
                 SortOptions::default(),
             )?;
 
@@ -288,17 +288,17 @@ impl ScalarUDFImpl for GetFieldFunc {
         match (array.data_type(), name) {
             (DataType::Map(_, _), ScalarValue::List(arr)) => {
                 let key_array: Arc<dyn Array> = arr;
-                process_map_array(array, key_array)
+                process_map_array(&array, key_array)
             }
             (DataType::Map(_, _), ScalarValue::Struct(arr)) => {
-                process_map_array(array, arr as Arc<dyn Array>)
+                process_map_array(&array, arr as Arc<dyn Array>)
             }
             (DataType::Map(_, _), other) => {
                 let data_type = other.data_type();
                 if data_type.is_nested() {
-                    process_map_with_nested_key(array, other.to_array()?)
+                    process_map_with_nested_key(&array, &other.to_array()?)
                 } else {
-                    process_map_array(array, other.to_array()?)
+                    process_map_array(&array, other.to_array()?)
                 }
             }
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {

@@ -198,6 +198,7 @@ mod tests {
                 FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
                     .with_file_group(file_group)
                     .with_projection_indices(self.projection.clone())
+                    .unwrap()
                     .build();
             DataSourceExec::from_data_source(base_config)
         }
@@ -1664,6 +1665,7 @@ mod tests {
             .with_file(partitioned_file)
             // file has 10 cols so index 12 should be month and 13 should be day
             .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
+            .unwrap()
             .build();
 
         let parquet_exec = DataSourceExec::from_data_source(config);

@@ -48,7 +48,7 @@ use datafusion_macros::user_doc;
 +----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -144,13 +144,11 @@ impl ScalarUDFImpl for ToCharFunc {
 
         match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => {
-                to_char_scalar(date_time.clone(), None)
-            }
+            | ColumnarValue::Scalar(ScalarValue::Null) => to_char_scalar(date_time, None),
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
-                to_char_scalar(date_time.clone(), Some(format))
+                to_char_scalar(date_time, Some(format))
             }
             ColumnarValue::Array(_) => to_char_array(&args),
             _ => {
@@ -206,7 +204,7 @@ fn build_format_options<'a>(
 
 /// Special version when arg\[1] is a scalar
 fn to_char_scalar(
-    expression: ColumnarValue,
+    expression: &ColumnarValue,
     format: Option<&str>,
 ) -> Result<ColumnarValue> {
     // it's possible that the expression is a scalar however because
@@ -253,7 +251,7 @@ fn to_char_scalar(
         // if the data type was a Date32, formatting could have failed because the format string
         // contained datetime specifiers, so we'll retry by casting the date array as a timestamp array
         if data_type == &Date32 {
-            return to_char_scalar(expression.clone().cast_to(&Date64, None)?, format);
+            return to_char_scalar(&expression.cast_to(&Date64, None)?, format);
         }
 
         exec_err!("{}", formatted.unwrap_err())
@@ -292,7 +290,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 if data_type == &Date32 {
                     let failed_date_value = arrays[0].slice(idx, 1);
 
-                    match retry_date_as_timestamp(failed_date_value, &format_options) {
+                    match retry_date_as_timestamp(&failed_date_value, &format_options) {
                         Ok(value) => {
                             results.push(Some(value));
                             continue;
@@ -322,7 +320,7 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 fn retry_date_as_timestamp(
-    array_ref: ArrayRef,
+    array_ref: &ArrayRef,
     format_options: &FormatOptions,
 ) -> Result<String> {
     let target_data_type = Date64;

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 /// This example shows how to implement the DataFusion [`CatalogProvider`] API
 /// for catalogs that are remote (require network access) and/or offer only
 /// asynchronous APIs such as [Polaris], [Unity], and [Hive].

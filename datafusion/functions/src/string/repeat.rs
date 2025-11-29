@@ -115,7 +115,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
         Utf8View => {
             let string_view_array = args[0].as_string_view();
             repeat_impl::<i32, &StringViewArray>(
-                string_view_array,
+                &string_view_array,
                 number_array,
                 i32::MAX as usize,
             )
@@ -123,7 +123,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
         Utf8 => {
             let string_array = args[0].as_string::<i32>();
             repeat_impl::<i32, &GenericStringArray<i32>>(
-                string_array,
+                &string_array,
                 number_array,
                 i32::MAX as usize,
             )
@@ -131,7 +131,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
         LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
             repeat_impl::<i64, &GenericStringArray<i64>>(
-                string_array,
+                &string_array,
                 number_array,
                 i64::MAX as usize,
             )
@@ -144,7 +144,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn repeat_impl<'a, T, S>(
-    string_array: S,
+    string_array: &S,
     number_array: &Int64Array,
     max_str_len: usize,
 ) -> Result<ArrayRef>

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -500,7 +502,7 @@ impl TableProvider for IndexTableProvider {
         );
         let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
             .with_limit(limit)
-            .with_projection_indices(projection.cloned())
+            .with_projection_indices(projection.cloned())?
             .with_file(partitioned_file)
             .build();
 

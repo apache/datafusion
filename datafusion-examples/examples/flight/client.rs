@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tonic::transport::Endpoint;

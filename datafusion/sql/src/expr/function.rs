@@ -266,9 +266,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
 
-        if name.eq("make_map") {
+        // handle make_map and map functions
+        // make_map always uses plan_make_map: make_map(k1, v1, k2, v2, ...)
+        // map has 2 syntaxes:
+        //     1. map([keys], [values]) - two arrays that get zipped
+        //     2. map(k1, v1, k2, v2, ...) - variadic pairs (uses plan_make_map)
+        let use_plan_make_map = match name.as_str() {
+            "make_map" => true,
+            "map" => {
+                // for map, check if this is the first syntax variant (two-array)
+                let args =
+                    self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
+                let is_two_array_syntax = args.len() == 2
+                    && args.iter().all(|arg| {
+                        matches!(
+                            arg.get_type(schema),
+                            Ok(DataType::List(_))
+                                | Ok(DataType::LargeList(_))
+                                | Ok(DataType::FixedSizeList(_, _))
+                        )
+                    });
+
+                // map function with variadic syntax requires non-empty list of arguments
+                if !is_two_array_syntax && args.is_empty() {
+                    return plan_err!(
+                        "Function 'map' expected at least one argument but received 0"
+                    );
+                }
+
+                !is_two_array_syntax
+            }
+            _ => false,
+        };
+
+        if use_plan_make_map {
             let mut fn_args =
                 self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
             for planner in self.context_provider.get_expr_planners().iter() {
                 match planner.plan_make_map(fn_args)? {
                     PlannerResult::Planned(expr) => return Ok(expr),

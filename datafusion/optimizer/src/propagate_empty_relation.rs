@@ -244,7 +244,7 @@ mod tests {
 
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_filter::EliminateFilter;
-    use crate::eliminate_nested_union::EliminateNestedUnion;
+    use crate::optimize_unions::OptimizeUnions;
     use crate::test::{
         assert_optimized_plan_with_rules, test_table_scan, test_table_scan_fields,
         test_table_scan_with_name,
@@ -277,7 +277,7 @@ mod tests {
         assert_optimized_plan_with_rules(
             vec![
                 Arc::new(EliminateFilter::new()),
-                Arc::new(EliminateNestedUnion::new()),
+                Arc::new(OptimizeUnions::new()),
                 Arc::new(PropagateEmptyRelation::new()),
             ],
             plan,

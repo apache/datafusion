@@ -34,6 +34,7 @@ use std::hint::black_box;
 use std::{sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     black_box(rt.block_on(df.collect()).unwrap());
@@ -124,6 +125,7 @@ async fn distinct_with_limit(
     Ok(())
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn run(rt: &Runtime, plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>) {
     black_box(rt.block_on(distinct_with_limit(plan.clone(), ctx.clone()))).unwrap();
 }

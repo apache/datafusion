@@ -460,12 +460,13 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint = Some(metadata);
         }
 
-        let table_schema = TableSchema::new(
-            Arc::clone(conf.file_schema()),
-            conf.table_partition_cols().clone(),
-        );
-        let mut source = ParquetSource::new(table_schema)
-            .with_table_parquet_options(self.options.clone());
+        let mut source = conf
+            .file_source()
+            .as_any()
+            .downcast_ref::<ParquetSource>()
+            .cloned()
+            .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
+        source = source.with_table_parquet_options(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();

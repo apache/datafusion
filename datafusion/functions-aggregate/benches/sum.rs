@@ -47,6 +47,7 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     sum_fn.create_groups_accumulator(accumulator_args).unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn convert_to_state_bench(
     c: &mut Criterion,
     name: &str,

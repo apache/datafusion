@@ -504,7 +504,7 @@ impl TableProvider for ListingTable {
                     .with_file_groups(partitioned_file_lists)
                     .with_constraints(self.constraints.clone())
                     .with_statistics(statistics)
-                    .with_projection_indices(projection)
+                    .with_projection_indices(projection)?
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())

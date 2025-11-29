@@ -36,6 +36,7 @@ use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use std::sync::{Arc, LazyLock};
 
 mod parse_sql_expr;
+#[expect(clippy::needless_pass_by_value)]
 mod simplification;
 
 #[test]
@@ -384,6 +385,7 @@ async fn evaluate_agg_test(expr: Expr, expected_lines: Vec<&str>) {
 
 /// Converts the `Expr` to a `PhysicalExpr`, evaluates it against the provided
 /// `RecordBatch` and compares the result to the expected result.
+#[expect(clippy::needless_pass_by_value)]
 fn evaluate_expr_test(expr: Expr, expected_lines: Vec<&str>) {
     let batch = &TEST_BATCH;
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();
