@@ -402,9 +402,9 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
     #[cfg(feature = "parquet_encryption")]
     use crate::config::ConfigFileEncryptionProperties;
+    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
