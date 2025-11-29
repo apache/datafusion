@@ -327,6 +327,10 @@ select
 ----
 2 -1 123 -123
 
+# ceil overflow with limited precision
+query error Decimal overflow while applying ceil
+select ceil(arrow_cast(9.23,'Decimal128(3,2)'));
+
 # ceil with decimal32 argument (ensure decimal output)
 query TTTTTTTT
 select
@@ -517,6 +521,10 @@ select
   floor(arrow_cast(-123.00,'Decimal128(10,2)'));
 ----
 1 -2 123 -123
+
+# floor overflow with limited precision
+query error Decimal overflow while applying floor
+select floor(arrow_cast(-9.23,'Decimal128(3,2)'));
 
 # floor with decimal32 argument (ensure decimal output)
 query TTTTTTTT

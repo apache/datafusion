@@ -112,30 +112,42 @@ impl ScalarUDFImpl for CeilFunc {
             DataType::Null => {
                 return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
             }
-            DataType::Decimal32(_, scale) => apply_decimal_op::<Decimal32Type, _>(
-                value,
-                *scale,
-                self.name(),
-                ceil_decimal_value,
-            )?,
-            DataType::Decimal64(_, scale) => apply_decimal_op::<Decimal64Type, _>(
-                value,
-                *scale,
-                self.name(),
-                ceil_decimal_value,
-            )?,
-            DataType::Decimal128(_, scale) => apply_decimal_op::<Decimal128Type, _>(
-                value,
-                *scale,
-                self.name(),
-                ceil_decimal_value,
-            )?,
-            DataType::Decimal256(_, scale) => apply_decimal_op::<Decimal256Type, _>(
-                value,
-                *scale,
-                self.name(),
-                ceil_decimal_value,
-            )?,
+            DataType::Decimal32(precision, scale) => {
+                apply_decimal_op::<Decimal32Type, _>(
+                    value,
+                    *precision,
+                    *scale,
+                    self.name(),
+                    ceil_decimal_value,
+                )?
+            }
+            DataType::Decimal64(precision, scale) => {
+                apply_decimal_op::<Decimal64Type, _>(
+                    value,
+                    *precision,
+                    *scale,
+                    self.name(),
+                    ceil_decimal_value,
+                )?
+            }
+            DataType::Decimal128(precision, scale) => {
+                apply_decimal_op::<Decimal128Type, _>(
+                    value,
+                    *precision,
+                    *scale,
+                    self.name(),
+                    ceil_decimal_value,
+                )?
+            }
+            DataType::Decimal256(precision, scale) => {
+                apply_decimal_op::<Decimal256Type, _>(
+                    value,
+                    *precision,
+                    *scale,
+                    self.name(),
+                    ceil_decimal_value,
+                )?
+            }
             other => {
                 return exec_err!(
                     "Unsupported data type {other:?} for function {}",
