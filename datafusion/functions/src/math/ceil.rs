@@ -19,12 +19,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
-use arrow::compute::cast;
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, Float32Type,
     Float64Type,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -89,21 +88,9 @@ impl ScalarUDFImpl for CeilFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Float32 => Ok(DataType::Float32),
-            DataType::Decimal32(precision, scale) => {
-                Ok(DataType::Decimal32(precision, scale))
-            }
-            DataType::Decimal64(precision, scale) => {
-                Ok(DataType::Decimal64(precision, scale))
-            }
-            DataType::Decimal128(precision, scale) => {
-                Ok(DataType::Decimal128(precision, scale))
-            }
-            DataType::Decimal256(precision, scale) => {
-                Ok(DataType::Decimal256(precision, scale))
-            }
-            _ => Ok(DataType::Float64),
+        match &arg_types[0] {
+            DataType::Null => Ok(DataType::Float64),
+            other => Ok(other.clone()),
         }
     }
 
@@ -122,7 +109,9 @@ impl ScalarUDFImpl for CeilFunc {
                     .as_primitive::<Float32Type>()
                     .unary::<_, Float32Type>(f32::ceil),
             ),
-            DataType::Null => return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None))),
+            DataType::Null => {
+                return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+            }
             DataType::Decimal32(_, scale) => apply_decimal_op::<Decimal32Type, _>(
                 value,
                 *scale,
