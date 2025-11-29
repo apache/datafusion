@@ -49,6 +49,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
 log = { workspace = true }
+percent-encoding = "2.3.2"
 rand = { workspace = true }
 sha1 = "0.10"
 url = { workspace = true }

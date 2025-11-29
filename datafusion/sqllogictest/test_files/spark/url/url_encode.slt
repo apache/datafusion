@@ -15,13 +15,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query T
+SELECT url_encode('https://spark.apache.org');
+----
+https%3A%2F%2Fspark.apache.org
 
-## Original Query: SELECT url_encode('https://spark.apache.org');
-## PySpark 3.5.5 Result: {'url_encode(https://spark.apache.org)': 'https%3A%2F%2Fspark.apache.org', 'typeof(url_encode(https://spark.apache.org))': 'string', 'typeof(https://spark.apache.org)': 'string'}
-#query
-#SELECT url_encode('https://spark.apache.org'::string);
+# Test with LargeUtf8
+query T
+SELECT url_encode(arrow_cast('https://spark.apache.org', 'LargeUtf8'));
+----
+https%3A%2F%2Fspark.apache.org
+
+# Test with Utf8View
+query T
+SELECT url_encode(arrow_cast('https://spark.apache.org', 'Utf8View'));
+----
+https%3A%2F%2Fspark.apache.org
