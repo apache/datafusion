@@ -32,7 +32,7 @@ pub use if_then::*;
 pub use literal::*;
 pub use scalar_function::*;
 pub use singular_or_list::*;
-pub use subquery::*;
+pub use subquery::{from_exists, from_in_subquery};
 pub use window_function::*;
 
 use crate::logical_plan::producer::utils::flatten_names;
@@ -139,7 +139,7 @@ pub fn to_substrait_rex(
         }
         Expr::WindowFunction(expr) => producer.handle_window_function(expr, schema),
         Expr::InList(expr) => producer.handle_in_list(expr, schema),
-        Expr::Exists(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
+        Expr::Exists(expr) => producer.handle_exists(expr),
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
         Expr::ScalarSubquery(expr) => {
             not_impl_err!("Cannot convert {expr:?} to Substrait")
@@ -148,8 +148,32 @@ pub fn to_substrait_rex(
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
-        Expr::OuterReferenceColumn(_, _) => {
-            not_impl_err!("Cannot convert {expr:?} to Substrait")
+        Expr::OuterReferenceColumn(_, col) => {
+            let function_anchor = producer.register_function("outer_reference".to_string());
+            Ok(Expression {
+                rex_type: Some(substrait::proto::expression::RexType::ScalarFunction(
+                    substrait::proto::expression::ScalarFunction {
+                        function_reference: function_anchor,
+                        arguments: vec![substrait::proto::FunctionArgument {
+                            arg_type: Some(substrait::proto::function_argument::ArgType::Value(
+                                Expression {
+                                    rex_type: Some(substrait::proto::expression::RexType::Literal(
+                                        substrait::proto::expression::Literal {
+                                            literal_type: Some(
+                                                substrait::proto::expression::literal::LiteralType::String(
+                                                    col.to_string()
+                                                )
+                                            ),
+                                            ..Default::default()
+                                        }
+                                    ))
+                                }
+                            ))
+                        }],
+                        ..Default::default()
+                    }
+                ))
+            })
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
     }

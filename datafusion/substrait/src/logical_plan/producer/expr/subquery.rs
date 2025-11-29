@@ -22,6 +22,8 @@ use substrait::proto::expression::subquery::InPredicate;
 use substrait::proto::expression::{RexType, ScalarFunction};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument};
+use datafusion::logical_expr::expr::Exists;
+use substrait::proto::expression::subquery::SetPredicate;
 
 pub fn from_in_subquery(
     producer: &mut impl SubstraitProducer,
@@ -51,6 +53,49 @@ pub fn from_in_subquery(
             },
         ))),
     };
+    if *negated {
+        let function_anchor = producer.register_function("not".to_string());
+
+        #[allow(deprecated)]
+        Ok(Expression {
+            rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                function_reference: function_anchor,
+                arguments: vec![FunctionArgument {
+                    arg_type: Some(ArgType::Value(substrait_subquery)),
+                }],
+                output_type: None,
+                args: vec![],
+                options: vec![],
+            })),
+        })
+    } else {
+        Ok(substrait_subquery)
+    }
+}
+
+pub fn from_exists(
+    producer: &mut impl SubstraitProducer,
+    exists: &Exists,
+) -> datafusion::common::Result<Expression> {
+    let Exists { subquery, negated } = exists;
+
+    let subquery_plan = producer.handle_plan(subquery.subquery.as_ref())?;
+
+    let substrait_subquery = Expression {
+        rex_type: Some(RexType::Subquery(Box::new(
+            substrait::proto::expression::Subquery {
+                subquery_type: Some(
+                    substrait::proto::expression::subquery::SubqueryType::SetPredicate(
+                        Box::new(SetPredicate {
+                            predicate_op: 1,
+                            tuples: Some(subquery_plan),
+                        }),
+                    ),
+                ),
+            },
+        ))),
+    };
+
     if *negated {
         let function_anchor = producer.register_function("not".to_string());
 
