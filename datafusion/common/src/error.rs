@@ -935,8 +935,6 @@ macro_rules! make_error {
             }
 
 
-            // Note: Certain macros are used in this  crate, but not all.
-            // This macro generates a use or all of them in case they are needed
             #[doc(hidden)]
             pub use $NAME_ERR as [<_ $NAME_ERR>];
             #[doc(hidden)]

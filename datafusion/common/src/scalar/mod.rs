@@ -6379,12 +6379,12 @@ mod tests {
         check_scalar_iter_binary!(
             Binary,
             BinaryArray,
-            vec![Some(b"foo"), None, Some(b"bar")]
+            [Some(b"foo"), None, Some(b"bar")]
         );
         check_scalar_iter_binary!(
             LargeBinary,
             LargeBinaryArray,
-            vec![Some(b"foo"), None, Some(b"bar")]
+            [Some(b"foo"), None, Some(b"bar")]
         );
     }
 
