@@ -26,7 +26,6 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use parquet::arrow::encode_arrow_schema;
-// TODO: handle once deprecated
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
