@@ -98,6 +98,11 @@ pub trait DistinctStorage: Default + std::fmt::Debug + Send + Sync {
     /// The native type being stored
     type Native: ArrowNativeType;
 
+    /// Iterator type for [`iter_values`]
+    type Iter<'a>: Iterator<Item = Self::Native> + 'a
+    where
+        Self: 'a;
+
     /// Insert a value into the storage, returning whether it was newly inserted
     fn insert(&mut self, value: Self::Native) -> bool;
 
@@ -110,12 +115,10 @@ pub trait DistinctStorage: Default + std::fmt::Debug + Send + Sync {
     }
 
     /// Iterate over the stored values
-    fn iter_values(&self) -> Box<dyn Iterator<Item = Self::Native> + '_>;
+    fn iter_values(&self) -> Self::Iter<'_>;
 
-    /// Extend the storage with values from an iterator
-    fn extend_values<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = Self::Native>;
+    /// Drain the storage, returning the distinct values collected so far.
+    fn drain_values(&mut self) -> Vec<Self::Native>;
 }
 
 /// Implementation of [`DistinctStorage`] for natively hashable types (integers, etc.)
@@ -124,6 +127,7 @@ where
     T: ArrowNativeType + Eq + std::hash::Hash,
 {
     type Native = T;
+    type Iter<'a> = std::iter::Copied<hashbrown::hash_set::Iter<'a, T>>;
 
     fn insert(&mut self, value: Self::Native) -> bool {
         HashSet::insert(self, value)
@@ -133,15 +137,14 @@ where
         HashSet::len(self)
     }
 
-    fn iter_values(&self) -> Box<dyn Iterator<Item = Self::Native> + '_> {
-        Box::new(self.iter().copied())
+    fn iter_values(&self) -> Self::Iter<'_> {
+        self.iter().copied()
     }
 
-    fn extend_values<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = Self::Native>,
-    {
-        HashSet::extend(self, iter)
+    fn drain_values(&mut self) -> Vec<Self::Native> {
+        let mut taken = HashSet::default();
+        std::mem::swap(self, &mut taken);
+        taken.into_iter().collect()
     }
 }
 
@@ -151,6 +154,8 @@ where
     T: ArrowNativeType + ToByteSlice + ArrowNativeTypeOp,
 {
     type Native = T;
+    type Iter<'a> =
+        std::iter::Map<hashbrown::hash_set::Iter<'a, Hashable<T>>, fn(&Hashable<T>) -> T>;
 
     fn insert(&mut self, value: Self::Native) -> bool {
         HashSet::insert(self, Hashable(value))
@@ -160,15 +165,20 @@ where
         HashSet::len(self)
     }
 
-    fn iter_values(&self) -> Box<dyn Iterator<Item = Self::Native> + '_> {
-        Box::new(self.iter().map(|h| h.0))
+    fn iter_values(&self) -> Self::Iter<'_> {
+        fn extract<T>(hashable: &Hashable<T>) -> T
+        where
+            T: ArrowNativeType + ToByteSlice + ArrowNativeTypeOp,
+        {
+            hashable.0
+        }
+        self.iter().map(extract::<T>)
     }
 
-    fn extend_values<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = Self::Native>,
-    {
-        HashSet::extend(self, iter.into_iter().map(Hashable))
+    fn drain_values(&mut self) -> Vec<Self::Native> {
+        let mut taken = HashSet::default();
+        std::mem::swap(self, &mut taken);
+        taken.into_iter().map(|v| v.0).collect()
     }
 }
 
@@ -329,9 +339,13 @@ impl<T: ArrowPrimitiveType, S: DistinctStorage<Native = T::Native>>
 
         let arr = as_primitive_array::<T>(&values[0])?;
         if arr.null_count() > 0 {
-            self.values.extend_values(arr.iter().flatten());
+            for value in arr.iter().flatten() {
+                self.values.insert(value);
+            }
         } else {
-            self.values.extend_values(arr.values().iter().copied());
+            for value in arr.values().iter().copied() {
+                self.values.insert(value);
+            }
         }
 
         Ok(())
@@ -356,5 +370,26 @@ impl<T: ArrowPrimitiveType, S: DistinctStorage<Native = T::Native>>
         let num_elements = self.values.len();
         let fixed_size = size_of_val(self) + size_of_val(&self.values);
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+    }
+
+    /// Number of distinct values tracked so far.
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Whether no values have been collected.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Iterate over the current distinct values.
+    pub fn iter_values(&self) -> S::Iter<'_> {
+        self.values.iter_values()
+    }
+
+    /// Drain the collected values into a Vec. Intended for final evaluation steps
+    /// that need to process the distinct values directly.
+    pub fn drain_values(&mut self) -> Vec<T::Native> {
+        self.values.drain_values()
     }
 }

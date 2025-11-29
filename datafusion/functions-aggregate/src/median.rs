@@ -529,10 +529,7 @@ impl<T: ArrowNumericType + Send + Sync + Debug> Accumulator
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values.values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
+        let d = self.distinct_values.drain_values();
         let median = calculate_median::<T>(d);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }

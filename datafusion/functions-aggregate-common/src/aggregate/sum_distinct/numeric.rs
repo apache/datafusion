@@ -53,7 +53,7 @@ impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
     }
 
     pub fn distinct_count(&self) -> usize {
-        self.values.values.len()
+        self.values.len()
     }
 }
 
@@ -77,8 +77,8 @@ impl<T: ArrowPrimitiveType + Send + Sync + Debug> Accumulator
             ScalarValue::new_primitive::<T>(None, &self.data_type)
         } else {
             let mut acc = T::Native::usize_as(0);
-            for distinct_value in self.values.values.iter() {
-                acc = acc.add_wrapping(distinct_value.0)
+            for distinct_value in self.values.iter_values() {
+                acc = acc.add_wrapping(distinct_value)
             }
             ScalarValue::new_primitive::<T>(Some(acc), &self.data_type)
         }
