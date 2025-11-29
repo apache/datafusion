@@ -18,8 +18,8 @@
 use crate::extensions::Extensions;
 use crate::logical_plan::producer::{
     from_aggregate, from_aggregate_function, from_alias, from_between, from_binary_expr,
-    from_case, from_cast, from_column, from_distinct, from_empty_relation, from_filter,
-    from_exists, from_in_list, from_in_subquery, from_join, from_like, from_limit, 
+    from_case, from_cast, from_column, from_distinct, from_empty_relation, from_exists,
+    from_filter, from_in_list, from_in_subquery, from_join, from_like, from_limit,
     from_literal, from_projection, from_repartition, from_scalar_function, from_sort,
     from_subquery_alias, from_table_scan, from_try_cast, from_unary_expr, from_union,
     from_values, from_window, from_window_function, to_substrait_rel, to_substrait_rex,
@@ -360,7 +360,10 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         from_in_subquery(self, in_subquery, schema)
     }
 
-    fn handle_exists(&mut self, exists: &expr::Exists) -> datafusion::common::Result<Expression> {
+    fn handle_exists(
+        &mut self,
+        exists: &expr::Exists,
+    ) -> datafusion::common::Result<Expression> {
         from_exists(self, exists)
     }
 }

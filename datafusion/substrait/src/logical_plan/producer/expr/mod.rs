@@ -149,7 +149,8 @@ pub fn to_substrait_rex(
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::OuterReferenceColumn(_, col) => {
-            let function_anchor = producer.register_function("outer_reference".to_string());
+            let function_anchor =
+                producer.register_function("outer_reference".to_string());
             Ok(Expression {
                 rex_type: Some(substrait::proto::expression::RexType::ScalarFunction(
                     substrait::proto::expression::ScalarFunction {

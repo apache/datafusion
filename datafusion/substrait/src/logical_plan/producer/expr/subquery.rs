@@ -17,13 +17,13 @@
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::DFSchemaRef;
+use datafusion::logical_expr::expr::Exists;
 use datafusion::logical_expr::expr::InSubquery;
 use substrait::proto::expression::subquery::InPredicate;
+use substrait::proto::expression::subquery::SetPredicate;
 use substrait::proto::expression::{RexType, ScalarFunction};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument};
-use datafusion::logical_expr::expr::Exists;
-use substrait::proto::expression::subquery::SetPredicate;
 
 pub fn from_in_subquery(
     producer: &mut impl SubstraitProducer,

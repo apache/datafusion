@@ -16,16 +16,16 @@
 // under the License.
 
 use crate::logical_plan::consumer::{from_substrait_func_args, SubstraitConsumer};
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::Result;
 use datafusion::common::{
     not_impl_err, plan_err, substrait_err, DFSchema, DataFusionError, ScalarValue,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{expr, Between, BinaryExpr, Expr, Like, Operator};
+use std::sync::Arc;
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
-use std::sync::Arc;
-use datafusion::arrow::datatypes::{Field, DataType};
 
 pub async fn from_scalar_function(
     consumer: &impl SubstraitConsumer,
@@ -47,7 +47,7 @@ pub async fn from_scalar_function(
     if fn_name == "outer_reference" {
         let arg = f.arguments.first().ok_or_else(|| {
             DataFusionError::Substrait(
-                "outer_reference function requires at least one argument".to_string()
+                "outer_reference function requires at least one argument".to_string(),
             )
         })?;
 
