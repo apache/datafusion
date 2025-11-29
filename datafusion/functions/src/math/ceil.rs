@@ -122,7 +122,7 @@ impl ScalarUDFImpl for CeilFunc {
                     .as_primitive::<Float32Type>()
                     .unary::<_, Float32Type>(f32::ceil),
             ),
-            DataType::Null => cast(value.as_ref(), &DataType::Float64)?,
+            DataType::Null => return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None))),
             DataType::Decimal32(_, scale) => apply_decimal_op::<Decimal32Type, _>(
                 value,
                 *scale,
