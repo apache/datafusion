@@ -31,8 +31,7 @@ use crate::{DisplayFormatType, ExecutionPlan};
 // TODO: It's never used.
 /// Represents a 2D coordinate in the rendered tree.
 /// Used to track positions of nodes and their connections.
-#[expect(dead_code)]
-pub struct Coordinate {
+#[expect(dead_code)] pub struct Coordinate {
     /// Horizontal position in the tree
     pub x: usize,
     /// Vertical position in the tree
