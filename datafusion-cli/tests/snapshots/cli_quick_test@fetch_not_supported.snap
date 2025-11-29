@@ -1,0 +1,16 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+assertion_line: 176
+info:
+  program: datafusion-cli
+  args:
+    - "--command"
+    - SELECT 1 FETCH NEXT 1 ROW ONLY
+    - "-q"
+---
+success: false
+exit_code: 1
+----- stdout -----
+Error: This feature is not implemented: FETCH clause is not supported yet
+
+----- stderr -----
