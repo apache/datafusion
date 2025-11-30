@@ -484,6 +484,107 @@ fn hash_fixed_list_array(
     Ok(())
 }
 
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_run_array<R: RunEndIndexType>(
+    array: &RunArray<R>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    // We find the relevant runs that cover potentially sliced arrays, so we can only hash those
+    // values. Then we find the runs refer to the original runs and ensure that we apply hashes
+    // correctly to the sliced, whether sliced at the start, end, or both.
+    let array_offset = array.offset();
+    let array_len = array.len();
+
+    if array_len == 0 {
+        return Ok(());
+    }
+
+    let run_ends = array.run_ends();
+    let run_ends_values = run_ends.values();
+    let values = array.values();
+
+    let mut start_physical_index = 0;
+    let mut end_physical_index = run_ends_values.len();
+
+    for (physical_index, &run_end) in run_ends_values.iter().enumerate() {
+        if run_end.as_usize() > array_offset {
+            start_physical_index = physical_index;
+            break;
+        }
+    }
+
+    let slice_end = array_offset + array_len;
+    for (physical_index, &run_end) in run_ends_values
+        .iter()
+        .enumerate()
+        .skip(start_physical_index)
+    {
+        if run_end.as_usize() >= slice_end {
+            end_physical_index = physical_index + 1;
+            break;
+        }
+    }
+
+    let sliced_values = values.slice(
+        start_physical_index,
+        end_physical_index - start_physical_index,
+    );
+    let mut values_hashes = vec![0u64; sliced_values.len()];
+    create_hashes(
+        std::slice::from_ref(&sliced_values),
+        random_state,
+        &mut values_hashes,
+    )?;
+
+    let mut logical_position = 0;
+    for (adjusted_physical_index, &absolute_run_end) in run_ends_values
+        [start_physical_index..end_physical_index]
+        .iter()
+        .enumerate()
+    {
+        let is_null_value = sliced_values.is_null(adjusted_physical_index);
+        let absolute_run_end = absolute_run_end.as_usize();
+
+        let start_in_slice = if absolute_run_end > array_offset {
+            logical_position
+        } else {
+            continue;
+        };
+
+        let end_in_slice = (absolute_run_end - array_offset).min(array_len);
+
+        if start_in_slice >= array_len {
+            break;
+        }
+
+        if rehash {
+            if !is_null_value {
+                let value_hash = values_hashes[adjusted_physical_index];
+                for hash in hashes_buffer
+                    .iter_mut()
+                    .take(end_in_slice)
+                    .skip(start_in_slice)
+                {
+                    *hash = combine_hashes(value_hash, *hash);
+                }
+            }
+        } else {
+            let value_hash = values_hashes[adjusted_physical_index];
+            hashes_buffer[start_in_slice..end_in_slice].fill(value_hash);
+        }
+
+        logical_position = end_in_slice;
+
+        if logical_position >= array_len {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 /// Internal helper function that hashes a single array and either initializes or combines
 /// the hash values in the buffer.
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -534,6 +635,10 @@ fn hash_single_array(
         DataType::Union(_, _) => {
             let array = as_union_array(array)?;
             hash_union_array(array, random_state, hashes_buffer)?;
+        }
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => hash_run_array(array, random_state, hashes_buffer, rehash)?,
+            _ => unreachable!()
         }
         _ => {
             // This is internal because we should have caught this before.
@@ -802,6 +907,97 @@ mod tests {
     create_hash_string!(large_string_array, LargeStringArray);
     create_hash_string!(string_view_array, StringArray);
     create_hash_string!(dict_string_array, DictionaryArray<Int8Type>);
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_run_array() -> Result<()> {
+        // Create values and run_ends for RunArray
+        let values = Arc::new(Int32Array::from(vec![10, 20, 30]));
+        let run_ends = Arc::new(Int32Array::from(vec![2, 5, 7]));
+
+        // Create the RunArray
+        let array = Arc::new(RunArray::try_new(&run_ends, values.as_ref()).unwrap());
+
+        // Create hashes
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; array.len()];
+        let hashes = create_hashes(
+            &[Arc::clone(&array) as ArrayRef],
+            &random_state,
+            hashes_buff,
+        )?;
+
+        // The length should be 7 (last run end)
+        assert_eq!(hashes.len(), 7);
+
+        // Values at indices 0,1 should have the same hash (value 10)
+        assert_eq!(hashes[0], hashes[1]);
+
+        // Values at indices 2,3,4 should have the same hash (value 20)
+        assert_eq!(hashes[2], hashes[3]);
+        assert_eq!(hashes[3], hashes[4]);
+
+        // Values at indices 5,6 should have the same hash (value 30)
+        assert_eq!(hashes[5], hashes[6]);
+
+        // Hashes for different values should be different
+        assert_ne!(hashes[0], hashes[2]);
+        assert_ne!(hashes[2], hashes[5]);
+        assert_ne!(hashes[0], hashes[5]);
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_multi_column_hash_with_run_array() -> Result<()> {
+        // Create a regular Int32Array
+        let int_array = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7]));
+
+        // Create a RunArray with same logical length
+        let values = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+        let run_ends = Arc::new(Int32Array::from(vec![2, 5, 7]));
+        let run_array = Arc::new(RunArray::try_new(&run_ends, values.as_ref()).unwrap());
+
+        // Create hashes for single column (int array)
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut one_col_hashes = vec![0; int_array.len()];
+        create_hashes(
+            &[Arc::clone(&int_array) as ArrayRef],
+            &random_state,
+            &mut one_col_hashes,
+        )?;
+
+        // Create hashes for both columns
+        let mut two_col_hashes = vec![0; int_array.len()];
+        create_hashes(
+            &[
+                Arc::clone(&int_array) as ArrayRef,
+                Arc::clone(&run_array) as ArrayRef,
+            ],
+            &random_state,
+            &mut two_col_hashes,
+        )?;
+
+        // Verify lengths
+        assert_eq!(one_col_hashes.len(), 7);
+        assert_eq!(two_col_hashes.len(), 7);
+
+        // Hashes should be different when including the Run array
+        assert_ne!(one_col_hashes, two_col_hashes);
+
+        // Indices 0,1 should have the same Run value ("foo") so their rehash pattern should be consistent
+        let diff_0_vs_1_one_col = one_col_hashes[0] != one_col_hashes[1];
+        let diff_0_vs_1_two_col = two_col_hashes[0] != two_col_hashes[1];
+        assert_eq!(diff_0_vs_1_one_col, diff_0_vs_1_two_col);
+
+        // Similarly for indices with the same Run value ("bar")
+        let diff_2_vs_3_one_col = one_col_hashes[2] != one_col_hashes[3];
+        let diff_2_vs_3_two_col = two_col_hashes[2] != two_col_hashes[3];
+        assert_eq!(diff_2_vs_3_one_col, diff_2_vs_3_two_col);
+
+        Ok(())
+    }
 
     #[test]
     // Tests actual values of hashes, which are different if forcing collisions
@@ -1322,5 +1518,168 @@ mod tests {
         assert_ne!(hashes[2], hashes[3]);
         // 67 vs 67
         assert_eq!(hashes[0], hashes[4]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_sliced_run_array() -> Result<()> {
+        // Create a run array: [10, 10, 20, 20, 20, 30, 30]
+        let values = Arc::new(Int32Array::from(vec![10, 20, 30]));
+        let run_ends = Arc::new(Int32Array::from(vec![2, 5, 7]));
+        let array = Arc::new(RunArray::try_new(&run_ends, values.as_ref()).unwrap());
+
+        // Create hashes for the full array
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut full_hashes = vec![0; array.len()];
+        create_hashes(
+            &[Arc::clone(&array) as ArrayRef],
+            &random_state,
+            &mut full_hashes,
+        )?;
+
+        // Now slice the array to get elements [2, 5) which is [20, 20, 20]
+        let array_ref: ArrayRef = Arc::clone(&array) as ArrayRef;
+        let sliced_array = array_ref.slice(2, 3);
+
+        // Create hashes for the sliced array
+        let mut sliced_hashes = vec![0; sliced_array.len()];
+        create_hashes(
+            std::slice::from_ref(&sliced_array),
+            &random_state,
+            &mut sliced_hashes,
+        )?;
+
+        // All three values in the sliced array should have the same hash
+        // (they're all the value 20)
+        assert_eq!(sliced_hashes.len(), 3);
+        assert_eq!(sliced_hashes[0], sliced_hashes[1]);
+        assert_eq!(sliced_hashes[1], sliced_hashes[2]);
+
+        // And they should match the hash of the same logical positions in the full array
+        assert_eq!(sliced_hashes[0], full_hashes[2]);
+        assert_eq!(sliced_hashes[1], full_hashes[3]);
+        assert_eq!(sliced_hashes[2], full_hashes[4]);
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_sliced_run_array_only_hashes_needed_values() -> Result<()> {
+        // Create a run array with many values, but slice it to use only a few
+        // [1, 1, 2, 2, 3, 3, ..., 1000, 1000]
+        let values_vec: Vec<i32> = (1..=1000).collect();
+        let run_ends_vec: Vec<i32> = (1..=1000).map(|i| i * 2).collect();
+
+        let values = Arc::new(Int32Array::from(values_vec));
+        let run_ends = Arc::new(Int32Array::from(run_ends_vec));
+        let array = Arc::new(RunArray::try_new(&run_ends, values.as_ref()).unwrap());
+
+        // Slice to only use values at positions 100-104 (which uses values 50, 51, 52)
+        // Full array: [1,1, 2,2, 3,3, ... 50,50, 51,51, 52,52, ...]
+        // Positions: [0,1, 2,3, 4,5, ... 98,99, 100,101, 102,103, ...]
+        let array_ref: ArrayRef = Arc::clone(&array) as ArrayRef;
+        let sliced_array = array_ref.slice(100, 5);
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut sliced_hashes = vec![0; sliced_array.len()];
+
+        // This test demonstrates that we're hashing ALL 1000 values
+        // even though we only need 3 of them (values at indices 49, 50, 51)
+        // We can't directly count hashing calls, but we can verify the behavior is correct
+        create_hashes(&[sliced_array], &random_state, &mut sliced_hashes)?;
+
+        // Verify the sliced array produces correct hashes
+        assert_eq!(sliced_hashes.len(), 5);
+
+        // Positions 100,101 should have the same hash (value 51)
+        assert_eq!(sliced_hashes[0], sliced_hashes[1]);
+        // Positions 102,103 should have the same hash (value 52)
+        assert_eq!(sliced_hashes[2], sliced_hashes[3]);
+        // Position 100 and 102 should have different hashes
+        assert_ne!(sliced_hashes[0], sliced_hashes[2]);
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_run_array_with_nulls() -> Result<()> {
+        // Create a run array with nullable values: [10, 10, null, null, 20, 20]
+        let values = Arc::new(Int32Array::from(vec![Some(10), None, Some(20)]));
+        let run_ends = Arc::new(Int32Array::from(vec![2, 4, 6]));
+        let array = Arc::new(RunArray::try_new(&run_ends, values.as_ref()).unwrap());
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; array.len()];
+        create_hashes(
+            &[Arc::clone(&array) as ArrayRef],
+            &random_state,
+            &mut hashes,
+        )?;
+
+        // Positions 0,1 should have the same hash (value 10)
+        assert_eq!(hashes[0], hashes[1]);
+        assert_ne!(hashes[0], 0); // Non-null value should have non-zero hash
+
+        // Positions 2,3 should have the same hash (null)
+        assert_eq!(hashes[2], hashes[3]);
+        // Null values should hash to 0 (uninitialized)
+        assert_eq!(hashes[2], 0);
+
+        // Positions 4,5 should have the same hash (value 20)
+        assert_eq!(hashes[4], hashes[5]);
+        assert_ne!(hashes[4], 0);
+
+        // Different non-null values should have different hashes
+        assert_ne!(hashes[0], hashes[4]);
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_run_array_with_nulls_multicolumn() -> Result<()> {
+        // Test that null handling in run arrays matches primitive arrays during rehash
+        // Create a regular primitive array: [10, null, 20]
+        let primitive_array = Arc::new(Int32Array::from(vec![Some(10), None, Some(20)]));
+
+        // Create a run array with same logical values: [10, null, 20]
+        let run_values = Arc::new(Int32Array::from(vec![Some(10), None, Some(20)]));
+        let run_ends = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let run_array =
+            Arc::new(RunArray::try_new(&run_ends, run_values.as_ref()).unwrap());
+
+        // Create a second column for multi-column hashing
+        let second_col = Arc::new(Int32Array::from(vec![100, 200, 300]));
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+
+        // Hash primitive array with two columns
+        let mut primitive_hashes = vec![0; 3];
+        create_hashes(
+            &[
+                Arc::clone(&primitive_array) as ArrayRef,
+                Arc::clone(&second_col) as ArrayRef,
+            ],
+            &random_state,
+            &mut primitive_hashes,
+        )?;
+
+        // Hash run array with two columns
+        let mut run_hashes = vec![0; 3];
+        create_hashes(
+            &[
+                Arc::clone(&run_array) as ArrayRef,
+                Arc::clone(&second_col) as ArrayRef,
+            ],
+            &random_state,
+            &mut run_hashes,
+        )?;
+
+        // The hashes should be identical - nulls should not contribute during rehash
+        assert_eq!(primitive_hashes, run_hashes);
+
+        Ok(())
     }
 }
