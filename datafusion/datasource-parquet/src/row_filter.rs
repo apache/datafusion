@@ -188,6 +188,10 @@ pub(crate) struct FilterCandidate {
 /// This will do several things
 /// 1. Determine the columns required to evaluate the expression
 /// 2. Calculate data required to estimate the cost of evaluating the filter
+///
+/// Note that this does *not* handle any adaptation of the data schema to the expression schema,
+/// it is assumed that the expression has already been adapted to the file schema before being passed in here,
+/// generally using [`PhysicalExprAdapter`](datafusion_physical_expr_adapter::PhysicalExprAdapter).
 struct FilterCandidateBuilder {
     expr: Arc<dyn PhysicalExpr>,
     /// The schema of this parquet file.

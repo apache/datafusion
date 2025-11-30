@@ -763,21 +763,14 @@ fn should_enable_page_index(
 mod test {
     use std::sync::Arc;
 
-    use arrow::{
-        compute::cast,
-        datatypes::{DataType, Field, Schema, SchemaRef},
-    };
+    use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        assert_batches_eq, record_batch, stats::Precision, ColumnStatistics,
-        DataFusionError, ScalarValue, Statistics,
+        record_batch, stats::Precision, ColumnStatistics, DataFusionError, ScalarValue,
+        Statistics,
     };
     use datafusion_datasource::{
-        file_stream::FileOpener,
-        schema_adapter::{
-            DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
-            SchemaMapper,
-        },
+        file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
         PartitionedFile,
     };
     use datafusion_expr::{col, lit};
@@ -785,7 +778,7 @@ mod test {
         expressions::DynamicFilterPhysicalExpr, planner::logical2physical, PhysicalExpr,
     };
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
-    use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
     use object_store::{memory::InMemory, path::Path, ObjectStore};
     use parquet::arrow::ArrowWriter;
@@ -807,21 +800,6 @@ mod test {
             num_batches += 1;
         }
         (num_batches, num_rows)
-    }
-
-    async fn collect_batches(
-        mut stream: std::pin::Pin<
-            Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
-                    + Send,
-            >,
-        >,
-    ) -> Vec<arrow::array::RecordBatch> {
-        let mut batches = vec![];
-        while let Some(Ok(batch)) = stream.next().await {
-            batches.push(batch);
-        }
-        batches
     }
 
     async fn write_parquet(
@@ -1275,16 +1253,5 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
-    }
-
-    fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
-        match metrics.sum_by_name(metric_name) {
-            Some(v) => v.as_usize(),
-            _ => {
-                panic!(
-                    "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
-                );
-            }
-        }
     }
 }
