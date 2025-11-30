@@ -98,7 +98,7 @@ pub trait DistinctStorage: Default + std::fmt::Debug + Send + Sync {
     /// The native type being stored
     type Native: ArrowNativeType;
 
-    /// Iterator type for [`iter_values`]
+    /// Iterator type returned by [`DistinctStorage::iter_values`]
     type Iter<'a>: Iterator<Item = Self::Native> + 'a
     where
         Self: 'a;

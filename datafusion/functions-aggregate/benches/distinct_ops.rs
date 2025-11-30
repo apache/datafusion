@@ -79,7 +79,7 @@ fn benchmark_count_distinct_float64(c: &mut Criterion) {
     });
 }
 
-fn create_distinct_median_accumulator(data_type: DataType) -> Box<dyn Accumulator> {
+fn create_distinct_median_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new(
         "value",
         data_type.clone(),
@@ -112,7 +112,7 @@ fn benchmark_distinct_median(c: &mut Criterion) {
 
     c.bench_function("median_distinct_float64", |b| {
         b.iter_batched(
-            || create_distinct_median_accumulator(DataType::Float64),
+            || create_distinct_median_accumulator(&DataType::Float64),
             |mut acc| {
                 acc.update_batch(std::slice::from_ref(&values)).unwrap();
                 black_box(acc.evaluate().unwrap());
@@ -123,7 +123,7 @@ fn benchmark_distinct_median(c: &mut Criterion) {
 }
 
 fn create_distinct_percentile_accumulator(
-    data_type: DataType,
+    data_type: &DataType,
     percentile: f64,
 ) -> Box<dyn Accumulator> {
     let schema = Arc::new(Schema::new(vec![
@@ -168,7 +168,7 @@ fn benchmark_distinct_percentile(c: &mut Criterion) {
 
     c.bench_function("percentile_cont_distinct_float64", |b| {
         b.iter_batched(
-            || create_distinct_percentile_accumulator(DataType::Float64, 0.75),
+            || create_distinct_percentile_accumulator(&DataType::Float64, 0.75),
             |mut acc| {
                 acc.update_batch(std::slice::from_ref(&values)).unwrap();
                 black_box(acc.evaluate().unwrap());
