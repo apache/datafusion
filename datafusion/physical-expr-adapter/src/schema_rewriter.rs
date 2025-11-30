@@ -23,6 +23,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::{
     exec_err,
+    nested_struct::validate_struct_compatibility,
     tree_node::{Transformed, TransformedResult, TreeNode},
     Result, ScalarValue,
 };
@@ -412,15 +413,28 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
-        let is_compatible =
-            can_cast_types(physical_field.data_type(), logical_field.data_type());
-        if !is_compatible {
-            return exec_err!(
-                "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
-                column.name(),
-                physical_field.data_type(),
-                logical_field.data_type()
-            );
+        //
+        // For struct types, use validate_struct_compatibility which handles:
+        // - Missing fields in source (filled with nulls)
+        // - Extra fields in source (ignored)
+        // - Recursive validation of nested structs
+        // For non-struct types, use Arrow's can_cast_types
+        match (physical_field.data_type(), logical_field.data_type()) {
+            (DataType::Struct(physical_fields), DataType::Struct(logical_fields)) => {
+                validate_struct_compatibility(physical_fields, logical_fields)?;
+            }
+            _ => {
+                let is_compatible =
+                    can_cast_types(physical_field.data_type(), logical_field.data_type());
+                if !is_compatible {
+                    return exec_err!(
+                        "Cannot cast column '{}' from '{}' (physical data type) to '{}' (logical data type)",
+                        column.name(),
+                        physical_field.data_type(),
+                        logical_field.data_type()
+                    );
+                }
+            }
         }
 
         let cast_expr = Arc::new(CastColumnExpr::new(
@@ -444,8 +458,11 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{RecordBatch, RecordBatchOptions};
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::array::{
+        BooleanArray, Int32Array, Int64Array, RecordBatch, RecordBatchOptions,
+        StringArray, StringViewArray, StructArray,
+    };
+    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
     use datafusion_common::{assert_contains, record_batch, Result, ScalarValue};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, lit, Column, Literal};
@@ -555,7 +572,11 @@ mod tests {
         let column_expr = Arc::new(Column::new("data", 0));
 
         let error_msg = adapter.rewrite(column_expr).unwrap_err().to_string();
-        assert_contains!(error_msg, "Cannot cast column 'data'");
+        // validate_struct_compatibility provides more specific error about which field can't be cast
+        assert_contains!(
+            error_msg,
+            "Cannot cast struct field 'field1' from type Binary to type Int32"
+        );
     }
 
     #[test]
@@ -835,6 +856,118 @@ mod tests {
                 .collect_vec(),
             vec![Some(1), None, Some(3)]
         );
+    }
+
+    /// Test that struct columns are properly adapted including:
+    /// - Type casting of subfields (Int32 -> Int64, Utf8 -> Utf8View)
+    /// - Missing fields in logical schema are filled with nulls
+    #[test]
+    fn test_adapt_struct_batches() {
+        // Physical struct: {id: Int32, name: Utf8}
+        let physical_struct_fields: Fields = vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]
+        .into();
+
+        let struct_array = StructArray::new(
+            physical_struct_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+                Arc::new(StringArray::from(vec![
+                    Some("alice"),
+                    None,
+                    Some("charlie"),
+                ])) as _,
+            ],
+            None,
+        );
+
+        let physical_schema = Arc::new(Schema::new(vec![Field::new(
+            "data",
+            DataType::Struct(physical_struct_fields),
+            false,
+        )]));
+
+        let physical_batch = RecordBatch::try_new(
+            Arc::clone(&physical_schema),
+            vec![Arc::new(struct_array)],
+        )
+        .unwrap();
+
+        // Logical struct: {id: Int64, name: Utf8View, extra: Boolean}
+        // - id: cast from Int32 to Int64
+        // - name: cast from Utf8 to Utf8View
+        // - extra: missing from physical, should be filled with nulls
+        let logical_struct_fields: Fields = vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8View, true),
+            Field::new("extra", DataType::Boolean, true), // New field, not in physical
+        ]
+        .into();
+
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            "data",
+            DataType::Struct(logical_struct_fields),
+            false,
+        )]));
+
+        let projection = vec![col("data", &logical_schema).unwrap()];
+
+        let factory = DefaultPhysicalExprAdapterFactory;
+        let adapter =
+            factory.create(Arc::clone(&logical_schema), Arc::clone(&physical_schema));
+
+        let adapted_projection = projection
+            .into_iter()
+            .map(|expr| adapter.rewrite(expr).unwrap())
+            .collect_vec();
+
+        let adapted_schema = Arc::new(Schema::new(
+            adapted_projection
+                .iter()
+                .map(|expr| expr.return_field(&physical_schema).unwrap())
+                .collect_vec(),
+        ));
+
+        let res = batch_project(
+            adapted_projection,
+            &physical_batch,
+            Arc::clone(&adapted_schema),
+        )
+        .unwrap();
+
+        assert_eq!(res.num_columns(), 1);
+
+        let result_struct = res
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        // Verify id field is cast to Int64
+        let id_col = result_struct.column_by_name("id").unwrap();
+        assert_eq!(id_col.data_type(), &DataType::Int64);
+        let id_values = id_col.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(
+            id_values.iter().collect_vec(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+
+        // Verify name field is cast to Utf8View
+        let name_col = result_struct.column_by_name("name").unwrap();
+        assert_eq!(name_col.data_type(), &DataType::Utf8View);
+        let name_values = name_col.as_any().downcast_ref::<StringViewArray>().unwrap();
+        assert_eq!(
+            name_values.iter().collect_vec(),
+            vec![Some("alice"), None, Some("charlie")]
+        );
+
+        // Verify extra field (missing from physical) is filled with nulls
+        let extra_col = result_struct.column_by_name("extra").unwrap();
+        assert_eq!(extra_col.data_type(), &DataType::Boolean);
+        let extra_values = extra_col.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert_eq!(extra_values.iter().collect_vec(), vec![None, None, None]);
     }
 
     #[test]
