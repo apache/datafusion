@@ -27,7 +27,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
-    Column, DFSchemaRef, DataFusionError, Diagnostic, HashMap, Result, ScalarValue,
+    Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{

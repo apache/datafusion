@@ -33,9 +33,7 @@ use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, DataFusionError, Result,
-};
+use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 

@@ -42,8 +42,7 @@ use crate::expressions::Column;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::{
-    assert_or_internal_err, internal_err, not_impl_err, DataFusionError, Result,
-    ScalarValue,
+    assert_or_internal_err, internal_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;

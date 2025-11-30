@@ -27,7 +27,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    assert_or_internal_err, internal_datafusion_err, plan_err, DataFusionError, Result,
+    assert_or_internal_err, internal_datafusion_err, plan_err, Result,
 };
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
