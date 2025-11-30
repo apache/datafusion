@@ -107,7 +107,7 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
     drop(private_data);
 }
 
-fn record_batch_to_wrapped_array(
+pub(crate) fn record_batch_to_wrapped_array(
     record_batch: RecordBatch,
 ) -> RResult<WrappedArray, RString> {
     let struct_array = StructArray::from(record_batch);
@@ -157,7 +157,7 @@ impl RecordBatchStream for FFI_RecordBatchStream {
     }
 }
 
-fn wrapped_array_to_record_batch(array: WrappedArray) -> Result<RecordBatch> {
+pub(crate) fn wrapped_array_to_record_batch(array: WrappedArray) -> Result<RecordBatch> {
     let array_data =
         unsafe { from_ffi(array.array, &array.schema.0).map_err(DataFusionError::from)? };
     let array = make_array(array_data);
