@@ -265,8 +265,10 @@ impl ExecutionPlan for WorkTableExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, Int16Array, Int32Array, Int64Array};
+    use arrow_schema::{DataType, Field, Schema};
     use datafusion_execution::memory_pool::{MemoryConsumer, UnboundedMemoryPool};
+    use futures::StreamExt;
 
     #[test]
     fn test_work_table() {
@@ -298,5 +300,54 @@ mod tests {
         // The reservation should be freed after drop the memory_stream
         drop(memory_stream);
         assert_eq!(pool.reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_work_table_exec() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int16, false),
+        ]));
+        let work_table_exec =
+            WorkTableExec::new("wt".into(), Arc::clone(&schema), Some(vec![2, 1]))
+                .unwrap();
+
+        // We inject the work table
+        let work_table = Arc::new(WorkTable::new());
+        let work_table_exec = work_table_exec
+            .with_new_state(Arc::clone(&work_table) as _)
+            .unwrap();
+
+        // We update the work table
+        let pool = Arc::new(UnboundedMemoryPool::default()) as _;
+        let reservation = MemoryConsumer::new("test_work_table").register(&pool);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Int16Array::from(vec![1, 2, 3, 4, 5])),
+            ],
+        )
+        .unwrap();
+        work_table.update(ReservedBatches::new(vec![batch], reservation));
+
+        // We get back the batch from the work table
+        let returned_batch = work_table_exec
+            .execute(0, Arc::new(TaskContext::default()))
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            returned_batch,
+            RecordBatch::try_from_iter(vec![
+                ("c", Arc::new(Int16Array::from(vec![1, 2, 3, 4, 5])) as _),
+                ("b", Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _),
+            ])
+            .unwrap()
+        );
     }
 }
