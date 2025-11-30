@@ -62,6 +62,7 @@ impl CsvOptionsProto {
                     .newlines_in_values
                     .map_or(vec![], |v| vec![v as u8]),
                 truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
+                compression_level: options.compression_level,
             }
         } else {
             CsvOptionsProto::default()
@@ -152,6 +153,7 @@ impl From<&CsvOptionsProto> for CsvOptions {
             } else {
                 Some(proto.truncated_rows[0] != 0)
             },
+            compression_level: proto.compression_level,
         }
     }
 }
@@ -238,6 +240,7 @@ impl JsonOptionsProto {
             JsonOptionsProto {
                 compression: options.compression as i32,
                 schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
+                compression_level: options.compression_level,
             }
         } else {
             JsonOptionsProto::default()
@@ -256,6 +259,7 @@ impl From<&JsonOptionsProto> for JsonOptions {
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
             schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
+            compression_level: proto.compression_level,
         }
     }
 }

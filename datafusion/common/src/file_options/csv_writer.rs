@@ -31,6 +31,8 @@ pub struct CsvWriterOptions {
     /// Compression to apply after ArrowWriter serializes RecordBatches.
     /// This compression is applied by DataFusion not the ArrowWriter itself.
     pub compression: CompressionTypeVariant,
+    /// Compression level for the output file.
+    pub compression_level: Option<u32>,
 }
 
 impl CsvWriterOptions {
@@ -41,6 +43,20 @@ impl CsvWriterOptions {
         Self {
             writer_options,
             compression,
+            compression_level: None,
+        }
+    }
+
+    /// Create a new `CsvWriterOptions` with the specified compression level.
+    pub fn new_with_level(
+        writer_options: WriterBuilder,
+        compression: CompressionTypeVariant,
+        compression_level: Option<u32>,
+    ) -> Self {
+        Self {
+            writer_options,
+            compression,
+            compression_level,
         }
     }
 }
@@ -81,6 +97,7 @@ impl TryFrom<&CsvOptions> for CsvWriterOptions {
         Ok(CsvWriterOptions {
             writer_options: builder,
             compression: value.compression,
+            compression_level: value.compression_level,
         })
     }
 }

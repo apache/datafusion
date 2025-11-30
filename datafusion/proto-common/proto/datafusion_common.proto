@@ -461,12 +461,14 @@ message CsvOptions {
   bytes newlines_in_values = 16; // Indicates if newlines are supported in values
   bytes terminator = 17; // Optional terminator character as a byte
   bytes truncated_rows = 18; // Indicates if truncated rows are allowed
+  optional uint32 compression_level = 19; // Optional compression level
 }
 
 // Options controlling CSV format
 message JsonOptions {
   CompressionTypeVariant compression = 1; // Compression type
   optional uint64 schema_infer_max_rec = 2; // Optional max records for schema inference
+  optional uint32 compression_level = 3; // Optional compression level
 }
 
 message TableParquetOptions {

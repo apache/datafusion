@@ -131,6 +131,8 @@ pub struct ObjectWriterBuilder {
     object_store: Arc<dyn ObjectStore>,
     /// The size of the buffer for the object writer.
     buffer_size: Option<usize>,
+    /// The compression level for the object writer.
+    compression_level: Option<u32>,
 }
 
 impl ObjectWriterBuilder {
@@ -145,6 +147,7 @@ impl ObjectWriterBuilder {
             location: location.clone(),
             object_store,
             buffer_size: None,
+            compression_level: None,
         }
     }
 
@@ -202,6 +205,22 @@ impl ObjectWriterBuilder {
         self.buffer_size
     }
 
+    /// Set compression level for object writer.
+    pub fn set_compression_level(&mut self, compression_level: Option<u32>) {
+        self.compression_level = compression_level;
+    }
+
+    /// Set compression level for object writer, returning the builder.
+    pub fn with_compression_level(mut self, compression_level: Option<u32>) -> Self {
+        self.compression_level = compression_level;
+        self
+    }
+
+    /// Currently specified compression level.
+    pub fn get_compression_level(&self) -> Option<u32> {
+        self.compression_level
+    }
+
     /// Return a writer object that writes to the object store location.
     ///
     /// If a buffer size has not been set, the default buffer buffer size will
@@ -215,6 +234,7 @@ impl ObjectWriterBuilder {
             location,
             object_store,
             buffer_size,
+            compression_level,
         } = self;
 
         let buf_writer = match buffer_size {
@@ -222,6 +242,7 @@ impl ObjectWriterBuilder {
             None => BufWriter::new(object_store, location),
         };
 
-        file_compression_type.convert_async_writer(buf_writer)
+        file_compression_type
+            .convert_async_writer_with_level(buf_writer, compression_level)
     }
 }
