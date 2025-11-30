@@ -62,7 +62,11 @@ where
     T::Native: ArrowNativeType + ArrowNativeTypeOp,
 {
     let base = <T::Native as ArrowNativeType>::from_usize(10).ok_or_else(|| {
-        DataFusionError::Execution(format!("Decimal overflow while applying {fn_name}"))
+        DataFusionError::Execution(format!(
+            "Cannot get 10_{} from usize: {:?}",
+            std::any::type_name::<T::Native>(),
+            10_usize
+        ))
     })?;
 
     base.pow_checked(scale as u32).map_err(|_| {
