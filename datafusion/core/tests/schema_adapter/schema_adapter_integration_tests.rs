@@ -273,6 +273,24 @@ async fn test_parquet_integration_with_physical_expr_adapter() -> Result<()> {
     assert_eq!(result_schema.field(0).name(), "ID");
     assert_eq!(result_schema.field(1).name(), "NAME");
 
+    // Verify the data was correctly read from the lowercase file columns
+    // This confirms the PhysicalExprAdapter successfully mapped uppercase -> lowercase
+    let id_array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int32Array>()
+        .expect("Expected Int32Array for ID column");
+    assert_eq!(id_array.values(), &[1, 2, 3]);
+
+    let name_array = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .expect("Expected StringArray for NAME column");
+    assert_eq!(name_array.value(0), "a");
+    assert_eq!(name_array.value(1), "b");
+    assert_eq!(name_array.value(2), "c");
+
     Ok(())
 }
 

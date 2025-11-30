@@ -352,7 +352,16 @@ let config = FileScanConfigBuilder::new(url, source)
     .build();
 ```
 
-**Handling projections in `FileSource`:**
+### `SchemaAdapterFactory` Fully Removed from Parquet
+
+Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaadapterfactory-and-schemaadapter), `SchemaAdapterFactory` has been fully removed from Parquet scanning. This applies to both:
+
+- **Predicate pushdown / row filtering** (deprecated in 49.0.0)
+- **Projections** (newly removed in 52.0.0)
+
+If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
+
+See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
 
 ### `PhysicalOptimizerRule::optimize` deprecated in favor of `optimize_plan`
 

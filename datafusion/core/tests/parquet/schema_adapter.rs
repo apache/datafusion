@@ -225,3 +225,97 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
     ];
     assert_batches_eq!(expected, &batches);
 }
+
+/// Test demonstrating how to implement a custom PhysicalExprAdapterFactory
+/// that fills missing columns with non-null default values.
+///
+/// This is the recommended migration path for users who previously used
+/// SchemaAdapterFactory to fill missing columns with default values.
+/// Instead of transforming batches after reading (SchemaAdapter::map_batch),
+/// the PhysicalExprAdapterFactory rewrites expressions to use literals for
+/// missing columns, achieving the same result more efficiently.
+#[tokio::test]
+async fn test_physical_expr_adapter_with_non_null_defaults() {
+    // File only has c1 column
+    let batch = record_batch!(("c1", Int32, [10, 20, 30])).unwrap();
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    write_parquet(batch, store.clone(), "defaults_test.parquet").await;
+
+    // Table schema has additional columns c2 (Utf8) and c3 (Int64) that don't exist in file
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int64, false), // type differs from file (Int32 vs Int64)
+        Field::new("c2", DataType::Utf8, true),   // missing from file
+        Field::new("c3", DataType::Int64, true),  // missing from file
+    ]));
+
+    let mut cfg = SessionConfig::new()
+        .with_collect_statistics(false)
+        .with_parquet_pruning(false);
+    cfg.options_mut().execution.parquet.pushdown_filters = true;
+    let ctx = SessionContext::new_with_config(cfg);
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+    // CustomPhysicalExprAdapterFactory fills:
+    // - missing Utf8 columns with 'b'
+    // - missing Int64 columns with 1
+    let listing_table_config =
+        ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
+            .infer_options(&ctx.state())
+            .await
+            .unwrap()
+            .with_schema(table_schema.clone())
+            .with_expr_adapter_factory(Arc::new(CustomPhysicalExprAdapterFactory));
+
+    let table = ListingTable::try_new(listing_table_config).unwrap();
+    ctx.register_table("t", Arc::new(table)).unwrap();
+
+    // Query all columns - missing columns should have default values
+    let batches = ctx
+        .sql("SELECT c1, c2, c3 FROM t ORDER BY c1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    // c1 is cast from Int32 to Int64, c2 defaults to 'b', c3 defaults to 1
+    let expected = [
+        "+----+----+----+",
+        "| c1 | c2 | c3 |",
+        "+----+----+----+",
+        "| 10 | b  | 1  |",
+        "| 20 | b  | 1  |",
+        "| 30 | b  | 1  |",
+        "+----+----+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // Verify predicates work with default values
+    // c3 = 1 should match all rows since default is 1
+    let batches = ctx
+        .sql("SELECT c1 FROM t WHERE c3 = 1 ORDER BY c1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let expected = [
+        "+----+", "| c1 |", "+----+", "| 10 |", "| 20 |", "| 30 |", "+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // c3 = 999 should match no rows
+    let batches = ctx
+        .sql("SELECT c1 FROM t WHERE c3 = 999")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let expected = ["++", "++"];
+    assert_batches_eq!(expected, &batches);
+}

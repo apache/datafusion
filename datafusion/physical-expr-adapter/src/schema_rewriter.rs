@@ -381,10 +381,8 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
                         column.name()
                     );
                     }
-                    // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
-                    // TODO: do we need to sync this with what the `SchemaAdapter` actually does?
-                    // While the default implementation fills in nulls in theory a custom `SchemaAdapter` could do something else!
-                    // See https://github.com/apache/datafusion/issues/16527
+                    // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` used to do.
+                    // If users want a different behavior they need to provide a custom `PhysicalExprAdapter` implementation.
                     let null_value =
                         ScalarValue::Null.cast_to(logical_field.data_type())?;
                     return Ok(Transformed::yes(expressions::lit(null_value)));
