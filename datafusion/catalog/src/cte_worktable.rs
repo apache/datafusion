@@ -95,7 +95,10 @@ impl TableProvider for CteWorkTable {
             filters.is_empty(),
             "CteWorkTable does not support pushing filters"
         );
-        assert_or_internal_err!(limit.is_none(), "CteWorkTable pushing limit");
+        assert_or_internal_err!(
+            limit.is_none(),
+            "CteWorkTable does not support limit pushdown"
+        );
         Ok(Arc::new(WorkTableExec::new(
             self.name.clone(),
             Arc::clone(&self.table_schema),
