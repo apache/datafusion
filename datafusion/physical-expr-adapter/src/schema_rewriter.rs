@@ -27,8 +27,9 @@ use datafusion_common::{
     Result, ScalarValue,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
+use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::{
-    expressions::{self, CastExpr, Column},
+    expressions::{self, Column},
     ScalarFunctionExpr,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -424,9 +425,10 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             );
         }
 
-        let cast_expr = Arc::new(CastExpr::new(
+        let cast_expr = Arc::new(CastColumnExpr::new(
             Arc::new(column),
-            logical_field.data_type().clone(),
+            Arc::new(physical_field.clone()),
+            Arc::new(logical_field.clone()),
             None,
         ));
 
@@ -448,7 +450,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{assert_contains, record_batch, Result, ScalarValue};
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, lit, CastExpr, Column, Literal};
+    use datafusion_physical_expr::expressions::{col, lit, Column, Literal};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use itertools::Itertools;
     use std::sync::Arc;
@@ -479,7 +481,7 @@ mod tests {
         let result = adapter.rewrite(column_expr).unwrap();
 
         // Should be wrapped in a cast expression
-        assert!(result.as_any().downcast_ref::<CastExpr>().is_some());
+        assert!(result.as_any().downcast_ref::<CastColumnExpr>().is_some());
     }
 
     #[test]
@@ -510,9 +512,10 @@ mod tests {
         println!("Rewritten expression: {result}");
 
         let expected = expressions::BinaryExpr::new(
-            Arc::new(CastExpr::new(
+            Arc::new(CastColumnExpr::new(
                 Arc::new(Column::new("a", 0)),
-                DataType::Int64,
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("a", DataType::Int64, false)),
                 None,
             )),
             Operator::Plus,
@@ -589,15 +592,30 @@ mod tests {
 
         let result = adapter.rewrite(column_expr).unwrap();
 
-        let expected = Arc::new(CastExpr::new(
+        let expected = Arc::new(CastColumnExpr::new(
             Arc::new(Column::new("data", 0)),
-            DataType::Struct(
-                vec![
-                    Field::new("id", DataType::Int64, false),
-                    Field::new("name", DataType::Utf8View, true),
-                ]
-                .into(),
-            ),
+            Arc::new(Field::new(
+                "data",
+                DataType::Struct(
+                    vec![
+                        Field::new("id", DataType::Int32, false),
+                        Field::new("name", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            Arc::new(Field::new(
+                "data",
+                DataType::Struct(
+                    vec![
+                        Field::new("id", DataType::Int64, false),
+                        Field::new("name", DataType::Utf8View, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
             None,
         )) as Arc<dyn PhysicalExpr>;
 
