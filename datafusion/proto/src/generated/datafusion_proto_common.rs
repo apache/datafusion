@@ -763,9 +763,6 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "6")]
     pub reorder_filters: bool,
-    /// default = false
-    #[prost(bool, tag = "34")]
-    pub force_filter_selections: bool,
     /// default = 1024 * 1024
     #[prost(uint64, tag = "7")]
     pub data_pagesize_limit: u64,
