@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::ops::Add;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
@@ -27,13 +26,10 @@ use arrow::datatypes::{
     ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
+use crate::datetime::adjust_to_local_time;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, utils::take_function_args, Result,
-    ScalarValue,
-};
+use datafusion_common::{internal_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,
@@ -324,60 +320,12 @@ fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
 /// ```
 ///
 /// See `test_adjust_to_local_time()` for example
-fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
-    fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
-    where
-        F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,
-    {
-        match converter(ts) {
-            MappedLocalTime::Ambiguous(earliest, latest) => exec_err!(
-                "Ambiguous timestamp. Do you mean {:?} or {:?}",
-                earliest,
-                latest
-            ),
-            MappedLocalTime::None => exec_err!(
-                "The local time does not exist because there is a gap in the local time."
-            ),
-            MappedLocalTime::Single(date_time) => Ok(date_time),
-        }
-    }
-
-    let date_time = match T::UNIT {
-        Nanosecond => Utc.timestamp_nanos(ts),
-        Microsecond => convert_timestamp(ts, |ts| Utc.timestamp_micros(ts))?,
-        Millisecond => convert_timestamp(ts, |ts| Utc.timestamp_millis_opt(ts))?,
-        Second => convert_timestamp(ts, |ts| Utc.timestamp_opt(ts, 0))?,
-    };
-
-    let offset_seconds: i64 = tz
-        .offset_from_utc_datetime(&date_time.naive_utc())
-        .fix()
-        .local_minus_utc() as i64;
-
-    let adjusted_date_time = date_time.add(
-        // This should not fail under normal circumstances as the
-        // maximum possible offset is 26 hours (93,600 seconds)
-        TimeDelta::try_seconds(offset_seconds)
-            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
-    );
-
-    // convert the naive datetime back to i64
-    match T::UNIT {
-        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(||
-            internal_datafusion_err!(
-                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
-            )
-        ),
-        Microsecond => Ok(adjusted_date_time.timestamp_micros()),
-        Millisecond => Ok(adjusted_date_time.timestamp_millis()),
-        Second => Ok(adjusted_date_time.timestamp()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use super::ToLocalTimeFunc;
+    use crate::datetime::adjust_to_local_time;
     use arrow::array::{types::TimestampNanosecondType, Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
@@ -385,8 +333,6 @@ mod tests {
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-
-    use super::{adjust_to_local_time, ToLocalTimeFunc};
 
     #[test]
     fn test_adjust_to_local_time() {
