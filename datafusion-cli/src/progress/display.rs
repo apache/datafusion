@@ -84,7 +84,7 @@ impl ProgressDisplay {
             .unwrap_or_else(|| "??:??".to_string());
         let elapsed = format_duration(self.start_time.elapsed());
 
-        format!(
+        let base_format = format!(
             "\r{}  {:5.1}%  {} / {}  •  {}  •  ETA {} / {}",
             bar,
             percent,
@@ -93,7 +93,18 @@ impl ProgressDisplay {
             throughput,
             eta_text,
             elapsed
-        )
+        );
+
+        // Add phase information for better user experience
+        match progress.phase {
+            crate::progress::ExecutionPhase::Reading => base_format,
+            crate::progress::ExecutionPhase::Processing => {
+                format!("{} 🔄 sorting/joining data", base_format)
+            }
+            crate::progress::ExecutionPhase::Finalizing => {
+                format!("{} ✨ finalizing results", base_format)
+            }
+        }
     }
 
     /// Format a spinner without percentage
@@ -102,7 +113,7 @@ impl ProgressDisplay {
         let current_formatted = progress.unit.format_value(progress.current);
         let elapsed = format_duration(self.start_time.elapsed());
 
-        format!(
+        let base_format = format!(
             "\r{}  {}: {}  elapsed: {}",
             spinner,
             match progress.unit {
@@ -111,7 +122,18 @@ impl ProgressDisplay {
             },
             current_formatted,
             elapsed
-        )
+        );
+
+        // Add phase information for spinner mode too
+        match progress.phase {
+            crate::progress::ExecutionPhase::Reading => base_format,
+            crate::progress::ExecutionPhase::Processing => {
+                format!("{} (sorting/joining)", base_format)
+            }
+            crate::progress::ExecutionPhase::Finalizing => {
+                format!("{} (finalizing)", base_format)
+            }
+        }
     }
 
     /// Create a visual progress bar

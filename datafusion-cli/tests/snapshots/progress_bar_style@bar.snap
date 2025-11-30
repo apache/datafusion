@@ -1,0 +1,23 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--progress"
+    - "on"
+    - "--progress-style"
+    - bar
+    - "--command"
+    - "SELECT COUNT(*) FROM generate_series(1, 1000)"
+    - "-q"
+---
+success: true
+exit_code: 0
+----- stdout -----
++----------+
+| count(*) |
++----------+
+| 1000     |
++----------+
+
+----- stderr -----

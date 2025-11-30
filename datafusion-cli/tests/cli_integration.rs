@@ -339,6 +339,203 @@ SELECT COUNT(*) FROM hits;
 /// Example:
 ///     RUST_BACKTRACE=1 cargo run --features backtrace -- -c 'select pow(1,'foo');'
 #[rstest]
+#[case("off")]
+#[case("on")]
+#[case("auto")]
+fn test_progress_bar_mode(#[case] mode: &str) {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix(mode);
+    settings.add_filter(r"▉+▎*", "[PROGRESS_BAR]");
+    settings.add_filter(r"[┤┐┌┘└─│┬┴┼]+", "[SPINNER]");
+    settings.add_filter(r"\d+\.\d+ [KMGT]?B", "[SIZE]");
+    settings.add_filter(r"\d+,?\d* rows", "[ROWS]");
+    settings.add_filter(r"\d+\.\d+%", "[PERCENT]");
+    settings.add_filter(r"ETA \d{2}:\d{2} / \d{2}:\d{2}", "[ETA]");
+    settings.add_filter(r"elapsed: \d{2}:\d{2}", "[ELAPSED]");
+    settings.add_filter(r"rows: \d+,?\d*", "rows: [COUNT]");
+    settings.add_filter(r"\d+\.\d+", "[DECIMAL]");
+    // Remove ALL progress bar output traces for deterministic tests
+    settings.add_filter(r"⠋  rows: \[COUNT\]  \[ELAPSED\]", "");
+    settings.add_filter(r"\[PROGRESS_LINE\]", "");
+    settings.add_filter(r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]", "");
+    settings.add_filter(r"␍", "");
+    settings.add_filter(r"␛\[K", "");
+    settings.add_filter(r"\[K\]", "");
+    // Remove all carriage returns and escape sequences completely
+    settings.add_filter(r"\r", "");
+    settings.add_filter(r"\x1b\[K", "");
+    settings.add_filter(r"\x0d", "");
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    cmd.args([
+        "--progress",
+        mode,
+        "--command",
+        "SELECT COUNT(*) FROM generate_series(1, 1000)",
+        "-q",
+    ]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[rstest]
+#[case("bar")]
+#[case("spinner")]
+fn test_progress_bar_style(#[case] style: &str) {
+    let mut settings = make_settings();
+    settings.set_snapshot_suffix(style);
+    settings.add_filter(r"▉+▎*", "[PROGRESS_BAR]");
+    settings.add_filter(r"[┤┐┌┘└─│┬┴┼]+", "[SPINNER]");
+    settings.add_filter(r"\d+\.\d+ [KMGT]?B", "[SIZE]");
+    settings.add_filter(r"\d+,?\d* rows", "[ROWS]");
+    settings.add_filter(r"\d+\.\d+%", "[PERCENT]");
+    settings.add_filter(r"ETA \d{2}:\d{2} / \d{2}:\d{2}", "[ETA]");
+    settings.add_filter(r"elapsed: \d{2}:\d{2}", "[ELAPSED]");
+    settings.add_filter(r"rows: \d+,?\d*", "rows: [COUNT]");
+    settings.add_filter(r"\d+\.\d+", "[DECIMAL]");
+    // Remove ALL progress bar output traces for deterministic tests
+    settings.add_filter(r"⠋  rows: \[COUNT\]  \[ELAPSED\]", "");
+    settings.add_filter(r"\[PROGRESS_LINE\]", "");
+    settings.add_filter(r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]", "");
+    settings.add_filter(r"␍", "");
+    settings.add_filter(r"␛\[K", "");
+    settings.add_filter(r"\[K\]", "");
+    // Remove all carriage returns and escape sequences completely
+    settings.add_filter(r"\r", "");
+    settings.add_filter(r"\x1b\[K", "");
+    settings.add_filter(r"\x0d", "");
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    cmd.args([
+        "--progress",
+        "on",
+        "--progress-style",
+        style,
+        "--command",
+        "SELECT COUNT(*) FROM generate_series(1, 1000)",
+        "-q",
+    ]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+fn test_progress_bar_with_blocking_operators() {
+    let mut settings = make_settings();
+    settings.add_filter(r"▉+▎*", "[PROGRESS_BAR]");
+    settings.add_filter(r"[┤┐┌┘└─│┬┴┼]+", "[SPINNER]");
+    settings.add_filter(r"\d+\.\d+ [KMGT]?B", "[SIZE]");
+    settings.add_filter(r"\d+,?\d* rows", "[ROWS]");
+    settings.add_filter(r"\d+\.\d+%", "[PERCENT]");
+    settings.add_filter(r"ETA \d{2}:\d{2} / \d{2}:\d{2}", "[ETA]");
+    settings.add_filter(r"elapsed: \d{2}:\d{2}", "[ELAPSED]");
+    settings.add_filter(r"rows: \d+,?\d*", "rows: [COUNT]");
+    settings.add_filter(r"\d+\.\d+", "[DECIMAL]");
+    // Remove ALL progress bar output traces for deterministic tests
+    settings.add_filter(r"⠋  rows: \[COUNT\]  \[ELAPSED\]", "");
+    settings.add_filter(r"\[PROGRESS_LINE\]", "");
+    settings.add_filter(r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]", "");
+    settings.add_filter(r"␍", "");
+    settings.add_filter(r"␛\[K", "");
+    settings.add_filter(r"\[K\]", "");
+    // Remove all carriage returns and escape sequences completely
+    settings.add_filter(r"\r", "");
+    settings.add_filter(r"\x1b\[K", "");
+    settings.add_filter(r"\x0d", "");
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    cmd.args([
+        "--progress",
+        "on",
+        "--command",
+        "SELECT * FROM generate_series(1, 1000) ORDER BY 1 DESC",
+        "-q",
+    ]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+fn test_progress_bar_with_aggregation() {
+    let mut settings = make_settings();
+    settings.add_filter(r"▉+▎*", "[PROGRESS_BAR]");
+    settings.add_filter(r"[┤┐┌┘└─│┬┴┼]+", "[SPINNER]");
+    settings.add_filter(r"\d+\.\d+ [KMGT]?B", "[SIZE]");
+    settings.add_filter(r"\d+,?\d* rows", "[ROWS]");
+    settings.add_filter(r"\d+\.\d+%", "[PERCENT]");
+    settings.add_filter(r"ETA \d{2}:\d{2} / \d{2}:\d{2}", "[ETA]");
+    settings.add_filter(r"elapsed: \d{2}:\d{2}", "[ELAPSED]");
+    settings.add_filter(r"rows: \d+,?\d*", "rows: [COUNT]");
+    settings.add_filter(r"\d+\.\d+", "[DECIMAL]");
+    // Remove ALL progress bar output traces for deterministic tests
+    settings.add_filter(r"⠋  rows: \[COUNT\]  \[ELAPSED\]", "");
+    settings.add_filter(r"\[PROGRESS_LINE\]", "");
+    settings.add_filter(r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]", "");
+    settings.add_filter(r"␍", "");
+    settings.add_filter(r"␛\[K", "");
+    settings.add_filter(r"\[K\]", "");
+    // Remove all carriage returns and escape sequences completely
+    settings.add_filter(r"\r", "");
+    settings.add_filter(r"\x1b\[K", "");
+    settings.add_filter(r"\x0d", "");
+    settings.add_filter(r"🔄|✨", "[PHASE_EMOJI]");
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    cmd.args([
+        "--progress",
+        "on",
+        "--command",
+        "SELECT COUNT(*), AVG(value) FROM generate_series(1, 5000) GROUP BY value % 100",
+        "-q",
+    ]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[test]
+fn test_progress_bar_with_large_dataset() {
+    let mut settings = make_settings();
+    settings.add_filter(r"▉+▎*", "[PROGRESS_BAR]");
+    settings.add_filter(r"[┤┐┌┘└─│┬┴┼]+", "[SPINNER]");
+    settings.add_filter(r"\d+\.\d+ [KMGT]?B", "[SIZE]");
+    settings.add_filter(r"\d+,?\d* rows", "[ROWS]");
+    settings.add_filter(r"\d+\.\d+%", "[PERCENT]");
+    settings.add_filter(r"ETA \d{2}:\d{2} / \d{2}:\d{2}", "[ETA]");
+    settings.add_filter(r"elapsed: \d{2}:\d{2}", "[ELAPSED]");
+    settings.add_filter(r"rows: \d+,?\d*", "rows: [COUNT]");
+    settings.add_filter(r"\d+\.\d+", "[DECIMAL]");
+    // Remove ALL progress bar output traces for deterministic tests
+    settings.add_filter(r"⠋  rows: \[COUNT\]  \[ELAPSED\]", "");
+    settings.add_filter(r"\[PROGRESS_LINE\]", "");
+    settings.add_filter(r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]", "");
+    settings.add_filter(r"␍", "");
+    settings.add_filter(r"␛\[K", "");
+    settings.add_filter(r"\[K\]", "");
+    // Remove all carriage returns and escape sequences completely
+    settings.add_filter(r"\r", "");
+    settings.add_filter(r"\x1b\[K", "");
+    settings.add_filter(r"\x0d", "");
+    let _bound = settings.bind_to_scope();
+
+    let mut cmd = cli();
+    cmd.args([
+        "--progress",
+        "on",
+        "--progress-estimator",
+        "alpha",
+        "--command",
+        "SELECT COUNT(*) FROM generate_series(1, 50000)",
+        "-q",
+    ]);
+
+    assert_cmd_snapshot!(cmd);
+}
+
+#[rstest]
 #[case("SELECT pow(1,'foo')")]
 #[case("SELECT CAST('not_a_number' AS INTEGER);")]
 #[cfg(feature = "backtrace")]

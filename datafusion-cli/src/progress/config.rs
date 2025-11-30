@@ -92,10 +92,14 @@ impl Default for ProgressStyle {
 /// ETA estimation algorithm
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum ProgressEstimator {
-    /// Simple linear estimation
+    /// Simple linear estimation based on current progress rate
     Linear,
-    /// Alpha filter (exponential moving average) smoothed estimation
+    /// Alpha filter (exponential moving average) - recommended for most use cases
+    /// Provides smooth ETA estimates with good responsiveness to progress changes
     Alpha,
+    /// Kalman filter-based estimation (DuckDB-inspired) - advanced mathematical modeling
+    /// Uses state estimation to predict completion time, best for variable workloads
+    Kalman,
 }
 
 impl Default for ProgressEstimator {

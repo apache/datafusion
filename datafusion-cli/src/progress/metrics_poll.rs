@@ -38,7 +38,14 @@ impl MetricsPoller {
     /// Poll current metrics from the plan
     pub fn poll(&mut self) -> LiveMetrics {
         let mut visitor = MetricsVisitor::new();
-        let _ = visit_execution_plan(self.plan.as_ref(), &mut visitor);
+        // Handle potential errors in plan visitation
+        if let Err(e) = visit_execution_plan(self.plan.as_ref(), &mut visitor) {
+            // Log the error but continue with default metrics
+            eprintln!(
+                "Warning: Failed to collect metrics for progress tracking: {}",
+                e
+            );
+        }
         visitor.into_metrics()
     }
 }

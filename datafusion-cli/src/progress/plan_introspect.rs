@@ -38,7 +38,14 @@ impl PlanIntrospector {
     /// Extract total bytes and rows from the plan's statistics
     pub fn get_totals(&self) -> PlanTotals {
         let mut visitor = TotalsVisitor::new();
-        let _ = visit_execution_plan(self.plan.as_ref(), &mut visitor);
+        // Handle potential errors in plan visitation
+        if let Err(e) = visit_execution_plan(self.plan.as_ref(), &mut visitor) {
+            // Log the error but continue with default totals
+            eprintln!(
+                "Warning: Failed to analyze execution plan for progress tracking: {}",
+                e
+            );
+        }
         visitor.into_totals()
     }
 }
@@ -50,6 +57,7 @@ pub struct PlanTotals {
     pub total_rows: usize,
     pub has_exact_bytes: bool,
     pub has_exact_rows: bool,
+    pub has_blocking_operators: bool,
 }
 
 impl PlanTotals {
@@ -59,6 +67,7 @@ impl PlanTotals {
             total_rows: 0,
             has_exact_bytes: false,
             has_exact_rows: false,
+            has_blocking_operators: false,
         }
     }
 }
@@ -91,6 +100,11 @@ impl ExecutionPlanVisitor for TotalsVisitor {
             }
         }
 
+        // Check for pipeline-breaking (blocking) operators
+        if self.is_blocking_operator(plan) {
+            self.totals.has_blocking_operators = true;
+        }
+
         // Continue visiting children
         Ok(true)
     }
@@ -101,6 +115,63 @@ impl TotalsVisitor {
     /// Leaf nodes are typically data sources that actually read data
     fn is_leaf_node(&self, plan: &dyn ExecutionPlan) -> bool {
         plan.children().is_empty()
+    }
+
+    /// Check if this plan node is a blocking/pipeline-breaking operator
+    /// These operators consume all input before producing any output
+    fn is_blocking_operator(&self, plan: &dyn ExecutionPlan) -> bool {
+        let name = plan.name();
+
+        // Check for known blocking operators using multiple strategies for robustness
+        self.is_known_blocking_operator(name)
+            || self.has_blocking_characteristics(plan)
+            || self.uses_blocking_patterns(name)
+    }
+
+    /// Check for explicitly known blocking operators
+    fn is_known_blocking_operator(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "SortExec" | "SortMergeJoinExec" | "HashJoinExec" | 
+            "AggregateExec" | "WindowAggExec" | "GlobalLimitExec" |
+            "SortPreservingMergeExec" | "CoalescePartitionsExec" |
+            "SortPreservingRepartitionExec" | "RepartitionExec" |
+            // Additional known blocking operators from real usage
+            "SortPreservingMergeSort" | "PartialSortExec" | "TopKExec" |
+            "UnionExec" | "CrossJoinExec" | "NestedLoopJoinExec" |
+            "SymmetricHashJoinExec" | "BoundedWindowAggExec"
+        )
+    }
+
+    /// Check if plan has characteristics that suggest blocking behavior
+    fn has_blocking_characteristics(&self, plan: &dyn ExecutionPlan) -> bool {
+        // Operators that require full input to determine output ordering are typically blocking
+        // This is a heuristic that may need refinement
+        let properties = plan.properties();
+
+        // If an operator has a specific output ordering that differs significantly
+        // from input ordering, it's likely blocking
+        if let Some(output_ordering) = properties.output_ordering() {
+            if !output_ordering.is_empty() {
+                // If we have multiple children with potentially different orderings,
+                // and we need to produce a specific order, likely blocking
+                return plan.children().len() > 1;
+            }
+        }
+
+        false
+    }
+
+    /// Check for blocking patterns in operator names
+    fn uses_blocking_patterns(&self, name: &str) -> bool {
+        // Pattern-based detection for operators we might not know about
+        name.ends_with("SortExec")
+            || name.ends_with("JoinExec")
+            || name.ends_with("AggregateExec")
+            || name.ends_with("WindowExec")
+            || name.contains("Sort") && name.contains("Exec")
+            || name.contains("Merge") && name.contains("Exec")
+            || name.contains("Union") && name.contains("Exec")
     }
 
     /// Accumulate statistics from a plan node

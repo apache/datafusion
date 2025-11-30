@@ -1,0 +1,63 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "--progress"
+    - "on"
+    - "--command"
+    - "SELECT COUNT(*), AVG(value) FROM generate_series(1, 5000) GROUP BY value % 100"
+    - "-q"
+---
+success: true
+exit_code: 0
+----- stdout -----
++----------+------------------------------+
+| count(*) | avg(generate_series().value) |
++----------+------------------------------+
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| 50       | [DECIMAL]                       |
+| .                                       |
+| .                                       |
+| .                                       |
++----------+------------------------------+
+
+----- stderr -----
