@@ -114,7 +114,9 @@ pub trait JoinHashMapType: Send + Sync {
         hash_values: &[u64],
         limit: usize,
         offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>);
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<JoinHashMapOffset>;
 
     /// Returns `true` if the join hash map contains no entries.
     fn is_empty(&self) -> bool;
@@ -171,13 +173,17 @@ impl JoinHashMapType for JoinHashMapU32 {
         hash_values: &[u64],
         limit: usize,
         offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<JoinHashMapOffset> {
         get_matched_indices_with_limit_offset::<u32>(
             &self.map,
             &self.next,
             hash_values,
             limit,
             offset,
+            input_indices,
+            match_indices,
         )
     }
 
@@ -237,13 +243,17 @@ impl JoinHashMapType for JoinHashMapU64 {
         hash_values: &[u64],
         limit: usize,
         offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<JoinHashMapOffset> {
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &self.next,
             hash_values,
             limit,
             offset,
+            input_indices,
+            match_indices,
         )
     }
 
@@ -388,14 +398,16 @@ pub fn get_matched_indices_with_limit_offset<T>(
     hash_values: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
-) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>)
+    input_indices: &mut Vec<u32>,
+    match_indices: &mut Vec<u64>,
+) -> Option<JoinHashMapOffset>
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
     T: ArrowNativeType,
 {
-    let mut input_indices = Vec::with_capacity(limit);
-    let mut match_indices = Vec::with_capacity(limit);
+    input_indices.clear();
+    match_indices.clear();
     let one = T::try_from(1).unwrap();
 
     // Check if hashmap consists of unique values
@@ -409,12 +421,11 @@ where
                 match_indices.push((*idx - one).into());
             }
         }
-        let next_off = if end == hash_values.len() {
+        return if end == hash_values.len() {
             None
         } else {
             Some((end, None))
         };
-        return (input_indices, match_indices, next_off);
     }
 
     let mut remaining_output = limit;
@@ -436,11 +447,11 @@ where
                 idx,
                 next_idx,
                 &mut remaining_output,
-                &mut input_indices,
-                &mut match_indices,
+                input_indices,
+                match_indices,
                 is_last,
             ) {
-                return (input_indices, match_indices, Some(next_offset));
+                return Some(next_offset);
             }
             idx + 1
         }
@@ -457,13 +468,13 @@ where
                 row_idx,
                 idx,
                 &mut remaining_output,
-                &mut input_indices,
-                &mut match_indices,
+                input_indices,
+                match_indices,
                 is_last,
             ) {
-                return (input_indices, match_indices, Some(next_offset));
+                return Some(next_offset);
             }
         }
     }
-    (input_indices, match_indices, None)
+    None
 }

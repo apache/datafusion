@@ -776,10 +776,9 @@ logical_plan
 03)--SubqueryAlias: t2
 04)----TableScan: t1 projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Reset the configs to old values
 statement ok
@@ -985,11 +984,10 @@ logical_plan
 physical_plan
 01)FilterExec: dept_name@2 != Engineering AND name@1 = Alice OR name@1 != Alice AND name@1 = Carol
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
-05)--------FilterExec: name@1 = Alice OR name@1 != Alice AND name@1 = Carol
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
+04)------FilterExec: name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITT
 SELECT e.emp_id, e.name, d.dept_name
@@ -1177,16 +1175,14 @@ logical_plan
 06)--------TableScan: t5 projection=[v0, v1, v2, v3, v4]
 07)----TableScan: t0 projection=[v0, v1]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(t1.v0 AS Float64)@6, v1@1)], filter=v1@1 + CAST(v0@0 AS Float64) > 0, projection=[v0@0, v1@1, v2@3, v3@4, v4@5, v0@7, v1@8]
-03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[v0@0 as v0, v1@1 as v1, v0@2 as v0, v2@3 as v2, v3@4 as v3, v4@5 as v4, CAST(v0@0 AS Float64) as CAST(t1.v0 AS Float64)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0), (v1@1, v1@1)], projection=[v0@0, v1@1, v0@2, v2@4, v3@5, v4@6]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[0]
-09)--------------DataSourceExec: partitions=1, partition_sizes=[0]
-10)----DataSourceExec: partitions=1, partition_sizes=[0]
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(t1.v0 AS Float64)@6, v1@1)], filter=v1@1 + CAST(v0@0 AS Float64) > 0, projection=[v0@0, v1@1, v2@3, v3@4, v4@5, v0@7, v1@8]
+02)--CoalescePartitionsExec
+03)----ProjectionExec: expr=[v0@0 as v0, v1@1 as v1, v0@2 as v0, v2@3 as v2, v3@4 as v3, v4@5 as v4, CAST(v0@0 AS Float64) as CAST(t1.v0 AS Float64)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0), (v1@1, v1@1)], projection=[v0@0, v1@1, v0@2, v2@4, v3@5, v4@6]
+06)----------DataSourceExec: partitions=1, partition_sizes=[0]
+07)----------DataSourceExec: partitions=1, partition_sizes=[0]
+08)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 
 
@@ -1372,19 +1368,17 @@ logical_plan
 07)--TableScan: s projection=[b]
 physical_plan
 01)ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@3 as a, b@0 as b]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(s.b AS Int64)@1, col1@1)], projection=[b@0, col0@2, col1@3, a@4]
-04)------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
-07)--------CoalesceBatchesExec: target_batch_size=8192
-08)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
-09)------------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
-10)--------------DataSourceExec: partitions=1, partition_sizes=[1]
-11)------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
-12)--------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
-13)----------------FilterExec: y@1 = x@0
-14)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(s.b AS Int64)@1, col1@1)], projection=[b@0, col0@2, col1@3, a@4]
+03)----ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
+06)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
+07)--------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+09)--------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
+10)----------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
+11)------------FilterExec: y@1 = x@0
+12)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table pairs;
@@ -1428,16 +1422,15 @@ logical_plan
 06)--------TableScan: t1 projection=[v0, v1]
 physical_plan
 01)ProjectionExec: expr=[v0@1 as v0, v1@2 as v1, sum(t1.v1)@0 as sum(t1.v1)]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(v0@1, v0@0)], projection=[sum(t1.v1)@0, v0@2, v1@3]
-04)------CoalescePartitionsExec
-05)--------ProjectionExec: expr=[sum(t1.v1)@1 as sum(t1.v1), v0@0 as v0]
-06)----------AggregateExec: mode=FinalPartitioned, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
-07)------------CoalesceBatchesExec: target_batch_size=8192
-08)--------------RepartitionExec: partitioning=Hash([v0@0], 4), input_partitions=1
-09)----------------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
-10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
-11)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(v0@1, v0@0)], projection=[sum(t1.v1)@0, v0@2, v1@3]
+03)----CoalescePartitionsExec
+04)------ProjectionExec: expr=[sum(t1.v1)@1 as sum(t1.v1), v0@0 as v0]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([v0@0], 4), input_partitions=1
+08)--------------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 SELECT *
@@ -1457,10 +1450,9 @@ logical_plan
 02)--TableScan: t0 projection=[v0, v1]
 03)--TableScan: t1 projection=[v0, v1]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0)]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IIII
 SELECT * FROM t0, LATERAL (SELECT * FROM t1 WHERE t0.v0 = t1.v0);
