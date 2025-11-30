@@ -372,7 +372,6 @@ unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> RString {
 
 unsafe extern "C" fn hash_fn_wrapper(expr: &FFI_PhysicalExpr) -> u64 {
     let expr = expr.inner();
-    // let mut hasher = DefaultHasher::new();
     let mut hasher = DefaultHasher::new();
     expr.hash(&mut hasher);
     hasher.finish()
