@@ -24,8 +24,9 @@ use datafusion_common::{
 };
 use std::sync::Arc;
 
-use crate::PhysicalExpr;
+use crate::{simplifier::not::simplify_not_expr_recursive, PhysicalExpr};
 
+pub mod not;
 pub mod unwrap_cast;
 
 /// Simplifies physical expressions by applying various optimizations
@@ -56,6 +57,11 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        // Apply NOT expression simplification first
+        let not_simplified = simplify_not_expr_recursive(&node, self.schema)?;
+        let node = not_simplified.data;
+        let transformed = not_simplified.transformed;
+
         // Apply unwrap cast optimization
         #[cfg(test)]
         let original_type = node.data_type(self.schema).unwrap();
@@ -66,7 +72,12 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
             original_type,
             "Simplified expression should have the same data type as the original"
         );
-        Ok(unwrapped)
+        // Combine transformation results
+        let final_transformed = transformed || unwrapped.transformed;
+        Ok(Transformed::new_transformed(
+            unwrapped.data,
+            final_transformed,
+        ))
     }
 }
 
