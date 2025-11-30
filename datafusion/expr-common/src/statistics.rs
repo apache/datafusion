@@ -17,7 +17,7 @@
 
 use std::f64::consts::LN_2;
 
-use crate::interval_arithmetic::{apply_operator, Interval};
+use crate::interval_arithmetic::{Interval, apply_operator};
 use crate::operator::Operator;
 use crate::type_coercion::binary::binary_numeric_coercion;
 
@@ -25,8 +25,8 @@ use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::DataType;
 use datafusion_common::rounding::alter_fp_rounding_mode;
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_ne_or_internal_err, assert_or_internal_err,
-    internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    assert_ne_or_internal_err, assert_or_internal_err, internal_err, not_impl_err,
 };
 
 /// This object defines probabilistic distributions that encode uncertain
@@ -878,11 +878,11 @@ pub fn compute_variance(
 #[cfg(test)]
 mod tests {
     use super::{
+        BernoulliDistribution, Distribution, GaussianDistribution, UniformDistribution,
         combine_bernoullis, combine_gaussians, compute_mean, compute_median,
         compute_variance, create_bernoulli_from_comparison, new_generic_from_binary_op,
-        BernoulliDistribution, Distribution, GaussianDistribution, UniformDistribution,
     };
-    use crate::interval_arithmetic::{apply_operator, Interval};
+    use crate::interval_arithmetic::{Interval, apply_operator};
     use crate::operator::Operator;
 
     use arrow::datatypes::DataType;

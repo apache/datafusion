@@ -778,8 +778,14 @@ fn test_decimal_cross_variant_comparison_coercion() -> Result<()> {
         for op in comparison_op_types {
             let (lhs, rhs) =
                 BinaryTypeCoercer::new(&lhs_type, &op, &rhs_type).get_input_types()?;
-            assert_eq!(expected_type, lhs, "Coercion of type {lhs_type:?} with {rhs_type:?} resulted in unexpected type: {lhs:?}");
-            assert_eq!(expected_type, rhs, "Coercion of type {rhs_type:?} with {lhs_type:?} resulted in unexpected type: {rhs:?}");
+            assert_eq!(
+                expected_type, lhs,
+                "Coercion of type {lhs_type:?} with {rhs_type:?} resulted in unexpected type: {lhs:?}"
+            );
+            assert_eq!(
+                expected_type, rhs,
+                "Coercion of type {rhs_type:?} with {lhs_type:?} resulted in unexpected type: {rhs:?}"
+            );
         }
     }
 

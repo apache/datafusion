@@ -67,21 +67,21 @@ pub mod utils;
 pub use arrow;
 pub use column::Column;
 pub use dfschema::{
-    qualified_name, DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema,
+    DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema, qualified_name,
 };
 pub use diagnostic::Diagnostic;
 pub use error::{
-    field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
-    SharedResult,
+    DataFusionError, Result, SchemaError, SharedResult, field_not_found,
+    unqualified_field_not_found,
 };
 pub use file_options::file_type::{
-    GetExt, DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
-    DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION,
+    DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
+    DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION, GetExt,
 };
 pub use functional_dependencies::{
+    Constraint, Constraints, Dependency, FunctionalDependence, FunctionalDependencies,
     aggregate_functional_dependencies, get_required_group_by_exprs_indices,
-    get_target_functional_dependencies, Constraint, Constraints, Dependency,
-    FunctionalDependence, FunctionalDependencies,
+    get_target_functional_dependencies,
 };
 use hashbrown::hash_map::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
@@ -137,10 +137,10 @@ macro_rules! downcast_value {
 // Not public API.
 #[doc(hidden)]
 pub mod __private {
-    use crate::error::_internal_datafusion_err;
     use crate::Result;
+    use crate::error::_internal_datafusion_err;
     use arrow::array::Array;
-    use std::any::{type_name, Any};
+    use std::any::{Any, type_name};
 
     #[doc(hidden)]
     pub trait DowncastArrayHelper {
@@ -191,7 +191,7 @@ mod tests {
 
         assert_starts_with(
             error.to_string(),
-            "Internal error: could not cast array of type Int32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::UInt64Type>"
+            "Internal error: could not cast array of type Int32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::UInt64Type>",
         );
     }
 

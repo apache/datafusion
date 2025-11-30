@@ -157,6 +157,166 @@ Instead of silently succeeding.
 
 The remove API no longer requires a mutable instance
 
+### FFI crate updates
+
+Many of the structs in the `datafusion-ffi` crate have been updated to allow easier
+conversion to the underlying trait types they represent. This simplifies some code
+paths, but also provides an additional improvement in cases where library code goes
+through a round trip via the foreign function interface.
+
+To update your code, suppose you have a `FFI_SchemaProvider` called `ffi_provider`
+and you wish to use this as a `SchemaProvider`. In the old approach you would do
+something like:
+
+```rust,ignore
+    let foreign_provider: ForeignSchemaProvider = ffi_provider.into();
+    let foreign_provider = Arc::new(foreign_provider) as Arc<dyn SchemaProvider>;
+```
+
+This code should now be written as:
+
+```rust,ignore
+    let foreign_provider: Arc<dyn SchemaProvider + Send> = ffi_provider.into();
+    let foreign_provider = foreign_provider as Arc<dyn SchemaProvider>;
+```
+
+For the case of user defined functions, the updates are similar but you
+may need to change the way you call the creation of the `ScalarUDF`.
+Aggregate and window functions follow the same pattern.
+
+Previously you may write:
+
+```rust,ignore
+    let foreign_udf: ForeignScalarUDF = ffi_udf.try_into()?;
+    let foreign_udf: ScalarUDF = foreign_udf.into();
+```
+
+Instead this should now be:
+
+```rust,ignore
+    let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.try_into()?;
+    let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
+```
+
+Additionally, the FFI structure for Scalar UDF's no longer contains a
+`return_type` call. This code was not used since the `ForeignScalarUDF`
+struct implements the `return_field_from_args` instead.
+
+### Projection handling moved from FileScanConfig to FileSource
+
+Projection handling has been moved from `FileScanConfig` into `FileSource` implementations. This enables format-specific projection pushdown (e.g., Parquet can push down struct field access, Vortex can push down computed expressions into un-decoded data).
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations
+- Users who use `FileScanConfigBuilder::with_projection_indices` directly
+
+**Breaking changes:**
+
+1. **`FileSource::with_projection` replaced with `try_pushdown_projection`:**
+
+   The `with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>` method has been removed and replaced with `try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>>`.
+
+2. **`FileScanConfig.projection_exprs` field removed:**
+
+   Projections are now stored in the `FileSource` directly, not in `FileScanConfig`.
+   Various public helper methods that access projection information have been removed from `FileScanConfig`.
+
+3. **`FileScanConfigBuilder::with_projection_indices` now returns `Result<Self>`:**
+
+   This method can now fail if the projection pushdown fails.
+
+4. **`FileSource::create_file_opener` now returns `Result<Arc<dyn FileOpener>>`:**
+
+   Previously returned `Arc<dyn FileOpener>` directly.
+   Any `FileSource` implementation that may fail to create a `FileOpener` should now return an appropriate error.
+
+5. **`DataSource::try_swapping_with_projection` signature changed:**
+
+   Parameter changed from `&[ProjectionExpr]` to `&ProjectionExprs`.
+
+**Migration guide:**
+
+If you have a custom `FileSource` implementation:
+
+**Before:**
+
+```rust,ignore
+impl FileSource for MyCustomSource {
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
+        // Apply projection from config
+        Arc::new(Self { /* ... */ })
+    }
+
+    fn create_file_opener(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(MyOpener { /* ... */ })
+    }
+}
+```
+
+**After:**
+
+```rust,ignore
+impl FileSource for MyCustomSource {
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        // Return None if projection cannot be pushed down
+        // Return Some(new_source) with projection applied if it can
+        Ok(Some(Arc::new(Self {
+            projection: Some(projection.clone()),
+            /* ... */
+        })))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        self.projection.as_ref()
+    }
+
+    fn create_file_opener(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Result<Arc<dyn FileOpener>> {
+        Ok(Arc::new(MyOpener { /* ... */ }))
+    }
+}
+```
+
+We recommend you look at [#18627](https://github.com/apache/datafusion/pull/18627)
+that introduced these changes for more examples for how this was handled for the various built in file sources.
+
+We have added [`SplitProjection`](https://docs.rs/datafusion-datasource/latest/datafusion_datasource/projection/struct.SplitProjection.html) and [`ProjectionOpener`](https://docs.rs/datafusion-datasource/latest/datafusion_datasource/projection/struct.ProjectionOpener.html) helpers to make it easier to handle projections in your `FileSource` implementations.
+
+For file sources that can only handle simple column selections (not computed expressions), use the `SplitProjection` and `ProjectionOpener` helpers to split the projection into pushdownable and non-pushdownable parts:
+
+```rust,ignore
+use datafusion_datasource::projection::{SplitProjection, ProjectionOpener};
+
+// In try_pushdown_projection:
+let split = SplitProjection::new(projection, self.table_schema())?;
+// Use split.file_projection() for what to push down to the file format
+// The ProjectionOpener wrapper will handle the rest
+```
+
+**For `FileScanConfigBuilder` users:**
+
+```diff
+let config = FileScanConfigBuilder::new(url, source)
+-   .with_projection_indices(Some(vec![0, 2, 3]))
++   .with_projection_indices(Some(vec![0, 2, 3]))?
+    .build();
+```
+
+**Handling projections in `FileSource`:**
+
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0
@@ -970,7 +1130,7 @@ By default if you do not use a custom `SchemaAdapterFactory` we will use express
 If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
 
 To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and use that instead of a `SchemaAdapterFactory`.
-See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
+See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for an example of how to do this.
 Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
 
 See [#16800] for details.

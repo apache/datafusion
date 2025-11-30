@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, ops::Deref};
-
 use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
@@ -28,6 +26,8 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use prost::Message;
+use std::ptr::null_mut;
+use std::{ffi::c_void, ops::Deref};
 
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 
@@ -70,6 +70,11 @@ pub struct FFI_Accumulator {
     /// Internal data. This is only to be accessed by the provider of the accumulator.
     /// A [`ForeignAccumulator`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_Accumulator {}
@@ -173,9 +178,11 @@ unsafe extern "C" fn retract_batch_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
-    let private_data =
-        Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
-    drop(private_data);
+    if !accumulator.private_data.is_null() {
+        let private_data =
+            Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
+        drop(private_data);
+    }
 }
 
 impl From<Box<dyn Accumulator>> for FFI_Accumulator {
@@ -193,6 +200,7 @@ impl From<Box<dyn Accumulator>> for FFI_Accumulator {
             supports_retract_batch,
             release: release_fn_wrapper,
             private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -214,12 +222,20 @@ pub struct ForeignAccumulator {
     accumulator: FFI_Accumulator,
 }
 
-unsafe impl Send for ForeignAccumulator {}
-unsafe impl Sync for ForeignAccumulator {}
-
-impl From<FFI_Accumulator> for ForeignAccumulator {
-    fn from(accumulator: FFI_Accumulator) -> Self {
-        Self { accumulator }
+impl From<FFI_Accumulator> for Box<dyn Accumulator> {
+    fn from(mut accumulator: FFI_Accumulator) -> Self {
+        if (accumulator.library_marker_id)() == crate::get_library_marker_id() {
+            unsafe {
+                let private_data = Box::from_raw(
+                    accumulator.private_data as *mut AccumulatorPrivateData,
+                );
+                // We must set this to null to avoid a double free
+                accumulator.private_data = null_mut();
+                private_data.accumulator
+            }
+        } else {
+            Box::new(ForeignAccumulator { accumulator })
+        }
     }
 }
 
@@ -306,14 +322,13 @@ impl Accumulator for ForeignAccumulator {
 
 #[cfg(test)]
 mod tests {
+    use super::{FFI_Accumulator, ForeignAccumulator};
     use arrow::array::{make_array, Array};
     use datafusion::{
         common::create_array, error::Result,
         functions_aggregate::average::AvgAccumulator, logical_expr::Accumulator,
         scalar::ScalarValue,
     };
-
-    use super::{FFI_Accumulator, ForeignAccumulator};
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
@@ -322,8 +337,9 @@ mod tests {
         let original_supports_retract = original_accum.supports_retract_batch();
 
         let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
-        let ffi_accum: FFI_Accumulator = boxed_accum.into();
-        let mut foreign_accum: ForeignAccumulator = ffi_accum.into();
+        let mut ffi_accum: FFI_Accumulator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
+        let mut foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
 
         // Send in an array to average. There are 5 values and it should average to 30.0
         let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
@@ -360,6 +376,37 @@ mod tests {
             original_supports_retract,
             foreign_accum.supports_retract_batch()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_accumulator_local_bypass() -> Result<()> {
+        let original_accum = AvgAccumulator::default();
+        let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
+        let original_size = boxed_accum.size();
+
+        let ffi_accum: FFI_Accumulator = boxed_accum.into();
+
+        // Verify local libraries can be downcast to their original
+        let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
+                as *const AvgAccumulator);
+            assert_eq!(original_size, concrete.size());
+        }
+
+        // Verify different library markers generate foreign accumulator
+        let original_accum = AvgAccumulator::default();
+        let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
+        let mut ffi_accum: FFI_Accumulator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
+                as *const ForeignAccumulator);
+            assert_eq!(original_size, concrete.size());
+        }
 
         Ok(())
     }

@@ -479,7 +479,7 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
 /// that may be missing in the physical data but present in the logical schema.
 /// See the [default_column_values.rs] example implementation.
 ///
-/// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs
+/// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs
 pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
 
 /// Intersects multiple metadata instances for UNION operations.

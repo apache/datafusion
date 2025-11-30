@@ -25,8 +25,9 @@ use datafusion_datasource::{
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
@@ -141,14 +142,14 @@ impl FileSource for TestSource {
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        Arc::new(TestOpener {
+    ) -> Result<Arc<dyn FileOpener>> {
+        Ok(Arc::new(TestOpener {
             batches: self.batches.clone(),
             batch_size: self.batch_size,
             schema: Arc::clone(&self.schema),
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
-        })
+        }))
     }
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
@@ -162,13 +163,6 @@ impl FileSource for TestSource {
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(TestSource {
             batch_size: Some(batch_size),
-            ..self.clone()
-        })
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            projection: config.projection_exprs.as_ref().map(|p| p.column_indices()),
             ..self.clone()
         })
     }
@@ -381,7 +375,9 @@ impl OptimizationTest {
         let input = format_execution_plan(&input_plan);
         let input_schema = input_plan.schema();
 
-        let output_result = opt.optimize(input_plan, &parquet_pushdown_config);
+        let session_config = SessionConfig::from(parquet_pushdown_config);
+        let optimizer_context = OptimizerContext::new(session_config.clone());
+        let output_result = opt.optimize_plan(input_plan, &optimizer_context);
         let output = output_result
             .and_then(|plan| {
                 if opt.schema_check() && (plan.schema() != input_schema) {

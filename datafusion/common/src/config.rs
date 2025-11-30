@@ -1121,7 +1121,7 @@ impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions 
                 return _config_err!(
                     "Invalid duration format: {}. Valid values are pretty or iso8601",
                     self.duration_format
-                )
+                );
             }
         };
 
@@ -1523,6 +1523,14 @@ impl Extensions {
     pub fn get_mut<T: ConfigExtension>(&mut self) -> Option<&mut T> {
         let e = self.0.get_mut(T::PREFIX)?;
         e.0.as_any_mut().downcast_mut()
+    }
+
+    /// Iterates all the config extension entries yielding their prefix and their
+    /// [ExtensionOptions] implementation.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &Box<dyn ExtensionOptions>)> {
+        self.0.iter().map(|(k, v)| (*k, &v.0))
     }
 }
 
@@ -2249,13 +2257,13 @@ impl ConfigField for TableParquetOptions {
                 [_meta] | [_meta, ""] => {
                     return _config_err!(
                         "Invalid metadata key provided, missing key in metadata::<key>"
-                    )
+                    );
                 }
                 [_meta, k] => k.into(),
                 _ => {
                     return _config_err!(
                         "Invalid metadata key provided, found too many '::' in \"{key}\""
-                    )
+                    );
                 }
             };
             self.key_value_metadata.insert(k, Some(value.into()));
@@ -3038,6 +3046,16 @@ mod tests {
     }
 
     #[test]
+    fn iter_test_extension_config() {
+        let mut extension = Extensions::new();
+        extension.insert(TestExtensionConfig::default());
+        let table_config = TableOptions::new().with_extensions(extension);
+        let extensions = table_config.extensions.iter().collect::<Vec<_>>();
+        assert_eq!(extensions.len(), 1);
+        assert_eq!(extensions[0].0, TestExtensionConfig::PREFIX);
+    }
+
+    #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::CSV);
@@ -3269,9 +3287,11 @@ mod tests {
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
         let entries = table_config.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key == "format.bloom_filter_enabled::col1"))
+        assert!(
+            entries
+                .iter()
+                .any(|item| item.key == "format.bloom_filter_enabled::col1")
+        )
     }
 
     #[cfg(feature = "parquet")]
@@ -3285,10 +3305,10 @@ mod tests {
             )
             .unwrap();
         let entries = table_parquet_options.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key
-                == "crypto.file_encryption.column_key_as_hex::double_field"))
+        assert!(
+            entries.iter().any(|item| item.key
+                == "crypto.file_encryption.column_key_as_hex::double_field")
+        )
     }
 
     #[cfg(feature = "parquet")]

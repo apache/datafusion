@@ -19,10 +19,9 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
+    use datafusion::catalog::{CatalogProvider, CatalogProviderList};
     use datafusion::prelude::SessionContext;
     use datafusion_common::DataFusionError;
-    use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
-    use datafusion_ffi::catalog_provider_list::ForeignCatalogProviderList;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
 
@@ -37,10 +36,10 @@ mod tests {
                     "External catalog provider failed to implement create_catalog"
                         .to_string(),
                 ))?();
-        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
+        let foreign_catalog: Arc<dyn CatalogProvider + Send> = (&ffi_catalog).into();
 
         let ctx = SessionContext::default();
-        let _ = ctx.register_catalog("fruit", Arc::new(foreign_catalog));
+        let _ = ctx.register_catalog("fruit", foreign_catalog);
 
         let df = ctx.table("fruit.apple.purchases").await?;
 
@@ -64,10 +63,11 @@ mod tests {
                     "External catalog provider failed to implement create_catalog_list"
                         .to_string(),
                 ))?();
-        let foreign_catalog_list: ForeignCatalogProviderList = (&ffi_catalog_list).into();
+        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+            (&ffi_catalog_list).into();
 
         let ctx = SessionContext::default();
-        ctx.register_catalog_list(Arc::new(foreign_catalog_list));
+        ctx.register_catalog_list(foreign_catalog_list);
 
         let df = ctx.table("blue.apple.purchases").await?;
 
