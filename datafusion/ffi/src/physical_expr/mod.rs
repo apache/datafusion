@@ -469,19 +469,19 @@ unsafe impl Send for ForeignPhysicalExpr {}
 unsafe impl Sync for ForeignPhysicalExpr {}
 
 impl From<&FFI_PhysicalExpr> for Arc<dyn PhysicalExpr> {
-    fn from(expr: &FFI_PhysicalExpr) -> Self {
-        if (expr.library_marker_id)() == crate::get_library_marker_id() {
-            Arc::clone(expr.inner())
+    fn from(ffi_expr: &FFI_PhysicalExpr) -> Self {
+        if (ffi_expr.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(ffi_expr.inner())
         } else {
             let children = unsafe {
-                (expr.children)(expr)
+                (ffi_expr.children)(ffi_expr)
                     .into_iter()
                     .map(|expr| <Arc<dyn PhysicalExpr>>::from(&expr))
                     .collect()
             };
 
             Arc::new(ForeignPhysicalExpr {
-                expr: expr.clone(),
+                expr: ffi_expr.clone(),
                 children,
             })
         }
