@@ -47,4 +47,4 @@ pub mod topk_aggregation;
 pub mod update_aggr_exprs;
 pub mod utils;
 
-pub use optimizer::PhysicalOptimizerRule;
+pub use optimizer::{OptimizerContext, PhysicalOptimizerRule};

@@ -18,6 +18,7 @@
 // https://github.com/apache/datafusion/issues/18503
 #![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
@@ -34,5 +35,5 @@ mod trace_utils;
 pub use common::SpawnedTask;
 pub use join_set::JoinSet;
 pub use trace_utils::{
-    set_join_set_tracer, trace_block, trace_future, JoinSetTracer, JoinSetTracerError,
+    JoinSetTracer, JoinSetTracerError, set_join_set_tracer, trace_block, trace_future,
 };

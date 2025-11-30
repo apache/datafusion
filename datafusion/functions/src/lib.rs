@@ -26,6 +26,8 @@
 // https://github.com/apache/datafusion/issues/18503
 #![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+// https://github.com/apache/datafusion/issues/18881
+#![deny(clippy::allow_attributes)]
 
 //! Function packages for [DataFusion].
 //!

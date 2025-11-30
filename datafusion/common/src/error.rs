@@ -935,14 +935,9 @@ macro_rules! make_error {
             }
 
 
-            // Note: Certain macros are used in this  crate, but not all.
-            // This macro generates a use or all of them in case they are needed
-            // so we allow unused code to avoid warnings when they are not used
             #[doc(hidden)]
-            #[allow(unused)]
             pub use $NAME_ERR as [<_ $NAME_ERR>];
             #[doc(hidden)]
-            #[allow(unused)]
             pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
         }
     };
@@ -1223,9 +1218,10 @@ mod test {
     #[test]
     fn datafusion_error_to_arrow() {
         let res = return_arrow_error().unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("External error: Error during planning: foo"));
+        assert!(
+            res.to_string()
+                .starts_with("External error: Error during planning: foo")
+        );
     }
 
     #[test]
@@ -1237,7 +1233,7 @@ mod test {
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
+    #[expect(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
@@ -1254,17 +1250,17 @@ mod test {
                 .unwrap(),
             &"Error during planning: Err"
         );
-        assert!(!err
-            .split(DataFusionError::BACK_TRACE_SEP)
-            .collect::<Vec<&str>>()
-            .get(1)
-            .unwrap()
-            .is_empty());
+        assert!(
+            !err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[cfg(not(feature = "backtrace"))]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_disabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err().to_string();
@@ -1334,7 +1330,6 @@ mod test {
     }
 
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_make_error_parse_input() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();
@@ -1403,9 +1398,11 @@ mod test {
         let external_error_2: DataFusionError = generic_error_2.into();
 
         println!("{external_error_2}");
-        assert!(external_error_2
-            .to_string()
-            .starts_with("External error: io error"));
+        assert!(
+            external_error_2
+                .to_string()
+                .starts_with("External error: io error")
+        );
     }
 
     /// Model what happens when implementing SendableRecordBatchStream:
