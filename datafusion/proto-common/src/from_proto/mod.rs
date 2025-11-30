@@ -25,12 +25,14 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
-    i256, DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    Schema, TimeUnit, UnionFields, UnionMode,
+    DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
+    TimeUnit, UnionFields, UnionMode, i256,
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
 use datafusion_common::{
+    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
         CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
@@ -40,8 +42,6 @@ use datafusion_common::{
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
-    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
 };
 
 #[derive(Debug)]

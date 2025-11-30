@@ -1223,9 +1223,10 @@ mod test {
     #[test]
     fn datafusion_error_to_arrow() {
         let res = return_arrow_error().unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("External error: Error during planning: foo"));
+        assert!(
+            res.to_string()
+                .starts_with("External error: Error during planning: foo")
+        );
     }
 
     #[test]
@@ -1254,12 +1255,13 @@ mod test {
                 .unwrap(),
             &"Error during planning: Err"
         );
-        assert!(!err
-            .split(DataFusionError::BACK_TRACE_SEP)
-            .collect::<Vec<&str>>()
-            .get(1)
-            .unwrap()
-            .is_empty());
+        assert!(
+            !err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[cfg(not(feature = "backtrace"))]
@@ -1403,9 +1405,11 @@ mod test {
         let external_error_2: DataFusionError = generic_error_2.into();
 
         println!("{external_error_2}");
-        assert!(external_error_2
-            .to_string()
-            .starts_with("External error: io error"));
+        assert!(
+            external_error_2
+                .to_string()
+                .starts_with("External error: io error")
+        );
     }
 
     /// Model what happens when implementing SendableRecordBatchStream:

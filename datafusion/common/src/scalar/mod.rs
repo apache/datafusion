@@ -36,57 +36,57 @@ use std::sync::Arc;
 use crate::assert_or_internal_err;
 use crate::cast::{
     as_binary_array, as_binary_view_array, as_boolean_array, as_date32_array,
-    as_date64_array, as_decimal128_array, as_decimal256_array, as_decimal32_array,
-    as_decimal64_array, as_dictionary_array, as_duration_microsecond_array,
+    as_date64_array, as_decimal32_array, as_decimal64_array, as_decimal128_array,
+    as_decimal256_array, as_dictionary_array, as_duration_microsecond_array,
     as_duration_millisecond_array, as_duration_nanosecond_array,
     as_duration_second_array, as_fixed_size_binary_array, as_fixed_size_list_array,
-    as_float16_array, as_float32_array, as_float64_array, as_int16_array, as_int32_array,
-    as_int64_array, as_int8_array, as_interval_dt_array, as_interval_mdn_array,
+    as_float16_array, as_float32_array, as_float64_array, as_int8_array, as_int16_array,
+    as_int32_array, as_int64_array, as_interval_dt_array, as_interval_mdn_array,
     as_interval_ym_array, as_large_binary_array, as_large_list_array,
     as_large_string_array, as_string_array, as_string_view_array,
     as_time32_millisecond_array, as_time32_second_array, as_time64_microsecond_array,
     as_time64_nanosecond_array, as_timestamp_microsecond_array,
     as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
-    as_timestamp_second_array, as_uint16_array, as_uint32_array, as_uint64_array,
-    as_uint8_array, as_union_array,
+    as_timestamp_second_array, as_uint8_array, as_uint16_array, as_uint32_array,
+    as_uint64_array, as_union_array,
 };
-use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
+use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
-    new_empty_array, new_null_array, Array, ArrayData, ArrayRef, ArrowNativeTypeOp,
-    ArrowPrimitiveType, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
-    DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
-    PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array, UnionArray,
+    Array, ArrayData, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray,
+    BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal32Array,
+    Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
+    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array,
+    Float32Array, Float64Array, GenericListArray, Int8Array, Int16Array, Int32Array,
+    Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
+    MutableArrayData, OffsetSizeTrait, PrimitiveArray, Scalar, StringArray,
+    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray, new_empty_array,
+    new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
-use arrow::compute::kernels::cast::{cast_with_options, CastOptions};
+use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
 use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
 };
 use arrow::datatypes::{
-    i256, validate_decimal_precision_and_scale, ArrowDictionaryKeyType, ArrowNativeType,
-    ArrowTimestampType, DataType, Date32Type, Decimal128Type, Decimal256Type,
-    Decimal32Type, Decimal64Type, DecimalType, Field, Float32Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano,
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType,
+    DECIMAL128_MAX_PRECISION, DataType, Date32Type, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, DecimalType, Field, Float32Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano,
     IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, UnionFields,
-    UnionMode, DECIMAL128_MAX_PRECISION,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, UnionFields,
+    UnionMode, i256, validate_decimal_precision_and_scale,
 };
-use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
+use arrow::util::display::{ArrayFormatter, FormatOptions, array_value_to_string};
 use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
 use chrono::{Duration, NaiveDate};
 use half::f16;
@@ -720,11 +720,7 @@ impl PartialOrd for ScalarValue {
             (Union(_, _, _), _) => None,
             (Dictionary(k1, v1), Dictionary(k2, v2)) => {
                 // Don't compare if the key types don't match (it is effectively a different datatype)
-                if k1 == k2 {
-                    v1.partial_cmp(v2)
-                } else {
-                    None
-                }
+                if k1 == k2 { v1.partial_cmp(v2) } else { None }
             }
             (Dictionary(_, _), _) => None,
             (Null, Null) => Some(Ordering::Equal),
@@ -744,7 +740,9 @@ fn first_array_for_list(arr: &dyn Array) -> ArrayRef {
     } else if let Some(arr) = arr.as_fixed_size_list_opt() {
         arr.value(0)
     } else {
-        unreachable!("Since only List / LargeList / FixedSizeList are supported, this should never happen")
+        unreachable!(
+            "Since only List / LargeList / FixedSizeList are supported, this should never happen"
+        )
     }
 }
 
@@ -2359,18 +2357,20 @@ impl ScalarValue {
         macro_rules! build_array_primitive {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
-                    let array = scalars.map(|sv| {
-                        if let ScalarValue::$SCALAR_TY(v) = sv {
-                            Ok(v)
-                        } else {
-                            _exec_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v) = sv {
+                                Ok(v)
+                            } else {
+                                _exec_err!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
-                                data_type, sv
-                            )
-                        }
-                    })
-                    .collect::<Result<$ARRAY_TY>>()?;
+                                    data_type,
+                                    sv
+                                )
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array)
                 }
             }};
@@ -2379,18 +2379,20 @@ impl ScalarValue {
         macro_rules! build_array_primitive_tz {
             ($ARRAY_TY:ident, $SCALAR_TY:ident, $TZ:expr) => {{
                 {
-                    let array = scalars.map(|sv| {
-                        if let ScalarValue::$SCALAR_TY(v, _) = sv {
-                            Ok(v)
-                        } else {
-                            _exec_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v, _) = sv {
+                                Ok(v)
+                            } else {
+                                _exec_err!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
-                                data_type, sv
-                            )
-                        }
-                    })
-                    .collect::<Result<$ARRAY_TY>>()?;
+                                    data_type,
+                                    sv
+                                )
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array.with_timezone_opt($TZ.clone()))
                 }
             }};
@@ -2401,18 +2403,20 @@ impl ScalarValue {
         macro_rules! build_array_string {
             ($ARRAY_TY:ident, $SCALAR_TY:ident) => {{
                 {
-                    let array = scalars.map(|sv| {
-                        if let ScalarValue::$SCALAR_TY(v) = sv {
-                            Ok(v)
-                        } else {
-                            _exec_err!(
-                                "Inconsistent types in ScalarValue::iter_to_array. \
+                    let array = scalars
+                        .map(|sv| {
+                            if let ScalarValue::$SCALAR_TY(v) = sv {
+                                Ok(v)
+                            } else {
+                                _exec_err!(
+                                    "Inconsistent types in ScalarValue::iter_to_array. \
                                     Expected {:?}, got {:?}",
-                                data_type, sv
-                            )
-                        }
-                    })
-                    .collect::<Result<$ARRAY_TY>>()?;
+                                    data_type,
+                                    sv
+                                )
+                            }
+                        })
+                        .collect::<Result<$ARRAY_TY>>()?;
                     Arc::new(array)
                 }
             }};
@@ -3718,10 +3722,9 @@ impl ScalarValue {
     ) -> Result<Self> {
         let source_type = self.data_type();
         if let Some(multiplier) = date_to_timestamp_multiplier(&source_type, target_type)
+            && let Some(value) = self.date_scalar_value_as_i64()
         {
-            if let Some(value) = self.date_scalar_value_as_i64() {
-                ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
-            }
+            ensure_timestamp_in_bounds(value, multiplier, &source_type, target_type)?;
         }
 
         let scalar_array = self.to_array()?;
@@ -5104,7 +5107,7 @@ mod tests {
     use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{
-        ArrowNumericType, Fields, Float64Type, TimeUnit, DECIMAL256_MAX_PRECISION,
+        ArrowNumericType, DECIMAL256_MAX_PRECISION, Fields, Float64Type, TimeUnit,
     };
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
@@ -5669,7 +5672,10 @@ mod tests {
             .sub_checked(&int_value_2)
             .unwrap_err()
             .strip_backtrace();
-        assert_eq!(err, "Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 - -9223372036854775808")
+        assert_eq!(
+            err,
+            "Arrow error: Arithmetic overflow: Overflow happened on: 9223372036854775807 - -9223372036854775808"
+        )
     }
 
     #[test]
@@ -5817,12 +5823,16 @@ mod tests {
         assert_eq!(123i128, array_decimal.value(0));
         assert_eq!(123i128, array_decimal.value(9));
         // test eq array
-        assert!(decimal_value
-            .eq_array(&array, 1)
-            .expect("Failed to compare arrays"));
-        assert!(decimal_value
-            .eq_array(&array, 5)
-            .expect("Failed to compare arrays"));
+        assert!(
+            decimal_value
+                .eq_array(&array, 1)
+                .expect("Failed to compare arrays")
+        );
+        assert!(
+            decimal_value
+                .eq_array(&array, 5)
+                .expect("Failed to compare arrays")
+        );
         // test try from array
         assert_eq!(
             decimal_value,
@@ -5867,18 +5877,24 @@ mod tests {
         assert_eq!(4, array.len());
         assert_eq!(DataType::Decimal128(10, 2), array.data_type().clone());
 
-        assert!(ScalarValue::try_new_decimal128(1, 10, 2)
-            .unwrap()
-            .eq_array(&array, 0)
-            .expect("Failed to compare arrays"));
-        assert!(ScalarValue::try_new_decimal128(2, 10, 2)
-            .unwrap()
-            .eq_array(&array, 1)
-            .expect("Failed to compare arrays"));
-        assert!(ScalarValue::try_new_decimal128(3, 10, 2)
-            .unwrap()
-            .eq_array(&array, 2)
-            .expect("Failed to compare arrays"));
+        assert!(
+            ScalarValue::try_new_decimal128(1, 10, 2)
+                .unwrap()
+                .eq_array(&array, 0)
+                .expect("Failed to compare arrays")
+        );
+        assert!(
+            ScalarValue::try_new_decimal128(2, 10, 2)
+                .unwrap()
+                .eq_array(&array, 1)
+                .expect("Failed to compare arrays")
+        );
+        assert!(
+            ScalarValue::try_new_decimal128(3, 10, 2)
+                .unwrap()
+                .eq_array(&array, 2)
+                .expect("Failed to compare arrays")
+        );
         assert_eq!(
             ScalarValue::Decimal128(None, 10, 2),
             ScalarValue::try_from_array(&array, 3).unwrap()
@@ -6823,7 +6839,9 @@ mod tests {
                 for other_index in 0..array.len() {
                     if index != other_index {
                         assert!(
-                            !scalar.eq_array(&array, other_index).expect("Failed to compare arrays"),
+                            !scalar
+                                .eq_array(&array, other_index)
+                                .expect("Failed to compare arrays"),
                             "Expected {scalar:?} to be NOT equal to {array:?} at index {other_index}"
                         );
                     }
