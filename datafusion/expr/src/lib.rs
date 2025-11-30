@@ -98,8 +98,9 @@ pub use datafusion_expr_common::signature::{
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like,
-    Sort as SortExpr, TryCast, WindowFunctionDefinition,
+    AggregateFunction, Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess,
+    GroupingSet, InList, InSubquery, Like, ScalarFunction, Sort as SortExpr, TryCast,
+    WindowFunction, WindowFunctionDefinition,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
