@@ -741,6 +741,101 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_timestamp_with_timezone_to_timestamp() -> Result<()> {
+        // Test casting from Timestamp(Nanosecond, Some("UTC")) to Timestamp(Nanosecond, None)
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            true,
+        )]);
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]).with_timezone("UTC");
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        let expression = cast_with_options(
+            col("a", &schema)?,
+            &schema,
+            Timestamp(TimeUnit::Nanosecond, None),
+            None,
+        )?;
+
+        // verify that the expression's type is correct
+        assert_eq!(
+            expression.data_type(&schema)?,
+            Timestamp(TimeUnit::Nanosecond, None)
+        );
+
+        // compute
+        let result = expression
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+
+        // verify that the array's data_type is correct
+        assert_eq!(*result.data_type(), Timestamp(TimeUnit::Nanosecond, None));
+
+        // verify that the data itself is downcastable and correct
+        let result = result
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("failed to downcast");
+
+        for (i, expected) in [1_i64, 2, 3, 4, 5].iter().enumerate() {
+            assert_eq!(result.value(i), *expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_timestamp_with_timezone() -> Result<()> {
+        // Test casting from Timestamp(Nanosecond, None) to Timestamp(Nanosecond, Some("UTC"))
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]);
+        let a = TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        let expression = cast_with_options(
+            col("a", &schema)?,
+            &schema,
+            Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            None,
+        )?;
+
+        // verify that the expression's type is correct
+        assert_eq!(
+            expression.data_type(&schema)?,
+            Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
+        );
+
+        // compute
+        let result = expression
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+
+        // verify that the array's data_type is correct
+        assert_eq!(
+            *result.data_type(),
+            Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
+        );
+
+        // verify that the data itself is downcastable and correct
+        let result = result
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("failed to downcast");
+
+        for (i, expected) in [1_i64, 2, 3, 4, 5].iter().enumerate() {
+            assert_eq!(result.value(i), *expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn invalid_cast() {
         // Ensure a useful error happens at plan time if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", Int32, false)]);

@@ -27,8 +27,9 @@ use datafusion_common::{
     Result, ScalarValue,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
+use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::{
-    expressions::{self, CastExpr, Column},
+    expressions::{self, Column},
     ScalarFunctionExpr,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -152,7 +153,7 @@ pub trait PhysicalExprAdapterFactory: Send + Sync + std::fmt::Debug {
     ) -> Arc<dyn PhysicalExprAdapter>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DefaultPhysicalExprAdapterFactory;
 
 impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
@@ -424,11 +425,14 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             );
         }
 
-        let cast_expr = Arc::new(CastExpr::new(
-            Arc::new(column),
-            logical_field.data_type().clone(),
-            None,
-        ));
+        let cast_expr = Arc::new(
+            CastColumnExpr::new(
+                Arc::new(column),
+                Arc::new(physical_field.clone()),
+                Arc::new(logical_field.clone()),
+                None,
+            )
+        );
 
         Ok(Transformed::yes(cast_expr))
     }
