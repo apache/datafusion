@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, PrimitiveArray,
+};
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
@@ -219,6 +221,15 @@ pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
     }
 }
 
+pub fn decimal32_to_f64(value: i32, scale: i8) -> Result<f64, ArrowError> {
+    if scale == 0 {
+        Ok(value as f64)
+    } else {
+        let divisor = f64::from(10).pow_checked(scale as u32)?;
+        Ok(value as f64 / divisor)
+    }
+}
+
 #[cfg(test)]
 pub mod test {
     /// $FUNC ScalarUDFImpl to test
@@ -365,6 +376,33 @@ pub mod test {
 
         for (value, scale, expected) in cases {
             match decimal128_to_i128(value, scale) {
+                Ok(actual) => {
+                    assert_eq!(
+                        actual,
+                        expected.expect("Got value but expected none"),
+                        "{value} and {scale} vs {expected:?}"
+                    );
+                }
+                Err(_) => assert!(expected.is_none()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal32_to_f64() {
+        let cases = [
+            (123, 0, Some(123.0)),
+            (1230, 1, Some(123.0)),
+            (123000, 3, Some(123.0)),
+            (1234567, 2, Some(12345.67)),
+            (1, 0, Some(1.0)),
+            (123, -3, Some(123000.0)),
+            (i32::MAX, 0, Some(i32::MAX as f64)),
+            (i32::MAX, 3, Some(i32::MAX as f64 / 1000.0)),
+        ];
+
+        for (value, scale, expected) in cases {
+            match decimal32_to_f64(value, scale) {
                 Ok(actual) => {
                     assert_eq!(
                         actual,

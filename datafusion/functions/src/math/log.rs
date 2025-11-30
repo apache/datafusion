@@ -21,11 +21,12 @@ use std::any::Any;
 
 use super::power::PowerFunc;
 
-use crate::utils::{calculate_binary_math, decimal128_to_i128};
+use crate::utils::{calculate_binary_math, decimal128_to_i128, decimal32_to_f64};
 use arrow::array::{Array, ArrayRef};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
+    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Float16Type, Float32Type,
+    Float64Type,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
@@ -99,6 +100,29 @@ impl LogFunc {
                 Volatility::Immutable,
             ),
         }
+    }
+}
+
+/// Binary function to calculate logarithm of Decimal32 `value` using `base` base
+/// Returns error if base is invalid
+fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if !base.is_finite() || base.trunc() != base {
+        return Err(ArrowError::ComputeError(format!(
+            "Log cannot use non-integer base: {base}"
+        )));
+    }
+    if (base as u32) < 2 {
+        return Err(ArrowError::ComputeError(format!(
+            "Log base must be greater than 1: {base}"
+        )));
+    }
+
+    let unscaled_value = decimal32_to_f64(value, scale)?;
+    if unscaled_value > 0.0 {
+        Ok(unscaled_value.log(base))
+    } else {
+        // Reflect f64::log behaviour
+        Ok(f64::NAN)
     }
 }
 
@@ -226,8 +250,14 @@ impl ScalarUDFImpl for LogFunc {
             // TODO: native log support for decimal 32 & 64; right now upcast
             //       to decimal128 to calculate
             //       https://github.com/apache/datafusion/issues/17555
-            DataType::Decimal32(precision, scale)
-            | DataType::Decimal64(precision, scale) => {
+            DataType::Decimal32(_, scale) => {
+                calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
+                    &value,
+                    &base,
+                    |value, base| log_decimal32(value, *scale, base),
+                )?
+            }
+            DataType::Decimal64(precision, scale) => {
                 calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
                     &cast(&value, &DataType::Decimal128(*precision, *scale))?,
                     &base,
@@ -367,6 +397,13 @@ mod tests {
             //       https://github.com/apache/datafusion/issues/18524
             116.0
         );
+    }
+
+    #[test]
+    fn test_log_decimal32_native() {
+        let value = 1234567;
+        assert_eq!(log_decimal32(value, 0, 2.0).unwrap(), 20.235573703046512);
+        assert_eq!(log_decimal32(value, 2, 2.0).unwrap(), 13.591717513271785);
     }
 
     #[test]
