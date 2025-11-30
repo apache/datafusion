@@ -22,12 +22,13 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, SchedulingType,
 };
 use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -174,7 +175,7 @@ pub trait DataSource: Send + Sync + Debug {
     }
     fn try_swapping_with_projection(
         &self,
-        _projection: &[ProjectionExpr],
+        _projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>>;
     /// Try to push down filters into this DataSource.
     /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
@@ -319,7 +320,7 @@ impl ExecutionPlan for DataSourceExec {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self
             .data_source
-            .try_swapping_with_projection(projection.expr())?
+            .try_swapping_with_projection(projection.projection_expr())?
         {
             Some(new_data_source) => {
                 Ok(Some(Arc::new(DataSourceExec::new(new_data_source))))
@@ -342,7 +343,7 @@ impl ExecutionPlan for DataSourceExec {
             .collect_vec();
         let res = self
             .data_source
-            .try_pushdown_filters(parent_filters.clone(), config)?;
+            .try_pushdown_filters(parent_filters, config)?;
         match res.updated_node {
             Some(data_source) => {
                 let mut new_node = self.clone();

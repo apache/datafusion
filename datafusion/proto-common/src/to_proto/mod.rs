@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::protobuf_common as protobuf;
 use crate::protobuf_common::{
-    arrow_type::ArrowTypeEnum, scalar_value::Value, EmptyMessage,
+    EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::csv::WriterBuilder;
@@ -32,6 +32,8 @@ use arrow::ipc::writer::{
     CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
 };
 use datafusion_common::{
+    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, JoinSide, ScalarValue, Statistics,
     config::{
         CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
@@ -40,8 +42,6 @@ use datafusion_common::{
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
-    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, JoinSide, ScalarValue, Statistics,
 };
 
 #[derive(Debug)]
@@ -1018,11 +1018,11 @@ fn encode_scalar_nested_value(
         ))
     })?;
 
-    let gen = IpcDataGenerator {};
+    let ipc_gen = IpcDataGenerator {};
     let mut dict_tracker = DictionaryTracker::new(false);
     let write_options = IpcWriteOptions::default();
     let mut compression_context = CompressionContext::default();
-    let (encoded_dictionaries, encoded_message) = gen
+    let (encoded_dictionaries, encoded_message) = ipc_gen
         .encode(
             &batch,
             &mut dict_tracker,
