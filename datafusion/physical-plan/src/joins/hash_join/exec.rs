@@ -142,7 +142,7 @@ impl JoinLeftData {
     }
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 /// Join execution plan: Evaluates equijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
 /// join.
@@ -387,7 +387,7 @@ impl HashJoinExec {
     ///
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -1336,7 +1336,7 @@ impl BuildSideState {
 /// # Returns
 /// `JoinLeftData` containing the hash map, consolidated batch, join key values,
 /// visited indices bitmap, and computed bounds (if requested).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,

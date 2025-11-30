@@ -70,7 +70,6 @@ pub(super) struct SortedStreamBatch {
 }
 
 impl SortedStreamBatch {
-    #[allow(dead_code)]
     fn new(batch: RecordBatch, compare_key_values: Vec<ArrayRef>) -> Self {
         Self {
             batch,
@@ -132,7 +131,7 @@ impl RecordBatchStream for ClassicPWMJStream {
 //      `Completed` however for Full and Right we will need to process the unmatched buffered rows.
 impl ClassicPWMJStream {
     // Creates a new `PiecewiseMergeJoinStream` instance
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         schema: Arc<Schema>,
         on_streamed: PhysicalExprRef,
@@ -248,10 +247,7 @@ impl ClassicPWMJStream {
                 // Reset BatchProcessState before processing a new stream batch
                 self.batch_process_state.reset();
                 self.state = PiecewiseMergeJoinStreamState::ProcessStreamBatch(
-                    SortedStreamBatch {
-                        batch: stream_batch,
-                        compare_key_values: vec![stream_values],
-                    },
+                    SortedStreamBatch::new(stream_batch, vec![stream_values]),
                 );
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -451,7 +447,6 @@ impl Stream for ClassicPWMJStream {
 }
 
 // For Left, Right, Full, and Inner joins, incoming stream batches will already be sorted.
-#[allow(clippy::too_many_arguments)]
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,

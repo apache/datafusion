@@ -266,7 +266,7 @@ struct ExternalSorter {
 impl ExternalSorter {
     // TODO: make a builder or some other nicer API to avoid the
     // clippy warning
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         partition_id: usize,
         schema: SchemaRef,

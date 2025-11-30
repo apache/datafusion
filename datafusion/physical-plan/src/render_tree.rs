@@ -31,11 +31,12 @@ use crate::{DisplayFormatType, ExecutionPlan};
 // TODO: It's never used.
 /// Represents a 2D coordinate in the rendered tree.
 /// Used to track positions of nodes and their connections.
-#[allow(dead_code)]
 pub struct Coordinate {
     /// Horizontal position in the tree
+    #[expect(dead_code)]
     pub x: usize,
     /// Vertical position in the tree
+    #[expect(dead_code)]
     pub y: usize,
 }
 

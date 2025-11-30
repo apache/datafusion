@@ -272,7 +272,7 @@ pub struct PiecewiseMergeJoinExec {
     left_child_plan_required_order: LexOrdering,
     /// The right sort order, descending for `<`, `<=` operations + ascending for `>`, `>=` operations
     /// Unsorted for mark joins
-    #[allow(unused)]
+    #[expect(dead_code)]
     right_batch_required_orders: LexOrdering,
 
     /// This determines the sort order of all join columns used in sorting the stream and buffered execution plans.

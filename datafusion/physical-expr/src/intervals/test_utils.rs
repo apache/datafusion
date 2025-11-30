@@ -25,7 +25,7 @@ use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Operator;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 /// This test function generates a conjunctive statement with two numeric
 /// terms with the following form:
 /// left_col (op_1) a  >/>= right_col (op_2) b AND left_col (op_3) c </<= right_col (op_4) d
@@ -61,7 +61,7 @@ pub fn gen_conjunctive_numerical_expr(
     Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 /// This test function generates a conjunctive statement with
 /// two scalar values with the following form:
 /// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d

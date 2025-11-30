@@ -145,7 +145,7 @@ impl Debug for MultiLevelMergeBuilder {
 }
 
 impl MultiLevelMergeBuilder {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         spill_manager: SpillManager,
         schema: SchemaRef,

@@ -533,7 +533,7 @@ pub(super) fn get_corrected_filter_mask(
                     // If the left row seen as true its needed to output it once
                     // To do that we mark all other matches for same row as null to avoid the output
                     if seen_true {
-                        #[allow(clippy::needless_range_loop)]
+                        #[expect(clippy::needless_range_loop)]
                         for j in first_row_idx..last_true_idx {
                             mask[j] = None;
                         }
@@ -748,7 +748,7 @@ impl Stream for SortMergeJoinStream {
 }
 
 impl SortMergeJoinStream {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         // Configured via `datafusion.execution.spill_compression`.
         spill_compression: SpillCompression,
