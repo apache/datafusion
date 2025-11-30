@@ -41,9 +41,13 @@ use datafusion_datasource::{
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
-use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::{
+    count::count_udaf,
+    min_max::{max_udaf, min_udaf},
+};
 use datafusion_physical_expr::{
-    aggregate::AggregateExprBuilder, Partitioning, ScalarFunctionExpr,
+    aggregate::{AggregateExprBuilder, AggregateFunctionExpr},
+    Partitioning, ScalarFunctionExpr,
 };
 use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::{
@@ -63,6 +67,7 @@ use datafusion_physical_plan::{
 use datafusion_physical_plan::union::UnionExec;
 use futures::StreamExt;
 use object_store::{memory::InMemory, ObjectStore};
+use regex::Regex;
 use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
 
 use crate::physical_optimizer::filter_pushdown::util::TestSource;
@@ -1901,6 +1906,435 @@ fn col_lit_predicate(
         Operator::Eq,
         Arc::new(Literal::new(scalar_value)),
     ))
+}
+
+// ==== Aggregate Dynamic Filter tests ====
+
+// ---- Test Utilities ----
+struct AggregateDynFilterCase<'a> {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    aggr_exprs: Vec<AggregateFunctionExpr>,
+    expected_before: Option<&'a str>,
+    expected_after: Option<&'a str>,
+    scan_support: bool,
+}
+
+async fn run_aggregate_dyn_filter_case(case: AggregateDynFilterCase<'_>) {
+    let AggregateDynFilterCase {
+        schema,
+        batches,
+        aggr_exprs,
+        expected_before,
+        expected_after,
+        scan_support,
+    } = case;
+
+    let scan = TestScanBuilder::new(Arc::clone(&schema))
+        .with_support(scan_support)
+        .with_batches(batches)
+        .build();
+
+    let aggr_exprs: Vec<_> = aggr_exprs
+        .into_iter()
+        .map(|expr| Arc::new(expr) as Arc<AggregateFunctionExpr>)
+        .collect();
+    let aggr_len = aggr_exprs.len();
+
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            aggr_exprs,
+            vec![None; aggr_len],
+            scan,
+            Arc::clone(&schema),
+        )
+        .unwrap(),
+    );
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    let session_config: SessionConfig = config.into();
+    let optimizer_context = OptimizerContext::new(session_config);
+
+    let optimized = FilterPushdown::new_post_optimization()
+        .optimize_plan(plan, &optimizer_context)
+        .unwrap();
+
+    let before = format_plan_for_test(&optimized);
+    if let Some(expected) = expected_before {
+        assert!(
+            before.contains(expected),
+            "expected `{expected}` before execution, got: {before}"
+        );
+    } else {
+        assert!(
+            !before.contains("DynamicFilter ["),
+            "dynamic filter unexpectedly present before execution: {before}"
+        );
+    }
+
+    let session_ctx = SessionContext::new();
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let task_ctx = session_ctx.state().task_ctx();
+    let mut stream = optimized.execute(0, Arc::clone(&task_ctx)).unwrap();
+    let _ = stream.next().await.transpose().unwrap();
+
+    let after = format_plan_for_test(&optimized);
+    if let Some(expected) = expected_after {
+        assert!(
+            after.contains(expected),
+            "expected `{expected}` after execution, got: {after}"
+        );
+    } else {
+        assert!(
+            !after.contains("DynamicFilter ["),
+            "dynamic filter unexpectedly present after execution: {after}"
+        );
+    }
+}
+
+// ---- Test Cases ----
+// Cases covered below:
+// 1. `min(a)` and `max(a)` baseline.
+// 2. Unsupported expression input (`min(a+1)`).
+// 3. Multiple supported columns (same column vs different columns).
+// 4. Mixed supported + unsupported aggregates.
+// 5. Entirely NULL input to surface current bound behavior.
+// 6. End-to-end tests on parquet files
+
+/// `MIN(a)`: able to pushdown dynamic filter
+#[tokio::test]
+async fn test_aggregate_dynamic_filter_min_simple() {
+    // Single min(a) showcases the base case.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batches = vec![record_batch!(("a", Int32, [5, 1, 3, 8])).unwrap()];
+
+    let min_expr =
+        AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .unwrap();
+
+    run_aggregate_dyn_filter_case(AggregateDynFilterCase {
+        schema,
+        batches,
+        aggr_exprs: vec![min_expr],
+        expected_before: Some("DynamicFilter [ empty ]"),
+        expected_after: Some("DynamicFilter [ a@0 < 1 ]"),
+        scan_support: true,
+    })
+    .await;
+}
+
+/// `MAX(a)`: able to pushdown dynamic filter
+#[tokio::test]
+async fn test_aggregate_dynamic_filter_max_simple() {
+    // Single max(a) mirrors the base case on the upper bound.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batches = vec![record_batch!(("a", Int32, [5, 1, 3, 8])).unwrap()];
+
+    let max_expr =
+        AggregateExprBuilder::new(max_udaf(), vec![col("a", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("max_a")
+            .build()
+            .unwrap();
+
+    run_aggregate_dyn_filter_case(AggregateDynFilterCase {
+        schema,
+        batches,
+        aggr_exprs: vec![max_expr],
+        expected_before: Some("DynamicFilter [ empty ]"),
+        expected_after: Some("DynamicFilter [ a@0 > 8 ]"),
+        scan_support: true,
+    })
+    .await;
+}
+
+/// `MIN(a+1)`: Can't pushdown dynamic filter
+#[tokio::test]
+async fn test_aggregate_dynamic_filter_min_expression_not_supported() {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batches = vec![record_batch!(("a", Int32, [5, 1, 3, 8])).unwrap()];
+
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        col("a", &schema).unwrap(),
+        Operator::Plus,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+    ));
+    let min_expr = AggregateExprBuilder::new(min_udaf(), vec![expr])
+        .schema(Arc::clone(&schema))
+        .alias("min_a_plus_one")
+        .build()
+        .unwrap();
+
+    run_aggregate_dyn_filter_case(AggregateDynFilterCase {
+        schema,
+        batches,
+        aggr_exprs: vec![min_expr],
+        expected_before: None,
+        expected_after: None,
+        scan_support: true,
+    })
+    .await;
+}
+
+/// `MIN(a), MAX(a)`: Pushdown dynamic filter like `(a<1) or (a>8)`
+#[tokio::test]
+async fn test_aggregate_dynamic_filter_min_max_same_column() {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batches = vec![record_batch!(("a", Int32, [5, 1, 3, 8])).unwrap()];
+
+    let min_expr =
+        AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .unwrap();
+    let max_expr =
+        AggregateExprBuilder::new(max_udaf(), vec![col("a", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("max_a")
+            .build()
+            .unwrap();
+
+    run_aggregate_dyn_filter_case(AggregateDynFilterCase {
+        schema,
+        batches,
+        aggr_exprs: vec![min_expr, max_expr],
+        expected_before: Some("DynamicFilter [ empty ]"),
+        expected_after: Some("DynamicFilter [ a@0 < 1 OR a@0 > 8 ]"),
+        scan_support: true,
+    })
+    .await;
+}
+
+/// `MIN(a), MAX(b)`: Pushdown dynamic filter like `(a<1) or (b>9)`
+#[tokio::test]
+async fn test_aggregate_dynamic_filter_min_max_different_columns() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let batches =
+        vec![
+            record_batch!(("a", Int32, [5, 1, 3, 8]), ("b", Int32, [7, 2, 4, 9]))
+                .unwrap(),
+        ];
+
+    let min_expr =
+        AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .unwrap();
+    let max_expr =
+        AggregateExprBuilder::new(max_udaf(), vec![col("b", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("max_b")
+            .build()
+            .unwrap();
+
+    run_aggregate_dyn_filter_case(AggregateDynFilterCase {
+        schema,
+        batches,
+        aggr_exprs: vec![min_expr, max_expr],
+        expected_before: Some("DynamicFilter [ empty ]"),
+        expected_after: Some("DynamicFilter [ a@0 < 1 OR b@1 > 9 ]"),
+        scan_support: true,
+    })
+    .await;
+}
+
+/// Mix of supported/unsupported aggregates retains only the valid ones.
+/// `MIN(a), MAX(a), MAX(b), MIN(c+1)`: Pushdown dynamic filter like `(a<1) or (a>8) OR (b>12)`
+#[tokio::test]
+async fn test_aggregate_dynamic_filter_multiple_mixed_expressions() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+        Field::new("c", DataType::Int32, true),
+    ]));
+    let batches = vec![record_batch!(
+        ("a", Int32, [5, 1, 3, 8]),
+        ("b", Int32, [10, 4, 6, 12]),
+        ("c", Int32, [100, 70, 90, 110])
+    )
+    .unwrap()];
+
+    let min_a = AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
+        .schema(Arc::clone(&schema))
+        .alias("min_a")
+        .build()
+        .unwrap();
+    let max_a = AggregateExprBuilder::new(max_udaf(), vec![col("a", &schema).unwrap()])
+        .schema(Arc::clone(&schema))
+        .alias("max_a")
+        .build()
+        .unwrap();
+    let max_b = AggregateExprBuilder::new(max_udaf(), vec![col("b", &schema).unwrap()])
+        .schema(Arc::clone(&schema))
+        .alias("max_b")
+        .build()
+        .unwrap();
+    let expr_c: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        col("c", &schema).unwrap(),
+        Operator::Plus,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+    ));
+    let min_c_expr = AggregateExprBuilder::new(min_udaf(), vec![expr_c])
+        .schema(Arc::clone(&schema))
+        .alias("min_c_plus_one")
+        .build()
+        .unwrap();
+
+    run_aggregate_dyn_filter_case(AggregateDynFilterCase {
+        schema,
+        batches,
+        aggr_exprs: vec![min_a, max_a, max_b, min_c_expr],
+        expected_before: Some("DynamicFilter [ empty ]"),
+        expected_after: Some("DynamicFilter [ a@0 < 1 OR a@0 > 8 OR b@1 > 12 ]"),
+        scan_support: true,
+    })
+    .await;
+}
+
+/// Don't tighten the dynamic filter if all inputs are null
+#[tokio::test]
+async fn test_aggregate_dynamic_filter_min_all_nulls() {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batches = vec![record_batch!(("a", Int32, [None, None, None, None])).unwrap()];
+
+    let min_expr =
+        AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .unwrap();
+
+    run_aggregate_dyn_filter_case(AggregateDynFilterCase {
+        schema,
+        batches,
+        aggr_exprs: vec![min_expr],
+        expected_before: Some("DynamicFilter [ empty ]"),
+        // After reading the input it hasn't a meaningful bound to update, so the
+        // predicate `true` means don't filter out anything
+        expected_after: Some("DynamicFilter [ true ]"),
+        scan_support: true,
+    })
+    .await;
+}
+
+/// Test aggregate dynamic filter is working when reading parquet files
+///
+/// Runs 'select max(id) from test_table where id > 1', and ensure some file ranges
+/// pruned by the dynamic filter.
+#[tokio::test]
+async fn test_aggregate_dynamic_filter_parquet_e2e() {
+    let config = SessionConfig::new()
+        .with_collect_statistics(true)
+        .with_target_partitions(2)
+        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true)
+        .set_bool("datafusion.execution.parquet.pushdown_filters", true);
+    let ctx = SessionContext::new_with_config(config);
+
+    let data_path = format!(
+        "{}/tests/data/test_statistics_per_partition/",
+        env!("CARGO_MANIFEST_DIR")
+    );
+
+    ctx.register_parquet("test_table", &data_path, ParquetReadOptions::default())
+        .await
+        .unwrap();
+
+    // partition 1:
+    //   files: ..03-01(id=4), ..03-02(id=3)
+    // partition 1:
+    //   files: ..03-03(id=2), ..03-04(id=1)
+    //
+    // In partition 1, after reading the first file, the dynamic filter will be update
+    // to "id > 4", so the `..03-02` file must be able to get pruned out
+    let df = ctx
+        .sql("explain analyze select max(id) from test_table where id > 1")
+        .await
+        .unwrap();
+
+    let result = df.collect().await.unwrap();
+
+    let formatted = pretty_format_batches(&result).unwrap();
+    let explain_analyze = format!("{formatted}");
+
+    // Capture "2" from "files_ranges_pruned_statistics=4 total → 2 matched"
+    let re = Regex::new(
+        r"files_ranges_pruned_statistics\s*=\s*(\d+)\s*total\s*[→>\-]\s*(\d+)\s*matched",
+    )
+    .unwrap();
+
+    if let Some(caps) = re.captures(&explain_analyze) {
+        let matched_num: i32 = caps[2].parse().unwrap();
+        assert!(
+            matched_num < 4,
+            "Total 4 files, if some pruned, the matched count is < 4"
+        );
+    } else {
+        unreachable!("metrics should exist")
+    }
+}
+
+/// Non-partial (Single) aggregates should skip dynamic filter initialization.
+#[test]
+fn test_aggregate_dynamic_filter_not_created_for_single_mode() {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+    let batches = vec![record_batch!(("a", Int32, [5, 1, 3, 8])).unwrap()];
+
+    let scan = TestScanBuilder::new(Arc::clone(&schema))
+        .with_support(true)
+        .with_batches(batches)
+        .build();
+
+    let min_expr =
+        AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .unwrap();
+
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![min_expr.into()],
+            vec![None],
+            scan,
+            Arc::clone(&schema),
+        )
+        .unwrap(),
+    );
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    let session_config: SessionConfig = config.into();
+    let optimizer_context = OptimizerContext::new(session_config);
+
+    let optimized = FilterPushdown::new_post_optimization()
+        .optimize_plan(plan, &optimizer_context)
+        .unwrap();
+
+    let formatted = format_plan_for_test(&optimized);
+    assert!(
+        !formatted.contains("DynamicFilter ["),
+        "dynamic filter should not be created for AggregateMode::Single: {formatted}"
+    );
 }
 
 #[tokio::test]

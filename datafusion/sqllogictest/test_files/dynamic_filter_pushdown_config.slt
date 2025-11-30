@@ -18,7 +18,8 @@
 # Tests for dynamic filter pushdown configuration options
 # - enable_topk_dynamic_filter_pushdown (for TopK dynamic filters)
 # - enable_join_dynamic_filter_pushdown (for Join dynamic filters)
-# - enable_dynamic_filter_pushdown (controls both)
+# - enable_aggregate_dynamic_filter_pushdown (for Aggregate dynamic filters)
+# - enable_dynamic_filter_pushdown (controls all three)
 
 # Setup: Create parquet test files
 statement ok
@@ -213,7 +214,80 @@ physical_plan
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id, info], file_type=parquet
 05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
 
-# Test 4: Backward compatibility
+# Test 4: Aggregate dynamic filter pushdown
+
+# Prepare aggregate-specific parquet data without statistics so aggregate statistics optimizer
+# doesn't pre-compute results.
+statement ok
+CREATE TABLE agg_source(category VARCHAR, score INT) AS VALUES
+('alpha', 10),
+('alpha', 25),
+('beta', 5),
+('beta', 12),
+('gamma', 42),
+('gamma', 8);
+
+statement ok
+SET datafusion.execution.parquet.statistics_enabled = 'none';
+
+statement ok
+COPY agg_source TO 'test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet' STORED AS PARQUET;
+
+statement ok
+SET datafusion.execution.parquet.statistics_enabled = 'page';
+
+statement ok
+CREATE EXTERNAL TABLE agg_parquet(category VARCHAR, score INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet';
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+# Aggregate dynamic filter should be pushed into the scan when enabled
+# Expecting a `DynamicFilter` inside parquet scanner's predicate
+query TT
+EXPLAIN SELECT MAX(score) FROM agg_parquet WHERE category = 'alpha'
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[max(agg_parquet.score)]]
+02)--Projection: agg_parquet.score
+03)----Filter: agg_parquet.category = Utf8View("alpha")
+04)------TableScan: agg_parquet projection=[category, score], partial_filters=[agg_parquet.category = Utf8View("alpha")]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_parquet.score)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_parquet.score)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet]]}, projection=[score], file_type=parquet, predicate=category@0 = alpha AND DynamicFilter [ empty ], pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1, required_guarantees=[category in (alpha)]
+
+# Disable aggregate dynamic filters only
+statement ok
+SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
+
+# Expecting no `DynamicFilter` inside parquet scanner's predicate
+query TT
+EXPLAIN SELECT MAX(score) FROM agg_parquet WHERE category = 'alpha'
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[max(agg_parquet.score)]]
+02)--Projection: agg_parquet.score
+03)----Filter: agg_parquet.category = Utf8View("alpha")
+04)------TableScan: agg_parquet projection=[category, score], partial_filters=[agg_parquet.category = Utf8View("alpha")]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_parquet.score)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_parquet.score)]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/agg_data.parquet]]}, projection=[score], file_type=parquet, predicate=category@0 = alpha, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1, required_guarantees=[category in (alpha)]
+
+statement ok
+SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;
+
+# Test 5: Backward compatibility
 
 # First, set both new configs to specific values
 statement ok
@@ -229,7 +303,7 @@ set datafusion.catalog.information_schema = true
 statement ok
 SET datafusion.optimizer.enable_dynamic_filter_pushdown = false;
 
-# Verify both configs are now false
+# Verify all configs are now false
 query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.enable_topk_dynamic_filter_pushdown';
@@ -239,6 +313,12 @@ false
 query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.enable_join_dynamic_filter_pushdown';
+----
+false
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown';
 ----
 false
 
@@ -272,7 +352,7 @@ SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
 statement ok
 set datafusion.catalog.information_schema = true
 
-# Verify both configs are now true
+# Verify all configs are now true
 query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.enable_topk_dynamic_filter_pushdown';
@@ -282,6 +362,12 @@ true
 query T
 SELECT value FROM information_schema.df_settings
 WHERE name = 'datafusion.optimizer.enable_join_dynamic_filter_pushdown';
+----
+true
+
+query T
+SELECT value FROM information_schema.df_settings
+WHERE name = 'datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown';
 ----
 true
 
@@ -328,12 +414,21 @@ DROP TABLE left_parquet;
 statement ok
 DROP TABLE right_parquet;
 
+statement ok
+DROP TABLE agg_source;
+
+statement ok
+DROP TABLE agg_parquet;
+
 # Reset configs to defaults
 statement ok
 SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
 
 statement ok
 SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+statement ok
+SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
 
 statement ok
 SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
