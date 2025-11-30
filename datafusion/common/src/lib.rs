@@ -26,6 +26,7 @@
 // https://github.com/apache/datafusion/issues/18503
 #![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 mod column;
 mod dfschema;

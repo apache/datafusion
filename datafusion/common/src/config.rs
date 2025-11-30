@@ -157,12 +157,10 @@ macro_rules! config_namespace {
                             // $(#[allow(deprecated)])?
                             {
                                 $(let value = $transform(value);)? // Apply transformation if specified
-                                #[allow(deprecated)]
                                 let ret = self.$field_name.set(rem, value.as_ref());
 
                                 $(if !$warn.is_empty() {
                                     let default: $field_type = $default;
-                                    #[allow(deprecated)]
                                     if default != self.$field_name {
                                         log::warn!($warn);
                                     }
@@ -181,7 +179,6 @@ macro_rules! config_namespace {
                 $(
                     let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -191,8 +188,7 @@ macro_rules! config_namespace {
                 match key {
                     $(
                         stringify!($field_name) => {
-                            #[allow(deprecated)]
-                            {
+                                    {
                                 if rem.is_empty() {
                                     let default_value: $field_type = $default;
                                     self.$field_name = default_value;
@@ -213,7 +209,6 @@ macro_rules! config_namespace {
         }
         impl Default for $struct_name {
             fn default() -> Self {
-                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -1851,8 +1846,7 @@ macro_rules! extensions_options {
                             // Safely apply deprecated attribute if present
                             // $(#[allow(deprecated)])?
                             {
-                                #[allow(deprecated)]
-                                self.$field_name.set(rem, value.as_ref())
+                                            self.$field_name.set(rem, value.as_ref())
                             }
                         },
                     )*
@@ -1866,7 +1860,6 @@ macro_rules! extensions_options {
                 $(
                     let key = stringify!($field_name).to_string();
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -2309,7 +2302,6 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                        stringify!($field_name) => {
                            // Handle deprecated fields
-                           #[allow(deprecated)] // Allow deprecated fields
                            $(let value = $transform(value);)?
                            self.$field_name.set(rem, value.as_ref())
                        },
@@ -2325,7 +2317,6 @@ macro_rules! config_namespace_with_hashmap {
                 let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                 let desc = concat!($($d),*).trim();
                 // Handle deprecated fields
-                #[allow(deprecated)]
                 self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -2333,7 +2324,6 @@ macro_rules! config_namespace_with_hashmap {
 
         impl Default for $struct_name {
             fn default() -> Self {
-                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -2361,7 +2351,6 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                     let key = format!("{}.{field}::{}", key_prefix, column_name, field = stringify!($field_name));
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     col_options.$field_name.visit(v, key.as_str(), desc);
                     )*
                 }
@@ -2940,7 +2929,7 @@ config_namespace! {
 pub trait OutputFormatExt: Display {}
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "parquet", expect(clippy::large_enum_variant))]
 pub enum OutputFormat {
     CSV(CsvOptions),
     JSON(JsonOptions),
