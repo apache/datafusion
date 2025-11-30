@@ -23,6 +23,7 @@ use std::{any::Any, borrow::Cow};
 use crate::Session;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_common::{assert_or_internal_err, DataFusionError};
 use datafusion_physical_plan::work_table::WorkTableExec;
 
 use datafusion_physical_plan::ExecutionPlan;
@@ -86,15 +87,20 @@ impl TableProvider for CteWorkTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // TODO: pushdown filters and limits
+        assert_or_internal_err!(
+            filters.is_empty(),
+            "CteWorkTable does not support pushing filters"
+        );
+        assert_or_internal_err!(limit.is_none(), "CteWorkTable pushing limit");
         Ok(Arc::new(WorkTableExec::new(
             self.name.clone(),
             Arc::clone(&self.table_schema),
-        )))
+            projection.cloned(),
+        )?))
     }
 
     fn supports_filters_pushdown(

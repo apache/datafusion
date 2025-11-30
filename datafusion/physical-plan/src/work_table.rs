@@ -103,25 +103,35 @@ pub struct WorkTableExec {
     name: String,
     /// The schema of the stream
     schema: SchemaRef,
+    /// Projection to apply to build the output stream from the recursion state
+    projection: Option<Vec<usize>>,
     /// The work table
     work_table: Arc<WorkTable>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    plan_properties: PlanProperties,
 }
 
 impl WorkTableExec {
     /// Create a new execution plan for a worktable exec.
-    pub fn new(name: String, schema: SchemaRef) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&schema));
-        Self {
+    pub fn new(
+        name: String,
+        mut schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        if let Some(projection) = &projection {
+            schema = Arc::new(schema.project(projection)?);
+        }
+        let plan_properties = Self::compute_properties(Arc::clone(&schema));
+        Ok(Self {
             name,
             schema,
+            projection,
             metrics: ExecutionPlanMetricsSet::new(),
             work_table: Arc::new(WorkTable::new()),
-            cache,
-        }
+            plan_properties,
+        })
     }
 
     /// Ref to name
@@ -173,7 +183,7 @@ impl ExecutionPlan for WorkTableExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        &self.plan_properties
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -199,11 +209,22 @@ impl ExecutionPlan for WorkTableExec {
             0,
             "WorkTableExec got an invalid partition {partition} (expected 0)"
         );
-        let batch = self.work_table.take()?;
+        let ReservedBatches {
+            mut batches,
+            reservation,
+        } = self.work_table.take()?;
+        if let Some(projection) = &self.projection {
+            // We apply the projection
+            // TODO: it would be better to apply it as soon as possible and not only here
+            // TODO: an aggressive projection makes the memory reservation smaller, even if we do not edit it
+            batches = batches
+                .into_iter()
+                .map(|b| b.project(projection))
+                .collect::<Result<Vec<_>, _>>()?;
+        }
 
-        let stream =
-            MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
-                .with_reservation(batch.reservation);
+        let stream = MemoryStream::try_new(batches, Arc::clone(&self.schema), None)?
+            .with_reservation(reservation);
         Ok(Box::pin(cooperative(stream)))
     }
 
@@ -236,9 +257,10 @@ impl ExecutionPlan for WorkTableExec {
         Some(Arc::new(Self {
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
+            projection: self.projection.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
-            cache: self.cache.clone(),
+            plan_properties: self.plan_properties.clone(),
         }))
     }
 }
