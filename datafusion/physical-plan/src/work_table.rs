@@ -107,7 +107,7 @@ pub struct WorkTableExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    plan_properties: PlanProperties,
+    cache: PlanProperties,
 }
 
 impl WorkTableExec {
@@ -127,7 +127,7 @@ impl WorkTableExec {
             projection,
             metrics: ExecutionPlanMetricsSet::new(),
             work_table: Arc::new(WorkTable::new()),
-            plan_properties,
+            cache: plan_properties,
         })
     }
 
@@ -180,7 +180,7 @@ impl ExecutionPlan for WorkTableExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.plan_properties
+        &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -257,7 +257,7 @@ impl ExecutionPlan for WorkTableExec {
             projection: self.projection.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
-            plan_properties: self.plan_properties.clone(),
+            cache: self.cache.clone(),
         }))
     }
 }
