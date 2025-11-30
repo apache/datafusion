@@ -18,17 +18,20 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
+#[cfg(feature = "parquet")]
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, CsvSource, FileSource, JsonSource, ParquetSource,
+    ArrowSource, CsvSource, FileSource, JsonSource,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::ColumnStatistics;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{ColumnStatistics, ScalarValue};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -36,6 +39,9 @@ use datafusion_datasource::schema_adapter::{
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::TableSchema;
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 
@@ -156,9 +162,61 @@ impl SchemaMapper for UppercaseSchemaMapper {
     }
 }
 
+/// A physical expression adapter factory that maps uppercase column names to lowercase
+#[derive(Debug)]
+struct UppercasePhysicalExprAdapterFactory;
+
+impl PhysicalExprAdapterFactory for UppercasePhysicalExprAdapterFactory {
+    fn create(
+        &self,
+        logical_file_schema: SchemaRef,
+        physical_file_schema: SchemaRef,
+    ) -> Arc<dyn PhysicalExprAdapter> {
+        Arc::new(UppercasePhysicalExprAdapter {
+            logical_file_schema,
+            physical_file_schema,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct UppercasePhysicalExprAdapter {
+    logical_file_schema: SchemaRef,
+    physical_file_schema: SchemaRef,
+}
+
+impl PhysicalExprAdapter for UppercasePhysicalExprAdapter {
+    fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+        expr.transform(|e| {
+            if let Some(column) = e.as_any().downcast_ref::<Column>() {
+                // Map uppercase column name (from logical schema) to lowercase (in physical file)
+                let lowercase_name = column.name().to_lowercase();
+                if let Ok(idx) = self.physical_file_schema.index_of(&lowercase_name) {
+                    return Ok(Transformed::yes(
+                        Arc::new(Column::new(&lowercase_name, idx))
+                            as Arc<dyn PhysicalExpr>,
+                    ));
+                }
+            }
+            Ok(Transformed::no(e))
+        })
+        .data()
+    }
+
+    fn with_partition_values(
+        &self,
+        _partition_values: Vec<(FieldRef, ScalarValue)>,
+    ) -> Arc<dyn PhysicalExprAdapter> {
+        Arc::new(Self {
+            logical_file_schema: self.logical_file_schema.clone(),
+            physical_file_schema: self.physical_file_schema.clone(),
+        })
+    }
+}
+
 #[cfg(feature = "parquet")]
 #[tokio::test]
-async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
+async fn test_parquet_integration_with_physical_expr_adapter() -> Result<()> {
     // Create test data
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -190,12 +248,13 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
         Field::new("NAME", DataType::Utf8, true),
     ]));
 
-    // Create a ParquetSource with the adapter factory
-    let file_source = ParquetSource::new(table_schema.clone())
-        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
+    // Create a ParquetSource with the table schema (uppercase columns)
+    let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
 
+    // Use PhysicalExprAdapterFactory to map uppercase column names to lowercase
     let config = FileScanConfigBuilder::new(store_url, file_source)
         .with_file(PartitionedFile::new(path, file_size))
+        .with_expr_adapter(Some(Arc::new(UppercasePhysicalExprAdapterFactory)))
         .build();
 
     // Create a data source executor
@@ -213,62 +272,6 @@ async fn test_parquet_integration_with_schema_adapter() -> Result<()> {
     let result_schema = batches[0].schema();
     assert_eq!(result_schema.field(0).name(), "ID");
     assert_eq!(result_schema.field(1).name(), "NAME");
-
-    Ok(())
-}
-
-#[cfg(feature = "parquet")]
-#[tokio::test]
-async fn test_parquet_integration_with_schema_adapter_and_expression_rewriter(
-) -> Result<()> {
-    // Create test data
-    let batch = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
-        ])),
-        vec![
-            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
-            Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c"])),
-        ],
-    )?;
-
-    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
-    let path = "test.parquet";
-    write_parquet(batch.clone(), store.clone(), path).await;
-
-    // Get the actual file size from the object store
-    let object_meta = store.head(&Path::from(path)).await?;
-    let file_size = object_meta.size;
-
-    // Create a session context and register the object store
-    let ctx = SessionContext::new();
-    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
-
-    // Create a ParquetSource with the adapter factory
-    let file_source = ParquetSource::new(batch.schema())
-        .with_schema_adapter_factory(Arc::new(UppercaseAdapterFactory {}))?;
-
-    let config = FileScanConfigBuilder::new(store_url, file_source)
-        .with_file(PartitionedFile::new(path, file_size))
-        .build();
-
-    // Create a data source executor
-    let exec = DataSourceExec::from_data_source(config);
-
-    // Collect results
-    let task_ctx = ctx.task_ctx();
-    let stream = exec.execute(0, task_ctx)?;
-    let batches = datafusion::physical_plan::common::collect(stream).await?;
-
-    // There should be one batch
-    assert_eq!(batches.len(), 1);
-
-    // Verify the schema has the original column names (schema adapter not applied in DataSourceExec)
-    let result_schema = batches[0].schema();
-    assert_eq!(result_schema.field(0).name(), "id");
-    assert_eq!(result_schema.field(1).name(), "name");
 
     Ok(())
 }
@@ -306,27 +309,8 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         );
     }
 
-    // Test ParquetSource
-    #[cfg(feature = "parquet")]
-    {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-        let source = ParquetSource::new(schema);
-        let source_with_adapter = source
-            .clone()
-            .with_schema_adapter_factory(factory.clone())
-            .unwrap();
-
-        let base_source: Arc<dyn FileSource> = source.into();
-        assert!(base_source.schema_adapter_factory().is_none());
-        assert!(source_with_adapter.schema_adapter_factory().is_some());
-
-        let retrieved_factory = source_with_adapter.schema_adapter_factory().unwrap();
-        assert_eq!(
-            format!("{:?}", retrieved_factory.as_ref()),
-            format!("{:?}", factory.as_ref())
-        );
-    }
+    // Note: ParquetSource no longer supports SchemaAdapterFactory.
+    // Parquet now uses PhysicalExprAdapterFactory for schema adaptation.
 
     // Test CsvSource
     {

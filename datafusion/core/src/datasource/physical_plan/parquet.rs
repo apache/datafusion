@@ -1272,7 +1272,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await;
         assert_contains!(read.unwrap_err().to_string(),
-            "Cannot cast file schema field c3 of type Date64 to table schema field of type Int8");
+            "Cannot cast column 'c3' from 'Date64' (physical data type) to 'Int8' (logical data type)");
     }
 
     #[tokio::test]
