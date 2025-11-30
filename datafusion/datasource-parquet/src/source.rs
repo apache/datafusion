@@ -410,6 +410,11 @@ impl ParquetSource {
         self.table_parquet_options.global.reorder_filters
     }
 
+    /// Return the value of [`datafusion_common::config::ParquetOptions::force_filter_selections`]
+    fn force_filter_selections(&self) -> bool {
+        self.table_parquet_options.global.force_filter_selections
+    }
+
     /// If enabled, the reader will read the page index
     /// This is used to optimize filter pushdown
     /// via `RowSelector` and `RowFilter` by
@@ -595,6 +600,7 @@ impl FileSource for ParquetSource {
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
+            force_filter_selections: self.force_filter_selections(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
