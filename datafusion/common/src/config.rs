@@ -836,6 +836,15 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
+
+        /// Enable sort pushdown optimization for sorted Parquet files.
+        /// Currently, this optimization only has reverse order support.
+        /// When a query requires ordering that can be satisfied by reversing
+        /// the file's natural ordering, row groups and batches are read in
+        /// reverse order to eliminate sort operations.
+        /// Note: This buffers one row group at a time (typically ~128MB).
+        /// Default: true
+        pub enable_sort_pushdown: bool, default = true
     }
 }
 

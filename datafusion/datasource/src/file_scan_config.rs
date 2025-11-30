@@ -30,32 +30,32 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, ColumnStatistics, Constraints, Result,
-    ScalarValue, Statistics,
+    internal_datafusion_err, internal_err, ColumnStatistics, Constraints,
+    DataFusionError, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
 use datafusion_expr::Operator;
+
+use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::coop::cooperative;
+use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
     display::{display_orderings, ProjectSchemaDisplay},
     filter_pushdown::FilterPushdownPropagation,
     metrics::ExecutionPlanMetricsSet,
     DisplayAs, DisplayFormatType,
 };
-use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
-
-use datafusion_physical_expr::equivalence::project_orderings;
-use datafusion_physical_plan::coop::cooperative;
-use datafusion_physical_plan::execution_plan::SchedulingType;
 use log::{debug, warn};
+use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -766,6 +766,131 @@ impl DataSource for FileScanConfig {
             }
         }
     }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        let current_ordering = match self.output_ordering.first() {
+            Some(ordering) => ordering.as_ref(),
+            None => return Ok(None),
+        };
+
+        // Only support reverse ordering pushdown
+        if !is_reverse_ordering(order, current_ordering) {
+            return Ok(None);
+        }
+
+        // Ask the file source if it can handle the sort pushdown
+        // (e.g., ParquetSource will enable reverse_scan)
+        let new_file_source = match self.file_source.try_pushdown_sort(order)? {
+            Some(source) => source,
+            None => return Ok(None),
+        };
+
+        let mut new_config = self.clone();
+
+        // Reverse file groups: when scanning in reverse, we need to read files
+        // in reverse order to maintain the correct global ordering
+        new_config.file_groups = new_config
+            .file_groups
+            .into_iter()
+            .map(|group| {
+                let mut files = group.into_inner();
+                files.reverse();
+                files.into()
+            })
+            .collect();
+
+        // Build the new output ordering by reversing each sort expression's direction
+        // E.g., [number DESC] becomes [number ASC]
+        let mut reversed_ordering = Vec::new();
+        for sort_expr in current_ordering {
+            reversed_ordering.push(PhysicalSortExpr {
+                expr: Arc::clone(&sort_expr.expr),
+                options: !sort_expr.options,
+            });
+        }
+
+        new_config.output_ordering = vec![LexOrdering::new(reversed_ordering)
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "Failed to create ordering: invalid sort expressions".to_string(),
+                )
+            })?];
+
+        new_config.file_source = new_file_source;
+
+        Ok(Some(Arc::new(new_config)))
+    }
+}
+
+/// Check if the requested ordering can be satisfied by reversing the current ordering.
+///
+/// This function supports **prefix matching**: if the file has ordering [A DESC, B ASC]
+/// and we need [A ASC], reversing the scan gives us [A ASC, B DESC], which satisfies
+/// the requirement since [A ASC] is a prefix.
+///
+/// # Arguments
+/// * `requested` - The ordering required by the query
+/// * `current` - The natural ordering of the data source (e.g., from file metadata)
+///
+/// # Returns
+/// `true` if reversing the current ordering would satisfy the requested ordering
+///
+/// # Example
+/// ```text
+/// Current:   [number DESC, letter ASC]
+/// Requested: [number ASC]
+/// Reversed:  [number ASC, letter DESC]  ✓ Prefix match!
+/// ```
+fn is_reverse_ordering(
+    requested: &[PhysicalSortExpr],
+    current: &[PhysicalSortExpr],
+) -> bool {
+    // Allow prefix matching - we can satisfy a prefix of the current ordering
+    // by reversing the scan
+    if requested.len() > current.len() {
+        return false;
+    }
+
+    requested.iter().zip(current.iter()).all(|(req, cur)| {
+        // IMPORTANT: Compare only the expressions (column names), not the entire PhysicalSortExpr!
+        //
+        // We want to check if the SAME expression is being sorted, regardless of direction.
+        // For example:
+        //   - Current: "number ASC NULLS LAST"
+        //   - Requested: "number DESC NULLS FIRST"
+        //
+        // The expressions are the same ("number"), only the sort options differ.
+        // That's exactly what we want - we can satisfy this by reversing the scan!
+        //
+        // If we used `req == cur` instead, it would compare the entire struct including
+        // the SortOptions, which would fail because:
+        //   - req.options = { descending: true, nulls_first: true }
+        //   - cur.options = { descending: false, nulls_first: false }
+        //   - These are different, so `req == cur` would be false!
+        //
+        // But that's wrong - we WANT the options to be different (reversed)!
+        //
+        // Using to_string() on the expr only gives us the column name without options:
+        //   - req.expr.to_string() = "number"
+        //   - cur.expr.to_string() = "number"
+        //   - These are equal! ✓
+        let exprs_match = req.expr.to_string() == cur.expr.to_string();
+
+        // Now check if the sort options are exactly reversed
+        // For a valid reverse scan:
+        //   - descending must be opposite: ASC ↔ DESC
+        //   - nulls_first must be opposite: NULLS FIRST ↔ NULLS LAST
+        let options_reversed = req.options.descending != cur.options.descending
+            && req.options.nulls_first != cur.options.nulls_first;
+
+        // Both conditions must be true:
+        //   1. Same expression/column
+        //   2. Completely reversed sort options
+        exprs_match && options_reversed
+    })
 }
 
 impl FileScanConfig {

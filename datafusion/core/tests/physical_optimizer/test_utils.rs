@@ -18,7 +18,7 @@
 //! Test utilities for physical optimizer tests
 
 use std::any::Any;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 use std::sync::{Arc, LazyLock};
 
 use arrow::array::Int32Array;
@@ -32,7 +32,9 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_common::{ColumnStatistics, JoinType, NullEquality, Result, Statistics};
+use datafusion_common::{
+    internal_err, ColumnStatistics, JoinType, NullEquality, Result, Statistics,
+};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -698,4 +700,81 @@ impl TestAggregate {
             TestAggregate::ColumnA(_) => 2,
         }
     }
+}
+
+/// A harness for testing physical optimizers.
+#[derive(Debug)]
+pub struct OptimizationTest {
+    input: Vec<String>,
+    output: Result<Vec<String>, String>,
+}
+
+impl OptimizationTest {
+    pub fn new<O>(
+        input_plan: Arc<dyn ExecutionPlan>,
+        opt: O,
+        enable_sort_pushdown: bool,
+    ) -> Self
+    where
+        O: PhysicalOptimizerRule,
+    {
+        let input = format_execution_plan(&input_plan);
+        let input_schema = input_plan.schema();
+
+        let mut session_config = SessionConfig::new();
+        session_config
+            .options_mut()
+            .execution
+            .parquet
+            .enable_sort_pushdown = enable_sort_pushdown;
+        let optimizer_context = OptimizerContext::new(session_config.clone());
+        let output_result = opt.optimize_plan(input_plan, &optimizer_context);
+        let output = output_result
+            .and_then(|plan| {
+                if opt.schema_check() && (plan.schema() != input_schema) {
+                    internal_err!(
+                        "Schema mismatch:\n\nBefore:\n{:?}\n\nAfter:\n{:?}",
+                        input_schema,
+                        plan.schema()
+                    )
+                } else {
+                    Ok(plan)
+                }
+            })
+            .map(|plan| format_execution_plan(&plan))
+            .map_err(|e| e.to_string());
+
+        Self { input, output }
+    }
+}
+
+impl Display for OptimizationTest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "OptimizationTest:")?;
+        writeln!(f, "  input:")?;
+        for line in &self.input {
+            writeln!(f, "    - {line}")?;
+        }
+        writeln!(f, "  output:")?;
+        match &self.output {
+            Ok(output) => {
+                writeln!(f, "    Ok:")?;
+                for line in output {
+                    writeln!(f, "      - {line}")?;
+                }
+            }
+            Err(err) => {
+                writeln!(f, "    Err: {err}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+    format_lines(&displayable(plan.as_ref()).indent(false).to_string())
+}
+
+fn format_lines(s: &str) -> Vec<String> {
+    s.trim().split('\n').map(|s| s.to_string()).collect()
 }
