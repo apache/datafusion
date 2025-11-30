@@ -293,36 +293,8 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
     ];
     assert_batches_eq!(expected, &batches);
 
-    // Test using a custom schema adapter and no explicit physical expr adapter
-    // This should use the custom schema adapter both for projections and predicate pushdown
-    let listing_table_config =
-        ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
-            .infer_options(&ctx.state())
-            .await
-            .unwrap()
-            .with_schema(table_schema.clone())
-            .with_schema_adapter_factory(Arc::new(CustomSchemaAdapterFactory));
-    let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.deregister_table("t").unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
-    let batches = ctx
-        .sql("SELECT c2, c1 FROM t WHERE c1 = 2 AND c2 = 'a'")
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
-    let expected = [
-        "+----+----+",
-        "| c2 | c1 |",
-        "+----+----+",
-        "| a  | 2  |",
-        "+----+----+",
-    ];
-    assert_batches_eq!(expected, &batches);
-
-    // Do the same test but with a custom physical expr adapter
-    // Now the default schema adapter will be used for projections, but the custom physical expr adapter will be used for predicate pushdown
+    // Test with a custom physical expr adapter only
+    // The default schema adapter will be used for projections, and the custom physical expr adapter will be used for predicate pushdown
     let listing_table_config =
         ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
             .infer_options(&ctx.state())

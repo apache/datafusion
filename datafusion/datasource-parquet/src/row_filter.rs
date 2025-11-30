@@ -471,7 +471,9 @@ mod test {
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
     use datafusion_expr::{col, Expr};
     use datafusion_physical_expr::planner::logical2physical;
-    use datafusion_physical_expr_adapter::{DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory};
+    use datafusion_physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
+    };
     use datafusion_physical_plan::metrics::{Count, Time};
 
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -531,12 +533,10 @@ mod test {
             None,
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let expr = DefaultPhysicalExprAdapterFactory::default().create(
-            Arc::new(table_schema.clone()),
-            Arc::clone(&file_schema),
-        )
-        .rewrite(expr)
-        .expect("rewriting expression");
+        let expr = DefaultPhysicalExprAdapterFactory {}
+            .create(Arc::new(table_schema.clone()), Arc::clone(&file_schema))
+            .rewrite(expr)
+            .expect("rewriting expression");
         let table_schema = Arc::new(table_schema.clone());
         let candidate =
             FilterCandidateBuilder::new(expr, file_schema.clone(), table_schema.clone())
@@ -574,7 +574,7 @@ mod test {
         ));
         let expr = logical2physical(&expr, &table_schema);
         // Rewrite the expression to add CastExpr for type coercion
-        let expr = DefaultPhysicalExprAdapterFactory::default()
+        let expr = DefaultPhysicalExprAdapterFactory {}
             .create(table_schema.clone(), Arc::clone(&file_schema))
             .rewrite(expr)
             .expect("rewriting expression");
