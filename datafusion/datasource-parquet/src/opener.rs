@@ -343,8 +343,7 @@ impl FileOpener for ParquetOpener {
             let indices = projection
                 .as_ref()
                 .iter()
-                .map(|p| collect_columns(&p.expr))
-                .flatten()
+                .flat_map(|p| collect_columns(&p.expr))
                 .map(|c| c.index())
                 .sorted_unstable()
                 .unique()

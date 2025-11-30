@@ -327,9 +327,6 @@ async fn test_multi_source_schema_adapter_reuse() -> Result<()> {
         );
     }
 
-    // Note: ParquetSource no longer supports SchemaAdapterFactory.
-    // Parquet now uses PhysicalExprAdapterFactory for schema adaptation.
-
     // Test CsvSource
     {
         let schema =
