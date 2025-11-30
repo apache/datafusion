@@ -96,7 +96,12 @@ impl CommonSubexprEliminate {
         sort: Sort,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let Sort { expr, input, fetch } = sort;
+        let Sort {
+            expr,
+            input,
+            fetch,
+            preserve_partitioning,
+        } = sort;
         let input = Arc::unwrap_or_clone(input);
         let (sort_expressions, sort_params): (Vec<_>, Vec<(_, _)>) = expr
             .into_iter()
@@ -117,6 +122,7 @@ impl CommonSubexprEliminate {
                         .collect(),
                     input: Arc::new(new_input),
                     fetch,
+                    preserve_partitioning,
                 })
             });
         Ok(new_sort)
