@@ -30,7 +30,7 @@ use arrow::datatypes::Schema;
 use datafusion_common::{tree_node::Transformed, Result, ScalarValue};
 use datafusion_expr::Operator;
 
-use crate::expressions::{lit, BinaryExpr, Literal, NotExpr};
+use crate::expressions::{in_list, lit, BinaryExpr, InListExpr, Literal, NotExpr};
 use crate::PhysicalExpr;
 
 /// Attempts to simplify NOT expressions
@@ -62,6 +62,19 @@ pub(crate) fn simplify_not_expr(
         if let ScalarValue::Boolean(None) = literal.value() {
             return Ok(Transformed::yes(lit(ScalarValue::Boolean(None))));
         }
+    }
+
+    // Handle NOT(IN list) -> NOT IN list
+    if let Some(in_list_expr) = inner_expr.as_any().downcast_ref::<InListExpr>() {
+        // Create a new InList expression with negated flag flipped
+        let negated = !in_list_expr.negated();
+        let new_in_list = in_list(
+            Arc::clone(in_list_expr.expr()),
+            in_list_expr.list().to_vec(),
+            &negated,
+            schema,
+        )?;
+        return Ok(Transformed::yes(new_in_list));
     }
 
     // Handle NOT(binary_expr) where we can flip the operator
@@ -186,7 +199,7 @@ fn negate_operator(op: &Operator) -> Option<Operator> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, BinaryExpr, NotExpr};
+    use crate::expressions::{col, in_list, lit, BinaryExpr, NotExpr};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -396,26 +409,117 @@ mod tests {
             assert_eq!(or_binary.op(), &Operator::Or, "Top level should be OR");
 
             // Verify left side is just 'a'
-            assert!(
-                or_binary
-                    .left()
-                    .as_any()
-                    .downcast_ref::<NotExpr>()
-                    .is_none(),
-                "Left should be simplified to just 'a'"
-            );
+            assert!(or_binary.left().as_any().downcast_ref::<NotExpr>().is_none(),
+                "Left should not be a NOT expression, it should be simplified to just 'a'");
 
             // Verify right side is just 'b'
-            assert!(
-                or_binary
-                    .right()
-                    .as_any()
-                    .downcast_ref::<NotExpr>()
-                    .is_none(),
-                "Right should be simplified to just 'b'"
-            );
+            assert!(or_binary.right().as_any().downcast_ref::<NotExpr>().is_none(),
+                "Right should not be a NOT expression, it should be simplified to just 'b'");
         } else {
             panic!("Expected binary OR expression result");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_not_in_list() -> Result<()> {
+        let schema = test_schema();
+
+        // NOT(b IN (1, 2, 3)) -> b NOT IN (1, 2, 3)
+        let list = vec![
+            lit(ScalarValue::Int32(Some(1))),
+            lit(ScalarValue::Int32(Some(2))),
+            lit(ScalarValue::Int32(Some(3))),
+        ];
+        let in_list_expr = in_list(col("b", &schema)?, list, &false, &schema)?;
+        let not_in: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(in_list_expr));
+
+        let result = simplify_not_expr_recursive(&not_in, &schema)?;
+        assert!(result.transformed, "Expression should be transformed");
+
+        // Verify the result is an InList expression with negated=true
+        if let Some(in_list_result) = result.data.as_any().downcast_ref::<InListExpr>() {
+            assert!(
+                in_list_result.negated(),
+                "InList should be negated (NOT IN)"
+            );
+            assert_eq!(
+                in_list_result.list().len(),
+                3,
+                "Should have 3 items in list"
+            );
+        } else {
+            panic!("Expected InListExpr result");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_not_not_in_list() -> Result<()> {
+        let schema = test_schema();
+
+        // NOT(b NOT IN (1, 2, 3)) -> b IN (1, 2, 3)
+        let list = vec![
+            lit(ScalarValue::Int32(Some(1))),
+            lit(ScalarValue::Int32(Some(2))),
+            lit(ScalarValue::Int32(Some(3))),
+        ];
+        let not_in_list_expr = in_list(col("b", &schema)?, list, &true, &schema)?;
+        let not_not_in: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(not_in_list_expr));
+
+        let result = simplify_not_expr_recursive(&not_not_in, &schema)?;
+        assert!(result.transformed, "Expression should be transformed");
+
+        // Verify the result is an InList expression with negated=false
+        if let Some(in_list_result) = result.data.as_any().downcast_ref::<InListExpr>() {
+            assert!(
+                !in_list_result.negated(),
+                "InList should not be negated (IN)"
+            );
+            assert_eq!(
+                in_list_result.list().len(),
+                3,
+                "Should have 3 items in list"
+            );
+        } else {
+            panic!("Expected InListExpr result");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_double_not_in_list() -> Result<()> {
+        let schema = test_schema();
+
+        // NOT(NOT(b IN (1, 2, 3))) -> b IN (1, 2, 3)
+        let list = vec![
+            lit(ScalarValue::Int32(Some(1))),
+            lit(ScalarValue::Int32(Some(2))),
+            lit(ScalarValue::Int32(Some(3))),
+        ];
+        let in_list_expr = in_list(col("b", &schema)?, list, &false, &schema)?;
+        let not_in = Arc::new(NotExpr::new(in_list_expr));
+        let double_not: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(not_in));
+
+        let result = simplify_not_expr_recursive(&double_not, &schema)?;
+        assert!(result.transformed, "Expression should be transformed");
+
+        // After double negation elimination, we should get back the original IN expression
+        if let Some(in_list_result) = result.data.as_any().downcast_ref::<InListExpr>() {
+            assert!(
+                !in_list_result.negated(),
+                "InList should not be negated (IN)"
+            );
+            assert_eq!(
+                in_list_result.list().len(),
+                3,
+                "Should have 3 items in list"
+            );
+        } else {
+            panic!("Expected InListExpr result");
         }
 
         Ok(())
