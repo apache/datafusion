@@ -18,7 +18,7 @@
 use std::{ffi::c_void, task::Poll};
 
 use abi_stable::{
-    std_types::{ROption, RResult, RString},
+    std_types::{ROption, RResult},
     StableAbi,
 };
 use arrow::array::{Array, RecordBatch};
@@ -36,6 +36,7 @@ use datafusion_common::{ffi_datafusion_err, ffi_err};
 use futures::{Stream, TryStreamExt};
 use tokio::runtime::Handle;
 
+use crate::util::FFIResult;
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
     rresult,
@@ -49,11 +50,10 @@ use crate::{
 pub struct FFI_RecordBatchStream {
     /// This mirrors the `poll_next` of [`RecordBatchStream`] but does so
     /// in a FFI safe manner.
-    pub poll_next:
-        unsafe extern "C" fn(
-            stream: &Self,
-            cx: &mut FfiContext,
-        ) -> FfiPoll<ROption<RResult<WrappedArray, RString>>>,
+    pub poll_next: unsafe extern "C" fn(
+        stream: &Self,
+        cx: &mut FfiContext,
+    ) -> FfiPoll<ROption<FFIResult<WrappedArray>>>,
 
     /// Return the schema of the record batch
     pub schema: unsafe extern "C" fn(stream: &Self) -> WrappedSchema,
@@ -111,7 +111,7 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
 
 pub(crate) fn record_batch_to_wrapped_array(
     record_batch: RecordBatch,
-) -> RResult<WrappedArray, RString> {
+) -> FFIResult<WrappedArray> {
     let struct_array = StructArray::from(record_batch);
     rresult!(
         to_ffi(&struct_array.to_data()).map(|(array, schema)| WrappedArray {
@@ -124,7 +124,7 @@ pub(crate) fn record_batch_to_wrapped_array(
 // probably want to use pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<ArrayData> {
 fn maybe_record_batch_to_wrapped_stream(
     record_batch: Option<Result<RecordBatch>>,
-) -> ROption<RResult<WrappedArray, RString>> {
+) -> ROption<FFIResult<WrappedArray>> {
     match record_batch {
         Some(Ok(record_batch)) => {
             ROption::RSome(record_batch_to_wrapped_array(record_batch))
@@ -137,7 +137,7 @@ fn maybe_record_batch_to_wrapped_stream(
 unsafe extern "C" fn poll_next_fn_wrapper(
     stream: &FFI_RecordBatchStream,
     cx: &mut FfiContext,
-) -> FfiPoll<ROption<RResult<WrappedArray, RString>>> {
+) -> FfiPoll<ROption<FFIResult<WrappedArray>>> {
     let private_data = stream.private_data as *mut RecordBatchStreamPrivateData;
     let stream = &mut (*private_data).rbs;
 
@@ -174,7 +174,7 @@ pub(crate) fn wrapped_array_to_record_batch(array: WrappedArray) -> Result<Recor
 }
 
 fn maybe_wrapped_array_to_record_batch(
-    array: ROption<RResult<WrappedArray, RString>>,
+    array: ROption<FFIResult<WrappedArray>>,
 ) -> Option<Result<RecordBatch>> {
     match array {
         ROption::RSome(RResult::ROk(wrapped_array)) => {

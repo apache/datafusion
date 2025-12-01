@@ -29,6 +29,7 @@ use crate::{
     schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider},
 };
 
+use crate::util::FFIResult;
 use datafusion::error::Result;
 
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
@@ -43,19 +44,19 @@ pub struct FFI_CatalogProvider {
         name: RString,
     ) -> ROption<FFI_SchemaProvider>,
 
-    pub register_schema:
-        unsafe extern "C" fn(
-            provider: &Self,
-            name: RString,
-            schema: &FFI_SchemaProvider,
-        ) -> RResult<ROption<FFI_SchemaProvider>, RString>,
+    pub register_schema: unsafe extern "C" fn(
+        provider: &Self,
+        name: RString,
+        schema: &FFI_SchemaProvider,
+    )
+        -> FFIResult<ROption<FFI_SchemaProvider>>,
 
-    pub deregister_schema:
-        unsafe extern "C" fn(
-            provider: &Self,
-            name: RString,
-            cascade: bool,
-        ) -> RResult<ROption<FFI_SchemaProvider>, RString>,
+    pub deregister_schema: unsafe extern "C" fn(
+        provider: &Self,
+        name: RString,
+        cascade: bool,
+    )
+        -> FFIResult<ROption<FFI_SchemaProvider>>,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -118,7 +119,7 @@ unsafe extern "C" fn register_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: RString,
     schema: &FFI_SchemaProvider,
-) -> RResult<ROption<FFI_SchemaProvider>, RString> {
+) -> FFIResult<ROption<FFI_SchemaProvider>> {
     let runtime = provider.runtime();
     let provider = provider.inner();
     let schema: Arc<dyn SchemaProvider + Send> = schema.into();
@@ -135,7 +136,7 @@ unsafe extern "C" fn deregister_schema_fn_wrapper(
     provider: &FFI_CatalogProvider,
     name: RString,
     cascade: bool,
-) -> RResult<ROption<FFI_SchemaProvider>, RString> {
+) -> FFIResult<ROption<FFI_SchemaProvider>> {
     let runtime = provider.runtime();
     let provider = provider.inner();
 

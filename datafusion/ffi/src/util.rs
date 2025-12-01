@@ -22,6 +22,11 @@ use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
 use std::sync::Arc;
 
+/// Convenience type for results passed through the FFI boundary. Since the
+/// `DataFusionError` enum is complex and little value is gained from creating
+/// a FFI safe variant of it, we convert errors to strings when passing results
+/// back. These are converted back and forth using the `df_result`, `rresult`,
+/// and `rresult_return` macros.
 pub type FFIResult<T> = RResult<T, RString>;
 
 /// This macro is a helpful conversion utility to convert from an abi_stable::RResult to a
@@ -120,10 +125,11 @@ pub fn rvec_wrapped_to_vec_datatype(
 
 #[cfg(test)]
 mod tests {
+    use crate::util::FFIResult;
     use abi_stable::std_types::{RResult, RString};
     use datafusion::error::DataFusionError;
 
-    fn wrap_result(result: Result<String, DataFusionError>) -> RResult<String, RString> {
+    fn wrap_result(result: Result<String, DataFusionError>) -> FFIResult<String> {
         RResult::ROk(rresult_return!(result))
     }
 
@@ -132,9 +138,9 @@ mod tests {
         const VALID_VALUE: &str = "valid_value";
         const ERROR_VALUE: &str = "error_value";
 
-        let ok_r_result: RResult<RString, RString> =
+        let ok_r_result: FFIResult<RString> =
             RResult::ROk(VALID_VALUE.to_string().into());
-        let err_r_result: RResult<RString, RString> =
+        let err_r_result: FFIResult<RString> =
             RResult::RErr(ERROR_VALUE.to_string().into());
 
         let returned_ok_result = df_result!(ok_r_result);
