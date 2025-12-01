@@ -303,7 +303,9 @@ impl LogicalPlanBuilder {
             let mut common_metadata: Option<FieldMetadata> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
-                let metadata = value.metadata(&schema)?;
+                let metadata = value
+                    .to_field(&schema)
+                    .map(|(_, field)| FieldMetadata::from(field.metadata()))?;
                 if let Some(ref cm) = common_metadata {
                     if &metadata != cm {
                         return plan_err!("Inconsistent metadata across values list at row {i} column {j}. Was {:?} but found {:?}", cm, metadata);
