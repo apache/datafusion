@@ -30,9 +30,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{
-    assert_or_internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{assert_or_internal_err, plan_err, Column, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;

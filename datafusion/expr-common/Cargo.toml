@@ -21,7 +21,7 @@ description = "Logical plan and expression representation for DataFusion query e
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -45,4 +45,4 @@ arrow = { workspace = true }
 datafusion-common = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
-paste = "^1.0"
+paste = { workspace = true }

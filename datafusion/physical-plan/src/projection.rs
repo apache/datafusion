@@ -159,6 +159,11 @@ impl ProjectionExec {
         self.projector.projection().as_ref()
     }
 
+    /// The projection expressions as a [`ProjectionExprs`].
+    pub fn projection_expr(&self) -> &ProjectionExprs {
+        self.projector.projection()
+    }
+
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input

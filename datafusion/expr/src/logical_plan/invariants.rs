@@ -18,7 +18,7 @@
 use datafusion_common::{
     assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    DFSchemaRef, DataFusionError, Result,
+    DFSchemaRef, Result,
 };
 
 use crate::{

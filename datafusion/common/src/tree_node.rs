@@ -956,12 +956,12 @@ impl<'a, T: 'a, C0: TreeNodeContainer<'a, T>, C1: TreeNodeContainer<'a, T>>
 }
 
 impl<
-        'a,
-        T: 'a,
-        C0: TreeNodeContainer<'a, T>,
-        C1: TreeNodeContainer<'a, T>,
-        C2: TreeNodeContainer<'a, T>,
-    > TreeNodeContainer<'a, T> for (C0, C1, C2)
+    'a,
+    T: 'a,
+    C0: TreeNodeContainer<'a, T>,
+    C1: TreeNodeContainer<'a, T>,
+    C2: TreeNodeContainer<'a, T>,
+> TreeNodeContainer<'a, T> for (C0, C1, C2)
 {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
@@ -992,13 +992,13 @@ impl<
 }
 
 impl<
-        'a,
-        T: 'a,
-        C0: TreeNodeContainer<'a, T>,
-        C1: TreeNodeContainer<'a, T>,
-        C2: TreeNodeContainer<'a, T>,
-        C3: TreeNodeContainer<'a, T>,
-    > TreeNodeContainer<'a, T> for (C0, C1, C2, C3)
+    'a,
+    T: 'a,
+    C0: TreeNodeContainer<'a, T>,
+    C1: TreeNodeContainer<'a, T>,
+    C2: TreeNodeContainer<'a, T>,
+    C3: TreeNodeContainer<'a, T>,
+> TreeNodeContainer<'a, T> for (C0, C1, C2, C3)
 {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
@@ -1090,12 +1090,12 @@ impl<'a, T: 'a, C0: TreeNodeContainer<'a, T>, C1: TreeNodeContainer<'a, T>>
 }
 
 impl<
-        'a,
-        T: 'a,
-        C0: TreeNodeContainer<'a, T>,
-        C1: TreeNodeContainer<'a, T>,
-        C2: TreeNodeContainer<'a, T>,
-    > TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2)
+    'a,
+    T: 'a,
+    C0: TreeNodeContainer<'a, T>,
+    C1: TreeNodeContainer<'a, T>,
+    C2: TreeNodeContainer<'a, T>,
+> TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2)
 {
     fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &self,
@@ -1109,13 +1109,13 @@ impl<
 }
 
 impl<
-        'a,
-        T: 'a,
-        C0: TreeNodeContainer<'a, T>,
-        C1: TreeNodeContainer<'a, T>,
-        C2: TreeNodeContainer<'a, T>,
-        C3: TreeNodeContainer<'a, T>,
-    > TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2, &'a C3)
+    'a,
+    T: 'a,
+    C0: TreeNodeContainer<'a, T>,
+    C1: TreeNodeContainer<'a, T>,
+    C2: TreeNodeContainer<'a, T>,
+    C3: TreeNodeContainer<'a, T>,
+> TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2, &'a C3)
 {
     fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &self,
@@ -1336,11 +1336,11 @@ pub(crate) mod tests {
     use std::collections::HashMap;
     use std::fmt::Display;
 
+    use crate::Result;
     use crate::tree_node::{
         Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRewriter,
         TreeNodeVisitor,
     };
-    use crate::Result;
 
     #[derive(Debug, Eq, Hash, PartialEq, Clone)]
     pub struct TestTreeNode<T> {
