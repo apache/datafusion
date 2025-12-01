@@ -16,11 +16,17 @@
 // under the License.
 
 use crate::logical_plan::producer::{
+    encode_recursive_scan_detail, RECURSIVE_SCAN_TYPE_URL,
+};
+use crate::logical_plan::producer::{
     to_substrait_literal, to_substrait_named_struct, SubstraitProducer,
 };
+use datafusion::catalog::cte_worktable::CteWorkTable;
+use datafusion::catalog::default_table_source::DefaultTableSource;
 use datafusion::common::{not_impl_err, substrait_datafusion_err, DFSchema, ToDFSchema};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
+use pbjson_types::Any as ProtoAny;
 use std::sync::Arc;
 use substrait::proto::expression::literal::Struct as LiteralStruct;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
@@ -28,7 +34,7 @@ use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
-use substrait::proto::{ReadRel, Rel};
+use substrait::proto::{extensions, ReadRel, Rel};
 
 /// Converts rows of literal expressions into Substrait literal structs.
 ///
@@ -92,6 +98,20 @@ fn convert_expression_rows(
         .collect()
 }
 
+fn recursive_scan_name(scan: &TableScan) -> Option<String> {
+    scan.source
+        .as_any()
+        .downcast_ref::<DefaultTableSource>()
+        .and_then(|source| {
+            source
+                .table_provider
+                .as_any()
+                .downcast_ref::<CteWorkTable>()
+                .map(|table| table.name().to_string())
+        })
+        .filter(|name| scan.table_name.table() == name)
+}
+
 pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
@@ -130,6 +150,18 @@ pub fn from_table_scan(
         Some(Box::new(filter_expr))
     };
 
+    let advanced_extension = if let Some(name) = recursive_scan_name(scan) {
+        Some(extensions::AdvancedExtension {
+            enhancement: Some(ProtoAny {
+                type_url: RECURSIVE_SCAN_TYPE_URL.to_string(),
+                value: encode_recursive_scan_detail(&name)?.into(),
+            }),
+            optimization: vec![],
+        })
+    } else {
+        None
+    };
+
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
@@ -137,7 +169,7 @@ pub fn from_table_scan(
             filter: filter_option,
             best_effort_filter: None,
             projection,
-            advanced_extension: None,
+            advanced_extension,
             read_type: Some(ReadType::NamedTable(NamedTable {
                 names: scan.table_name.to_vec(),
                 advanced_extension: None,

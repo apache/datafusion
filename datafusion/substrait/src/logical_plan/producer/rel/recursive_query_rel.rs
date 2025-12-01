@@ -62,6 +62,7 @@ pub fn from_recursive_query(
 
 /// Type URL to identify RecursiveQuery in Substrait extensions
 pub const RECURSIVE_QUERY_TYPE_URL: &str = "datafusion.RecursiveQuery";
+pub const RECURSIVE_SCAN_TYPE_URL: &str = "datafusion.RecursiveScan";
 
 /// Simple protobuf message to encode RecursiveQuery metadata
 #[derive(Clone, PartialEq, prost::Message)]
@@ -72,6 +73,12 @@ struct RecursiveQueryDetail {
     is_distinct: bool,
 }
 
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct RecursiveScanDetail {
+    #[prost(string, tag = "1")]
+    pub name: String,
+}
+
 fn encode_recursive_query_detail(
     name: &str,
     is_distinct: bool,
@@ -79,6 +86,19 @@ fn encode_recursive_query_detail(
     let detail = RecursiveQueryDetail {
         name: name.to_string(),
         is_distinct,
+    };
+    Ok(detail.encode_to_vec())
+}
+
+pub fn encode_recursive_scan_detail(name: &str) -> datafusion::common::Result<Vec<u8>> {
+    if name.is_empty() {
+        return datafusion::common::substrait_err!(
+            "Recursive table name cannot be empty"
+        );
+    }
+
+    let detail = RecursiveScanDetail {
+        name: name.to_string(),
     };
     Ok(detail.encode_to_vec())
 }
@@ -100,4 +120,21 @@ pub fn decode_recursive_query_detail(
     }
 
     Ok((detail.name, detail.is_distinct))
+}
+
+pub fn decode_recursive_scan_detail(bytes: &[u8]) -> datafusion::common::Result<String> {
+    let detail = RecursiveScanDetail::decode(bytes).map_err(|e| {
+        datafusion::common::DataFusionError::Substrait(format!(
+            "Failed to decode RecursiveScanDetail: {}",
+            e
+        ))
+    })?;
+
+    if detail.name.is_empty() {
+        return datafusion::common::substrait_err!(
+            "Recursive table name cannot be empty"
+        );
+    }
+
+    Ok(detail.name)
 }

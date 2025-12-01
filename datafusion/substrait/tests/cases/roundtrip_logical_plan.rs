@@ -2177,3 +2177,40 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_recursive_query_with_work_table_scan_executes() -> Result<()> {
+    let ctx = create_context().await?;
+
+    ctx.register_csv(
+        "balance",
+        "../core/tests/data/recursive_cte/balance.csv",
+        CsvReadOptions::new().has_header(true),
+    )
+    .await?;
+
+    let sql = r#"
+        WITH RECURSIVE balances AS (
+            SELECT * from balance
+            UNION ALL
+            SELECT time + 1 as time, name, account_balance + 10 as account_balance
+            FROM balances
+            WHERE time < 10
+        )
+        SELECT * FROM balances
+        ORDER BY time, name, account_balance
+    "#;
+
+    let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    let substrait = to_substrait_plan(&plan, &ctx.state())?;
+    let roundtrip = from_substrait_plan(&ctx.state(), &substrait).await?;
+
+    let batches = ctx.execute_logical_plan(roundtrip).await?.collect().await?;
+
+    assert!(
+        !batches.is_empty(),
+        "Recursive CTE roundtrip should yield at least one batch"
+    );
+
+    Ok(())
+}
