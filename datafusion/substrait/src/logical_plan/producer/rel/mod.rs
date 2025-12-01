@@ -74,5 +74,11 @@ pub fn to_substrait_rel(
         LogicalPlan::RecursiveQuery(plan) => {
             not_impl_err!("Unsupported plan type: {plan:?}")?
         }
+        LogicalPlan::DependentJoin(join) => {
+            not_impl_err!("Unsupported plan type: {join:?}")?
+        }
+        LogicalPlan::DelimGet(delim_get) => {
+            not_impl_err!("Unsupported plan type: {delim_get:?}")?
+        }
     }
 }

@@ -431,6 +431,10 @@ fn optimize_projections(
             });
             vec![required_indices.append(&additional_necessary_child_indices)]
         }
+        LogicalPlan::DependentJoin(..) => {
+            return Ok(Transformed::no(plan));
+        }
+        LogicalPlan::DelimGet(_) => return Ok(Transformed::no(plan)),
     };
 
     // Required indices are currently ordered (child0, child1, ...)
