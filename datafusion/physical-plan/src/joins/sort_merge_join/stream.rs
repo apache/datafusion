@@ -882,7 +882,7 @@ impl Stream for SortMergeJoinStream {
                         self.staging_output_record_batches
                             .debug_assert_metadata_aligned();
 
-                        if !self.staging_output_record_batches.batches.is_empty() {
+                        if !self.staging_output_record_batches.is_empty() {
                             let record_batch = self.output_record_batch_and_reset()?;
                             // For non-filtered join output whenever the target output batch size
                             // is hit. For filtered join its needed to output on later phase
