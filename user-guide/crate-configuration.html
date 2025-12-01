@@ -460,6 +460,29 @@ codegen unit <em>significantly</em> increases <code class="docutils literal notr
 </pre></div>
 </div>
 </section>
+<section id="profile-guided-optimization-pgo">
+<h3>Profile Guided Optimization (PGO)<a class="headerlink" href="#profile-guided-optimization-pgo" title="Link to this heading">#</a></h3>
+<p>Profile Guided Optimization can improve DataFusion performance by up to 25%. It works by compiling with instrumentation, running representative workloads to collect profile data, then recompiling with optimizations based on that data.</p>
+<p>Build with instrumentation:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s2">&quot;-C profile-generate=/tmp/pgo-data&quot;</span><span class="w"> </span>cargo<span class="w"> </span>build<span class="w"> </span>--release
+</pre></div>
+</div>
+<p>Run your workloads to collect profile data. Use benchmarks like TPCH or Clickbench, or your actual production queries:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./target/release/your-datafusion-app<span class="w"> </span>--benchmark
+</pre></div>
+</div>
+<p>Rebuild using the collected profile:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s2">&quot;-C profile-use=/tmp/pgo-data&quot;</span><span class="w"> </span>cargo<span class="w"> </span>build<span class="w"> </span>--release
+</pre></div>
+</div>
+<p>Tips:</p>
+<ul class="simple">
+<li><p>Use workloads that match your production patterns</p></li>
+<li><p>Run multiple iterations during profiling for better coverage</p></li>
+<li><p>Combine with LTO and CPU-specific optimizations for best results</p></li>
+</ul>
+<p>See the <a class="reference external" href="https://rustc-dev-guide.rust-lang.org/building/optimized-build.html#profile-guided-optimization">Rust compiler guide</a> for more details. Discussion and results in <a class="reference external" href="https://github.com/apache/datafusion/issues/9507">issue #9507</a>.</p>
+</section>
 <section id="alternate-allocator-snmalloc">
 <h3>Alternate Allocator: <code class="docutils literal notranslate"><span class="pre">snmalloc</span></code><a class="headerlink" href="#alternate-allocator-snmalloc" title="Link to this heading">#</a></h3>
 <p>You can also use <a class="reference external" href="https://crates.io/crates/snmalloc-rs">snmalloc-rs</a> crate as
@@ -625,6 +648,7 @@ backtrace:<span class="w">    </span><span class="m">0</span>:<span class="w"> <
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#optimizing-builds">Optimizing Builds</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generate-code-with-cpu-specific-instructions">Generate Code with CPU Specific Instructions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-link-time-optimization-single-codegen-unit">Enable Link Time Optimization / Single Codegen Unit</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#profile-guided-optimization-pgo">Profile Guided Optimization (PGO)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#alternate-allocator-snmalloc">Alternate Allocator: <code class="docutils literal notranslate"><span class="pre">snmalloc</span></code></a></li>
 </ul>
 </li>
