@@ -166,6 +166,11 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         self.buffer.capacity() / 8 + self.nulls.allocated_size()
     }
 
+    fn claim_buffers(&self, _pool: &dyn arrow_buffer::MemoryPool) {
+        // No-op: This builder uses BooleanBufferBuilder (backed by Vec), not Arrow buffers.
+        // Memory is tracked via size() method.
+    }
+
     fn build(self: Box<Self>) -> ArrayRef {
         let Self { mut buffer, nulls } = *self;
 

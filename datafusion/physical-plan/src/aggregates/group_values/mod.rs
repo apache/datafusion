@@ -24,6 +24,7 @@ use arrow::array::types::{
 };
 use arrow::array::{downcast_primitive, ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use arrow_buffer::MemoryPool;
 use datafusion_common::Result;
 
 use datafusion_expr::EmitTo;
@@ -99,8 +100,21 @@ pub trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
-    /// Returns the number of bytes of memory used by this [`GroupValues`]
+    /// Returns the size of non-Arrow allocations in bytes.
+    ///
+    /// This includes Vec capacity, BufferBuilder capacity, and other
+    /// non-Arrow data structures. Arrow Buffer memory should be tracked
+    /// separately via [`claim_buffers`].
+    ///
+    /// [`claim_buffers`]: GroupValues::claim_buffers
     fn size(&self) -> usize;
+
+    /// Claims all internal Arrow buffers with the provided memory pool.
+    ///
+    /// Default implementation does nothing (for builders that don't store arrays with shared buffers).
+    fn claim_buffers(&self, _pool: &dyn MemoryPool) {
+        // Default: no-op
+    }
 
     /// Returns true if this [`GroupValues`] is empty
     fn is_empty(&self) -> bool;

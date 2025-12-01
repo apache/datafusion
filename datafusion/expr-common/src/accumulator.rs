@@ -18,6 +18,7 @@
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
 use arrow::array::ArrayRef;
+use arrow_buffer::MemoryPool;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use std::fmt::Debug;
 
@@ -71,15 +72,33 @@ pub trait Accumulator: Send + Sync + Debug {
     /// when possible (for example distinct strings)
     fn evaluate(&mut self) -> Result<ScalarValue>;
 
-    /// Returns the allocated size required for this accumulator, in
-    /// bytes, including `Self`.
+    /// Returns the size of non-Arrow allocations in bytes, including `Self`.
     ///
     /// This value is used to calculate the memory used during
     /// execution so DataFusion can stay within its allotted limit.
     ///
+    /// This includes Vec capacity, BufferBuilder capacity, and other
+    /// non-Arrow data structures. Arrow Buffer memory should be tracked
+    /// separately via [`claim_buffers`].
+    ///
     /// "Allocated" means that for internal containers such as `Vec`,
     /// the `capacity` should be used not the `len`.
+    ///
+    /// [`claim_buffers`]: Self::claim_buffers
     fn size(&self) -> usize;
+
+    /// Claim Arrow buffers with the memory pool for accurate tracking.
+    ///
+    /// This method should be called to register Arrow Buffer instances
+    /// with the pool, enabling automatic deduplication of shared buffers.
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation does nothing, which is appropriate for
+    /// accumulators that don't store Arrow arrays (e.g., simple numeric accumulators).
+    fn claim_buffers(&self, _pool: &dyn MemoryPool) {
+        // Default: no-op for accumulators without Arrow buffers
+    }
 
     /// Returns the intermediate state of the accumulator, consuming the
     /// intermediate state.

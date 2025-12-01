@@ -2259,6 +2259,7 @@ name = "datafusion-expr-common"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "datafusion-common",
  "indexmap 2.12.1",
  "itertools 0.14.0",
@@ -2325,6 +2326,7 @@ version = "51.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
+ "arrow-buffer",
  "criterion",
  "datafusion-common",
  "datafusion-doc",
@@ -2346,6 +2348,7 @@ version = "51.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
+ "arrow-buffer",
  "criterion",
  "datafusion-common",
  "datafusion-expr-common",
@@ -2527,6 +2530,7 @@ version = "51.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
+ "arrow-buffer",
  "arrow-ord",
  "arrow-schema",
  "async-trait",

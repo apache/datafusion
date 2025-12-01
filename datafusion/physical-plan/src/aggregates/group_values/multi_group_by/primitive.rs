@@ -247,6 +247,11 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         self.group_values.allocated_size() + self.nulls.allocated_size()
     }
 
+    fn claim_buffers(&self, _pool: &dyn arrow_buffer::MemoryPool) {
+        // No-op: This builder uses Vec<T::Native>, not Arrow buffers.
+        // Memory is tracked via size() method.
+    }
+
     fn build(self: Box<Self>) -> ArrayRef {
         let Self {
             data_type,

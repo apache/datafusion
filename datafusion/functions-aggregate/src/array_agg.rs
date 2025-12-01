@@ -27,6 +27,7 @@ use arrow::array::{
 };
 use arrow::compute::{filter, SortOptions};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use arrow_buffer::MemoryPool;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{
@@ -391,24 +392,16 @@ impl Accumulator for ArrayAggAccumulator {
     fn size(&self) -> usize {
         size_of_val(self)
             + (size_of::<ArrayRef>() * self.values.capacity())
-            + self
-                .values
-                .iter()
-                // Each ArrayRef might be just a reference to a bigger array, and many
-                // ArrayRefs here might be referencing exactly the same array, so if we
-                // were to call `arr.get_array_memory_size()`, we would be double-counting
-                // the same underlying data many times.
-                //
-                // Instead, we do an approximation by estimating how much memory each
-                // ArrayRef would occupy if its underlying data was fully owned by this
-                // accumulator.
-                //
-                // Note that this is just an estimation, but the reality is that this
-                // accumulator might not own any data.
-                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
-                .sum::<usize>()
             + self.datatype.size()
             - size_of_val(&self.datatype)
+    }
+
+    fn claim_buffers(&self, pool: &dyn MemoryPool) {
+        for arr in &self.values {
+            for buffer in arr.to_data().buffers() {
+                buffer.claim(pool);
+            }
+        }
     }
 }
 
@@ -1073,10 +1066,25 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 266);
+        // size() returns only non-Arrow allocations (Vec capacity, etc.)
+        let non_arrow_size = acc1.size();
+        assert_eq!(non_arrow_size, 236);
+
+        // Verify Arrow buffer tracking - claims full buffer capacity
+        let pool = arrow_buffer::TrackingMemoryPool::default();
+        acc1.claim_buffers(&pool);
+        let arrow_buffer_size = pool.used();
+
+        // With small arrays, buffer over-allocation creates high overhead
+        // This tracks actual physical memory (capacity), not logical slice size
+        assert_eq!(arrow_buffer_size, 2080);
+
+        // Total memory = non-Arrow + Arrow buffers (tracks actual RAM usage)
+        assert_eq!(non_arrow_size + arrow_buffer_size, 2316);
 
         Ok(())
     }
+
     #[test]
     fn does_not_over_account_memory_distinct() -> Result<()> {
         let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
