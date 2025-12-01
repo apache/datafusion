@@ -17,28 +17,30 @@
 
 use super::{Column, Literal};
 use crate::expressions::case::ResultState::{Complete, Empty, Partial};
-use crate::expressions::try_cast;
+use crate::expressions::{lit, try_cast};
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
     is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
+    SlicesIterator,
 };
-use arrow::datatypes::{DataType, Schema, UInt32Type};
+use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, DataFusionError, HashMap, HashSet,
-    Result, ScalarValue,
+    assert_or_internal_err, exec_err, internal_datafusion_err, internal_err,
+    DataFusionError, HashMap, HashSet, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::datum::compare_with_eq;
-use itertools::Itertools;
 use std::borrow::Cow;
-use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
+
+use datafusion_physical_expr_common::datum::compare_with_eq;
+use itertools::Itertools;
+use std::fmt::{Debug, Formatter};
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -246,11 +248,24 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
-fn create_filter(predicate: &BooleanArray) -> FilterPredicate {
+fn create_filter(predicate: &BooleanArray, optimize: bool) -> FilterPredicate {
     let mut filter_builder = FilterBuilder::new(predicate);
-    // Always optimize the filter since we use them multiple times.
-    filter_builder = filter_builder.optimize();
+    if optimize {
+        // Always optimize the filter since we use them multiple times.
+        filter_builder = filter_builder.optimize();
+    }
     filter_builder.build()
+}
+
+fn multiple_arrays(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(fields) => {
+            fields.len() > 1
+                || fields.len() == 1 && multiple_arrays(fields[0].data_type())
+        }
+        DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
+        _ => false,
+    }
 }
 
 // This should be removed when https://github.com/apache/arrow-rs/pull/8693
@@ -288,6 +303,84 @@ fn filter_array(
     filter: &FilterPredicate,
 ) -> std::result::Result<ArrayRef, ArrowError> {
     filter.filter(array)
+}
+
+fn merge(
+    mask: &BooleanArray,
+    truthy: ColumnarValue,
+    falsy: ColumnarValue,
+) -> std::result::Result<ArrayRef, ArrowError> {
+    let (truthy, truthy_is_scalar) = match truthy {
+        ColumnarValue::Array(a) => (a, false),
+        ColumnarValue::Scalar(s) => (s.to_array()?, true),
+    };
+    let (falsy, falsy_is_scalar) = match falsy {
+        ColumnarValue::Array(a) => (a, false),
+        ColumnarValue::Scalar(s) => (s.to_array()?, true),
+    };
+
+    if truthy_is_scalar && falsy_is_scalar {
+        return zip(mask, &Scalar::new(truthy), &Scalar::new(falsy));
+    }
+
+    let falsy = falsy.to_data();
+    let truthy = truthy.to_data();
+
+    let mut mutable = MutableArrayData::new(vec![&truthy, &falsy], false, truthy.len());
+
+    // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
+    // fill with falsy values
+
+    // keep track of how much is filled
+    let mut filled = 0;
+    let mut falsy_offset = 0;
+    let mut truthy_offset = 0;
+
+    SlicesIterator::new(mask).for_each(|(start, end)| {
+        // the gap needs to be filled with falsy values
+        if start > filled {
+            if falsy_is_scalar {
+                for _ in filled..start {
+                    // Copy the first item from the 'falsy' array into the output buffer.
+                    mutable.extend(1, 0, 1);
+                }
+            } else {
+                let falsy_length = start - filled;
+                let falsy_end = falsy_offset + falsy_length;
+                mutable.extend(1, falsy_offset, falsy_end);
+                falsy_offset = falsy_end;
+            }
+        }
+        // fill with truthy values
+        if truthy_is_scalar {
+            for _ in start..end {
+                // Copy the first item from the 'truthy' array into the output buffer.
+                mutable.extend(0, 0, 1);
+            }
+        } else {
+            let truthy_length = end - start;
+            let truthy_end = truthy_offset + truthy_length;
+            mutable.extend(0, truthy_offset, truthy_end);
+            truthy_offset = truthy_end;
+        }
+        filled = end;
+    });
+    // the remaining part is falsy
+    if filled < mask.len() {
+        if falsy_is_scalar {
+            for _ in filled..mask.len() {
+                // Copy the first item from the 'falsy' array into the output buffer.
+                mutable.extend(1, 0, 1);
+            }
+        } else {
+            let falsy_length = mask.len() - filled;
+            let falsy_end = falsy_offset + falsy_length;
+            mutable.extend(1, falsy_offset, falsy_end);
+        }
+    }
+
+    let data = mutable.freeze();
+    Ok(make_array(data))
 }
 
 /// Merges elements by index from a list of [`ArrayData`], creating a new [`ColumnarValue`] from
@@ -342,7 +435,7 @@ fn filter_array(
 /// └───────────┘  └─────────┘                             └─────────┘
 ///    values        indices                                  result
 /// ```
-fn merge(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
+fn merge_n(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
     #[cfg(debug_assertions)]
     for ix in indices {
         if let Some(index) = ix.index() {
@@ -425,9 +518,10 @@ impl PartialResultIndex {
             return internal_err!("Partial result index exceeds limit");
         };
 
-        if index == NONE_VALUE {
-            return internal_err!("Partial result index exceeds limit");
-        }
+        assert_or_internal_err!(
+            index != NONE_VALUE,
+            "Partial result index exceeds limit"
+        );
 
         Ok(Self { index })
     }
@@ -571,9 +665,10 @@ impl ResultBuilder {
         row_indices: &ArrayRef,
         row_values: ArrayData,
     ) -> Result<()> {
-        if row_indices.null_count() != 0 {
-            return internal_err!("Row indices must not contain nulls");
-        }
+        assert_or_internal_err!(
+            row_indices.null_count() == 0,
+            "Row indices must not contain nulls"
+        );
 
         match &mut self.state {
             Empty => {
@@ -600,9 +695,11 @@ impl ResultBuilder {
                     // `case_when_with_expr` and `case_when_no_expr`, already ensure that
                     // they only calculate a value for each row at most once.
                     #[cfg(debug_assertions)]
-                    if !indices[*row_ix as usize].is_none() {
-                        return internal_err!("Duplicate value for row {}", *row_ix);
-                    }
+                    assert_or_internal_err!(
+                        indices[*row_ix as usize].is_none(),
+                        "Duplicate value for row {}",
+                        *row_ix
+                    );
 
                     indices[*row_ix as usize] = array_index;
                 }
@@ -647,7 +744,7 @@ impl ResultBuilder {
             }
             Partial { arrays, indices } => {
                 // Merge partial results into a single array.
-                Ok(ColumnarValue::Array(merge(&arrays, &indices)?))
+                Ok(ColumnarValue::Array(merge_n(&arrays, &indices)?))
             }
             Complete(v) => {
                 // If we have a complete result, we can just return it.
@@ -723,6 +820,26 @@ impl CaseExpr {
 }
 
 impl CaseBody {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        // since all then results have the same data type, we can choose any one as the
+        // return data type except for the null.
+        let mut data_type = DataType::Null;
+        for i in 0..self.when_then_expr.len() {
+            data_type = self.when_then_expr[i].1.data_type(input_schema)?;
+            if !data_type.equals_datatype(&DataType::Null) {
+                break;
+            }
+        }
+        // if all then results are null, we use data type of else expr instead if possible.
+        if data_type.equals_datatype(&DataType::Null) {
+            if let Some(e) = &self.else_expr {
+                data_type = e.data_type(input_schema)?;
+            }
+        }
+
+        Ok(data_type)
+    }
+
     /// See [CaseExpr::case_when_with_expr].
     fn case_when_with_expr(
         &self,
@@ -749,12 +866,13 @@ impl CaseBody {
         // Since each when expression is tested against the base expression using the equality
         // operator, null base values can never match any when expression. `x = NULL` is falsy,
         // for all possible values of `x`.
-        if base_values.null_count() > 0 {
+        let base_null_count = base_values.logical_null_count();
+        if base_null_count > 0 {
             // Use `is_not_null` since this is a cheap clone of the null buffer from 'base_value'.
             // We already checked there are nulls, so we can be sure a new buffer will not be
             // created.
             let base_not_nulls = is_not_null(base_values.as_ref())?;
-            let base_all_null = base_values.null_count() == remainder_batch.num_rows();
+            let base_all_null = base_null_count == remainder_batch.num_rows();
 
             // If there is an else expression, use that as the default value for the null rows
             // Otherwise the default `null` value from the result builder will be used.
@@ -767,7 +885,7 @@ impl CaseBody {
                     result_builder.add_branch_result(&remainder_rows, nulls_value)?;
                 } else {
                     // Filter out the null rows and evaluate the else expression for those
-                    let nulls_filter = create_filter(&not(&base_not_nulls)?);
+                    let nulls_filter = create_filter(&not(&base_not_nulls)?, true);
                     let nulls_batch =
                         filter_record_batch(&remainder_batch, &nulls_filter)?;
                     let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
@@ -782,7 +900,7 @@ impl CaseBody {
             }
 
             // Remove the null rows from the remainder batch
-            let not_null_filter = create_filter(&base_not_nulls);
+            let not_null_filter = create_filter(&base_not_nulls, true);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &not_null_filter)?);
             remainder_rows = filter_array(&remainder_rows, &not_null_filter)?;
@@ -802,8 +920,7 @@ impl CaseBody {
                     compare_with_eq(&a, &base_values, base_value_is_nested)
                 }
                 ColumnarValue::Scalar(s) => {
-                    let scalar = Scalar::new(s.to_array()?);
-                    compare_with_eq(&scalar, &base_values, base_value_is_nested)
+                    compare_with_eq(&s.to_scalar()?, &base_values, base_value_is_nested)
                 }
             }?;
 
@@ -829,7 +946,7 @@ impl CaseBody {
             // for the current branch
             // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
             // this unconditionally.
-            let then_filter = create_filter(&when_value);
+            let then_filter = create_filter(&when_value, true);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
@@ -852,7 +969,7 @@ impl CaseBody {
                     not(&prep_null_mask_filter(&when_value))
                 }
             }?;
-            let next_filter = create_filter(&next_selection);
+            let next_filter = create_filter(&next_selection, true);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
@@ -918,7 +1035,7 @@ impl CaseBody {
             // for the current branch
             // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
             // this unconditionally.
-            let then_filter = create_filter(when_value);
+            let then_filter = create_filter(when_value, true);
             let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
@@ -941,7 +1058,7 @@ impl CaseBody {
                     not(&prep_null_mask_filter(when_value))
                 }
             }?;
-            let next_filter = create_filter(&next_selection);
+            let next_filter = create_filter(&next_selection, true);
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
@@ -964,24 +1081,39 @@ impl CaseBody {
         &self,
         batch: &RecordBatch,
         when_value: &BooleanArray,
-        return_type: &DataType,
     ) -> Result<ColumnarValue> {
-        let then_value = self.when_then_expr[0]
-            .1
-            .evaluate_selection(batch, when_value)?
-            .into_array(batch.num_rows())?;
+        let when_value = match when_value.null_count() {
+            0 => Cow::Borrowed(when_value),
+            _ => {
+                // `prep_null_mask_filter` is required to ensure null is treated as false
+                Cow::Owned(prep_null_mask_filter(when_value))
+            }
+        };
 
-        // evaluate else expression on the values not covered by when_value
-        let remainder = not(when_value)?;
-        let e = self.else_expr.as_ref().unwrap();
+        let optimize_filter = batch.num_columns() > 1
+            || (batch.num_columns() == 1 && multiple_arrays(batch.column(0).data_type()));
+
+        let when_filter = create_filter(&when_value, optimize_filter);
+        let then_batch = filter_record_batch(batch, &when_filter)?;
+        let then_value = self.when_then_expr[0].1.evaluate(&then_batch)?;
+
+        let else_selection = not(&when_value)?;
+        let else_filter = create_filter(&else_selection, optimize_filter);
+        let else_batch = filter_record_batch(batch, &else_filter)?;
+
         // keep `else_expr`'s data type and return type consistent
-        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
+        let e = self.else_expr.as_ref().unwrap();
+        let return_type = self.data_type(&batch.schema())?;
+        let else_expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
             .unwrap_or_else(|_| Arc::clone(e));
-        let else_ = expr
-            .evaluate_selection(batch, &remainder)?
-            .into_array(batch.num_rows())?;
 
-        Ok(ColumnarValue::Array(zip(&remainder, &else_, &then_value)?))
+        let else_value = else_expr.evaluate(&else_batch)?;
+
+        Ok(ColumnarValue::Array(merge(
+            &when_value,
+            then_value,
+            else_value,
+        )?))
     }
 }
 
@@ -1113,11 +1245,12 @@ impl CaseExpr {
         batch: &RecordBatch,
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
-        let return_type = self.data_type(&batch.schema())?;
-
         // evaluate when condition on batch
         let when_value = self.body.when_then_expr[0].0.evaluate(batch)?;
-        let when_value = when_value.into_array(batch.num_rows())?;
+        // `num_rows == 1` is intentional to avoid expanding scalars.
+        // If the `when_value` is effectively a scalar, the 'all true' and 'all false' checks
+        // below will avoid incorrectly using the scalar as a merge/zip mask.
+        let when_value = when_value.into_array(1)?;
         let when_value = as_boolean_array(&when_value).map_err(|e| {
             DataFusionError::Context(
                 "WHEN expression did not return a BooleanArray".to_string(),
@@ -1125,29 +1258,21 @@ impl CaseExpr {
             )
         })?;
 
-        // For the true and false/null selection vectors, bypass `evaluate_selection` and merging
-        // results. This avoids materializing the array for the other branch which we will discard
-        // entirely anyway.
         let true_count = when_value.true_count();
-        if true_count == batch.num_rows() {
-            return self.body.when_then_expr[0].1.evaluate(batch);
+        if true_count == when_value.len() {
+            // All input rows are true, just call the 'then' expression
+            self.body.when_then_expr[0].1.evaluate(batch)
         } else if true_count == 0 {
-            return self.body.else_expr.as_ref().unwrap().evaluate(batch);
-        }
-
-        // Treat 'NULL' as false value
-        let when_value = match when_value.null_count() {
-            0 => Cow::Borrowed(when_value),
-            _ => Cow::Owned(prep_null_mask_filter(when_value)),
-        };
-
-        if projected.projection.len() < batch.num_columns() {
+            // All input rows are false/null, just call the 'else' expression
+            self.body.else_expr.as_ref().unwrap().evaluate(batch)
+        } else if projected.projection.len() < batch.num_columns() {
+            // The case expressions do not use all the columns of the input batch.
+            // Project first to reduce time spent filtering.
             let projected_batch = batch.project(&projected.projection)?;
-            projected
-                .body
-                .expr_or_expr(&projected_batch, &when_value, &return_type)
+            projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
-            self.body.expr_or_expr(batch, &when_value, &return_type)
+            // All columns are used in the case expressions, so there is no need to project.
+            self.body.expr_or_expr(batch, when_value)
         }
     }
 }
@@ -1159,36 +1284,66 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        // since all then results have the same data type, we can choose any one as the
-        // return data type except for the null.
-        let mut data_type = DataType::Null;
-        for i in 0..self.body.when_then_expr.len() {
-            data_type = self.body.when_then_expr[i].1.data_type(input_schema)?;
-            if !data_type.equals_datatype(&DataType::Null) {
-                break;
-            }
-        }
-        // if all then results are null, we use data type of else expr instead if possible.
-        if data_type.equals_datatype(&DataType::Null) {
-            if let Some(e) = &self.body.else_expr {
-                data_type = e.data_type(input_schema)?;
-            }
-        }
-
-        Ok(data_type)
+        self.body.data_type(input_schema)
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        // this expression is nullable if any of the input expressions are nullable
-        let then_nullable = self
+        let nullable_then = self
             .body
             .when_then_expr
             .iter()
-            .map(|(_, t)| t.nullable(input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        if then_nullable.contains(&true) {
-            Ok(true)
+            .filter_map(|(w, t)| {
+                let is_nullable = match t.nullable(input_schema) {
+                    // Pass on error determining nullability verbatim
+                    Err(e) => return Some(Err(e)),
+                    Ok(n) => n,
+                };
+
+                // Branches with a then expression that is not nullable do not impact the
+                // nullability of the case expression.
+                if !is_nullable {
+                    return None;
+                }
+
+                // For case-with-expression assume all 'then' expressions are reachable
+                if self.body.expr.is_some() {
+                    return Some(Ok(()));
+                }
+
+                // For branches with a nullable 'then' expression, try to determine
+                // if the 'then' expression is ever reachable in the situation where
+                // it would evaluate to null.
+
+                // Replace the `then` expression with `NULL` in the `when` expression
+                let with_null = match replace_with_null(w, t.as_ref(), input_schema) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(e) => e,
+                };
+
+                // Try to const evaluate the modified `when` expression.
+                let predicate_result = match evaluate_predicate(&with_null) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(b) => b,
+                };
+
+                match predicate_result {
+                    // Evaluation was inconclusive or true, so the 'then' expression is reachable
+                    None | Some(true) => Some(Ok(())),
+                    // Evaluation proves the branch will never be taken.
+                    // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                    Some(false) => None,
+                }
+            })
+            .next();
+
+        if let Some(nullable_then) = nullable_then {
+            // There is at least one reachable nullable 'then' expression, so the case
+            // expression itself is nullable.
+            // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+            nullable_then.map(|_| true)
         } else if let Some(e) = &self.body.else_expr {
+            // There are no reachable nullable 'then' expressions, so all we still need to
+            // check is the 'else' expression's nullability.
             e.nullable(input_schema)
         } else {
             // CASE produces NULL if there is no `else` expr
@@ -1291,6 +1446,51 @@ impl PhysicalExpr for CaseExpr {
     }
 }
 
+/// Attempts to const evaluate the given `predicate`.
+/// Returns:
+/// - `Some(true)` if the predicate evaluates to a truthy value.
+/// - `Some(false)` if the predicate evaluates to a falsy value.
+/// - `None` if the predicate could not be evaluated.
+fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<Option<bool>> {
+    // Create a dummy record with no columns and one row
+    let batch = RecordBatch::try_new_with_options(
+        Arc::new(Schema::empty()),
+        vec![],
+        &RecordBatchOptions::new().with_row_count(Some(1)),
+    )?;
+
+    // Evaluate the predicate and interpret the result as a boolean
+    let result = match predicate.evaluate(&batch) {
+        // An error during evaluation means we couldn't const evaluate the predicate, so return `None`
+        Err(_) => None,
+        Ok(ColumnarValue::Array(array)) => Some(
+            ScalarValue::try_from_array(array.as_ref(), 0)?
+                .cast_to(&DataType::Boolean)?,
+        ),
+        Ok(ColumnarValue::Scalar(scalar)) => Some(scalar.cast_to(&DataType::Boolean)?),
+    };
+    Ok(result.map(|v| matches!(v, ScalarValue::Boolean(Some(true)))))
+}
+
+fn replace_with_null(
+    expr: &Arc<dyn PhysicalExpr>,
+    expr_to_replace: &dyn PhysicalExpr,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    let with_null = Arc::clone(expr)
+        .transform_down(|e| {
+            if e.as_ref().dyn_eq(expr_to_replace) {
+                let data_type = e.data_type(input_schema)?;
+                let null_literal = lit(ScalarValue::try_new_null(&data_type)?);
+                Ok(Transformed::yes(null_literal))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        })?
+        .data;
+    Ok(with_null)
+}
+
 /// Create a CASE expression
 pub fn case(
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -1304,7 +1504,8 @@ pub fn case(
 mod tests {
     use super::*;
 
-    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
+    use crate::expressions;
+    use crate::expressions::{binary, cast, col, is_not_null, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
@@ -1312,7 +1513,7 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
-    use datafusion_expr::Operator;
+    use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
@@ -1339,6 +1540,84 @@ mod tests {
         let result = as_int32_array(&result)?;
 
         let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![0u8, 1u8, 2u8, 3u8]);
+        let values = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 END
+        let when1 = lit("foo");
+        let then1 = lit(123i32);
+        let when2 = lit("bar");
+        let then2 = lit(456i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_all_null_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![2u8, 2u8, 2u8, 2u8]);
+        let values = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 END
+        let when1 = lit("foo");
+        let then1 = lit(123i32);
+        let when2 = lit("bar");
+        let then2 = lit(456i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![None, None, None, None]);
 
         assert_eq!(expected, result);
 
@@ -2140,7 +2419,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge() {
+    fn test_merge_n() {
         let a1 = StringArray::from(vec![Some("A")]).to_data();
         let a2 = StringArray::from(vec![Some("B")]).to_data();
         let a3 = StringArray::from(vec![Some("C"), Some("D")]).to_data();
@@ -2154,7 +2433,7 @@ mod tests {
             PartialResultIndex::try_new(2).unwrap(),
         ];
 
-        let merged = merge(&[a1, a2, a3], &indices).unwrap();
+        let merged = merge_n(&[a1, a2, a3], &indices).unwrap();
         let merged = merged.as_string::<i32>();
 
         assert_eq!(merged.len(), indices.len());
@@ -2168,5 +2447,203 @@ mod tests {
         assert_eq!(merged.value(4), "C");
         assert!(merged.is_valid(5));
         assert_eq!(merged.value(5), "D");
+    }
+
+    #[test]
+    fn test_merge() {
+        let a1 = Arc::new(StringArray::from(vec![Some("A"), Some("C")]));
+        let a2 = Arc::new(StringArray::from(vec![Some("B")]));
+
+        let mask = BooleanArray::from(vec![true, false, true]);
+
+        let merged =
+            merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
+        let merged = merged.as_string::<i32>();
+
+        assert_eq!(merged.len(), mask.len());
+        assert!(merged.is_valid(0));
+        assert_eq!(merged.value(0), "A");
+        assert!(merged.is_valid(1));
+        assert_eq!(merged.value(1), "B");
+        assert!(merged.is_valid(2));
+        assert_eq!(merged.value(2), "C");
+    }
+
+    fn when_then_else(
+        when: &Arc<dyn PhysicalExpr>,
+        then: &Arc<dyn PhysicalExpr>,
+        els: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let case = CaseExpr::try_new(
+            None,
+            vec![(Arc::clone(when), Arc::clone(then))],
+            Some(Arc::clone(els)),
+        )?;
+        Ok(Arc::new(case))
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_nullable_column() -> Result<()> {
+        case_expression_nullability(true)
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_not_nullable_column() -> Result<()> {
+        case_expression_nullability(false)
+    }
+
+    fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
+        let schema =
+            Schema::new(vec![Field::new("foo", DataType::Int32, col_is_nullable)]);
+
+        let foo = col("foo", &schema)?;
+        let foo_is_not_null = is_not_null(Arc::clone(&foo))?;
+        let foo_is_null = expressions::is_null(Arc::clone(&foo))?;
+        let not_foo_is_null = expressions::not(Arc::clone(&foo_is_null))?;
+        let zero = lit(0);
+        let foo_eq_zero =
+            binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?;
+
+        assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&foo_eq_zero, &foo, &zero)?, &schema);
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::And,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::And,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::Or,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?,
+                    Operator::Or,
+                    Arc::clone(&foo_is_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&zero),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    Operator::Or,
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&foo),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        Ok(())
+    }
+
+    fn assert_not_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(!expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullability(expr: Arc<dyn PhysicalExpr>, schema: &Schema, nullable: bool) {
+        if nullable {
+            assert_nullable(expr, schema);
+        } else {
+            assert_not_nullable(expr, schema);
+        }
     }
 }

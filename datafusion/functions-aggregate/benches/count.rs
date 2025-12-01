@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray};
@@ -29,7 +30,7 @@ use datafusion_expr::{Accumulator, AggregateUDFImpl, GroupsAccumulator};
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_expr::expressions::col;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 fn prepare_group_accumulator() -> Box<dyn GroupsAccumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Int32, true)]));
@@ -75,6 +76,7 @@ fn prepare_accumulator() -> Box<dyn Accumulator> {
     count_fn.accumulator(accumulator_args).unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn convert_to_state_bench(
     c: &mut Criterion,
     name: &str,

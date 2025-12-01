@@ -161,7 +161,7 @@ mod tests {
                 .as_ref()
                 .map(|p| logical2physical(p, &table_schema));
 
-            let mut source = ParquetSource::default();
+            let mut source = ParquetSource::new(table_schema);
             if let Some(predicate) = predicate {
                 source = source.with_predicate(predicate);
             }
@@ -186,23 +186,20 @@ mod tests {
                 source = source.with_bloom_filter_on_read(false);
             }
 
-            source.with_schema(TableSchema::new(Arc::clone(&table_schema), vec![]))
+            Arc::new(source)
         }
 
         fn build_parquet_exec(
             &self,
-            file_schema: SchemaRef,
             file_group: FileGroup,
             source: Arc<dyn FileSource>,
         ) -> Arc<DataSourceExec> {
-            let base_config = FileScanConfigBuilder::new(
-                ObjectStoreUrl::local_filesystem(),
-                file_schema,
-                source,
-            )
-            .with_file_group(file_group)
-            .with_projection_indices(self.projection.clone())
-            .build();
+            let base_config =
+                FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                    .with_file_group(file_group)
+                    .with_projection_indices(self.projection.clone())
+                    .unwrap()
+                    .build();
             DataSourceExec::from_data_source(base_config)
         }
 
@@ -231,11 +228,8 @@ mod tests {
 
             // build a ParquetExec to return the results
             let parquet_source = self.build_file_source(Arc::clone(table_schema));
-            let parquet_exec = self.build_parquet_exec(
-                Arc::clone(table_schema),
-                file_group.clone(),
-                Arc::clone(&parquet_source),
-            );
+            let parquet_exec =
+                self.build_parquet_exec(file_group.clone(), Arc::clone(&parquet_source));
 
             let analyze_exec = Arc::new(AnalyzeExec::new(
                 false,
@@ -243,7 +237,6 @@ mod tests {
                 vec![MetricType::SUMMARY, MetricType::DEV],
                 // use a new ParquetSource to avoid sharing execution metrics
                 self.build_parquet_exec(
-                    Arc::clone(table_schema),
                     file_group.clone(),
                     self.build_file_source(Arc::clone(table_schema)),
                 ),
@@ -1550,8 +1543,7 @@ mod tests {
         ) -> Result<()> {
             let config = FileScanConfigBuilder::new(
                 ObjectStoreUrl::local_filesystem(),
-                file_schema,
-                Arc::new(ParquetSource::default()),
+                Arc::new(ParquetSource::new(file_schema)),
             )
             .with_file_groups(file_groups)
             .build();
@@ -1653,23 +1645,27 @@ mod tests {
             ),
         ]);
 
-        let source = Arc::new(ParquetSource::default());
-        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
-            .with_file(partitioned_file)
-            // file has 10 cols so index 12 should be month and 13 should be day
-            .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
-            .with_table_partition_cols(vec![
-                Field::new("year", DataType::Utf8, false),
-                Field::new("month", DataType::UInt8, false),
-                Field::new(
+        let table_schema = TableSchema::new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Field::new("year", DataType::Utf8, false)),
+                Arc::new(Field::new("month", DataType::UInt8, false)),
+                Arc::new(Field::new(
                     "day",
                     DataType::Dictionary(
                         Box::new(DataType::UInt16),
                         Box::new(DataType::Utf8),
                     ),
                     false,
-                ),
-            ])
+                )),
+            ],
+        );
+        let source = Arc::new(ParquetSource::new(table_schema.clone()));
+        let config = FileScanConfigBuilder::new(object_store_url, source)
+            .with_file(partitioned_file)
+            // file has 10 cols so index 12 should be month and 13 should be day
+            .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
+            .unwrap()
             .build();
 
         let parquet_exec = DataSourceExec::from_data_source(config);
@@ -1731,8 +1727,7 @@ mod tests {
         let file_schema = Arc::new(Schema::empty());
         let config = FileScanConfigBuilder::new(
             ObjectStoreUrl::local_filesystem(),
-            file_schema,
-            Arc::new(ParquetSource::default()),
+            Arc::new(ParquetSource::new(file_schema)),
         )
         .with_file(partitioned_file)
         .build();
@@ -1877,6 +1872,100 @@ mod tests {
 
         // check the projection
         assert_contains!(&explain, "projection=[c1]");
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_metrics_with_multiple_predicates() {
+        // Test that metrics are correctly calculated when multiple predicates
+        // are pushed down (connected with AND). This ensures we don't double-count
+        // rows when multiple predicates filter the data sequentially.
+
+        // Create a batch with two columns: c1 (string) and c2 (int32)
+        // Total: 10 rows
+        let c1: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("foo"), // 0 - passes c1 filter, fails c2 filter (5 <= 10)
+            Some("bar"), // 1 - fails c1 filter
+            Some("bar"), // 2 - fails c1 filter
+            Some("baz"), // 3 - passes both filters (20 > 10)
+            Some("foo"), // 4 - passes both filters (12 > 10)
+            Some("bar"), // 5 - fails c1 filter
+            Some("baz"), // 6 - passes both filters (25 > 10)
+            Some("foo"), // 7 - passes c1 filter, fails c2 filter (7 <= 10)
+            Some("bar"), // 8 - fails c1 filter
+            Some("qux"), // 9 - passes both filters (30 > 10)
+        ]));
+
+        let c2: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(5),
+            Some(15),
+            Some(8),
+            Some(20),
+            Some(12),
+            Some(9),
+            Some(25),
+            Some(7),
+            Some(18),
+            Some(30),
+        ]));
+
+        let batch = create_batch(vec![("c1", c1), ("c2", c2)]);
+
+        // Create filter: c1 != 'bar' AND c2 > 10
+        //
+        // First predicate (c1 != 'bar'):
+        //   - Rows passing: 0, 3, 4, 6, 7, 9 (6 rows)
+        //   - Rows pruned: 1, 2, 5, 8 (4 rows)
+        //
+        // Second predicate (c2 > 10) on remaining 6 rows:
+        //   - Rows passing: 3, 4, 6, 9 (4 rows with c2 = 20, 12, 25, 30)
+        //   - Rows pruned: 0, 7 (2 rows with c2 = 5, 7)
+        //
+        // Expected final metrics:
+        //   - pushdown_rows_matched: 4 (final result)
+        //   - pushdown_rows_pruned: 4 + 2 = 6 (cumulative)
+        //   - Total: 4 + 6 = 10
+
+        let filter = col("c1").not_eq(lit("bar")).and(col("c2").gt(lit(10)));
+
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .round_trip(vec![batch])
+            .await;
+
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        // Verify the result rows
+        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r###"
+            +-----+----+
+            | c1  | c2 |
+            +-----+----+
+            | baz | 20 |
+            | foo | 12 |
+            | baz | 25 |
+            | qux | 30 |
+            +-----+----+
+        "###);
+
+        // Verify metrics - this is the key test
+        let pushdown_rows_matched = get_value(&metrics, "pushdown_rows_matched");
+        let pushdown_rows_pruned = get_value(&metrics, "pushdown_rows_pruned");
+
+        assert_eq!(
+            pushdown_rows_matched, 4,
+            "Expected 4 rows to pass both predicates"
+        );
+        assert_eq!(
+            pushdown_rows_pruned, 6,
+            "Expected 6 rows to be pruned (4 by first predicate + 2 by second predicate)"
+        );
+
+        // The sum should equal the total number of rows
+        assert_eq!(
+            pushdown_rows_matched + pushdown_rows_pruned,
+            10,
+            "matched + pruned should equal total rows"
+        );
     }
 
     #[tokio::test]
@@ -2279,11 +2368,11 @@ mod tests {
         let size_hint_calls = reader_factory.metadata_size_hint_calls.clone();
 
         let source = Arc::new(
-            ParquetSource::default()
+            ParquetSource::new(Arc::clone(&schema))
                 .with_parquet_file_reader_factory(reader_factory)
                 .with_metadata_size_hint(456),
         );
-        let config = FileScanConfigBuilder::new(store_url, schema, source)
+        let config = FileScanConfigBuilder::new(store_url, source)
             .with_file(
                 PartitionedFile {
                     object_meta: ObjectMeta {

@@ -33,7 +33,7 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r#"
-Returns the current UTC timestamp.
+Returns the current timestamp in the system configured timezone (None by default).
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
 "#,
@@ -58,8 +58,7 @@ impl NowFunc {
     ///
     /// Prefer [`NowFunc::new_with_config`] which allows specifying the
     /// timezone via [`ConfigOptions`]. This helper now mirrors the
-    /// canonical default offset (`"+00:00"`) provided by
-    /// `ConfigOptions::default()`.
+    /// canonical default offset (None) provided by `ConfigOptions::default()`.
     pub fn new() -> Self {
         Self::new_with_config(&ConfigOptions::default())
     }
@@ -68,7 +67,11 @@ impl NowFunc {
         Self {
             signature: Signature::nullary(Volatility::Stable),
             aliases: vec!["current_timestamp".to_string()],
-            timezone: Some(Arc::from(config.execution.time_zone.as_str())),
+            timezone: config
+                .execution
+                .time_zone
+                .as_ref()
+                .map(|tz| Arc::from(tz.as_str())),
         }
     }
 }
@@ -145,7 +148,7 @@ impl ScalarUDFImpl for NowFunc {
 mod tests {
     use super::*;
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[test]
     fn now_func_default_matches_config() {
         let default_config = ConfigOptions::default();
@@ -178,6 +181,6 @@ mod tests {
             ScalarValue::TimestampNanosecond(None, configured_now.timezone.clone());
 
         assert_eq!(legacy_scalar, configured_scalar);
-        assert_eq!(Some("+00:00"), legacy_now.timezone.as_deref());
+        assert_eq!(None, legacy_now.timezone.as_deref());
     }
 }

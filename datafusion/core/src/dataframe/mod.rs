@@ -52,8 +52,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
-    TableReference, UnnestOptions,
+    unqualified_field_not_found, Column, DFSchema, DataFusionError, ParamValues,
+    ScalarValue, SchemaError, TableReference, UnnestOptions,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -310,11 +310,20 @@ impl DataFrame {
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
         let fields = columns
             .iter()
-            .flat_map(|name| {
-                self.plan
+            .map(|name| {
+                let fields = self
+                    .plan
                     .schema()
-                    .qualified_fields_with_unqualified_name(name)
+                    .qualified_fields_with_unqualified_name(name);
+                if fields.is_empty() {
+                    Err(unqualified_field_not_found(name, self.plan.schema()))
+                } else {
+                    Ok(fields)
+                }
             })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = fields
             .into_iter()
@@ -1655,7 +1664,7 @@ impl DataFrame {
     pub fn into_view(self) -> Arc<dyn TableProvider> {
         Arc::new(DataFrameTableProvider {
             plan: self.plan,
-            table_type: TableType::Temporary,
+            table_type: TableType::View,
         })
     }
 
@@ -2321,6 +2330,10 @@ impl DataFrame {
 
     /// Cache DataFrame as a memory table.
     ///
+    /// Default behavior could be changed using
+    /// a [`crate::execution::session_state::CacheFactory`]
+    /// configured via [`SessionState`].
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -2335,14 +2348,20 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        let context = SessionContext::new_with_state((*self.session_state).clone());
-        // The schema is consistent with the output
-        let plan = self.clone().create_physical_plan().await?;
-        let schema = plan.schema();
-        let task_ctx = Arc::new(self.task_ctx());
-        let partitions = collect_partitioned(plan, task_ctx).await?;
-        let mem_table = MemTable::try_new(schema, partitions)?;
-        context.read_table(Arc::new(mem_table))
+        if let Some(cache_factory) = self.session_state.cache_factory() {
+            let new_plan =
+                cache_factory.create(self.plan, self.session_state.as_ref())?;
+            Ok(Self::new(*self.session_state, new_plan))
+        } else {
+            let context = SessionContext::new_with_state((*self.session_state).clone());
+            // The schema is consistent with the output
+            let plan = self.clone().create_physical_plan().await?;
+            let schema = plan.schema();
+            let task_ctx = Arc::new(self.task_ctx());
+            let partitions = collect_partitioned(plan, task_ctx).await?;
+            let mem_table = MemTable::try_new(schema, partitions)?;
+            context.read_table(Arc::new(mem_table))
+        }
     }
 
     /// Apply an alias to the DataFrame.
@@ -2383,6 +2402,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
+    #[expect(clippy::needless_pass_by_value)]
     pub fn fill_null(
         &self,
         value: ScalarValue,

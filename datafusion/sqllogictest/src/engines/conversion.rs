@@ -122,6 +122,7 @@ pub(crate) fn decimal_to_str(value: Decimal) -> String {
 /// Converts a `BigDecimal` to its plain string representation, optionally rounding to a specified number of decimal places.
 ///
 /// If `round_digits` is `None`, the value is rounded to 12 decimal places by default.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn big_decimal_to_str(value: BigDecimal, round_digits: Option<i64>) -> String {
     // Round the value to limit the number of decimal places
     let value = value.round(round_digits.unwrap_or(12)).normalized();

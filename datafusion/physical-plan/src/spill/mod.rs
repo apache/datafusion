@@ -19,6 +19,11 @@
 
 pub(crate) mod in_progress_spill_file;
 pub(crate) mod spill_manager;
+pub mod spill_pool;
+
+// Re-export SpillManager for doctests only (hidden from public docs)
+#[doc(hidden)]
+pub use spill_manager::SpillManager;
 
 use std::fs::File;
 use std::io::BufReader;
@@ -222,6 +227,7 @@ impl RecordBatchStream for SpillReaderStream {
     since = "46.0.0",
     note = "This method is deprecated. Use `SpillManager::spill_record_batch_by_size` instead."
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub fn spill_record_batch_by_size(
     batch: &RecordBatch,
     path: PathBuf,

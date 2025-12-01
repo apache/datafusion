@@ -34,7 +34,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
-use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile};
+use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile, TableSchema};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
@@ -42,6 +42,7 @@ use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
+use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
     in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
@@ -481,38 +482,17 @@ pub fn parse_protobuf_file_scan_schema(
     Ok(Arc::new(convert_required!(proto.schema)?))
 }
 
-pub fn parse_protobuf_file_scan_config(
+/// Parses a TableSchema from protobuf, extracting the file schema and partition columns
+pub fn parse_table_schema_from_proto(
     proto: &protobuf::FileScanExecConf,
-    ctx: &TaskContext,
-    codec: &dyn PhysicalExtensionCodec,
-    file_source: Arc<dyn FileSource>,
-) -> Result<FileScanConfig> {
+) -> Result<TableSchema> {
     let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
-    let projection = proto
-        .projection
-        .iter()
-        .map(|i| *i as usize)
-        .collect::<Vec<_>>();
-
-    let constraints = convert_required!(proto.constraints)?;
-    let statistics = convert_required!(proto.statistics)?;
-
-    let file_groups = proto
-        .file_groups
-        .iter()
-        .map(|f| f.try_into())
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let object_store_url = match proto.object_store_url.is_empty() {
-        false => ObjectStoreUrl::parse(&proto.object_store_url)?,
-        true => ObjectStoreUrl::local_filesystem(),
-    };
 
     // Reacquire the partition column types from the schema before removing them below.
     let table_partition_cols = proto
         .table_partition_cols
         .iter()
-        .map(|col| Ok(schema.field_with_name(col)?.clone()))
+        .map(|col| Ok(Arc::new(schema.field_with_name(col)?.clone())))
         .collect::<Result<Vec<_>>>()?;
 
     // Remove partition columns from the schema after recreating table_partition_cols
@@ -530,6 +510,31 @@ pub fn parse_protobuf_file_scan_config(
         .with_metadata(schema.metadata.clone()),
     );
 
+    Ok(TableSchema::new(file_schema, table_partition_cols))
+}
+
+pub fn parse_protobuf_file_scan_config(
+    proto: &protobuf::FileScanExecConf,
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    file_source: Arc<dyn FileSource>,
+) -> Result<FileScanConfig> {
+    let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
+
+    let constraints = convert_required!(proto.constraints)?;
+    let statistics = convert_required!(proto.statistics)?;
+
+    let file_groups = proto
+        .file_groups
+        .iter()
+        .map(|f| f.try_into())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let object_store_url = match proto.object_store_url.is_empty() {
+        false => ObjectStoreUrl::parse(&proto.object_store_url)?,
+        true => ObjectStoreUrl::local_filesystem(),
+    };
+
     let mut output_ordering = vec![];
     for node_collection in &proto.output_ordering {
         let sort_exprs = parse_physical_sort_exprs(
@@ -541,13 +546,39 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.extend(LexOrdering::new(sort_exprs));
     }
 
-    let config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+    // Parse projection expressions if present and apply to file source
+    let file_source = if let Some(proto_projection_exprs) = &proto.projection_exprs {
+        let projection_exprs: Vec<ProjectionExpr> = proto_projection_exprs
+            .projections
+            .iter()
+            .map(|proto_expr| {
+                let expr = parse_physical_expr(
+                    proto_expr.expr.as_ref().ok_or_else(|| {
+                        internal_datafusion_err!("ProjectionExpr missing expr field")
+                    })?,
+                    ctx,
+                    &schema,
+                    codec,
+                )?;
+                Ok(ProjectionExpr::new(expr, proto_expr.alias.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let projection_exprs = ProjectionExprs::new(projection_exprs);
+
+        // Apply projection to file source
+        file_source
+            .try_pushdown_projection(&projection_exprs)?
+            .unwrap_or(file_source)
+    } else {
+        file_source
+    };
+
+    let config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
-        .with_projection_indices(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
-        .with_table_partition_cols(table_partition_cols)
         .with_output_ordering(output_ordering)
         .with_batch_size(proto.batch_size.map(|s| s as usize))
         .build();

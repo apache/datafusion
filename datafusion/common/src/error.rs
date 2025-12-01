@@ -15,7 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion error types
+//! # Error Handling in DataFusion
+//!
+//! In DataFusion, there are two types of errors that can be raised:
+//!
+//! 1. Expected errors – These indicate invalid operations performed by the caller,
+//!    such as attempting to open a non-existent file. Different categories exist to
+//!    distinguish their sources (e.g., [`DataFusionError::ArrowError`],
+//!    [`DataFusionError::IoError`], etc.).
+//!
+//! 2. Unexpected errors – Represented by [`DataFusionError::Internal`], these
+//!    indicate that an internal invariant has been broken, suggesting a potential
+//!    bug in the system.
+//!
+//! There are several convenient macros for throwing errors. For example, use
+//! `exec_err!` for expected errors.
+//! For invariant checks, you can use `assert_or_internal_err!`,
+//! `assert_eq_or_internal_err!`, `assert_ne_or_internal_err!` for easier assertions.
+//! On the performance-critical path, use `debug_assert!` instead to reduce overhead.
+
 #[cfg(feature = "backtrace")]
 use std::backtrace::{Backtrace, BacktraceStatus};
 
@@ -750,12 +768,122 @@ impl DataFusionErrorBuilder {
 macro_rules! unwrap_or_internal_err {
     ($Value: ident) => {
         $Value.ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            $crate::DataFusionError::Internal(format!(
                 "{} should not be None",
                 stringify!($Value)
             ))
         })?
     };
+}
+
+/// Assert a condition, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_or_internal_err!(predicate);
+/// assert_or_internal_err!(predicate, "human readable message");
+/// assert_or_internal_err!(predicate, format!("details: {}", value));
+/// ```
+#[macro_export]
+macro_rules! assert_or_internal_err {
+    ($cond:expr) => {
+        if !$cond {
+            return Err($crate::DataFusionError::Internal(format!(
+                "Assertion failed: {}",
+                stringify!($cond)
+            )));
+        }
+    };
+    ($cond:expr, $($arg:tt)+) => {
+        if !$cond {
+            return Err($crate::DataFusionError::Internal(format!(
+                "Assertion failed: {}: {}",
+                stringify!($cond),
+                format!($($arg)+)
+            )));
+        }
+    };
+}
+
+/// Assert equality, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_eq_or_internal_err!(actual, expected);
+/// assert_eq_or_internal_err!(left_expr, right_expr, "values must match");
+/// assert_eq_or_internal_err!(lhs, rhs, "metadata: {}", extra);
+/// ```
+#[macro_export]
+macro_rules! assert_eq_or_internal_err {
+    ($left:expr, $right:expr $(,)?) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val != right_val {
+            return Err($crate::DataFusionError::Internal(format!(
+                "Assertion failed: {} == {} (left: {:?}, right: {:?})",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val
+            )));
+        }
+    }};
+    ($left:expr, $right:expr, $($arg:tt)+) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val != right_val {
+            return Err($crate::DataFusionError::Internal(format!(
+                "Assertion failed: {} == {} (left: {:?}, right: {:?}): {}",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val,
+                format!($($arg)+)
+            )));
+        }
+    }};
+}
+
+/// Assert inequality, returning `DataFusionError::Internal` on failure.
+///
+/// # Examples
+///
+/// ```text
+/// assert_ne_or_internal_err!(left, right);
+/// assert_ne_or_internal_err!(lhs_expr, rhs_expr, "values must differ");
+/// assert_ne_or_internal_err!(a, b, "context {}", info);
+/// ```
+#[macro_export]
+macro_rules! assert_ne_or_internal_err {
+    ($left:expr, $right:expr $(,)?) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val == right_val {
+            return Err($crate::DataFusionError::Internal(format!(
+                "Assertion failed: {} != {} (left: {:?}, right: {:?})",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val
+            )));
+        }
+    }};
+    ($left:expr, $right:expr, $($arg:tt)+) => {{
+        let left_val = &$left;
+        let right_val = &$right;
+        if left_val == right_val {
+            return Err($crate::DataFusionError::Internal(format!(
+                "Assertion failed: {} != {} (left: {:?}, right: {:?}): {}",
+                stringify!($left),
+                stringify!($right),
+                left_val,
+                right_val,
+                format!($($arg)+)
+            )));
+        }
+    }};
 }
 
 /// Add a macros for concise  DataFusionError::* errors declaration
@@ -807,14 +935,9 @@ macro_rules! make_error {
             }
 
 
-            // Note: Certain macros are used in this  crate, but not all.
-            // This macro generates a use or all of them in case they are needed
-            // so we allow unused code to avoid warnings when they are not used
             #[doc(hidden)]
-            #[allow(unused)]
             pub use $NAME_ERR as [<_ $NAME_ERR>];
             #[doc(hidden)]
-            #[allow(unused)]
             pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
         }
     };
@@ -845,7 +968,7 @@ make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
 #[macro_export]
 macro_rules! sql_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::SQL(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        let err = $crate::DataFusionError::SQL(Box::new($ERR), Some($crate::DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -857,7 +980,7 @@ macro_rules! sql_datafusion_err {
 #[macro_export]
 macro_rules! sql_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = datafusion_common::sql_datafusion_err!($ERR);
+        let err = $crate::sql_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -869,7 +992,7 @@ macro_rules! sql_err {
 #[macro_export]
 macro_rules! arrow_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::ArrowError(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        let err = $crate::DataFusionError::ArrowError(Box::new($ERR), Some($crate::DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -882,7 +1005,7 @@ macro_rules! arrow_datafusion_err {
 macro_rules! arrow_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {
     {
-        let err = datafusion_common::arrow_datafusion_err!($ERR);
+        let err = $crate::arrow_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -894,9 +1017,9 @@ macro_rules! arrow_err {
 #[macro_export]
 macro_rules! schema_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = $crate::error::DataFusionError::SchemaError(
+        let err = $crate::DataFusionError::SchemaError(
             Box::new($ERR),
-            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
+            Box::new(Some($crate::DataFusionError::get_back_trace())),
         );
         $(
             let err = err.with_diagnostic($DIAG);
@@ -909,9 +1032,9 @@ macro_rules! schema_datafusion_err {
 #[macro_export]
 macro_rules! schema_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = $crate::error::DataFusionError::SchemaError(
+        let err = $crate::DataFusionError::SchemaError(
             Box::new($ERR),
-            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
+            Box::new(Some($crate::DataFusionError::get_back_trace())),
         );
         $(
             let err = err.with_diagnostic($DIAG);
@@ -974,6 +1097,115 @@ mod test {
     use std::sync::Arc;
 
     use arrow::error::ArrowError;
+    use insta::assert_snapshot;
+
+    fn ok_result() -> Result<()> {
+        Ok(())
+    }
+
+    #[test]
+    fn test_assert_eq_or_internal_err_passes() -> Result<()> {
+        assert_eq_or_internal_err!(1, 1);
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_eq_or_internal_err_fails() {
+        fn check() -> Result<()> {
+            assert_eq_or_internal_err!(1, 2, "expected equality");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: 1 == 2 (left: 1, right: 2): expected equality.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_ne_or_internal_err_passes() -> Result<()> {
+        assert_ne_or_internal_err!(1, 2);
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_ne_or_internal_err_fails() {
+        fn check() -> Result<()> {
+            assert_ne_or_internal_err!(3, 3, "values must differ");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: 3 != 3 (left: 3, right: 3): values must differ.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_passes() -> Result<()> {
+        assert_or_internal_err!(true);
+        assert_or_internal_err!(true, "message");
+        ok_result()
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_fails_default() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false);
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_fails_with_message() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false, "custom message");
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false: custom message.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
+
+    #[test]
+    fn test_assert_or_internal_err_with_format_arguments() {
+        fn check() -> Result<()> {
+            assert_or_internal_err!(false, "custom {}", 42);
+            ok_result()
+        }
+
+        let err = check().unwrap_err();
+        assert_snapshot!(
+            err.to_string(),
+            @r"
+        Internal error: Assertion failed: false: custom 42.
+        This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
+        "
+        );
+    }
 
     #[test]
     fn test_error_size() {
@@ -986,9 +1218,10 @@ mod test {
     #[test]
     fn datafusion_error_to_arrow() {
         let res = return_arrow_error().unwrap_err();
-        assert!(res
-            .to_string()
-            .starts_with("External error: Error during planning: foo"));
+        assert!(
+            res.to_string()
+                .starts_with("External error: Error during planning: foo")
+        );
     }
 
     #[test]
@@ -1000,7 +1233,6 @@ mod test {
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
@@ -1017,17 +1249,17 @@ mod test {
                 .unwrap(),
             &"Error during planning: Err"
         );
-        assert!(!err
-            .split(DataFusionError::BACK_TRACE_SEP)
-            .collect::<Vec<&str>>()
-            .get(1)
-            .unwrap()
-            .is_empty());
+        assert!(
+            !err.split(DataFusionError::BACK_TRACE_SEP)
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[cfg(not(feature = "backtrace"))]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_disabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err().to_string();
@@ -1097,7 +1329,6 @@ mod test {
     }
 
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_make_error_parse_input() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();
@@ -1166,9 +1397,11 @@ mod test {
         let external_error_2: DataFusionError = generic_error_2.into();
 
         println!("{external_error_2}");
-        assert!(external_error_2
-            .to_string()
-            .starts_with("External error: io error"));
+        assert!(
+            external_error_2
+                .to_string()
+                .starts_with("External error: io error")
+        );
     }
 
     /// Model what happens when implementing SendableRecordBatchStream:

@@ -21,9 +21,10 @@ use arrow::{
     datatypes::{Field, Float32Type, Float64Type},
     util::bench_util::create_primitive_array,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::trunc;
+use std::hint::black_box;
 
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;

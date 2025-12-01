@@ -26,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_err, Column, DFSchemaRef,
-    Diagnostic, HashMap, Result, ScalarValue,
+    assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
+    Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
@@ -97,6 +97,7 @@ pub(crate) enum CheckColumnsMustReferenceAggregatePurpose {
     Projection,
     Having,
     Qualify,
+    OrderBy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,9 @@ impl CheckColumnsSatisfyExprsPurpose {
             }
             Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Qualify) => {
                 "Column in QUALIFY must be in GROUP BY or an aggregate function"
+            }
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::OrderBy) => {
+                "Column in ORDER BY must be in GROUP BY or an aggregate function"
             }
         }
     }
@@ -417,26 +421,25 @@ impl RecursiveUnnestRewriter<'_> {
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
         let placeholder_column = Column::from_name(placeholder_name.clone());
-
-        let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
+        let field = expr_in_unnest.to_field(self.input_schema)?.1;
+        let data_type = field.data_type();
 
         match data_type {
             DataType::Struct(inner_fields) => {
-                if !struct_allowed {
-                    return internal_err!("unnest on struct can only be applied at the root level of select expression");
-                }
+                assert_or_internal_err!(
+                    struct_allowed,
+                    "unnest on struct can only be applied at the root level of select expression"
+                );
                 push_projection_dedupl(
                     self.inner_projection_exprs,
                     expr_in_unnest.clone().alias(placeholder_name.clone()),
                 );
                 self.columns_unnestings
                     .insert(Column::from_name(placeholder_name.clone()), None);
-                Ok(
-                    get_struct_unnested_columns(&placeholder_name, &inner_fields)
-                        .into_iter()
-                        .map(Expr::Column)
-                        .collect(),
-                )
+                Ok(get_struct_unnested_columns(&placeholder_name, inner_fields)
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect())
             }
             DataType::List(_)
             | DataType::FixedSizeList(_, _)
@@ -477,8 +480,8 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///   is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref unnest_expr) = expr {
-            let (data_type, _) =
-                unnest_expr.expr.data_type_and_nullable(self.input_schema)?;
+            let field = unnest_expr.expr.to_field(self.input_schema)?.1;
+            let data_type = field.data_type();
             self.consecutive_unnest.push(Some(unnest_expr.clone()));
             // if expr inside unnest is a struct, do not consider
             // the next unnest as consecutive unnest (if any)
@@ -531,7 +534,6 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///                          / /
     ///                       column2
     /// ```
-    ///
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {

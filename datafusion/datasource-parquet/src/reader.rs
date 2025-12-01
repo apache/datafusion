@@ -97,6 +97,7 @@ impl DefaultParquetFileReaderFactory {
 pub struct ParquetFileReader {
     pub file_metrics: ParquetFileMetrics,
     pub inner: ParquetObjectReader,
+    pub partitioned_file: PartitionedFile,
 }
 
 impl AsyncFileReader for ParquetFileReader {
@@ -129,6 +130,18 @@ impl AsyncFileReader for ParquetFileReader {
     }
 }
 
+impl Drop for ParquetFileReader {
+    fn drop(&mut self) {
+        self.file_metrics
+            .scan_efficiency_ratio
+            .add_part(self.file_metrics.bytes_scanned.value());
+        // Multiple ParquetFileReaders may run, so we set_total to avoid adding the total multiple times
+        self.file_metrics
+            .scan_efficiency_ratio
+            .set_total(self.partitioned_file.object_meta.size as usize);
+    }
+}
+
 impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
     fn create_reader(
         &self,
@@ -156,6 +169,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
         Ok(Box::new(ParquetFileReader {
             inner,
             file_metrics,
+            partitioned_file,
         }))
     }
 }
@@ -208,14 +222,14 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             inner = inner.with_footer_size_hint(hint)
         };
 
-        Ok(Box::new(CachedParquetFileReader {
-            store: Arc::clone(&self.store),
-            inner,
+        Ok(Box::new(CachedParquetFileReader::new(
             file_metrics,
+            Arc::clone(&self.store),
+            inner,
             partitioned_file,
-            metadata_cache: Arc::clone(&self.metadata_cache),
+            Arc::clone(&self.metadata_cache),
             metadata_size_hint,
-        }))
+        )))
     }
 }
 
@@ -229,6 +243,26 @@ pub struct CachedParquetFileReader {
     partitioned_file: PartitionedFile,
     metadata_cache: Arc<dyn FileMetadataCache>,
     metadata_size_hint: Option<usize>,
+}
+
+impl CachedParquetFileReader {
+    pub fn new(
+        file_metrics: ParquetFileMetrics,
+        store: Arc<dyn ObjectStore>,
+        inner: ParquetObjectReader,
+        partitioned_file: PartitionedFile,
+        metadata_cache: Arc<dyn FileMetadataCache>,
+        metadata_size_hint: Option<usize>,
+    ) -> Self {
+        Self {
+            file_metrics,
+            store,
+            inner,
+            partitioned_file,
+            metadata_cache,
+            metadata_size_hint,
+        }
+    }
 }
 
 impl AsyncFileReader for CachedParquetFileReader {
@@ -283,6 +317,18 @@ impl AsyncFileReader for CachedParquetFileReader {
                 })
         }
         .boxed()
+    }
+}
+
+impl Drop for CachedParquetFileReader {
+    fn drop(&mut self) {
+        self.file_metrics
+            .scan_efficiency_ratio
+            .add_part(self.file_metrics.bytes_scanned.value());
+        // Multiple ParquetFileReaders may run, so we set_total to avoid adding the total multiple times
+        self.file_metrics
+            .scan_efficiency_ratio
+            .set_total(self.partitioned_file.object_meta.size as usize);
     }
 }
 

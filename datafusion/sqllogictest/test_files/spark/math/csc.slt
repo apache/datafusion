@@ -23,5 +23,24 @@
 
 ## Original Query: SELECT csc(1);
 ## PySpark 3.5.5 Result: {'CSC(1)': 1.1883951057781212, 'typeof(CSC(1))': 'double', 'typeof(1)': 'int'}
-#query
-#SELECT csc(1::int);
+
+query R
+SELECT csc(1::INT);
+----
+1.188395105778121
+
+query R
+SELECT csc(a) FROM (VALUES (0::INT), (1::INT), (-1::INT), (null)) AS t(a);
+----
+Infinity
+1.188395105778121
+-1.188395105778121
+NULL
+
+query R
+SELECT csc(a) FROM (VALUES (pi()), (-pi()), (pi()/2) , (arrow_cast('NAN','Float32'))) AS t(a);
+----
+8165619676597685
+-8165619676597685
+1
+NaN

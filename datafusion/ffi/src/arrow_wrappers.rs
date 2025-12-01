@@ -50,14 +50,15 @@ impl From<SchemaRef> for WrappedSchema {
 /// give the user a warning, and return some kind of result. In this case we default to an
 /// empty schema.
 #[cfg(not(tarpaulin_include))]
-fn catch_df_schema_error(e: ArrowError) -> Schema {
+fn catch_df_schema_error(e: &ArrowError) -> Schema {
     error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}");
     Schema::empty()
 }
 
 impl From<WrappedSchema> for SchemaRef {
     fn from(value: WrappedSchema) -> Self {
-        let schema = Schema::try_from(&value.0).unwrap_or_else(catch_df_schema_error);
+        let schema =
+            Schema::try_from(&value.0).unwrap_or_else(|e| catch_df_schema_error(&e));
         Arc::new(schema)
     }
 }

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray};
@@ -25,7 +26,7 @@ use datafusion_expr::{function::AccumulatorArgs, AggregateUDFImpl, GroupsAccumul
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_physical_expr::expressions::col;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     let field = Field::new("f", data_type.clone(), true).into();
@@ -46,6 +47,7 @@ fn prepare_accumulator(data_type: &DataType) -> Box<dyn GroupsAccumulator> {
     sum_fn.create_groups_accumulator(accumulator_args).unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn convert_to_state_bench(
     c: &mut Criterion,
     name: &str,

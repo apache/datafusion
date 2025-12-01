@@ -181,7 +181,7 @@ impl CacheManager {
     }
 }
 
-const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
+pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 
 #[derive(Clone)]
 pub struct CacheManagerConfig {
