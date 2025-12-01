@@ -306,8 +306,6 @@ SELECT age, person FROM table ORDER BY age, person DESC;
 
 Limits the number of rows to be a maximum of `count` rows. `count` should be a non-negative integer.
 
-DataFusion does not currently support the SQL `FETCH` clause. Use `LIMIT` to constrain the number of returned rows instead.
-
 Example:
 
 ```sql
