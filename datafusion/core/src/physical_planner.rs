@@ -3109,7 +3109,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct("foo": Boolean), Utf8]"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct("foo": non-null Boolean), Utf8]"#
         );
 
         Ok(())
