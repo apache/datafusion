@@ -802,48 +802,12 @@ impl Stream for SortMergeJoinStream {
                         match self.current_ordering {
                             Ordering::Less | Ordering::Equal => {
                                 if !streamed_exhausted {
-                                    if self.filter.is_some()
-                                        && matches!(
-                                            self.join_type,
-                                            JoinType::Left
-                                                | JoinType::LeftSemi
-                                                | JoinType::LeftMark
-                                                | JoinType::Right
-                                                | JoinType::RightSemi
-                                                | JoinType::RightMark
-                                                | JoinType::LeftAnti
-                                                | JoinType::RightAnti
-                                                | JoinType::Full
-                                        )
-                                    {
-                                        self.freeze_all()?;
-
-                                        // Verify metadata alignment before checking if we have batches to filter
-                                        self.staging_output_record_batches
-                                            .debug_assert_metadata_aligned();
-
-                                        // If join is filtered and there is joined tuples waiting
-                                        // to be filtered
-                                        if !self.staging_output_record_batches.is_empty()
-                                        {
-                                            // Apply filter on joined tuples and get filtered batch
-                                            let out_filtered_batch =
-                                                self.filter_joined_batch()?;
-
-                                            // Append filtered batch to the output buffer
-                                            self.output
-                                                .push_batch(out_filtered_batch)
-                                                .expect("Failed to push output batch");
-
-                                            if self.output.has_completed_batch() {
-                                                let record_batch = self
-                                                    .output
-                                                    .next_completed_batch()
-                                                    .expect("Failed to get output batch");
-                                                return Poll::Ready(Some(Ok(
-                                                    record_batch,
-                                                )));
+                                    if self.needs_deferred_filtering() {
+                                        match self.process_filtered_batches()? {
+                                            Poll::Ready(Some(batch)) => {
+                                                return Poll::Ready(Some(Ok(batch)));
                                             }
+                                            Poll::Ready(None) | Poll::Pending => {}
                                         }
                                     }
 
@@ -912,20 +876,7 @@ impl Stream for SortMergeJoinStream {
                             // because target output batch size can be hit in the middle of
                             // filtering causing the filtering to be incomplete and causing
                             // correctness issues
-                            if self.filter.is_some()
-                                && matches!(
-                                    self.join_type,
-                                    JoinType::Left
-                                        | JoinType::LeftSemi
-                                        | JoinType::Right
-                                        | JoinType::RightSemi
-                                        | JoinType::LeftAnti
-                                        | JoinType::RightAnti
-                                        | JoinType::LeftMark
-                                        | JoinType::RightMark
-                                        | JoinType::Full
-                                )
-                            {
+                            if self.needs_deferred_filtering() {
                                 continue;
                             }
 
@@ -943,20 +894,7 @@ impl Stream for SortMergeJoinStream {
 
                     // if there is still something not processed
                     if !self.staging_output_record_batches.is_empty() {
-                        if self.filter.is_some()
-                            && matches!(
-                                self.join_type,
-                                JoinType::Left
-                                    | JoinType::LeftSemi
-                                    | JoinType::Right
-                                    | JoinType::RightSemi
-                                    | JoinType::LeftAnti
-                                    | JoinType::RightAnti
-                                    | JoinType::Full
-                                    | JoinType::LeftMark
-                                    | JoinType::RightMark
-                            )
-                        {
+                        if self.needs_deferred_filtering() {
                             let record_batch = self.filter_joined_batch()?;
                             return Poll::Ready(Some(Ok(record_batch)));
                         } else {
@@ -1048,6 +986,59 @@ impl SortMergeJoinStream {
     /// Number of unfrozen output pairs (used to decide when to freeze + output)
     fn num_unfrozen_pairs(&self) -> usize {
         self.streamed_batch.num_output_rows()
+    }
+
+    /// Returns true if this join needs deferred filtering
+    ///
+    /// Deferred filtering is needed when a filter exists and the join type requires
+    /// ensuring each input row produces at least one output row (or exactly one for semi).
+    fn needs_deferred_filtering(&self) -> bool {
+        self.filter.is_some()
+            && matches!(
+                self.join_type,
+                JoinType::Left
+                    | JoinType::LeftSemi
+                    | JoinType::LeftMark
+                    | JoinType::Right
+                    | JoinType::RightSemi
+                    | JoinType::RightMark
+                    | JoinType::LeftAnti
+                    | JoinType::RightAnti
+                    | JoinType::Full
+            )
+    }
+
+    /// Process accumulated batches for filtered joins
+    ///
+    /// Freezes unfrozen pairs, applies deferred filtering, and outputs if ready.
+    /// Returns Poll::Ready with a batch if one is available, otherwise Poll::Pending.
+    fn process_filtered_batches(&mut self) -> Poll<Option<Result<RecordBatch>>> {
+        self.freeze_all()?;
+
+        // Verify metadata alignment before checking if we have batches to filter
+        self.staging_output_record_batches
+            .debug_assert_metadata_aligned();
+
+        // If join is filtered and there is joined tuples waiting to be filtered
+        if !self.staging_output_record_batches.is_empty() {
+            // Apply filter on joined tuples and get filtered batch
+            let out_filtered_batch = self.filter_joined_batch()?;
+
+            // Append filtered batch to the output buffer
+            self.output
+                .push_batch(out_filtered_batch)
+                .expect("Failed to push output batch");
+
+            if self.output.has_completed_batch() {
+                let record_batch = self
+                    .output
+                    .next_completed_batch()
+                    .expect("Failed to get output batch");
+                return Poll::Ready(Some(Ok(record_batch)));
+            }
+        }
+
+        Poll::Pending
     }
 
     /// Poll next streamed row
@@ -1689,20 +1680,7 @@ impl SortMergeJoinStream {
             .concat_batches(&self.schema)?;
         (&record_batch).record_output(&self.join_metrics.baseline_metrics());
 
-        if !(self.filter.is_some()
-            && matches!(
-                self.join_type,
-                JoinType::Left
-                    | JoinType::LeftSemi
-                    | JoinType::Right
-                    | JoinType::RightSemi
-                    | JoinType::LeftAnti
-                    | JoinType::RightAnti
-                    | JoinType::LeftMark
-                    | JoinType::RightMark
-                    | JoinType::Full
-            ))
-        {
+        if !self.needs_deferred_filtering() {
             // For non-filtered outer joins, we clear batches immediately after concat
             // since we don't need them for deferred filter processing
             self.staging_output_record_batches.clear_batches();
