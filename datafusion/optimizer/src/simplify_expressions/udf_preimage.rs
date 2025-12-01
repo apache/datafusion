@@ -36,7 +36,7 @@ pub(super) fn preimage_in_comparison_for_binary(
             Expr::ScalarFunction(ScalarFunction { func, args }),
             Expr::Literal(lit_value, _),
         ) => (func, args, lit_value),
-        _ => return internal_err!("Expect date_part expr and literal"),
+        _ => return internal_err!("Expect scalar function expr and literal"),
     };
     let expr = Box::new(args[1].clone());
 
@@ -44,109 +44,56 @@ pub(super) fn preimage_in_comparison_for_binary(
         return internal_err!("Can't get the data type of the expr {:?}", &expr);
     };
 
-    let preimage_func = match func.name() {
-        "date_part" => DatePartFunc::new(),
+    let preimage_interval = match func.name() {
+        "date_part" => DatePartFunc::new()
+            .preimage(&lit_value, &expr_type)
+            .expect("Preimage interval should be created"),
         _ => return internal_err!("Preimage is not supported for {:?}", func.name()),
     };
 
+    let lower = lit(preimage_interval.lower().clone());
+    let upper = lit(preimage_interval.upper().clone());
+
     let rewritten_expr = match op {
-        Operator::Lt | Operator::GtEq => {
-            let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
-                Some(v) => v,
-                None => {
-                    return internal_err!("Could not cast literal to the column type")
-                }
-            };
+        Operator::Lt | Operator::GtEq => Expr::BinaryExpr(BinaryExpr {
+            left: expr,
+            op,
+            right: Box::new(lower),
+        }),
+        Operator::Gt => Expr::BinaryExpr(BinaryExpr {
+            left: expr,
+            op: Operator::GtEq,
+            right: Box::new(upper),
+        }),
+        Operator::LtEq => Expr::BinaryExpr(BinaryExpr {
+            left: expr,
+            op: Operator::Lt,
+            right: Box::new(upper),
+        }),
+        Operator::Eq => and(
             Expr::BinaryExpr(BinaryExpr {
-                left: expr,
-                op,
-                right: Box::new(lit(v)),
-            })
-        }
-        Operator::Gt => {
-            let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
-                Some(v) => v,
-                None => {
-                    return internal_err!("Could not cast literal to the column type")
-                }
-            };
-            Expr::BinaryExpr(BinaryExpr {
-                left: expr,
+                left: expr.clone(),
                 op: Operator::GtEq,
-                right: Box::new(lit(v)),
-            })
-        }
-        Operator::LtEq => {
-            let v = match preimage_func.preimage_cast(&lit_value, &expr_type, op) {
-                Some(v) => v,
-                None => {
-                    return internal_err!("Could not cast literal to the column type")
-                }
-            };
+                right: Box::new(lower),
+            }),
             Expr::BinaryExpr(BinaryExpr {
                 left: expr,
                 op: Operator::Lt,
-                right: Box::new(lit(v)),
-            })
-        }
-        Operator::Eq => {
-            let lower =
-                match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::GtEq)
-                {
-                    Some(v) => v,
-                    None => {
-                        return internal_err!("Could not cast literal to the column type")
-                    }
-                };
-            let upper =
-                match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::LtEq)
-                {
-                    Some(v) => v,
-                    None => {
-                        return internal_err!("Could not cast literal to the column type")
-                    }
-                };
-            and(
-                Expr::BinaryExpr(BinaryExpr {
-                    left: expr.clone(),
-                    op: Operator::GtEq,
-                    right: Box::new(lit(lower)),
-                }),
-                Expr::BinaryExpr(BinaryExpr {
-                    left: expr,
-                    op: Operator::Lt,
-                    right: Box::new(lit(upper)),
-                }),
-            )
-        }
-        Operator::NotEq => {
-            let lower =
-                match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::Lt) {
-                    Some(v) => v,
-                    None => {
-                        return internal_err!("Could not cast literal to the column type")
-                    }
-                };
-            let upper =
-                match preimage_func.preimage_cast(&lit_value, &expr_type, Operator::Gt) {
-                    Some(v) => v,
-                    None => {
-                        return internal_err!("Could not cast literal to the column type")
-                    }
-                };
-            or(
-                Expr::BinaryExpr(BinaryExpr {
-                    left: expr.clone(),
-                    op: Operator::Lt,
-                    right: Box::new(lit(lower)),
-                }),
-                Expr::BinaryExpr(BinaryExpr {
-                    left: expr,
-                    op: Operator::GtEq,
-                    right: Box::new(lit(upper)),
-                }),
-            )
-        }
+                right: Box::new(upper),
+            }),
+        ),
+        Operator::NotEq => or(
+            Expr::BinaryExpr(BinaryExpr {
+                left: expr.clone(),
+                op: Operator::Lt,
+                right: Box::new(lower),
+            }),
+            Expr::BinaryExpr(BinaryExpr {
+                left: expr,
+                op: Operator::GtEq,
+                right: Box::new(upper),
+            }),
+        ),
         _ => return internal_err!("Expect comparison operators"),
     };
     Ok(Transformed::yes(rewritten_expr))
@@ -191,7 +138,7 @@ pub(super) fn is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary<
                 return false;
             };
             DatePartFunc::new()
-                .preimage_cast(lit_value, &expr_type, op)
+                .preimage(lit_value, &expr_type)
                 .is_some()
         }
         _ => false,
