@@ -23,8 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::types::logical_string;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    arrow_datafusion_err, exec_err, internal_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::{
     binary_expr, cast, Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl,

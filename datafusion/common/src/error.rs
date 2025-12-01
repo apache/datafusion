@@ -768,7 +768,7 @@ impl DataFusionErrorBuilder {
 macro_rules! unwrap_or_internal_err {
     ($Value: ident) => {
         $Value.ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            $crate::DataFusionError::Internal(format!(
                 "{} should not be None",
                 stringify!($Value)
             ))
@@ -789,7 +789,7 @@ macro_rules! unwrap_or_internal_err {
 macro_rules! assert_or_internal_err {
     ($cond:expr) => {
         if !$cond {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {}",
                 stringify!($cond)
             )));
@@ -797,7 +797,7 @@ macro_rules! assert_or_internal_err {
     };
     ($cond:expr, $($arg:tt)+) => {
         if !$cond {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {}: {}",
                 stringify!($cond),
                 format!($($arg)+)
@@ -821,7 +821,7 @@ macro_rules! assert_eq_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
@@ -834,7 +834,7 @@ macro_rules! assert_eq_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
@@ -861,7 +861,7 @@ macro_rules! assert_ne_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
@@ -874,7 +874,7 @@ macro_rules! assert_ne_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
@@ -968,7 +968,7 @@ make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
 #[macro_export]
 macro_rules! sql_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::SQL(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        let err = $crate::DataFusionError::SQL(Box::new($ERR), Some($crate::DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -980,7 +980,7 @@ macro_rules! sql_datafusion_err {
 #[macro_export]
 macro_rules! sql_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = datafusion_common::sql_datafusion_err!($ERR);
+        let err = $crate::sql_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -992,7 +992,7 @@ macro_rules! sql_err {
 #[macro_export]
 macro_rules! arrow_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::ArrowError(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        let err = $crate::DataFusionError::ArrowError(Box::new($ERR), Some($crate::DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -1005,7 +1005,7 @@ macro_rules! arrow_datafusion_err {
 macro_rules! arrow_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {
     {
-        let err = datafusion_common::arrow_datafusion_err!($ERR);
+        let err = $crate::arrow_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -1017,9 +1017,9 @@ macro_rules! arrow_err {
 #[macro_export]
 macro_rules! schema_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = $crate::error::DataFusionError::SchemaError(
+        let err = $crate::DataFusionError::SchemaError(
             Box::new($ERR),
-            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
+            Box::new(Some($crate::DataFusionError::get_back_trace())),
         );
         $(
             let err = err.with_diagnostic($DIAG);
@@ -1032,9 +1032,9 @@ macro_rules! schema_datafusion_err {
 #[macro_export]
 macro_rules! schema_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = $crate::error::DataFusionError::SchemaError(
+        let err = $crate::DataFusionError::SchemaError(
             Box::new($ERR),
-            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
+            Box::new(Some($crate::DataFusionError::get_back_trace())),
         );
         $(
             let err = err.with_diagnostic($DIAG);
