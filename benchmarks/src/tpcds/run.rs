@@ -18,10 +18,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{
-    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_QUERY_END_ID,
-    TPCH_QUERY_START_ID, TPCH_TABLES,
-};
 use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
@@ -46,16 +42,43 @@ use structopt::StructOpt;
 
 // hack to avoid `default_value is meaningless for bool` errors
 type BoolDefaultTrue = bool;
+pub const TPCDS_QUERY_START_ID: usize = 1;
+pub const TPCDS_QUERY_END_ID: usize = 99;
 
-/// Run the tpch benchmark.
-///
-/// This benchmarks is derived from the [TPC-H][1] version
-/// [2.17.1]. The data and answers are generated using `tpch-gen` from
-/// [2].
-///
-/// [1]: http://www.tpc.org/tpch/
-/// [2]: https://github.com/databricks/tpch-dbgen.git
-/// [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
+pub const TPCDS_TABLES: &[&str] = &[
+    "call_center", "customer_address", "household_demographics", "promotion", "store_sales", "web_page",
+    "catalog_page", "customer_demographics", "income_band", "reason", "store", "web_returns",
+    "catalog_returns", "customer", "inventory", "ship_mode", "time_dim", "web_sales",
+    "catalog_sales", "date_dim", "item", "store_returns", "warehouse", "web_site",
+];
+
+/// Get the SQL statements from the specified query file
+pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
+    if query > 0 && query < 100 {
+        let possibilities = vec![
+            format!("queries/q{query}.sql"),
+        ];
+        let mut errors = vec![];
+        for filename in possibilities {
+            match fs::read_to_string(&filename) {
+                Ok(contents) => {
+                    return Ok(contents
+                        .split(';')
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                        .collect());
+                }
+                Err(e) => errors.push(format!("{filename}: {e}")),
+            };
+        }
+        plan_err!("invalid query. Could not find query: {:?}", errors)
+    } else {
+        plan_err!("invalid query. Expected value between 1 and 99")
+    }
+}
+
+/// Run the tpcds benchmark.
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(verbatim_doc_comment)]
 pub struct RunOpt {
@@ -71,9 +94,9 @@ pub struct RunOpt {
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
     path: PathBuf,
 
-    /// File format: `csv` or `parquet`
-    #[structopt(short = "f", long = "format", default_value = "csv")]
-    file_format: String,
+    /// Path to query files
+    #[structopt(parse(from_os_str), required = true, short = "Q", long = "query_path")]
+    query_path: PathBuf,
 
     /// Load the data into a MemTable before executing the query
     #[structopt(short = "m", long = "mem-table")]
@@ -112,7 +135,7 @@ impl RunOpt {
         println!("Running benchmarks with the following options: {self:?}");
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
-            None => TPCH_QUERY_START_ID..=TPCH_QUERY_END_ID,
+            None => TPCDS_QUERY_START_ID..=TPCDS_QUERY_END_ID,
         };
 
         let mut benchmark_run = BenchmarkRun::new();
@@ -200,7 +223,7 @@ impl RunOpt {
     }
 
     async fn register_tables(&self, ctx: &SessionContext) -> Result<()> {
-        for table in TPCH_TABLES {
+        for table in TPCDS_TABLES {
             let table_provider = { self.get_table(ctx, table).await? };
 
             if self.mem_table {
@@ -268,54 +291,20 @@ impl RunOpt {
         table: &str,
     ) -> Result<Arc<dyn TableProvider>> {
         let path = self.path.to_str().unwrap();
-        let table_format = self.file_format.as_str();
         let target_partitions = self.partitions();
 
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
-        let (format, path, extension): (Arc<dyn FileFormat>, String, &'static str) =
-            match table_format {
-                // dbgen creates .tbl ('|' delimited) files without header
-                "tbl" => {
-                    let path = format!("{path}/{table}.tbl");
-
-                    let format = CsvFormat::default()
-                        .with_delimiter(b'|')
-                        .with_has_header(false);
-
-                    (Arc::new(format), path, ".tbl")
-                }
-                "csv" => {
-                    let path = format!("{path}/csv/{table}");
-                    let format = CsvFormat::default()
-                        .with_delimiter(b',')
-                        .with_has_header(true);
-
-                    (Arc::new(format), path, DEFAULT_CSV_EXTENSION)
-                }
-                "parquet" => {
-                    let path = format!("{path}/{table}");
-                    let format = ParquetFormat::default()
-                        .with_options(ctx.state().table_options().parquet.clone());
-
-                    (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
-                }
-                other => {
-                    unimplemented!("Invalid file format '{}'", other);
-                }
-            };
+        let path = format!("{path}/{table}");
+        let format = ParquetFormat::default().with_options(ctx.state().table_options().parquet.clone());
+        let extension = DEFAULT_PARQUET_EXTENSION;
 
         let table_path = ListingTableUrl::parse(path)?;
         let options = ListingOptions::new(format)
             .with_file_extension(extension)
             .with_target_partitions(target_partitions)
             .with_collect_stat(state.config().collect_statistics());
-        let schema = match table_format {
-            "parquet" => options.infer_schema(&state, &table_path).await?,
-            "tbl" => Arc::new(get_tbl_tpch_table_schema(table)),
-            "csv" => Arc::new(get_tpch_table_schema(table)),
-            _ => unreachable!(),
-        };
+        let schema = options.infer_schema(&state, &table_path).await?;
         let options = if self.sorted {
             let key_column_name = schema.fields()[0].name();
             options
@@ -340,175 +329,4 @@ impl RunOpt {
             .partitions
             .unwrap_or_else(get_available_parallelism)
     }
-}
-
-#[cfg(test)]
-// Only run with "ci" mode when we have the data
-#[cfg(feature = "ci")]
-mod tests {
-    use std::path::Path;
-
-    use super::*;
-
-    use datafusion::common::exec_err;
-    use datafusion::error::Result;
-    use datafusion_proto::bytes::{
-        logical_plan_from_bytes, logical_plan_to_bytes, physical_plan_from_bytes,
-        physical_plan_to_bytes,
-    };
-
-    fn get_tpch_data_path() -> Result<String> {
-        let path =
-            std::env::var("TPCH_DATA").unwrap_or_else(|_| "benchmarks/data".to_string());
-        if !Path::new(&path).exists() {
-            return exec_err!(
-                "Benchmark data not found (set TPCH_DATA env var to override): {}",
-                path
-            );
-        }
-        Ok(path)
-    }
-
-    async fn round_trip_logical_plan(query: usize) -> Result<()> {
-        let ctx = SessionContext::default();
-        let path = get_tpch_data_path()?;
-        let common = CommonOpt {
-            iterations: 1,
-            partitions: Some(2),
-            batch_size: Some(8192),
-            mem_pool_type: "fair".to_string(),
-            memory_limit: None,
-            sort_spill_reservation_bytes: None,
-            debug: false,
-        };
-        let opt = RunOpt {
-            query: Some(query),
-            common,
-            path: PathBuf::from(path.to_string()),
-            file_format: "tbl".to_string(),
-            mem_table: false,
-            output_path: None,
-            disable_statistics: false,
-            prefer_hash_join: true,
-            enable_piecewise_merge_join: false,
-            sorted: false,
-        };
-        opt.register_tables(&ctx).await?;
-        let queries = get_query_sql(query)?;
-        for query in queries {
-            let plan = ctx.sql(&query).await?;
-            let plan = plan.into_optimized_plan()?;
-            let bytes = logical_plan_to_bytes(&plan)?;
-            let plan2 = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-            let plan_formatted = format!("{}", plan.display_indent());
-            let plan2_formatted = format!("{}", plan2.display_indent());
-            assert_eq!(plan_formatted, plan2_formatted);
-        }
-        Ok(())
-    }
-
-    async fn round_trip_physical_plan(query: usize) -> Result<()> {
-        let ctx = SessionContext::default();
-        let path = get_tpch_data_path()?;
-        let common = CommonOpt {
-            iterations: 1,
-            partitions: Some(2),
-            batch_size: Some(8192),
-            mem_pool_type: "fair".to_string(),
-            memory_limit: None,
-            sort_spill_reservation_bytes: None,
-            debug: false,
-        };
-        let opt = RunOpt {
-            query: Some(query),
-            common,
-            path: PathBuf::from(path.to_string()),
-            file_format: "tbl".to_string(),
-            mem_table: false,
-            output_path: None,
-            disable_statistics: false,
-            prefer_hash_join: true,
-            enable_piecewise_merge_join: false,
-            sorted: false,
-        };
-        opt.register_tables(&ctx).await?;
-        let queries = get_query_sql(query)?;
-        for query in queries {
-            let plan = ctx.sql(&query).await?;
-            let plan = plan.create_physical_plan().await?;
-            let bytes = physical_plan_to_bytes(plan.clone())?;
-            let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-            let plan_formatted = format!("{}", displayable(plan.as_ref()).indent(false));
-            let plan2_formatted =
-                format!("{}", displayable(plan2.as_ref()).indent(false));
-            assert_eq!(plan_formatted, plan2_formatted);
-        }
-        Ok(())
-    }
-
-    macro_rules! test_round_trip_logical {
-        ($tn:ident, $query:expr) => {
-            #[tokio::test]
-            async fn $tn() -> Result<()> {
-                round_trip_logical_plan($query).await
-            }
-        };
-    }
-
-    macro_rules! test_round_trip_physical {
-        ($tn:ident, $query:expr) => {
-            #[tokio::test]
-            async fn $tn() -> Result<()> {
-                round_trip_physical_plan($query).await
-            }
-        };
-    }
-
-    // logical plan tests
-    test_round_trip_logical!(round_trip_logical_plan_q1, 1);
-    test_round_trip_logical!(round_trip_logical_plan_q2, 2);
-    test_round_trip_logical!(round_trip_logical_plan_q3, 3);
-    test_round_trip_logical!(round_trip_logical_plan_q4, 4);
-    test_round_trip_logical!(round_trip_logical_plan_q5, 5);
-    test_round_trip_logical!(round_trip_logical_plan_q6, 6);
-    test_round_trip_logical!(round_trip_logical_plan_q7, 7);
-    test_round_trip_logical!(round_trip_logical_plan_q8, 8);
-    test_round_trip_logical!(round_trip_logical_plan_q9, 9);
-    test_round_trip_logical!(round_trip_logical_plan_q10, 10);
-    test_round_trip_logical!(round_trip_logical_plan_q11, 11);
-    test_round_trip_logical!(round_trip_logical_plan_q12, 12);
-    test_round_trip_logical!(round_trip_logical_plan_q13, 13);
-    test_round_trip_logical!(round_trip_logical_plan_q14, 14);
-    test_round_trip_logical!(round_trip_logical_plan_q15, 15);
-    test_round_trip_logical!(round_trip_logical_plan_q16, 16);
-    test_round_trip_logical!(round_trip_logical_plan_q17, 17);
-    test_round_trip_logical!(round_trip_logical_plan_q18, 18);
-    test_round_trip_logical!(round_trip_logical_plan_q19, 19);
-    test_round_trip_logical!(round_trip_logical_plan_q20, 20);
-    test_round_trip_logical!(round_trip_logical_plan_q21, 21);
-    test_round_trip_logical!(round_trip_logical_plan_q22, 22);
-
-    // physical plan tests
-    test_round_trip_physical!(round_trip_physical_plan_q1, 1);
-    test_round_trip_physical!(round_trip_physical_plan_q2, 2);
-    test_round_trip_physical!(round_trip_physical_plan_q3, 3);
-    test_round_trip_physical!(round_trip_physical_plan_q4, 4);
-    test_round_trip_physical!(round_trip_physical_plan_q5, 5);
-    test_round_trip_physical!(round_trip_physical_plan_q6, 6);
-    test_round_trip_physical!(round_trip_physical_plan_q7, 7);
-    test_round_trip_physical!(round_trip_physical_plan_q8, 8);
-    test_round_trip_physical!(round_trip_physical_plan_q9, 9);
-    test_round_trip_physical!(round_trip_physical_plan_q10, 10);
-    test_round_trip_physical!(round_trip_physical_plan_q11, 11);
-    test_round_trip_physical!(round_trip_physical_plan_q12, 12);
-    test_round_trip_physical!(round_trip_physical_plan_q13, 13);
-    test_round_trip_physical!(round_trip_physical_plan_q14, 14);
-    test_round_trip_physical!(round_trip_physical_plan_q15, 15);
-    test_round_trip_physical!(round_trip_physical_plan_q16, 16);
-    test_round_trip_physical!(round_trip_physical_plan_q17, 17);
-    test_round_trip_physical!(round_trip_physical_plan_q18, 18);
-    test_round_trip_physical!(round_trip_physical_plan_q19, 19);
-    test_round_trip_physical!(round_trip_physical_plan_q20, 20);
-    test_round_trip_physical!(round_trip_physical_plan_q21, 21);
-    test_round_trip_physical!(round_trip_physical_plan_q22, 22);
 }

@@ -611,13 +611,7 @@ data_tpch() {
     exit 1
 }
 
-# Creates TPCDS data at a certain scale factor
-#
-# call like: data_tpcds($scale_factor)
-#
-# Creates data in $DATA_DIR/tpcds_sf1 for scale factor 1
-# Creates data in $DATA_DIR/tpcds_sf10 for scale factor 10
-# etc
+# Points to TPCDS data generation instructions
 data_tpcds() {
     echo ""
     echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
@@ -676,7 +670,7 @@ run_tpcds() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpcds benchmark..."
 
-    debug_run $CARGO_COMMAND --bin tpcds -- benchmark datafusion --iterations 5 --path "${TPCDS_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin tpcds -- benchmark datafusion --iterations 5 --path "${TPCDS_DIR}" --query_path "${SCRIPT_DIR}/queries/tpcds" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the compile profile benchmark helper
