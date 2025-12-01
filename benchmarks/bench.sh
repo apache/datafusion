@@ -555,13 +555,20 @@ data_tpch() {
     # Ensure the target data directory exists
     mkdir -p "${TPCH_DIR}"
 
+    # check if tpchgen_cli is installed
+    if ! command -v tpchgen-cli &> /dev/null
+    then
+        echo "tpchgen_cli could not be found, please install it via 'cargo install tpchgen-cli'"
+        exit 1
+    fi
+
     # Create 'tbl' (CSV format) data into $DATA_DIR if it does not already exist
     FILE="${TPCH_DIR}/supplier.tbl"
     if test -f "${FILE}"; then
         echo " tbl files exist ($FILE exists)."
     else
-        echo " creating tbl files with tpch_dbgen..."
-        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/scalytics/tpch-docker:main -vf -s "${SCALE_FACTOR}"
+        echo " creating tbl files with tpchgen-cli..."
+        tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format tbl --output-dir "${TPCH_DIR}"
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
@@ -574,26 +581,22 @@ data_tpch() {
         docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
-    # Create 'parquet' files from tbl
+    # Create 'parquet' files, one directory per file
     FILE="${TPCH_DIR}/supplier"
     if test -d "${FILE}"; then
         echo " parquet files exist ($FILE exists)."
     else
-        echo " creating parquet files using benchmark binary ..."
-        pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
-        popd > /dev/null
+        echo " creating parquet files using tpchgen-cli ..."
+        tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format parquet --parquet-compression='ZSTD(1)' --parts=1 --output-dir "${TPCH_DIR}"
     fi
 
-    # Create 'csv' files from tbl
+    # Create 'csv' files
     FILE="${TPCH_DIR}/csv/supplier"
     if test -d "${FILE}"; then
         echo " csv files exist ($FILE exists)."
     else
-        echo " creating csv files using benchmark binary ..."
-        pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}/csv" --format csv
-        popd > /dev/null
+        echo " creating csv files using tpchgen-cli binary ..."
+        tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format csv --output-dir "${TPCH_DIR}/csv"
     fi
 }
 
