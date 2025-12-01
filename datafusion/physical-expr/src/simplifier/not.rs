@@ -376,4 +376,48 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_not_of_not_and_not() -> Result<()> {
+        let schema = test_schema();
+
+        // NOT(NOT(a) AND NOT(b)) -> a OR b
+        // This tests the combination of De Morgan's law and double negation elimination
+        let not_a = Arc::new(NotExpr::new(col("a", &schema)?));
+        let not_b = Arc::new(NotExpr::new(col("b", &schema)?));
+        let and_expr = Arc::new(BinaryExpr::new(not_a, Operator::And, not_b));
+        let not_and: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(and_expr));
+
+        let result = simplify_not_expr_recursive(&not_and, &schema)?;
+        assert!(result.transformed, "Expression should be transformed");
+
+        // Verify the result is an OR expression
+        if let Some(or_binary) = result.data.as_any().downcast_ref::<BinaryExpr>() {
+            assert_eq!(or_binary.op(), &Operator::Or, "Top level should be OR");
+
+            // Verify left side is just 'a'
+            assert!(
+                or_binary
+                    .left()
+                    .as_any()
+                    .downcast_ref::<NotExpr>()
+                    .is_none(),
+                "Left should be simplified to just 'a'"
+            );
+
+            // Verify right side is just 'b'
+            assert!(
+                or_binary
+                    .right()
+                    .as_any()
+                    .downcast_ref::<NotExpr>()
+                    .is_none(),
+                "Right should be simplified to just 'b'"
+            );
+        } else {
+            panic!("Expected binary OR expression result");
+        }
+
+        Ok(())
+    }
 }
