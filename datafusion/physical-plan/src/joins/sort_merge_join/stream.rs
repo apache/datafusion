@@ -156,6 +156,14 @@ impl StreamedBatch {
         }
     }
 
+    /// Number of unfrozen output pairs in this streamed batch
+    fn num_output_rows(&self) -> usize {
+        self.output_indices
+            .iter()
+            .map(|chunk| chunk.streamed_indices.len())
+            .sum()
+    }
+
     /// Appends new pair consisting of current streamed index and `buffered_idx`
     /// index of buffered batch with `buffered_batch_idx` index.
     fn append_output_pair(
@@ -325,10 +333,6 @@ pub(super) struct SortMergeJoinStream {
     /// Output buffer. Currently used by filtering as it requires double buffering
     /// to avoid small/empty batches. Non-filtered join outputs directly from `staging_output_record_batches.batches`
     pub output: BatchCoalescer,
-    /// Staging output size, including output batches and staging joined results.
-    /// Increased when we put rows into buffer and decreased after we actually output batches.
-    /// Used to trigger output when sufficient rows are ready
-    pub output_size: usize,
     /// The comparison result of current streamed row and buffered batches
     pub current_ordering: Ordering,
     /// Manages the process of spilling and reading back intermediate data
@@ -390,7 +394,7 @@ pub(super) struct JoinedRecordBatches {
     pub(super) filter_mask: BooleanBuilder,
     /// Which input row (within batch) produced each output row? (for grouping by input row)
     pub(super) row_indices: UInt64Builder,
-    /// Which input batch did each output row come from? (disambiguates row_indices)
+    /// Which input batch did each output row come from? (disambiguate row_indices)
     pub(super) batch_ids: Vec<usize>,
 }
 
@@ -573,27 +577,6 @@ impl JoinedRecordBatches {
 
         // After clear, everything should be empty
         self.debug_assert_empty_consistency();
-    }
-
-    /// Drains all data from the BatchCoalescer into a single RecordBatch
-    ///
-    /// This finalizes any buffered data and concatenates all completed batches.
-    fn drain_to_batch(&mut self) -> Result<RecordBatch> {
-        // Finalize any partial buffered data
-        self.joined_batches.finish_buffered_batch()?;
-
-        // Collect all completed batches
-        let mut batches = Vec::new();
-        while let Some(batch) = self.joined_batches.next_completed_batch() {
-            batches.push(batch);
-        }
-
-        // Return appropriate result based on what we collected
-        match batches.len() {
-            0 => Ok(RecordBatch::new_empty(self.joined_batches.schema())),
-            1 => Ok(batches.into_iter().next().unwrap()),
-            _ => Ok(concat_batches(&self.joined_batches.schema(), &batches)?),
-        }
     }
 }
 impl RecordBatchStream for SortMergeJoinStream {
@@ -910,7 +893,7 @@ impl Stream for SortMergeJoinStream {
                 SortMergeJoinState::JoinOutput => {
                     self.join_partial()?;
 
-                    if self.output_size < self.batch_size {
+                    if self.num_unfrozen_pairs() < self.batch_size {
                         if self.buffered_data.scanning_finished() {
                             self.buffered_data.scanning_reset();
                             self.state = SortMergeJoinState::Init;
@@ -1052,7 +1035,6 @@ impl SortMergeJoinStream {
                 batch_ids: vec![],
             },
             output: BatchCoalescer::new(schema, batch_size),
-            output_size: 0,
             batch_size,
             join_type,
             join_metrics,
@@ -1061,6 +1043,11 @@ impl SortMergeJoinStream {
             spill_manager,
             streamed_batch_counter: AtomicUsize::new(0),
         })
+    }
+
+    /// Number of unfrozen output pairs (used to decide when to freeze + output)
+    fn num_unfrozen_pairs(&self) -> usize {
+        self.streamed_batch.num_output_rows()
     }
 
     /// Poll next streamed row
@@ -1362,7 +1349,7 @@ impl SortMergeJoinStream {
         if join_buffered {
             // joining streamed/nulls and buffered
             while !self.buffered_data.scanning_finished()
-                && self.output_size < self.batch_size
+                && self.num_unfrozen_pairs() < self.batch_size
             {
                 let scanning_idx = self.buffered_data.scanning_idx();
                 if join_streamed {
@@ -1378,7 +1365,6 @@ impl SortMergeJoinStream {
                         .null_joined
                         .push(scanning_idx);
                 }
-                self.output_size += 1;
                 self.buffered_data.scanning_advance();
 
                 if self.buffered_data.scanning_finished() {
@@ -1398,7 +1384,6 @@ impl SortMergeJoinStream {
 
             self.streamed_batch
                 .append_output_pair(scanning_batch_idx, scanning_idx);
-            self.output_size += 1;
             self.buffered_data.scanning_finish();
             self.streamed_joined = true;
         }
@@ -1703,16 +1688,6 @@ impl SortMergeJoinStream {
             .staging_output_record_batches
             .concat_batches(&self.schema)?;
         (&record_batch).record_output(&self.join_metrics.baseline_metrics());
-        // If join filter exists, `self.output_size` is not accurate as we don't know the exact
-        // number of rows in the output record batch. If streamed row joined with buffered rows,
-        // once join filter is applied, the number of output rows may be more than 1.
-        // If `record_batch` is empty, we should reset `self.output_size` to 0. It could be happened
-        // when the join filter is applied and all rows are filtered out.
-        if record_batch.num_rows() == 0 || record_batch.num_rows() > self.output_size {
-            self.output_size = 0;
-        } else {
-            self.output_size -= record_batch.num_rows();
-        }
 
         if !(self.filter.is_some()
             && matches!(
