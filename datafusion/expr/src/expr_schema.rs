@@ -28,6 +28,7 @@ use crate::udf::ReturnFieldArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
@@ -485,7 +486,7 @@ impl ExprSchemable for Expr {
         schema: &dyn ExprSchema,
     ) -> Result<(Option<TableReference>, Arc<Field>)> {
         let (relation, schema_name) = self.qualified_name();
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let field = match self {
             Expr::Alias(Alias {
                 expr,
@@ -493,30 +494,28 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let field = expr.to_field(schema).map(|(_, f)| f.as_ref().clone())?;
-
                 let mut combined_metadata = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(Arc::new(combined_metadata.add_to_field(field)))
+                Ok(expr
+                    .to_field(schema)
+                    .map(|(_, f)| f)?
+                    .with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
-            Expr::Column(c) => schema.field_from_column(c).map(|f| Arc::new(f.clone())),
+            Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
             Expr::OuterReferenceColumn(field, _) => {
-                Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
+                Ok(Arc::clone(field).renamed(&schema_name))
             }
             Expr::ScalarVariable(ty, _) => {
                 Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
             }
-            Expr::Literal(l, metadata) => {
-                let mut field = Field::new(&schema_name, l.data_type(), l.is_null());
-                if let Some(metadata) = metadata {
-                    field = metadata.add_to_field(field);
-                }
-                Ok(Arc::new(field))
-            }
+            Expr::Literal(l, metadata) => Ok(Arc::new(
+                Field::new(&schema_name, l.data_type(), l.is_null())
+                    .with_field_metadata_opt(metadata.as_ref()),
+            )),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -623,8 +622,7 @@ impl ExprSchemable for Expr {
                 let new_fields = fields
                     .into_iter()
                     .zip(new_data_types)
-                    .map(|(f, d)| f.as_ref().clone().with_data_type(d))
-                    .map(Arc::new)
+                    .map(|(f, d)| f.retyped(d))
                     .collect::<Vec<FieldRef>>();
 
                 let arguments = args
@@ -644,12 +642,11 @@ impl ExprSchemable for Expr {
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
             Expr::Cast(Cast { expr, data_type }) => expr
                 .to_field(schema)
-                .map(|(_, f)| f.as_ref().clone().with_data_type(data_type.clone()))
-                .map(Arc::new),
+                .map(|(_, f)| f.retyped(data_type.clone())),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
-            }) => Ok(field.as_ref().clone().with_name(&schema_name).into()),
+            }) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -670,7 +667,8 @@ impl ExprSchemable for Expr {
 
         Ok((
             relation,
-            Arc::new(field.as_ref().clone().with_name(schema_name)),
+            // todo avoid this rename / use the name above
+            field.renamed(&schema_name),
         ))
     }
 
@@ -1172,25 +1170,25 @@ mod tests {
 
     #[derive(Debug)]
     struct MockExprSchema {
-        field: Field,
+        field: FieldRef,
         error_on_nullable: bool,
     }
 
     impl MockExprSchema {
         fn new() -> Self {
             Self {
-                field: Field::new("mock_field", DataType::Null, false),
+                field: Arc::new(Field::new("mock_field", DataType::Null, false)),
                 error_on_nullable: false,
             }
         }
 
         fn with_nullable(mut self, nullable: bool) -> Self {
-            self.field = self.field.with_nullable(nullable);
+            Arc::make_mut(&mut self.field).set_nullable(nullable);
             self
         }
 
         fn with_data_type(mut self, data_type: DataType) -> Self {
-            self.field = self.field.with_data_type(data_type);
+            Arc::make_mut(&mut self.field).set_data_type(data_type);
             self
         }
 
@@ -1200,7 +1198,8 @@ mod tests {
         }
 
         fn with_metadata(mut self, metadata: FieldMetadata) -> Self {
-            self.field = metadata.add_to_field(self.field);
+            self.field =
+                Arc::new(metadata.add_to_field(Arc::unwrap_or_clone(self.field)));
             self
         }
     }
@@ -1211,7 +1210,7 @@ mod tests {
             Ok(self.field.is_nullable())
         }
 
-        fn field_from_column(&self, _col: &Column) -> Result<&Field> {
+        fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
             Ok(&self.field)
         }
     }
