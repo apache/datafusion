@@ -68,6 +68,7 @@ jobs:
           persist-credentials: false
       # Version fixed on purpose. It uses heuristics to detect typos, so upgrading 
       # it may cause checks to fail more often.
+      # We can upgrade it manually once a while.
       - name: Install typos-cli
         run: cargo install typos-cli --locked --version 1.37.0
       - name: Run typos check
