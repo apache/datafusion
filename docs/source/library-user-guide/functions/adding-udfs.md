@@ -31,14 +31,14 @@ This page covers how to add UDFs to DataFusion. In particular, it covers how to 
 | Table          | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                | [simple_udtf.rs]                      |
 | Scalar (async) | A scalar function for performing `async` operations (such as network or I/O calls) within the UDF.         | [async_udf.rs]                        |
 
-[simple_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
-[simple_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-[advanced_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
-[simple_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-[advanced_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-[simple_udtf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
-[async_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs
+[simple_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udf.rs
+[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
+[simple_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udwf.rs
+[advanced_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
+[simple_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udaf.rs
+[advanced_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
+[simple_udtf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udtf.rs
+[async_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/async_udf.rs
 
 First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different
 types of UDFs.
@@ -354,7 +354,7 @@ async fn main() {
 }
 ```
 
-## Adding a Async Scalar UDF
+## Adding an Async Scalar UDF
 
 An Async Scalar UDF allows you to implement user-defined functions that support
 asynchronous execution, such as performing network or I/O operations within the
@@ -579,12 +579,105 @@ After registration, you can use these async UDFs directly in SQL queries, for ex
 SELECT async_upper('datafusion');
 ```
 
-For async UDF implementation details, see [`async_udf.rs`](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs).
+For async UDF implementation details, see [`async_udf.rs`](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/async_udf.rs).
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
 [`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
-[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
+
+## Named Arguments
+
+DataFusion supports named arguments for Scalar, Window, and Aggregate UDFs, allowing you to pass arguments by parameter name:
+
+```sql
+-- Scalar function
+SELECT substr(str => 'hello', start_pos => 2, length => 3);
+
+-- Window function
+SELECT lead(expr => value, offset => 1) OVER (ORDER BY id) FROM table;
+
+-- Aggregate function
+SELECT corr(y => col1, x => col2) FROM table;
+```
+
+Named arguments can be mixed with positional arguments, but positional arguments must come first:
+
+```sql
+SELECT substr('hello', start_pos => 2, length => 3);  -- Valid
+```
+
+### Implementing Functions with Named Arguments
+
+To support named arguments in your UDF, add parameter names to your function's signature using `.with_parameter_names()`. This works the same way for Scalar, Window, and Aggregate UDFs:
+
+```rust
+# use std::sync::Arc;
+# use std::any::Any;
+# use arrow::datatypes::DataType;
+# use datafusion_common::Result;
+# use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, Signature, Volatility};
+# use datafusion_expr::ScalarUDFImpl;
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct PowerFunction {
+    signature: Signature,
+}
+
+impl PowerFunction {
+    fn new() -> Self {
+        Self {
+            signature: Signature::uniform(
+                2,
+                vec![DataType::Float64],
+                Volatility::Immutable
+            )
+            .with_parameter_names(vec![
+                "base".to_string(),
+                "exponent".to_string()
+            ])
+            .expect("valid parameter names"),
+        }
+    }
+}
+
+impl ScalarUDFImpl for PowerFunction {
+    fn as_any(&self) -> &dyn Any { self }
+    fn name(&self) -> &str { "power" }
+    fn signature(&self) -> &Signature { &self.signature }
+
+    fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Your implementation - arguments are in correct positional order
+        unimplemented!()
+    }
+}
+```
+
+The parameter names should match the order of arguments in your function's signature. DataFusion automatically resolves named arguments to the correct positional order before invoking your function.
+
+Once registered, users can call your functions with named arguments in any order:
+
+```sql
+-- All equivalent
+SELECT power(base => 2.0, exponent => 3.0);
+SELECT power(exponent => 3.0, base => 2.0);
+SELECT power(2.0, exponent => 3.0);
+```
+
+### Error Messages
+
+When a function call fails due to incorrect arguments, DataFusion will show the parameter names in error messages to help users:
+
+```text
+No function matches the given name and argument types substr(Utf8).
+    Candidate functions:
+    substr(str: Any, start_pos: Any)
+    substr(str: Any, start_pos: Any, length: Any)
+```
 
 ## Adding a Window UDF
 
@@ -727,7 +820,7 @@ let smooth_it = create_udwf(
 
 [`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
 [`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
-[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
 
@@ -1255,9 +1348,9 @@ async fn main() -> Result<()> {
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
-[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 
-## Adding a User-Defined Table Function
+## Adding a Table UDF
 
 A User-Defined Table Function (UDTF) is a function that takes parameters and returns a `TableProvider`.
 
@@ -1266,8 +1359,8 @@ This is a simple struct that holds a set of RecordBatches in memory and treats t
 be replaced with your own struct that implements `TableProvider`.
 
 While this is a simple example for illustrative purposes, UDTFs have a lot of potential use cases. And can be
-particularly useful for reading data from external sources and interactive analysis. For example, see the [example][4]
-for a working example that reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata`
+particularly useful for reading data from external sources and interactive analysis. See the [working example][simple_udtf.rs]
+which reads from a CSV file. As another example, you could use the built-in UDTF `parquet_metadata`
 in the CLI to read the metadata from a Parquet file.
 
 ```console

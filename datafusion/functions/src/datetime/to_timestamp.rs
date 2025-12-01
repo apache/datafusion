@@ -38,7 +38,7 @@ use datafusion_macros::user_doc;
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`). Supports strings, integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats] are provided. Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
 
-Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
+Note: `to_timestamp` returns `Timestamp(ns)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
 "#,
     syntax_example = "to_timestamp(expression[, ..., format_n])",
     sql_example = r#"```sql
@@ -55,7 +55,7 @@ Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for in
 | 2023-05-17T03:59:00.123456789                                                                          |
 +--------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -89,7 +89,7 @@ pub struct ToTimestampFunc {
 | 2023-05-17T03:59:00                                                                                            |
 +----------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -123,7 +123,7 @@ pub struct ToTimestampSecondsFunc {
 | 2023-05-17T03:59:00.123                                                                                       |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -157,7 +157,7 @@ pub struct ToTimestampMillisFunc {
 | 2023-05-17T03:59:00.123456                                                                                    |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",
@@ -191,7 +191,7 @@ pub struct ToTimestampMicrosFunc {
 | 2023-05-17T03:59:00.123456789                                                                                |
 +---------------------------------------------------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "expression",

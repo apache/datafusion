@@ -36,7 +36,6 @@ impl<'a> WindowUDFFieldArgs<'a> {
     ///   arguments to the user-defined window function.
     /// * `function_name` - The qualified schema name of the
     ///   user-defined window function expression.
-    ///
     pub fn new(input_fields: &'a [FieldRef], display_name: &'a str) -> Self {
         WindowUDFFieldArgs {
             input_fields,

@@ -35,6 +35,8 @@
     )
 )]
 #![warn(missing_docs, clippy::needless_borrow)]
+#![deny(clippy::needless_pass_by_value)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! [DataFusion] is an extensible query engine written in Rust that
 //! uses [Apache Arrow] as its in-memory format. DataFusion's target users are
@@ -86,26 +88,29 @@
 //! let ctx = SessionContext::new();
 //!
 //! // create the dataframe
-//! let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+//! let df = ctx
+//!     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+//!     .await?;
 //!
 //! // create a plan
-//! let df = df.filter(col("a").lt_eq(col("b")))?
-//!            .aggregate(vec![col("a")], vec![min(col("b"))])?
-//!            .limit(0, Some(100))?;
+//! let df = df
+//!     .filter(col("a").lt_eq(col("b")))?
+//!     .aggregate(vec![col("a")], vec![min(col("b"))])?
+//!     .limit(0, Some(100))?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!    .to_string();
+//! let pretty_results =
+//!     arrow::util::pretty::pretty_format_batches(&results)?.to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
 //!     "| a | min(?table?.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+----------------+",
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -126,24 +131,27 @@
 //! # async fn main() -> Result<()> {
 //! let ctx = SessionContext::new();
 //!
-//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new())
+//!     .await?;
 //!
 //! // create a plan
-//! let df = ctx.sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
+//! let df = ctx
+//!     .sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100")
+//!     .await?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!   .to_string();
+//! let pretty_results =
+//!     arrow::util::pretty::pretty_format_batches(&results)?.to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
 //!     "| a | min(example.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+----------------+",
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -352,7 +360,7 @@
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
 //! [`tree_node module`]: datafusion_expr::logical_plan::tree_node
 //! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
-//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
 //!
 //! ### Physical Plans
 //!
@@ -443,7 +451,30 @@
 //! other operators read a single [`RecordBatch`] from their input to produce a
 //! single [`RecordBatch`] as output.
 //!
-//! For example, given this SQL query:
+//! For example, given this SQL:
+//!
+//! ```sql
+//! SELECT name FROM 'data.parquet' WHERE id > 10
+//! ```
+//!
+//! An simplified DataFusion execution plan is shown below. It first reads
+//! data from the Parquet file, then applies the filter, then the projection,
+//! and finally produces output. Each step processes one [`RecordBatch`] at a
+//! time. Multiple batches are processed concurrently on different CPU cores
+//! for plans with multiple partitions.
+//!
+//! ```text
+//! ┌─────────────┐    ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐    ┌──────────┐
+//! │ Parquet     │───▶│ DataSource   │───▶│ FilterExec     │───▶│ ProjectionExec   │───▶│ Results  │
+//! │ File        │    │              │    │                │    │                  │    │          │
+//! └─────────────┘    └──────────────┘    └────────────────┘    └──────────────────┘    └──────────┘
+//!                    (reads data)        (id > 10)             (keeps "name" col)
+//!                    RecordBatch ───▶    RecordBatch ────▶     RecordBatch ────▶        RecordBatch
+//! ```
+//!
+//! DataFusion uses the classic "pull" based control flow (explained more in the
+//! next section) to implement streaming execution. As an example,
+//! consider the following SQL query:
 //!
 //! ```sql
 //! SELECT date_trunc('month', time) FROM data WHERE id IN (10,20,30);
@@ -607,7 +638,7 @@
 //! └─────────────┘           ┗━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
 //!                          ─────────────────────────────────────────────────────────────▶
 //!                                                                                           time
-//!```
+//! ```
 //!
 //! Note that DataFusion does not use [`tokio::task::spawn_blocking`] for
 //! CPU-bounded work, because `spawn_blocking` is designed for blocking **IO**,
@@ -618,7 +649,7 @@
 //!
 //! [Tokio]:  https://tokio.rs
 //! [`Runtime`]: tokio::runtime::Runtime
-//! [thread_pools example]: https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/thread_pools.rs
+//! [thread_pools example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/thread_pools.rs
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec
@@ -897,6 +928,12 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 // For example, if `user_guide_expressions(line 123)` fails,
 // go to `docs/source/user-guide/expressions.md` to find the relevant problem.
 //
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/arrow-introduction.md",
+    user_guide_arrow_introduction
+);
+
 #[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/user-guide/concepts-readings-events.md",

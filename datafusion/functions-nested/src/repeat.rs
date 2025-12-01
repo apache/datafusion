@@ -148,8 +148,7 @@ impl ScalarUDFImpl for ArrayRepeat {
     }
 }
 
-/// Array_repeat SQL function
-pub fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[0];
     let count_array = &args[1];
 

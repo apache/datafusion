@@ -269,6 +269,8 @@ pub struct ParquetReadOptions<'a> {
     pub file_sort_order: Vec<Vec<SortExpr>>,
     /// Properties for decryption of Parquet files that use modular encryption
     pub file_decryption_properties: Option<ConfigFileDecryptionProperties>,
+    /// Metadata size hint for Parquet files reading (in bytes)
+    pub metadata_size_hint: Option<usize>,
 }
 
 impl Default for ParquetReadOptions<'_> {
@@ -281,6 +283,7 @@ impl Default for ParquetReadOptions<'_> {
             schema: None,
             file_sort_order: vec![],
             file_decryption_properties: None,
+            metadata_size_hint: None,
         }
     }
 }
@@ -338,6 +341,12 @@ impl<'a> ParquetReadOptions<'a> {
         file_decryption_properties: ConfigFileDecryptionProperties,
     ) -> Self {
         self.file_decryption_properties = Some(file_decryption_properties);
+        self
+    }
+
+    /// Configure metadata size hint for Parquet files reading (in bytes)
+    pub fn metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
+        self.metadata_size_hint = size_hint;
         self
     }
 }
@@ -514,6 +523,12 @@ impl<'a> NdJsonReadOptions<'a> {
         self.file_sort_order = file_sort_order;
         self
     }
+
+    /// Specify how many rows to read for schema inference
+    pub fn schema_infer_max_records(mut self, schema_infer_max_records: usize) -> Self {
+        self.schema_infer_max_records = schema_infer_max_records;
+        self
+    }
 }
 
 #[async_trait]
@@ -606,6 +621,11 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
         if let Some(file_decryption_properties) = &self.file_decryption_properties {
             options.crypto.file_decryption = Some(file_decryption_properties.clone());
         }
+        // This can be overridden per-read in ParquetReadOptions, if setting.
+        if let Some(metadata_size_hint) = self.metadata_size_hint {
+            options.global.metadata_size_hint = Some(metadata_size_hint);
+        }
+
         let mut file_format = ParquetFormat::new().with_options(options);
 
         if let Some(parquet_pruning) = self.parquet_pruning {

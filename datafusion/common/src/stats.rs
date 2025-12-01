@@ -120,10 +120,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn add(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a + b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_add(*b).map_or_else(
+                || Precision::Inexact(a.saturating_add(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a + b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_add(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -133,10 +138,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn sub(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a - b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_sub(*b).map_or_else(
+                || Precision::Inexact(a.saturating_sub(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a - b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_sub(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -146,10 +156,15 @@ impl Precision<usize> {
     /// values is [`Precision::Absent`], the result is `Absent` too.
     pub fn multiply(&self, other: &Precision<usize>) -> Precision<usize> {
         match (self, other) {
-            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a * b),
+            (Precision::Exact(a), Precision::Exact(b)) => a.checked_mul(*b).map_or_else(
+                || Precision::Inexact(a.saturating_mul(*b)),
+                Precision::Exact,
+            ),
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => Precision::Inexact(a * b),
+            | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                Precision::Inexact(a.saturating_mul(*b))
+            }
             (_, _) => Precision::Absent,
         }
     }
@@ -352,7 +367,7 @@ impl Statistics {
             return self;
         };
 
-        #[allow(clippy::large_enum_variant)]
+        #[expect(clippy::large_enum_variant)]
         enum Slot {
             /// The column is taken and put into the specified statistics location
             Taken(usize),
@@ -505,33 +520,35 @@ impl Statistics {
     /// # use arrow::datatypes::{Field, Schema, DataType};
     /// # use datafusion_common::stats::Precision;
     /// let stats1 = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(1))
-    ///   .with_total_byte_size(Precision::Exact(2))
-    ///   .add_column_statistics(ColumnStatistics::new_unknown()
-    ///      .with_null_count(Precision::Exact(3))
-    ///      .with_min_value(Precision::Exact(ScalarValue::from(4)))
-    ///      .with_max_value(Precision::Exact(ScalarValue::from(5)))
-    ///   );
+    ///     .with_num_rows(Precision::Exact(1))
+    ///     .with_total_byte_size(Precision::Exact(2))
+    ///     .add_column_statistics(
+    ///         ColumnStatistics::new_unknown()
+    ///             .with_null_count(Precision::Exact(3))
+    ///             .with_min_value(Precision::Exact(ScalarValue::from(4)))
+    ///             .with_max_value(Precision::Exact(ScalarValue::from(5))),
+    ///     );
     ///
     /// let stats2 = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(10))
-    ///   .with_total_byte_size(Precision::Inexact(20))
-    ///   .add_column_statistics(ColumnStatistics::new_unknown()
-    ///       // absent null count
-    ///      .with_min_value(Precision::Exact(ScalarValue::from(40)))
-    ///      .with_max_value(Precision::Exact(ScalarValue::from(50)))
-    ///   );
+    ///     .with_num_rows(Precision::Exact(10))
+    ///     .with_total_byte_size(Precision::Inexact(20))
+    ///     .add_column_statistics(
+    ///         ColumnStatistics::new_unknown()
+    ///             // absent null count
+    ///             .with_min_value(Precision::Exact(ScalarValue::from(40)))
+    ///             .with_max_value(Precision::Exact(ScalarValue::from(50))),
+    ///     );
     ///
     /// let merged_stats = stats1.try_merge(&stats2).unwrap();
     /// let expected_stats = Statistics::default()
-    ///   .with_num_rows(Precision::Exact(11))
-    ///   .with_total_byte_size(Precision::Inexact(22)) // inexact in stats2 --> inexact
-    ///   .add_column_statistics(
-    ///     ColumnStatistics::new_unknown()
-    ///       .with_null_count(Precision::Absent) // missing from stats2 --> absent
-    ///       .with_min_value(Precision::Exact(ScalarValue::from(4)))
-    ///       .with_max_value(Precision::Exact(ScalarValue::from(50)))
-    ///   );
+    ///     .with_num_rows(Precision::Exact(11))
+    ///     .with_total_byte_size(Precision::Inexact(22)) // inexact in stats2 --> inexact
+    ///     .add_column_statistics(
+    ///         ColumnStatistics::new_unknown()
+    ///             .with_null_count(Precision::Absent) // missing from stats2 --> absent
+    ///             .with_min_value(Precision::Exact(ScalarValue::from(4)))
+    ///             .with_max_value(Precision::Exact(ScalarValue::from(50))),
+    ///     );
     ///
     /// assert_eq!(merged_stats, expected_stats)
     /// ```
@@ -807,11 +824,21 @@ mod tests {
         let precision2 = Precision::Inexact(23);
         let precision3 = Precision::Exact(30);
         let absent_precision = Precision::Absent;
+        let precision_max_exact = Precision::Exact(usize::MAX);
+        let precision_max_inexact = Precision::Exact(usize::MAX);
 
         assert_eq!(precision1.add(&precision2), Precision::Inexact(65));
         assert_eq!(precision1.add(&precision3), Precision::Exact(72));
         assert_eq!(precision2.add(&precision3), Precision::Inexact(53));
         assert_eq!(precision1.add(&absent_precision), Precision::Absent);
+        assert_eq!(
+            precision_max_exact.add(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
+        assert_eq!(
+            precision_max_inexact.add(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
     }
 
     #[test]
@@ -843,6 +870,8 @@ mod tests {
 
         assert_eq!(precision1.sub(&precision2), Precision::Inexact(19));
         assert_eq!(precision1.sub(&precision3), Precision::Exact(12));
+        assert_eq!(precision2.sub(&precision1), Precision::Inexact(0));
+        assert_eq!(precision3.sub(&precision1), Precision::Inexact(0));
         assert_eq!(precision1.sub(&absent_precision), Precision::Absent);
     }
 
@@ -871,12 +900,22 @@ mod tests {
         let precision1 = Precision::Exact(6);
         let precision2 = Precision::Inexact(3);
         let precision3 = Precision::Exact(5);
+        let precision_max_exact = Precision::Exact(usize::MAX);
+        let precision_max_inexact = Precision::Exact(usize::MAX);
         let absent_precision = Precision::Absent;
 
         assert_eq!(precision1.multiply(&precision2), Precision::Inexact(18));
         assert_eq!(precision1.multiply(&precision3), Precision::Exact(30));
         assert_eq!(precision2.multiply(&precision3), Precision::Inexact(15));
         assert_eq!(precision1.multiply(&absent_precision), Precision::Absent);
+        assert_eq!(
+            precision_max_exact.multiply(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
+        assert_eq!(
+            precision_max_inexact.multiply(&precision1),
+            Precision::Inexact(usize::MAX)
+        );
     }
 
     #[test]
@@ -922,9 +961,11 @@ mod tests {
             Precision::Exact(ScalarValue::Int64(None)),
         );
         // Overflow returns error
-        assert!(Precision::Exact(ScalarValue::Int32(Some(256)))
-            .cast_to(&DataType::Int8)
-            .is_err());
+        assert!(
+            Precision::Exact(ScalarValue::Int32(Some(256)))
+                .cast_to(&DataType::Int8)
+                .is_err()
+        );
     }
 
     #[test]
@@ -937,8 +978,6 @@ mod tests {
         // Precision<ScalarValue> is not copy (requires .clone())
         let precision: Precision<ScalarValue> =
             Precision::Exact(ScalarValue::Int64(Some(42)));
-        // Clippy would complain about this if it were Copy
-        #[allow(clippy::redundant_clone)]
         let p2 = precision.clone();
         assert_eq!(precision, p2);
     }
@@ -1176,7 +1215,10 @@ mod tests {
         let items = vec![stats1, stats2];
 
         let e = Statistics::try_merge_iter(&items, &schema).unwrap_err();
-        assert_contains!(e.to_string(), "Error during planning: Cannot merge statistics with different number of columns: 0 vs 1");
+        assert_contains!(
+            e.to_string(),
+            "Error during planning: Cannot merge statistics with different number of columns: 0 vs 1"
+        );
     }
 
     #[test]

@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{Result, _plan_err};
+use crate::error::{_plan_err, Result};
 use arrow::{
-    array::{new_null_array, Array, ArrayRef, StructArray},
-    compute::{cast_with_options, CastOptions},
+    array::{Array, ArrayRef, StructArray, new_null_array},
+    compute::{CastOptions, cast_with_options},
     datatypes::{DataType::Struct, Field, FieldRef},
 };
 use std::sync::Arc;
@@ -110,16 +110,19 @@ fn cast_struct_column(
 /// temporal values are formatted when cast to strings.
 ///
 /// ```
-/// use std::sync::Arc;
-/// use arrow::array::{Int64Array, ArrayRef};
+/// use arrow::array::{ArrayRef, Int64Array};
 /// use arrow::compute::CastOptions;
 /// use arrow::datatypes::{DataType, Field};
 /// use datafusion_common::nested_struct::cast_column;
+/// use std::sync::Arc;
 ///
 /// let source: ArrayRef = Arc::new(Int64Array::from(vec![1, i64::MAX]));
 /// let target = Field::new("ints", DataType::Int32, true);
 /// // Permit lossy conversions by producing NULL on overflow instead of erroring
-/// let options = CastOptions { safe: true, ..Default::default() };
+/// let options = CastOptions {
+///     safe: true,
+///     ..Default::default()
+/// };
 /// let result = cast_column(&source, &target, &options).unwrap();
 /// assert!(result.is_null(1));
 /// ```

@@ -35,7 +35,10 @@ use datafusion_common::HashMap;
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
-pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
+pub use value::{
+    Count, Gauge, MetricValue, PruningMetrics, RatioMergeStrategy, RatioMetrics,
+    ScopedTimerGuard, Time, Timestamp,
+};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.
@@ -45,24 +48,23 @@ pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 /// [`ExecutionPlanMetricsSet`].
 ///
 /// ```
-///  use datafusion_physical_plan::metrics::*;
+/// use datafusion_physical_plan::metrics::*;
 ///
-///  let metrics = ExecutionPlanMetricsSet::new();
-///  assert!(metrics.clone_inner().output_rows().is_none());
+/// let metrics = ExecutionPlanMetricsSet::new();
+/// assert!(metrics.clone_inner().output_rows().is_none());
 ///
-///  // Create a counter to increment using the MetricBuilder
-///  let partition = 1;
-///  let output_rows = MetricBuilder::new(&metrics)
-///      .output_rows(partition);
+/// // Create a counter to increment using the MetricBuilder
+/// let partition = 1;
+/// let output_rows = MetricBuilder::new(&metrics).output_rows(partition);
 ///
-///  // Counter can be incremented
-///  output_rows.add(13);
+/// // Counter can be incremented
+/// output_rows.add(13);
 ///
-///  // The value can be retrieved directly:
-///  assert_eq!(output_rows.value(), 13);
+/// // The value can be retrieved directly:
+/// assert_eq!(output_rows.value(), 13);
 ///
-///  // As well as from the metrics set
-///  assert_eq!(metrics.clone_inner().output_rows(), Some(13));
+/// // As well as from the metrics set
+/// assert_eq!(metrics.clone_inner().output_rows(), Some(13));
 /// ```
 ///
 /// [`ExecutionPlan`]: super::ExecutionPlan
@@ -78,6 +80,29 @@ pub struct Metric {
     /// To which partition of an operators output did this metric
     /// apply? If `None` then means all partitions.
     partition: Option<usize>,
+
+    metric_type: MetricType,
+}
+
+/// Categorizes metrics so the display layer can choose the desired verbosity.
+///
+/// # How is it used:
+/// The `datafusion.explain.analyze_level` configuration controls which category is shown.
+/// - When set to `dev`, all metrics with type `MetricType::Summary` or `MetricType::DEV`
+///   will be shown.
+/// - When set to `summary`, only metrics with type `MetricType::Summary` are shown.
+///
+/// # Difference from `EXPLAIN ANALYZE VERBOSE`:  
+/// The `VERBOSE` keyword controls whether per-partition metrics are shown (when specified),  
+/// or aggregated metrics are displayed (when omitted).  
+/// In contrast, the `analyze_level` configuration determines which categories or
+/// levels of metrics are displayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MetricType {
+    /// Common metrics for high-level insights (answering which operator is slow)
+    SUMMARY,
+    /// For deep operator-level introspection for developers
+    DEV,
 }
 
 impl Display for Metric {
@@ -122,6 +147,7 @@ impl Metric {
             value,
             labels: vec![],
             partition,
+            metric_type: MetricType::DEV,
         }
     }
 
@@ -136,7 +162,14 @@ impl Metric {
             value,
             labels,
             partition,
+            metric_type: MetricType::DEV,
         }
+    }
+
+    /// Set the type for this metric. Defaults to [`MetricType::DEV`]
+    pub fn with_type(mut self, metric_type: MetricType) -> Self {
+        self.metric_type = metric_type;
+        self
     }
 
     /// Add a new label to this metric
@@ -163,6 +196,11 @@ impl Metric {
     /// Return a reference to the partition
     pub fn partition(&self) -> Option<usize> {
         self.partition
+    }
+
+    /// Return the metric type (verbosity level) associated with this metric
+    pub fn metric_type(&self) -> MetricType {
+        self.metric_type
     }
 }
 
@@ -260,11 +298,15 @@ impl MetricsSet {
             MetricValue::ElapsedCompute(_) => false,
             MetricValue::SpillCount(_) => false,
             MetricValue::SpilledBytes(_) => false,
+            MetricValue::OutputBytes(_) => false,
+            MetricValue::OutputBatches(_) => false,
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
+            MetricValue::PruningMetrics { name, .. } => name == metric_name,
+            MetricValue::Ratio { name, .. } => name == metric_name,
             MetricValue::Custom { .. } => false,
         })
     }
@@ -286,7 +328,8 @@ impl MetricsSet {
                 .or_insert_with(|| {
                     // accumulate with no partition
                     let partition = None;
-                    let mut accum = Metric::new(metric.value().new_empty(), partition);
+                    let mut accum = Metric::new(metric.value().new_empty(), partition)
+                        .with_type(metric.metric_type());
                     accum.value_mut().aggregate(metric.value());
                     accum
                 });
@@ -322,6 +365,21 @@ impl MetricsSet {
             .filter(|m| !m.value.is_timestamp())
             .collect::<Vec<_>>();
 
+        Self { metrics }
+    }
+
+    /// Returns a new derived `MetricsSet` containing only metrics whose
+    /// [`MetricType`] appears in `allowed`.
+    pub fn filter_by_metric_types(self, allowed: &[MetricType]) -> Self {
+        if allowed.is_empty() {
+            return Self { metrics: vec![] };
+        }
+
+        let metrics = self
+            .metrics
+            .into_iter()
+            .filter(|metric| allowed.contains(&metric.metric_type()))
+            .collect::<Vec<_>>();
         Self { metrics }
     }
 }

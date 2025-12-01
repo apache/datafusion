@@ -49,13 +49,13 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
           shared-key: "amd-ci-check" # this job uses it's own cache becase check has a separate cache and we need it to be fast as it blocks other jobs
           save-if: ${{ github.ref_name == 'main' }}
@@ -77,7 +77,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -102,13 +102,13 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -139,7 +139,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -170,13 +170,13 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -209,8 +209,6 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=math_expressions
       - name: Check datafusion (parquet)
         run: cargo check --profile ci --no-default-features -p datafusion --features=parquet
-      - name: Check datafusion (pyarrow)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=pyarrow
       - name: Check datafusion (regex_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=regex_expressions
       - name: Check datafusion (recursive_protection)
@@ -237,7 +235,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -271,8 +269,22 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+      volumes:
+        - /usr/local:/host/usr/local
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - name: Remove unnecessary preinstalled software
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          # remove tool cache: about 8.5GB (github has host /opt/hostedtoolcache mounted as /__t)
+          rm -rf /__t/* || true
+          # remove Haskell runtime: about 6.3GB (host /usr/local/.ghcup)
+          rm -rf /host/usr/local/.ghcup || true
+          # remove Android library: about 7.8GB (host /usr/local/lib/android)
+          rm -rf /host/usr/local/lib/android || true
+          echo "Disk space after cleanup:"
+          df -h
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -281,7 +293,7 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
          save-if: ${{ github.ref_name == 'main' }}
          shared-key: "amd-ci"
@@ -302,6 +314,15 @@ jobs:
             --features serde,avro,json,backtrace,integration-tests,parquet_encryption
       - name: Verify Working Directory Clean
         run: git diff --exit-code
+        # Check no temporary directories created during test.
+        # `false/` folder is excuded for rust cache.
+      - name: Verify Working Directory Clean (No Untracked Files)
+        run: |
+          STATUS="$(git status --porcelain | sed -e '/^?? false\/$/d' -e '/^?? false$/d')"
+          if [ -n "$STATUS" ]; then
+            echo "$STATUS"
+            exit 1
+          fi
 
   # datafusion-cli tests
   linux-test-datafusion-cli:
@@ -309,14 +330,14 @@ jobs:
     needs: linux-build-lib
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
@@ -340,7 +361,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -349,10 +370,23 @@ jobs:
         with:
           rust-version: stable
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
+      - name: Remove unnecessary preinstalled software
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          apt-get clean
+          rm -rf /__t/CodeQL
+          rm -rf /__t/PyPy
+          rm -rf /__t/Java_Temurin-Hotspot_jdk
+          rm -rf /__t/Python
+          rm -rf /__t/go
+          rm -rf /__t/Ruby
+          echo "Disk space after cleanup:"
+          df -h
       - name: Run examples
         run: |
           # test datafusion-sql examples
@@ -370,7 +404,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -391,7 +425,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -403,7 +437,7 @@ jobs:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup for wasm32
         run: |
           rustup target add wasm32-unknown-unknown
@@ -412,7 +446,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@522492a8c115f1b6d4d318581f09638e9442547b  # v2.62.21
+        uses: taiki-e/install-action@b4b80945859e8ef89a9732a0f46499a443b196fe  # v2.62.59
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -431,7 +465,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -453,7 +487,7 @@ jobs:
           export RUST_MIN_STACK=20971520
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
           cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test --features backtrace --profile ci --package datafusion-sqllogictest --test sqllogictests
+          INCLUDE_TPCH=true cargo test --features backtrace,parquet_encryption --profile ci --package datafusion-sqllogictest --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -478,7 +512,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -502,7 +536,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -540,7 +574,7 @@ jobs:
     name: cargo test (macos-aarch64)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -550,37 +584,13 @@ jobs:
         shell: bash
         run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
 
-  test-datafusion-pyarrow:
-    name: cargo test pyarrow (amd64)
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust:bullseye # Use the bullseye tag image which comes with python3.9
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Install PyArrow
-        run: |
-          echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          apt-get update
-          apt-get install python3-pip -y
-          python3 -m pip install pyarrow
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run datafusion-common tests
-        run: cargo test --profile ci -p datafusion-common --features=pyarrow,sql
-
   vendor:
     name: Verify Vendored Code
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -597,7 +607,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -656,7 +666,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -667,7 +677,7 @@ jobs:
       - name: Install Clippy
         run: rustup component add clippy
       - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1  # v2.8.1
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-clippy"
@@ -681,7 +691,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -702,7 +712,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -710,7 +720,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
         with:
           node-version: "20"
       - name: Check if configs.md has been modified
@@ -735,11 +745,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@522492a8c115f1b6d4d318581f09638e9442547b  # v2.62.21
+        uses: taiki-e/install-action@b4b80945859e8ef89a9732a0f46499a443b196fe  # v2.62.59
         with:
           tool: cargo-msrv
 

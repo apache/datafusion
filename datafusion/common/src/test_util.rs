@@ -55,7 +55,7 @@ pub fn format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowErro
 /// # use arrow::array::{ArrayRef, Int32Array};
 /// # use datafusion_common::assert_batches_eq;
 /// let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-///  let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
+/// let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
 /// // Expected output is a vec of strings
 /// let expected = vec![
 ///     "+--------+",
@@ -735,32 +735,34 @@ mod tests {
         let non_existing = cwd.join("non-existing-dir").display().to_string();
         let non_existing_str = non_existing.as_str();
 
-        env::set_var(udf_env, non_existing_str);
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_err());
+        unsafe {
+            env::set_var(udf_env, non_existing_str);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_err());
 
-        env::set_var(udf_env, "");
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, "");
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::set_var(udf_env, " ");
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, " ");
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::set_var(udf_env, existing_str);
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, existing_str);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::remove_var(udf_env);
-        let res = get_data_dir(udf_env, non_existing_str);
-        assert!(res.is_err());
+            env::remove_var(udf_env);
+            let res = get_data_dir(udf_env, non_existing_str);
+            assert!(res.is_err());
 
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
+        }
     }
 
     #[test]

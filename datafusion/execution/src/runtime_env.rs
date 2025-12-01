@@ -67,9 +67,9 @@ use url::Url;
 /// // restrict to using at most 100MB of memory
 /// let pool_size = 100 * 1024 * 1024;
 /// let runtime_env = RuntimeEnvBuilder::new()
-///   .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
-///   .build()
-///   .unwrap();
+///     .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+///     .build()
+///     .unwrap();
 /// ```
 pub struct RuntimeEnv {
     /// Runtime memory management
@@ -89,6 +89,41 @@ impl Debug for RuntimeEnv {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "RuntimeEnv")
     }
+}
+
+/// Creates runtime configuration entries with the provided values
+///
+/// This helper function defines the structure and metadata for all runtime configuration
+/// entries to avoid duplication between `RuntimeEnv::config_entries()` and
+/// `RuntimeEnvBuilder::entries()`.
+fn create_runtime_config_entries(
+    memory_limit: Option<String>,
+    max_temp_directory_size: Option<String>,
+    temp_directory: Option<String>,
+    metadata_cache_limit: Option<String>,
+) -> Vec<ConfigEntry> {
+    vec![
+        ConfigEntry {
+            key: "datafusion.runtime.memory_limit".to_string(),
+            value: memory_limit,
+            description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.max_temp_directory_size".to_string(),
+            value: max_temp_directory_size,
+            description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.temp_directory".to_string(),
+            value: temp_directory,
+            description: "The path to the temporary file directory.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.metadata_cache_limit".to_string(),
+            value: metadata_cache_limit,
+            description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+        }
+    ]
 }
 
 impl RuntimeEnv {
@@ -114,8 +149,6 @@ impl RuntimeEnv {
     /// ```
     ///
     /// # Example: Register remote URL object store like [Github](https://github.com)
-    ///
-    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use url::Url;
@@ -139,6 +172,12 @@ impl RuntimeEnv {
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         self.object_store_registry.register_store(url, object_store)
+    }
+
+    /// Deregisters a custom `ObjectStore` previously registered for a specific url.
+    /// See [`ObjectStoreRegistry::deregister_store`] for more details.
+    pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        self.object_store_registry.deregister_store(url)
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
@@ -168,6 +207,64 @@ impl RuntimeEnv {
         id: &str,
     ) -> Result<Arc<dyn EncryptionFactory>> {
         self.parquet_encryption_factory_registry.get_factory(id)
+    }
+
+    /// Returns the current runtime configuration entries
+    pub fn config_entries(&self) -> Vec<ConfigEntry> {
+        use crate::memory_pool::MemoryLimit;
+
+        /// Convert bytes to a human-readable format
+        fn format_byte_size(size: u64) -> String {
+            const GB: u64 = 1024 * 1024 * 1024;
+            const MB: u64 = 1024 * 1024;
+            const KB: u64 = 1024;
+
+            match size {
+                s if s >= GB => format!("{}G", s / GB),
+                s if s >= MB => format!("{}M", s / MB),
+                s if s >= KB => format!("{}K", s / KB),
+                s => format!("{s}"),
+            }
+        }
+
+        let memory_limit_value = match self.memory_pool.memory_limit() {
+            MemoryLimit::Finite(size) => Some(format_byte_size(
+                size.try_into()
+                    .expect("Memory limit size conversion failed"),
+            )),
+            MemoryLimit::Infinite => Some("unlimited".to_string()),
+            MemoryLimit::Unknown => None,
+        };
+
+        let max_temp_dir_size = self.disk_manager.max_temp_directory_size();
+        let max_temp_dir_value = format_byte_size(max_temp_dir_size);
+
+        let temp_paths = self.disk_manager.temp_dir_paths();
+        let temp_dir_value = if temp_paths.is_empty() {
+            None
+        } else {
+            Some(
+                temp_paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
+        };
+
+        let metadata_cache_limit = self.cache_manager.get_metadata_cache_limit();
+        let metadata_cache_value = format_byte_size(
+            metadata_cache_limit
+                .try_into()
+                .expect("Metadata cache size conversion failed"),
+        );
+
+        create_runtime_config_entries(
+            memory_limit_value,
+            Some(max_temp_dir_value),
+            temp_dir_value,
+            Some(metadata_cache_value),
+        )
     }
 }
 
@@ -355,28 +452,12 @@ impl RuntimeEnvBuilder {
 
     /// Returns a list of all available runtime configurations with their current values and descriptions
     pub fn entries(&self) -> Vec<ConfigEntry> {
-        vec![
-            ConfigEntry {
-                key: "datafusion.runtime.memory_limit".to_string(),
-                value: None, // Default is system-dependent
-                description: "Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.max_temp_directory_size".to_string(),
-                value: Some("100G".to_string()),
-                description: "Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.temp_directory".to_string(),
-                value: None, // Default is system-dependent
-                description: "The path to the temporary file directory.",
-            },
-            ConfigEntry {
-                key: "datafusion.runtime.metadata_cache_limit".to_string(),
-                value: Some("50M".to_owned()),
-                description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-            }
-        ]
+        create_runtime_config_entries(
+            None,
+            Some("100G".to_string()),
+            None,
+            Some("50M".to_owned()),
+        )
     }
 
     /// Generate documentation that can be included in the user guide

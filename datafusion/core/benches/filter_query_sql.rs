@@ -24,13 +24,14 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
 use futures::executor::block_on;
+use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 async fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.sql(sql)).unwrap();
-    criterion::black_box(rt.block_on(df.collect()).unwrap());
+    black_box(rt.block_on(df.collect()).unwrap());
 }
 
 fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext> {

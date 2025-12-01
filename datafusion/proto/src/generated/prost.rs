@@ -278,10 +278,14 @@ pub struct CreateExternalTableNode {
 pub struct PrepareNode {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
+    /// We serialize both the data types and the fields for compatibility with
+    /// older versions (newer versions populate both).
     #[prost(message, repeated, tag = "2")]
     pub data_types: ::prost::alloc::vec::Vec<super::datafusion_common::ArrowType>,
     #[prost(message, optional, boxed, tag = "3")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, repeated, tag = "4")]
+    pub fields: ::prost::alloc::vec::Vec<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateCatalogSchemaNode {
@@ -605,7 +609,7 @@ pub mod logical_expr_node {
         TryCast(::prost::alloc::boxed::Box<super::TryCastNode>),
         /// window expressions
         #[prost(message, tag = "18")]
-        WindowExpr(super::WindowExprNode),
+        WindowExpr(::prost::alloc::boxed::Box<super::WindowExprNode>),
         /// AggregateUDF expressions
         #[prost(message, tag = "19")]
         AggregateUdfExpr(::prost::alloc::boxed::Box<super::AggregateUdfExprNode>),
@@ -651,8 +655,17 @@ pub struct Wildcard {
 pub struct PlaceholderNode {
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
+    /// We serialize the data type, metadata, and nullability separately to maintain
+    /// compatibility with older versions
     #[prost(message, optional, tag = "2")]
     pub data_type: ::core::option::Option<super::datafusion_common::ArrowType>,
+    #[prost(bool, optional, tag = "3")]
+    pub nullable: ::core::option::Option<bool>,
+    #[prost(map = "string, string", tag = "4")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogicalExprList {
@@ -795,6 +808,8 @@ pub struct AggregateUdfExprNode {
     pub order_by: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(bytes = "vec", optional, tag = "6")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(enumeration = "NullTreatment", optional, tag = "7")]
+    pub null_treatment: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarUdfExprNode {
@@ -818,6 +833,12 @@ pub struct WindowExprNode {
     pub window_frame: ::core::option::Option<WindowFrame>,
     #[prost(bytes = "vec", optional, tag = "10")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(enumeration = "NullTreatment", optional, tag = "11")]
+    pub null_treatment: ::core::option::Option<i32>,
+    #[prost(bool, tag = "12")]
+    pub distinct: bool,
+    #[prost(message, optional, boxed, tag = "13")]
+    pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(oneof = "window_expr_node::WindowFunction", tags = "3, 9")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
 }
@@ -1521,6 +1542,18 @@ pub struct PhysicalSortExprNodeCollection {
     pub physical_sort_expr_nodes: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProjectionExpr {
+    #[prost(string, tag = "1")]
+    pub alias: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub expr: ::core::option::Option<PhysicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProjectionExprs {
+    #[prost(message, repeated, tag = "1")]
+    pub projections: ::prost::alloc::vec::Vec<ProjectionExpr>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileScanExecConf {
     #[prost(message, repeated, tag = "1")]
     pub file_groups: ::prost::alloc::vec::Vec<FileGroup>,
@@ -1542,6 +1575,8 @@ pub struct FileScanExecConf {
     pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
     #[prost(uint64, optional, tag = "12")]
     pub batch_size: ::core::option::Option<u64>,
+    #[prost(message, optional, tag = "13")]
+    pub projection_exprs: ::core::option::Option<ProjectionExprs>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -2123,6 +2158,32 @@ impl WindowFrameBoundType {
             "CURRENT_ROW" => Some(Self::CurrentRow),
             "PRECEDING" => Some(Self::Preceding),
             "FOLLOWING" => Some(Self::Following),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum NullTreatment {
+    RespectNulls = 0,
+    IgnoreNulls = 1,
+}
+impl NullTreatment {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::RespectNulls => "RESPECT_NULLS",
+            Self::IgnoreNulls => "IGNORE_NULLS",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "RESPECT_NULLS" => Some(Self::RespectNulls),
+            "IGNORE_NULLS" => Some(Self::IgnoreNulls),
             _ => None,
         }
     }

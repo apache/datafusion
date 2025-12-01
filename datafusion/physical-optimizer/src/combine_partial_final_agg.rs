@@ -26,8 +26,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::ExecutionPlan;
 
-use crate::PhysicalOptimizerRule;
-use datafusion_common::config::ConfigOptions;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
@@ -36,7 +35,6 @@ use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
 ///
 /// This rule should be applied after the EnforceDistribution and EnforceSorting rules
-///
 #[derive(Default, Debug)]
 pub struct CombinePartialFinalAggregate {}
 
@@ -48,10 +46,10 @@ impl CombinePartialFinalAggregate {
 }
 
 impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(|plan| {
             // Check if the plan is AggregateExec

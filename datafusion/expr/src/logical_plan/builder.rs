@@ -25,7 +25,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, FieldMetadata, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -50,11 +50,12 @@ use crate::{
 
 use super::dml::InsertOp;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, internal_datafusion_err, not_impl_err,
+    exec_err, get_target_functional_dependencies, internal_datafusion_err,
     plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
     NullEquality, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
@@ -178,12 +179,6 @@ impl LogicalPlanBuilder {
         recursive_term: LogicalPlan,
         is_distinct: bool,
     ) -> Result<Self> {
-        // TODO: we need to do a bunch of validation here. Maybe more.
-        if is_distinct {
-            return not_impl_err!(
-                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported"
-            );
-        }
         // Ensure that the static term and the recursive term have the same number of fields
         let static_fields_len = self.plan.schema().fields().len();
         let recursive_fields_len = recursive_term.schema().fields().len();
@@ -449,14 +444,13 @@ impl LogicalPlanBuilder {
     /// # ])) as _;
     /// # let table_source = Arc::new(LogicalTableSource::new(employee_schema));
     /// // VALUES (1), (2)
-    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
-    ///   .build()?;
+    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
     /// // INSERT INTO MyTable VALUES (1), (2)
     /// let insert_plan = LogicalPlanBuilder::insert_into(
-    ///   input,
-    ///   "MyTable",
-    ///   table_source,
-    ///   InsertOp::Append,
+    ///     input,
+    ///     "MyTable",
+    ///     table_source,
+    ///     InsertOp::Append,
     /// )?;
     /// # Ok(())
     /// # }
@@ -622,11 +616,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
-    pub fn prepare(self, name: String, data_types: Vec<DataType>) -> Result<Self> {
+    pub fn prepare(self, name: String, fields: Vec<FieldRef>) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Statement(Statement::Prepare(
             Prepare {
                 name,
-                data_types,
+                fields,
                 input: self.plan,
             },
         ))))
@@ -952,8 +946,8 @@ impl LogicalPlanBuilder {
     /// // Form the expression `(left.a != right.a)` AND `(left.b != right.b)`
     /// let exprs = vec![
     ///     col("left.a").eq(col("right.a")),
-    ///     col("left.b").not_eq(col("right.b"))
-    ///  ];
+    ///     col("left.b").not_eq(col("right.b")),
+    /// ];
     ///
     /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
     /// // finding all pairs of rows from `left` and `right` where

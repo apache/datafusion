@@ -23,10 +23,10 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result, _plan_err, _schema_err};
+use crate::error::{_plan_err, _schema_err, DataFusionError, Result};
 use crate::{
-    field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
-    SchemaError, TableReference,
+    Column, FunctionalDependencies, SchemaError, TableReference, field_not_found,
+    unqualified_field_not_found,
 };
 
 use arrow::compute::can_cast_types;
@@ -56,12 +56,10 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// an Arrow schema.
 ///
 /// ```rust
-/// use datafusion_common::{DFSchema, Column};
 /// use arrow::datatypes::{DataType, Field, Schema};
+/// use datafusion_common::{Column, DFSchema};
 ///
-/// let arrow_schema = Schema::new(vec![
-///    Field::new("c1", DataType::Int32, false),
-/// ]);
+/// let arrow_schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
 ///
 /// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
 /// let column = Column::from_qualified_name("t1.c1");
@@ -77,12 +75,10 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// Create an unqualified schema using TryFrom:
 ///
 /// ```rust
-/// use datafusion_common::{DFSchema, Column};
 /// use arrow::datatypes::{DataType, Field, Schema};
+/// use datafusion_common::{Column, DFSchema};
 ///
-/// let arrow_schema = Schema::new(vec![
-///    Field::new("c1", DataType::Int32, false),
-/// ]);
+/// let arrow_schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
 ///
 /// let df_schema = DFSchema::try_from(arrow_schema).unwrap();
 /// let column = Column::new_unqualified("c1");
@@ -94,13 +90,15 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// Use the `Into` trait to convert `DFSchema` into an Arrow schema:
 ///
 /// ```rust
+/// use arrow::datatypes::{Field, Schema};
 /// use datafusion_common::DFSchema;
-/// use arrow::datatypes::{Schema, Field};
 /// use std::collections::HashMap;
 ///
-/// let df_schema = DFSchema::from_unqualified_fields(vec![
-///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
-/// ].into(),HashMap::new()).unwrap();
+/// let df_schema = DFSchema::from_unqualified_fields(
+///     vec![Field::new("c1", arrow::datatypes::DataType::Int32, false)].into(),
+///     HashMap::new(),
+/// )
+/// .unwrap();
 /// let schema: &Schema = df_schema.as_arrow();
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
@@ -884,22 +882,26 @@ impl DFSchema {
     /// # Example
     ///
     /// ```
-    /// use datafusion_common::DFSchema;
     /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_common::DFSchema;
     /// use std::collections::HashMap;
     ///
     /// let schema = DFSchema::from_unqualified_fields(
     ///     vec![
     ///         Field::new("id", DataType::Int32, false),
     ///         Field::new("name", DataType::Utf8, true),
-    ///     ].into(),
-    ///     HashMap::new()
-    /// ).unwrap();
+    ///     ]
+    ///     .into(),
+    ///     HashMap::new(),
+    /// )
+    /// .unwrap();
     ///
-    /// assert_eq!(schema.tree_string().to_string(),
-    /// r#"root
+    /// assert_eq!(
+    ///     schema.tree_string().to_string(),
+    ///     r#"root
     ///  |-- id: int32 (nullable = false)
-    ///  |-- name: utf8 (nullable = true)"#);
+    ///  |-- name: utf8 (nullable = true)"#
+    /// );
     /// ```
     pub fn tree_string(&self) -> impl Display + '_ {
         let mut result = String::from("root\n");
@@ -980,36 +982,35 @@ fn format_field_with_indent(
             result.push_str(&format!(
                 "{indent}|-- {field_name}: map (nullable = {nullable_str})\n"
             ));
-            if let DataType::Struct(inner_fields) = field.data_type() {
-                if inner_fields.len() == 2 {
-                    format_field_with_indent(
-                        result,
-                        "key",
-                        inner_fields[0].data_type(),
-                        inner_fields[0].is_nullable(),
-                        &child_indent,
-                    );
-                    let value_contains_null =
-                        field.is_nullable().to_string().to_lowercase();
-                    // Handle complex value types properly
-                    match inner_fields[1].data_type() {
-                        DataType::Struct(_)
-                        | DataType::List(_)
-                        | DataType::LargeList(_)
-                        | DataType::FixedSizeList(_, _)
-                        | DataType::Map(_, _) => {
-                            format_field_with_indent(
-                                result,
-                                "value",
-                                inner_fields[1].data_type(),
-                                inner_fields[1].is_nullable(),
-                                &child_indent,
-                            );
-                        }
-                        _ => {
-                            result.push_str(&format!("{child_indent}|-- value: {} (nullable = {value_contains_null})\n",
+            if let DataType::Struct(inner_fields) = field.data_type()
+                && inner_fields.len() == 2
+            {
+                format_field_with_indent(
+                    result,
+                    "key",
+                    inner_fields[0].data_type(),
+                    inner_fields[0].is_nullable(),
+                    &child_indent,
+                );
+                let value_contains_null = field.is_nullable().to_string().to_lowercase();
+                // Handle complex value types properly
+                match inner_fields[1].data_type() {
+                    DataType::Struct(_)
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::FixedSizeList(_, _)
+                    | DataType::Map(_, _) => {
+                        format_field_with_indent(
+                            result,
+                            "value",
+                            inner_fields[1].data_type(),
+                            inner_fields[1].is_nullable(),
+                            &child_indent,
+                        );
+                    }
+                    _ => {
+                        result.push_str(&format!("{child_indent}|-- value: {} (nullable = {value_contains_null})\n",
                                 format_simple_data_type(inner_fields[1].data_type())));
-                        }
                     }
                 }
             }
@@ -1417,9 +1418,7 @@ mod tests {
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let arrow_schema = schema.as_arrow();
-        let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-        Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }";
-        assert_eq!(expected, arrow_schema.to_string());
+        insta::assert_snapshot!(arrow_schema.to_string(), @r#"Field { "c0": nullable Boolean }, Field { "c1": nullable Boolean }"#);
         Ok(())
     }
 
@@ -1433,12 +1432,14 @@ mod tests {
             join.to_string()
         );
         // test valid access
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t1"), "c0")
-            .is_ok());
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t2"), "c0")
-            .is_ok());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t1"), "c0")
+                .is_ok()
+        );
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t2"), "c0")
+                .is_ok()
+        );
         // test invalid access
         assert!(join.field_with_unqualified_name("c0").is_err());
         assert!(join.field_with_unqualified_name("t1.c0").is_err());
@@ -1480,18 +1481,20 @@ mod tests {
             join.to_string()
         );
         // test valid access
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t1"), "c0")
-            .is_ok());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t1"), "c0")
+                .is_ok()
+        );
         assert!(join.field_with_unqualified_name("c0").is_ok());
         assert!(join.field_with_unqualified_name("c100").is_ok());
         assert!(join.field_with_name(None, "c100").is_ok());
         // test invalid access
         assert!(join.field_with_unqualified_name("t1.c0").is_err());
         assert!(join.field_with_unqualified_name("t1.c100").is_err());
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare(""), "c100")
-            .is_err());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare(""), "c100")
+                .is_err()
+        );
         Ok(())
     }
 
@@ -1500,9 +1503,11 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
-        assert_contains!(join.unwrap_err().to_string(),
-                         "Schema error: Schema contains qualified \
-                          field name t1.c0 and unqualified field name c0 which would be ambiguous");
+        assert_contains!(
+            join.unwrap_err().to_string(),
+            "Schema error: Schema contains qualified \
+                          field name t1.c0 and unqualified field name c0 which would be ambiguous"
+        );
         Ok(())
     }
 

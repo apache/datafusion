@@ -23,6 +23,9 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+// https://github.com/apache/datafusion/issues/18503
+#![deny(clippy::needless_pass_by_value)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! [DataFusion](https://github.com/apache/datafusion)
 //! is an extensible query execution framework that uses
@@ -44,6 +47,7 @@ mod udaf;
 mod udf;
 mod udwf;
 
+pub mod arguments;
 pub mod conditional_expressions;
 pub mod execution_props;
 pub mod expr;
@@ -69,6 +73,7 @@ pub mod async_udf;
 pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
+mod predicate_bounds;
 pub mod ptr_eq;
 pub mod test;
 pub mod tree_node;
@@ -117,7 +122,7 @@ pub use udaf::{
     ReversedUDAF, SetMonotonicity, StatisticsArgs,
 };
 pub use udf::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
-pub use udwf::{ReversedUDWF, WindowUDF, WindowUDFImpl};
+pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 #[cfg(test)]

@@ -22,19 +22,20 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
-use crate::{Result, ScalarValue};
+use crate::assert_or_internal_err;
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err};
+use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{
-    cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
+    cast::AsArray,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::{partition, SortColumn, SortOptions};
+use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::collections::HashSet;
 use std::num::NonZero;
 use std::ops::Range;
@@ -46,26 +47,23 @@ use std::thread::available_parallelism;
 ///
 /// Example:
 /// ```
-/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 /// use datafusion_common::project_schema;
 ///
 /// // Schema with columns 'a', 'b', and 'c'
 /// let schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("a", DataType::Int32, true),
-///   Field::new("b", DataType::Int64, true),
-///   Field::new("c", DataType::Utf8, true),
+///     Field::new("a", DataType::Int32, true),
+///     Field::new("b", DataType::Int64, true),
+///     Field::new("c", DataType::Utf8, true),
 /// ]));
 ///
 /// // Pick columns 'c' and 'b'
-/// let projection = Some(vec![2,1]);
-/// let projected_schema = project_schema(
-///    &schema,
-///    projection.as_ref()
-///  ).unwrap();
+/// let projection = Some(vec![2, 1]);
+/// let projected_schema = project_schema(&schema, projection.as_ref()).unwrap();
 ///
 /// let expected_schema = SchemaRef::new(Schema::new(vec![
-///   Field::new("c", DataType::Utf8, true),
-///   Field::new("b", DataType::Int64, true),
+///     Field::new("c", DataType::Utf8, true),
+///     Field::new("b", DataType::Int64, true),
 /// ]));
 ///
 /// assert_eq!(projected_schema, expected_schema);
@@ -268,10 +266,10 @@ fn needs_quotes(s: &str) -> bool {
     let mut chars = s.chars();
 
     // first char can not be a number unless escaped
-    if let Some(first_char) = chars.next() {
-        if !(first_char.is_ascii_lowercase() || first_char == '_') {
-            return true;
-        }
+    if let Some(first_char) = chars.next()
+        && !(first_char.is_ascii_lowercase() || first_char == '_')
+    {
+        return true;
     }
 
     !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
@@ -285,6 +283,9 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
+/// Parse a string into a vector of identifiers.
+///
+/// Note: If ignore_case is false, the string will be normalized to lowercase.
 #[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<String> {
     parse_identifiers(s)
@@ -395,9 +396,11 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// # use arrow::array::types::Int64Type;
 /// # use datafusion_common::utils::SingleRowListArrayBuilder;
 /// // Array is [1, 2, 3]
-/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-///       Some(vec![Some(1), Some(2), Some(3)]),
-/// ]);
+/// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![
+///     Some(1),
+///     Some(2),
+///     Some(3),
+/// ])]);
 /// // Wrap as a list array: [[1, 2, 3]]
 /// let list_arr = SingleRowListArrayBuilder::new(Arc::new(arr)).build_list_array();
 /// assert_eq!(list_arr.len(), 1);
@@ -517,9 +520,7 @@ pub fn arrays_into_list_array(
     arr: impl IntoIterator<Item = ArrayRef>,
 ) -> Result<ListArray> {
     let arr = arr.into_iter().collect::<Vec<_>>();
-    if arr.is_empty() {
-        return _internal_err!("Cannot wrap empty array into list array");
-    }
+    assert_or_internal_err!(!arr.is_empty(), "Cannot wrap empty array into list array");
 
     let lens = arr.iter().map(|x| x.len()).collect::<Vec<_>>();
     // Assume data type is consistent
@@ -551,7 +552,8 @@ pub fn fixed_size_list_to_arrays(a: &ArrayRef) -> Vec<ArrayRef> {
 /// use datafusion_common::utils::base_type;
 /// use std::sync::Arc;
 ///
-/// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+/// let data_type =
+///     DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// assert_eq!(base_type(&data_type), DataType::Int32);
 ///
 /// let data_type = DataType::Int32;
@@ -903,16 +905,19 @@ pub fn get_available_parallelism() -> usize {
 /// # use datafusion_common::utils::take_function_args;
 /// # use datafusion_common::ScalarValue;
 /// fn my_function(args: &[ScalarValue]) -> Result<()> {
-///   // function expects 2 args, so create a 2-element array
-///   let [arg1, arg2] = take_function_args("my_function", args)?;
-///   // ... do stuff..
-///   Ok(())
+///     // function expects 2 args, so create a 2-element array
+///     let [arg1, arg2] = take_function_args("my_function", args)?;
+///     // ... do stuff..
+///     Ok(())
 /// }
 ///
 /// // Calling the function with 1 argument produces an error:
 /// let args = vec![ScalarValue::Int32(Some(10))];
 /// let err = my_function(&args).unwrap_err();
-/// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
+/// assert_eq!(
+///     err.to_string(),
+///     "Execution error: my_function function requires 2 arguments, got 1"
+/// );
 /// // Calling the function with 2 arguments works great
 /// let args = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))];
 /// my_function(&args).unwrap();
@@ -938,8 +943,6 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
-    use sqlparser::ast::Ident;
-    use sqlparser::tokenizer::Span;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -1168,7 +1171,7 @@ mod tests {
             let expected_parsed = vec![Ident {
                 value: identifier.to_string(),
                 quote_style,
-                span: Span::empty(),
+                span: sqlparser::tokenizer::Span::empty(),
             }];
 
             assert_eq!(

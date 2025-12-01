@@ -41,7 +41,10 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, JoinType, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, internal_err, DataFusionError, JoinType, Result,
+    ScalarValue,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
@@ -300,12 +303,12 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if self.left.output_partitioning().partition_count() != 1 {
-            return internal_err!(
-                "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
+        assert_eq_or_internal_err!(
+            self.left.output_partitioning().partition_count(),
+            1,
+            "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
                  consider using CoalescePartitionsExec or the EnforceDistribution rule"
-            );
-        }
+        );
 
         let stream = self.right.execute(partition, Arc::clone(&context))?;
 
@@ -627,7 +630,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Joins the the indexed row of left data with the current probe batch.
+    /// Joins the indexed row of left data with the current probe batch.
     /// If all the results are produced, the state is set to fetch new probe batch.
     fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let right_batch = self.state.try_as_record_batch()?;
@@ -650,7 +653,6 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                         self.left_index += 1;
                     }
 
-                    self.join_metrics.output_batches.add(1);
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }

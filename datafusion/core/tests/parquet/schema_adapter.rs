@@ -23,7 +23,9 @@ use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
-use datafusion::datasource::listing::{ListingTable, ListingTableConfig};
+use datafusion::datasource::listing::{
+    ListingTable, ListingTableConfig, ListingTableConfigExt,
+};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;
@@ -480,7 +482,7 @@ fn test_apply_schema_adapter_with_factory() {
     ]));
 
     // Create a parquet source
-    let source = ParquetSource::default();
+    let source = ParquetSource::new(schema.clone());
 
     // Create a file scan config with source that has a schema adapter factory
     let factory = Arc::new(PrefixAdapterFactory {
@@ -489,12 +491,9 @@ fn test_apply_schema_adapter_with_factory() {
 
     let file_source = source.clone().with_schema_adapter_factory(factory).unwrap();
 
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        schema.clone(),
-        file_source,
-    )
-    .build();
+    let config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .build();
 
     // Apply schema adapter to a new source
     let result_source = source.apply_schema_adapter(&config).unwrap();
@@ -530,18 +529,15 @@ fn test_apply_schema_adapter_without_factory() {
     ]));
 
     // Create a parquet source
-    let source = ParquetSource::default();
+    let source = ParquetSource::new(schema.clone());
 
     // Convert to Arc<dyn FileSource>
     let file_source: Arc<dyn FileSource> = Arc::new(source.clone());
 
     // Create a file scan config without a schema adapter factory
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        schema.clone(),
-        file_source,
-    )
-    .build();
+    let config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .build();
 
     // Apply schema adapter function - should pass through the source unchanged
     let result_source = source.apply_schema_adapter(&config).unwrap();

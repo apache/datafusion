@@ -42,13 +42,15 @@ impl DataFrame {
     /// use datafusion::dataframe::DataFrameWriteOptions;
     /// let ctx = SessionContext::new();
     /// // Sort the data by column "b" and write it to a new location
-    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
-    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
-    ///   .write_parquet(
-    ///     "output.parquet",
-    ///     DataFrameWriteOptions::new(),
-    ///     None, // can also specify parquet writing options here
-    /// ).await?;
+    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?
+    ///     .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///     .write_parquet(
+    ///         "output.parquet",
+    ///         DataFrameWriteOptions::new(),
+    ///         None, // can also specify parquet writing options here
+    ///     )
+    ///     .await?;
     /// # fs::remove_file("output.parquet")?;
     /// # Ok(())
     /// # }
@@ -102,7 +104,6 @@ impl DataFrame {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -117,6 +118,8 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{col, lit};
 
+    #[cfg(feature = "parquet_encryption")]
+    use datafusion_common::config::ConfigFileEncryptionProperties;
     use object_store::local::LocalFileSystem;
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
@@ -147,7 +150,7 @@ mod tests {
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
         let formatted = pretty::pretty_format_batches(&plan)?.to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"));
+        assert!(formatted.contains("FilterExec: id@0 = 1"), "{formatted}");
 
         Ok(())
     }
@@ -248,7 +251,7 @@ mod tests {
         Ok(())
     }
 
-    #[rstest]
+    #[rstest::rstest]
     #[cfg(feature = "parquet_encryption")]
     #[tokio::test]
     async fn roundtrip_parquet_with_encryption(
@@ -281,7 +284,8 @@ mod tests {
 
         // Write encrypted parquet using write_parquet
         let mut options = TableParquetOptions::default();
-        options.crypto.file_encryption = Some((&encrypt).into());
+        options.crypto.file_encryption =
+            Some(ConfigFileEncryptionProperties::from(&encrypt));
         options.global.allow_single_file_parallelism = allow_single_file_parallelism;
 
         df.write_parquet(

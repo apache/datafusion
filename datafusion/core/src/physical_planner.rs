@@ -60,10 +60,14 @@ use crate::schema_equivalence::schema_satisfied_by;
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
+use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::format::ExplainAnalyzeLevel;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::TableReference;
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_or_internal_err, TableReference,
+};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
@@ -77,19 +81,22 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{
-    Analyze, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, RecursiveQuery, SkipType, StringifiedPlan, WindowFrame,
-    WindowFrameBound, WriteOp,
+    Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
+    FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
+    WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
+use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
+use datafusion_physical_plan::metrics::MetricType;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::unnest::ListUnnest;
@@ -343,11 +350,11 @@ impl DefaultPhysicalPlanner {
             .flatten()
             .collect::<Vec<_>>();
         // Ideally this never happens if we have a valid LogicalPlan tree
-        if outputs.len() != 1 {
-            return internal_err!(
-                "Failed to convert LogicalPlan to ExecutionPlan: More than one root detected"
-            );
-        }
+        assert_eq_or_internal_err!(
+            outputs.len(),
+            1,
+            "Failed to convert LogicalPlan to ExecutionPlan: More than one root detected"
+        );
         let plan = outputs.pop().unwrap();
         Ok(plan)
     }
@@ -492,7 +499,7 @@ impl DefaultPhysicalPlanner {
                 output_schema,
             }) => {
                 let output_schema = Arc::clone(output_schema.inner());
-                self.plan_describe(Arc::clone(schema), output_schema)?
+                self.plan_describe(&Arc::clone(schema), output_schema)?
             }
 
             // 1 Child
@@ -584,9 +591,10 @@ impl DefaultPhysicalPlanner {
                 }
             }
             LogicalPlan::Window(Window { window_expr, .. }) => {
-                if window_expr.is_empty() {
-                    return internal_err!("Impossibly got empty window expression");
-                }
+                assert_or_internal_err!(
+                    !window_expr.is_empty(),
+                    "Impossibly got empty window expression"
+                );
 
                 let input_exec = children.one()?;
 
@@ -846,6 +854,7 @@ impl DefaultPhysicalPlanner {
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
                         FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
+                            .with_batch_size(session_state.config().batch_size())?
                     }
                     PlanAsyncExpr::Async(
                         async_map,
@@ -864,6 +873,7 @@ impl DefaultPhysicalPlanner {
                         .with_projection(Some(
                             (0..input.schema().fields().len()).collect(),
                         ))?
+                        .with_batch_size(session_state.config().batch_size())?
                     }
                     _ => {
                         return internal_err!(
@@ -985,7 +995,7 @@ impl DefaultPhysicalPlanner {
                     struct_type_columns.clone(),
                     schema,
                     options.clone(),
-                ))
+                )?)
             }
 
             // 2 Children
@@ -1131,8 +1141,42 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<join_utils::JoinOn>>()?;
 
+                // TODO: `num_range_filters` can be used later on for ASOF joins (`num_range_filters > 1`)
+                let mut num_range_filters = 0;
+                let mut range_filters: Vec<Expr> = Vec::new();
+                let mut total_filters = 0;
+
                 let join_filter = match filter {
                     Some(expr) => {
+                        let split_expr = split_conjunction(expr);
+                        for expr in split_expr.iter() {
+                            match *expr {
+                                Expr::BinaryExpr(BinaryExpr {
+                                    left: _,
+                                    right: _,
+                                    op,
+                                }) => {
+                                    if matches!(
+                                        op,
+                                        Operator::Lt
+                                            | Operator::LtEq
+                                            | Operator::Gt
+                                            | Operator::GtEq
+                                    ) {
+                                        range_filters.push((**expr).clone());
+                                        num_range_filters += 1;
+                                    }
+                                    total_filters += 1;
+                                }
+                                // TODO: Want to deal with `Expr::Between` for IEJoins, it counts as two range predicates
+                                // which is why it is not dealt with in PWMJ
+                                // Expr::Between(_) => {},
+                                _ => {
+                                    total_filters += 1;
+                                }
+                            }
+                        }
+
                         // Extract columns from filter expression and saved in a HashSet
                         let cols = expr.column_refs();
 
@@ -1188,6 +1232,7 @@ impl DefaultPhysicalPlanner {
                         )?;
                         let filter_schema =
                             Schema::new_with_metadata(filter_fields, metadata);
+
                         let filter_expr = create_physical_expr(
                             expr,
                             &filter_df_schema,
@@ -1210,10 +1255,125 @@ impl DefaultPhysicalPlanner {
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
 
+                // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
                     if join_filter.is_none() && matches!(join_type, JoinType::Inner) {
                         // cross join if there is no join conditions and no join filter set
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
+                    } else if num_range_filters == 1
+                        && total_filters == 1
+                        && !matches!(
+                            join_type,
+                            JoinType::LeftSemi
+                                | JoinType::RightSemi
+                                | JoinType::LeftAnti
+                                | JoinType::RightAnti
+                                | JoinType::LeftMark
+                                | JoinType::RightMark
+                        )
+                        && session_state
+                            .config_options()
+                            .optimizer
+                            .enable_piecewise_merge_join
+                    {
+                        let Expr::BinaryExpr(be) = &range_filters[0] else {
+                            return plan_err!(
+                                "Unsupported expression for PWMJ: Expected `Expr::BinaryExpr`"
+                            );
+                        };
+
+                        let mut op = be.op;
+                        if !matches!(
+                            op,
+                            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+                        ) {
+                            return plan_err!(
+                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
+                                op
+                            );
+                        }
+
+                        fn reverse_ineq(op: Operator) -> Operator {
+                            match op {
+                                Operator::Lt => Operator::Gt,
+                                Operator::LtEq => Operator::GtEq,
+                                Operator::Gt => Operator::Lt,
+                                Operator::GtEq => Operator::LtEq,
+                                _ => op,
+                            }
+                        }
+
+                        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+                        enum Side {
+                            Left,
+                            Right,
+                            Both,
+                        }
+
+                        let side_of = |e: &Expr| -> Result<Side> {
+                            let cols = e.column_refs();
+                            let any_left = cols
+                                .iter()
+                                .any(|c| left_df_schema.index_of_column(c).is_ok());
+                            let any_right = cols
+                                .iter()
+                                .any(|c| right_df_schema.index_of_column(c).is_ok());
+
+                            Ok(match (any_left, any_right) {
+                                (true, false) => Side::Left,
+                                (false, true) => Side::Right,
+                                (true, true) => Side::Both,
+                                _ => unreachable!(),
+                            })
+                        };
+
+                        let mut lhs_logical = &be.left;
+                        let mut rhs_logical = &be.right;
+
+                        let left_side = side_of(lhs_logical)?;
+                        let right_side = side_of(rhs_logical)?;
+                        if matches!(left_side, Side::Both)
+                            || matches!(right_side, Side::Both)
+                        {
+                            return Ok(Arc::new(NestedLoopJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                join_filter,
+                                join_type,
+                                None,
+                            )?));
+                        }
+
+                        if left_side == Side::Right && right_side == Side::Left {
+                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
+                            op = reverse_ineq(op);
+                        } else if !(left_side == Side::Left && right_side == Side::Right)
+                        {
+                            return plan_err!(
+                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
+                                op
+                            );
+                        }
+
+                        let on_left = create_physical_expr(
+                            lhs_logical,
+                            left_df_schema,
+                            session_state.execution_props(),
+                        )?;
+                        let on_right = create_physical_expr(
+                            rhs_logical,
+                            right_df_schema,
+                            session_state.execution_props(),
+                        )?;
+
+                        Arc::new(PiecewiseMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            (on_left, on_right),
+                            op,
+                            *join_type,
+                            session_state.config().target_partitions(),
+                        )?)
                     } else {
                         // there is no equal join condition, use the nested loop join
                         Arc::new(NestedLoopJoinExec::try_new(
@@ -1598,11 +1758,11 @@ fn qualify_join_schema_sides(
     let join_fields = join_schema.fields();
 
     // Validate lengths
-    if join_fields.len() != left_fields.len() + right_fields.len() {
-        return internal_err!(
-            "Join schema field count must match left and right field count."
-        );
-    }
+    assert_eq_or_internal_err!(
+        join_fields.len(),
+        left_fields.len() + right_fields.len(),
+        "Join schema field count must match left and right field count."
+    );
 
     // Validate field names match
     for (i, (field, expected)) in join_fields
@@ -1610,14 +1770,12 @@ fn qualify_join_schema_sides(
         .zip(left_fields.iter().chain(right_fields.iter()))
         .enumerate()
     {
-        if field.name() != expected.name() {
-            return internal_err!(
-                "Field name mismatch at index {}: expected '{}', found '{}'",
-                i,
-                expected.name(),
-                field.name()
-            );
-        }
+        assert_eq_or_internal_err!(
+            field.name(),
+            expected.name(),
+            "Field name mismatch at index {}",
+            i
+        );
     }
 
     // qualify sides
@@ -2073,9 +2231,15 @@ impl DefaultPhysicalPlanner {
         let input = self.create_physical_plan(&a.input, session_state).await?;
         let schema = Arc::clone(a.schema.inner());
         let show_statistics = session_state.config_options().explain.show_statistics;
+        let analyze_level = session_state.config_options().explain.analyze_level;
+        let metric_types = match analyze_level {
+            ExplainAnalyzeLevel::Summary => vec![MetricType::SUMMARY],
+            ExplainAnalyzeLevel::Dev => vec![MetricType::SUMMARY, MetricType::DEV],
+        };
         Ok(Arc::new(AnalyzeExec::new(
             a.verbose,
             show_statistics,
+            metric_types,
             input,
             schema,
         )))
@@ -2083,6 +2247,7 @@ impl DefaultPhysicalPlanner {
 
     /// Optimize a physical plan by applying each physical optimizer,
     /// calling observer(plan, optimizer after each one)
+    #[expect(clippy::needless_pass_by_value)]
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -2106,18 +2271,21 @@ impl DefaultPhysicalPlanner {
         // to verify that the plan fulfills the base requirements.
         InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
+        // Create optimizer context from session state
+        let optimizer_context = OptimizerContext::new(session_state.config().clone());
+
         let mut new_plan = Arc::clone(&plan);
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
-                .optimize(new_plan, session_state.config_options())
+                .optimize_plan(new_plan, &optimizer_context)
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
             OptimizationInvariantChecker::new(optimizer)
-                .check(&new_plan, before_schema)?;
+                .check(&new_plan, &before_schema)?;
 
             debug!(
                 "Optimized physical plan by {}:\n{}\n",
@@ -2150,7 +2318,7 @@ impl DefaultPhysicalPlanner {
     // return an record_batch which describes a table's schema.
     fn plan_describe(
         &self,
-        table_schema: Arc<Schema>,
+        table_schema: &Arc<Schema>,
         output_schema: Arc<Schema>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut column_names = StringBuilder::new();
@@ -2353,10 +2521,12 @@ impl<'a> OptimizationInvariantChecker<'a> {
     pub fn check(
         &mut self,
         plan: &Arc<dyn ExecutionPlan>,
-        previous_schema: Arc<Schema>,
+        previous_schema: &Arc<Schema>,
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
-        if self.rule.schema_check() && plan.schema() != previous_schema {
+        if self.rule.schema_check()
+            && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
+        {
             internal_err!("PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
                 self.rule.name(),
                 previous_schema,
@@ -2370,6 +2540,38 @@ impl<'a> OptimizationInvariantChecker<'a> {
 
         Ok(())
     }
+}
+
+/// Checks if the change from `old` schema to `new` is allowed or not.
+///
+/// The current implementation only allows nullability of individual fields to change
+/// from 'nullable' to 'not nullable'. This can happen due to physical expressions knowing
+/// more about their null-ness than their logical counterparts.
+/// This change is allowed because for any field the non-nullable domain `F` is a strict subset
+/// of the nullable domain `F ∪ { NULL }`. A physical schema that guarantees a stricter subset
+/// of values will not violate any assumptions made based on the less strict schema.
+fn is_allowed_schema_change(old: &Schema, new: &Schema) -> bool {
+    if new.metadata != old.metadata {
+        return false;
+    }
+
+    if new.fields.len() != old.fields.len() {
+        return false;
+    }
+
+    let new_fields = new.fields.iter().map(|f| f.as_ref());
+    let old_fields = old.fields.iter().map(|f| f.as_ref());
+    old_fields
+        .zip(new_fields)
+        .all(|(old, new)| is_allowed_field_change(old, new))
+}
+
+fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> bool {
+    new_field.name() == old_field.name()
+        && new_field.data_type() == old_field.data_type()
+        && new_field.metadata() == old_field.metadata()
+        && (new_field.is_nullable() == old_field.is_nullable()
+            || !new_field.is_nullable())
 }
 
 impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
@@ -2484,9 +2686,9 @@ mod tests {
         // verify that the plan correctly casts u8 to i64
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
-        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "lit", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }"#;
+        let expected = r#"BinaryExpr { left: Column { name: "c7", index: 2 }, op: Lt, right: Literal { value: Int64(5), field: Field { name: "lit", data_type: Int64 } }, fail_on_overflow: false"#;
 
-        assert!(format!("{exec_plan:?}").contains(expected));
+        assert_contains!(format!("{exec_plan:?}"), expected);
         Ok(())
     }
 
@@ -2510,9 +2712,112 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "lit", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
-
-        assert_eq!(format!("{cube:?}"), expected);
+        insta::assert_debug_snapshot!(cube, @r#"
+        Ok(
+            PhysicalGroupBy {
+                expr: [
+                    (
+                        Column {
+                            name: "c1",
+                            index: 0,
+                        },
+                        "c1",
+                    ),
+                    (
+                        Column {
+                            name: "c2",
+                            index: 1,
+                        },
+                        "c2",
+                    ),
+                    (
+                        Column {
+                            name: "c3",
+                            index: 2,
+                        },
+                        "c3",
+                    ),
+                ],
+                null_expr: [
+                    (
+                        Literal {
+                            value: Utf8(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Utf8,
+                                nullable: true,
+                            },
+                        },
+                        "c1",
+                    ),
+                    (
+                        Literal {
+                            value: Int64(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Int64,
+                                nullable: true,
+                            },
+                        },
+                        "c2",
+                    ),
+                    (
+                        Literal {
+                            value: Int64(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Int64,
+                                nullable: true,
+                            },
+                        },
+                        "c3",
+                    ),
+                ],
+                groups: [
+                    [
+                        false,
+                        false,
+                        false,
+                    ],
+                    [
+                        true,
+                        false,
+                        false,
+                    ],
+                    [
+                        false,
+                        true,
+                        false,
+                    ],
+                    [
+                        false,
+                        false,
+                        true,
+                    ],
+                    [
+                        true,
+                        true,
+                        false,
+                    ],
+                    [
+                        true,
+                        false,
+                        true,
+                    ],
+                    [
+                        false,
+                        true,
+                        true,
+                    ],
+                    [
+                        true,
+                        true,
+                        true,
+                    ],
+                ],
+            },
+        )
+        "#);
 
         Ok(())
     }
@@ -2537,9 +2842,92 @@ mod tests {
             &session_state,
         );
 
-        let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL), field: Field { name: "lit", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c1"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c2"), (Literal { value: Int64(NULL), field: Field { name: "lit", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} } }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
-
-        assert_eq!(format!("{rollup:?}"), expected);
+        insta::assert_debug_snapshot!(rollup, @r#"
+        Ok(
+            PhysicalGroupBy {
+                expr: [
+                    (
+                        Column {
+                            name: "c1",
+                            index: 0,
+                        },
+                        "c1",
+                    ),
+                    (
+                        Column {
+                            name: "c2",
+                            index: 1,
+                        },
+                        "c2",
+                    ),
+                    (
+                        Column {
+                            name: "c3",
+                            index: 2,
+                        },
+                        "c3",
+                    ),
+                ],
+                null_expr: [
+                    (
+                        Literal {
+                            value: Utf8(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Utf8,
+                                nullable: true,
+                            },
+                        },
+                        "c1",
+                    ),
+                    (
+                        Literal {
+                            value: Int64(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Int64,
+                                nullable: true,
+                            },
+                        },
+                        "c2",
+                    ),
+                    (
+                        Literal {
+                            value: Int64(NULL),
+                            field: Field {
+                                name: "lit",
+                                data_type: Int64,
+                                nullable: true,
+                            },
+                        },
+                        "c3",
+                    ),
+                ],
+                groups: [
+                    [
+                        true,
+                        true,
+                        true,
+                    ],
+                    [
+                        false,
+                        true,
+                        true,
+                    ],
+                    [
+                        false,
+                        false,
+                        true,
+                    ],
+                    [
+                        false,
+                        false,
+                        false,
+                    ],
+                ],
+            },
+        )
+        "#);
 
         Ok(())
     }
@@ -2677,35 +3065,13 @@ mod tests {
         let logical_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(NoOpExtensionNode::default()),
         });
-        let plan = planner
+        let e = planner
             .create_physical_plan(&logical_plan, &session_state)
-            .await;
+            .await
+            .expect_err("planning error")
+            .strip_backtrace();
 
-        let expected_error: &str = "Error during planning: \
-            Extension planner for NoOp created an ExecutionPlan with mismatched schema. \
-            LogicalPlan schema: \
-            DFSchema { inner: Schema { fields: \
-                [Field { name: \"a\", \
-                data_type: Int32, \
-                nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, metadata: {} }], \
-                metadata: {} }, field_qualifiers: [None], \
-                functional_dependencies: FunctionalDependencies { deps: [] } }, \
-            ExecutionPlan schema: Schema { fields: \
-                [Field { name: \"b\", \
-                data_type: Int32, \
-                nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, metadata: {} }], \
-                metadata: {} }";
-        match plan {
-            Ok(_) => panic!("Expected planning failure"),
-            Err(e) => assert!(
-                e.to_string().contains(expected_error),
-                "Error '{e}' did not contain expected error '{expected_error}'"
-            ),
-        }
+        insta::assert_snapshot!(e, @r#"Error during planning: Extension planner for NoOp created an ExecutionPlan with mismatched schema. LogicalPlan schema: DFSchema { inner: Schema { fields: [Field { name: "a", data_type: Int32 }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, ExecutionPlan schema: Schema { fields: [Field { name: "b", data_type: Int32 }], metadata: {} }"#);
     }
 
     #[tokio::test]
@@ -2721,10 +3087,9 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [ProjectionExpr { expr: BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\"), field: Field { name: \"lit\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, fail_on_overflow: false }, fail_on_overflow: false }";
+        let expected = r#"expr: BinaryExpr { left: BinaryExpr { left: Column { name: "c1", index: 0 }, op: Eq, right: Literal { value: Utf8("a"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }"#;
 
-        let actual = format!("{execution_plan:?}");
-        assert!(actual.contains(expected), "{}", actual);
+        assert_contains!(format!("{execution_plan:?}"), expected);
 
         Ok(())
     }
@@ -2744,7 +3109,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct(foo Boolean), Utf8]"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct("foo": Boolean), Utf8]"#
         );
 
         Ok(())
@@ -3383,20 +3748,20 @@ digraph {
 
         // Test: check should pass with same schema
         let equal_schema = ok_plan.schema();
-        OptimizationInvariantChecker::new(&rule).check(&ok_plan, equal_schema)?;
+        OptimizationInvariantChecker::new(&rule).check(&ok_plan, &equal_schema)?;
 
         // Test: should fail with schema changed
         let different_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&ok_plan, different_schema)
+            .check(&ok_plan, &different_schema)
             .unwrap_err();
         assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
 
         // Test: should fail when extension node fails it's own invariant check
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&failing_node, ok_plan.schema())
+            .check(&failing_node, &ok_plan.schema())
             .unwrap_err();
         assert!(expected_err
             .to_string()
@@ -3409,7 +3774,7 @@ digraph {
             Arc::clone(&child),
         ])?;
         let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&invalid_plan, ok_plan.schema())
+            .check(&invalid_plan, &ok_plan.schema())
             .unwrap_err();
         assert!(expected_err
             .to_string()

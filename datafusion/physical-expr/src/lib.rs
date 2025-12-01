@@ -23,6 +23,9 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+// https://github.com/apache/datafusion/issues/18503
+#![deny(clippy::needless_pass_by_value)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 // Backward compatibility
 pub mod aggregate;
@@ -37,6 +40,7 @@ pub mod intervals;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
+pub mod projection;
 mod scalar_function;
 pub mod simplifier;
 pub mod statistics;

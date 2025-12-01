@@ -29,10 +29,11 @@ use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_doc::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
@@ -240,6 +241,14 @@ impl WindowUDFImpl for Rank {
             RankType::Percent => Some(get_percent_rank_doc()),
         }
     }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        match self.rank_type {
+            RankType::Basic => LimitEffect::None,
+            RankType::Dense => LimitEffect::None,
+            RankType::Percent => LimitEffect::Unknown,
+        }
+    }
 }
 
 /// State for the RANK(rank) built-in window function.
@@ -372,7 +381,7 @@ mod tests {
         test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
     }
 
-    #[allow(clippy::single_range_in_vec_init)]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_without_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..8], expected)
     }
@@ -425,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::single_range_in_vec_init)]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_percent_rank() -> Result<()> {
         let r = Rank::percent_rank();
 

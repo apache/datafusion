@@ -19,6 +19,11 @@
 
 use std::{borrow::Cow, sync::Arc};
 
+use crate::metrics::{
+    value::{PruningMetrics, RatioMergeStrategy, RatioMetrics},
+    MetricType,
+};
+
 use super::{
     Count, ExecutionPlanMetricsSet, Gauge, Label, Metric, MetricValue, Time, Timestamp,
 };
@@ -29,19 +34,18 @@ use super::{
 /// case of constant strings
 ///
 /// ```rust
-///  use datafusion_physical_plan::metrics::*;
+/// use datafusion_physical_plan::metrics::*;
 ///
-///  let metrics = ExecutionPlanMetricsSet::new();
-///  let partition = 1;
+/// let metrics = ExecutionPlanMetricsSet::new();
+/// let partition = 1;
 ///
-///  // Create the standard output_rows metric
-///  let output_rows = MetricBuilder::new(&metrics).output_rows(partition);
+/// // Create the standard output_rows metric
+/// let output_rows = MetricBuilder::new(&metrics).output_rows(partition);
 ///
-///  // Create a operator specific counter with some labels
-///  let num_bytes = MetricBuilder::new(&metrics)
-///    .with_new_label("filename", "my_awesome_file.parquet")
-///    .counter("num_bytes", partition);
-///
+/// // Create a operator specific counter with some labels
+/// let num_bytes = MetricBuilder::new(&metrics)
+///     .with_new_label("filename", "my_awesome_file.parquet")
+///     .counter("num_bytes", partition);
 /// ```
 pub struct MetricBuilder<'a> {
     /// Location that the metric created by this builder will be added do
@@ -52,21 +56,35 @@ pub struct MetricBuilder<'a> {
 
     /// arbitrary name=value pairs identifying this metric
     labels: Vec<Label>,
+
+    /// The type controlling the verbosity/category for this builder
+    /// See comments in [`MetricType`] for details
+    metric_type: MetricType,
 }
 
 impl<'a> MetricBuilder<'a> {
     /// Create a new `MetricBuilder` that will register the result of `build()` with the `metrics`
+    ///
+    /// `self.metric_type` controls when such metric is displayed. See comments in
+    /// [`MetricType`] for details.
     pub fn new(metrics: &'a ExecutionPlanMetricsSet) -> Self {
         Self {
             metrics,
             partition: None,
             labels: vec![],
+            metric_type: MetricType::DEV,
         }
     }
 
     /// Add a label to the metric being constructed
     pub fn with_label(mut self, label: Label) -> Self {
         self.labels.push(label);
+        self
+    }
+
+    /// Set the metric type to the metric being constructed
+    pub fn with_type(mut self, metric_type: MetricType) -> Self {
+        self.metric_type = metric_type;
         self
     }
 
@@ -92,8 +110,11 @@ impl<'a> MetricBuilder<'a> {
             labels,
             partition,
             metrics,
+            metric_type,
         } = self;
-        let metric = Arc::new(Metric::new_with_labels(value, partition, labels));
+        let metric = Arc::new(
+            Metric::new_with_labels(value, partition, labels).with_type(metric_type),
+        );
         metrics.register(metric);
     }
 
@@ -129,6 +150,22 @@ impl<'a> MetricBuilder<'a> {
         let count = Count::new();
         self.with_partition(partition)
             .build(MetricValue::SpilledRows(count.clone()));
+        count
+    }
+
+    /// Consume self and create a new counter for recording total output bytes
+    pub fn output_bytes(self, partition: usize) -> Count {
+        let count = Count::new();
+        self.with_partition(partition)
+            .build(MetricValue::OutputBytes(count.clone()));
+        count
+    }
+
+    /// Consume self and create a new counter for recording total output batches
+    pub fn output_batches(self, partition: usize) -> Count {
+        let count = Count::new();
+        self.with_partition(partition)
+            .build(MetricValue::OutputBatches(count.clone()));
         count
     }
 
@@ -222,5 +259,45 @@ impl<'a> MetricBuilder<'a> {
         self.with_partition(partition)
             .build(MetricValue::EndTimestamp(timestamp.clone()));
         timestamp
+    }
+
+    /// Consumes self and creates a new `PruningMetrics`
+    pub fn pruning_metrics(
+        self,
+        name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> PruningMetrics {
+        let pruning_metrics = PruningMetrics::new();
+        self.with_partition(partition)
+            .build(MetricValue::PruningMetrics {
+                name: name.into(),
+                // inner values will be `Arc::clone()`
+                pruning_metrics: pruning_metrics.clone(),
+            });
+        pruning_metrics
+    }
+
+    /// Consumes self and creates a new [`RatioMetrics`]
+    pub fn ratio_metrics(
+        self,
+        name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> RatioMetrics {
+        self.ratio_metrics_with_strategy(name, partition, RatioMergeStrategy::default())
+    }
+
+    /// Consumes self and creates a new [`RatioMetrics`] with a specific merge strategy
+    pub fn ratio_metrics_with_strategy(
+        self,
+        name: impl Into<Cow<'static, str>>,
+        partition: usize,
+        merge_strategy: RatioMergeStrategy,
+    ) -> RatioMetrics {
+        let ratio_metrics = RatioMetrics::new().with_merge_strategy(merge_strategy);
+        self.with_partition(partition).build(MetricValue::Ratio {
+            name: name.into(),
+            ratio_metrics: ratio_metrics.clone(),
+        });
+        ratio_metrics
     }
 }
