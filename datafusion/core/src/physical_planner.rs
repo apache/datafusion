@@ -3226,7 +3226,7 @@ mod tests {
             })
             .collect();
         let dict_array: DictionaryArray<Int32Type> = dict_values.into_iter().collect();
-        let val_array: Int32Array = (0..10000).map(|i| (i % 10) as i32).collect();
+        let val_array: Int32Array = (0..10000).map(|i| i % 10).collect();
 
         let batch = RecordBatch::try_from_iter(vec![
             ("d1", Arc::new(dict_array) as ArrayRef),
