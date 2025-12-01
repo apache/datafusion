@@ -17,16 +17,14 @@
 
 use super::{
     LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalUnionFields,
-    TypeSignature, ValuePrettyPrinter,
+    TypeSignature,
 };
-use crate::error::{_internal_err, Result};
-use crate::types::DefaultValuePrettyPrinter;
+use crate::error::{Result, _internal_err};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
-    Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
+    DataType, Field, FieldRef, Fields,
+    IntervalUnit, TimeUnit, UnionFields, DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
 };
-use std::sync::LazyLock;
 use std::{fmt::Display, sync::Arc};
 
 /// Representation of a type that DataFusion can handle natively. It is a subset
@@ -369,12 +367,6 @@ impl LogicalType for NativeType {
                 );
             }
         })
-    }
-
-    fn pretty_printer(&self) -> &Arc<dyn ValuePrettyPrinter> {
-        static PRETTY_PRINTER: LazyLock<Arc<dyn ValuePrettyPrinter>> =
-            LazyLock::new(|| Arc::new(DefaultValuePrettyPrinter {}));
-        &PRETTY_PRINTER
     }
 }
 

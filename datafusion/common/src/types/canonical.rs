@@ -16,13 +16,14 @@
 // under the License.
 
 use crate::error::_internal_err;
-use crate::types::{
-    LogicalType, NativeType, TypeParameter, TypeSignature, ValuePrettyPrinter,
-};
+use crate::types::{LogicalType, NativeType, TypeParameter, TypeSignature};
+use crate::Result;
 use crate::ScalarValue;
-use crate::{Result, _internal_datafusion_err};
+use arrow::array::{Array, FixedSizeBinaryArray};
+use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
 use arrow_schema::extension::{ExtensionType, Opaque, Uuid};
-use std::sync::{Arc, LazyLock};
+use arrow_schema::DataType;
+use std::fmt::Write;
 use uuid::Bytes;
 
 impl LogicalType for Uuid {
@@ -37,33 +38,43 @@ impl LogicalType for Uuid {
         }
     }
 
-    fn pretty_printer(&self) -> &Arc<dyn ValuePrettyPrinter> {
-        static PRETTY_PRINTER: LazyLock<Arc<dyn ValuePrettyPrinter>> =
-            LazyLock::new(|| Arc::new(UuidValuePrettyPrinter {}));
-        &PRETTY_PRINTER
+    fn create_array_formatter<'fmt>(
+        &self,
+        array: &'fmt dyn Array,
+        options: &FormatOptions<'fmt>,
+    ) -> Result<Option<ArrayFormatter<'fmt>>> {
+        if array.data_type() != &DataType::FixedSizeBinary(16) {
+            return _internal_err!("Wrong array type for Uuid");
+        }
+
+        let display_index = UuidValueDisplayIndex {
+            array: array.as_any().downcast_ref().unwrap(),
+        };
+        Ok(Some(ArrayFormatter::new(
+            Box::new(display_index),
+            options.safe(),
+        )))
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-struct UuidValuePrettyPrinter;
+/// Pretty printer for binary UUID values.
+#[derive(Debug, Clone, Copy)]
+struct UuidValueDisplayIndex<'arr> {
+    array: &'arr FixedSizeBinaryArray,
+}
 
-impl ValuePrettyPrinter for UuidValuePrettyPrinter {
-    fn pretty_print_scalar(&self, value: &ScalarValue) -> Result<String> {
-        match value {
-            ScalarValue::FixedSizeBinary(16, value) => match value {
-                Some(value) => {
-                    let bytes = Bytes::try_from(value.as_slice()).map_err(|_| {
-                        _internal_datafusion_err!(
-                            "Invalid UUID bytes even though type is correct."
-                        )
-                    })?;
-                    let uuid = uuid::Uuid::from_bytes(bytes);
-                    Ok(format!("arrow.uuid({uuid})"))
-                }
-                None => Ok("arrow.uuid(NULL)".to_owned()),
-            },
-            _ => _internal_err!("Wrong scalar given to "),
+impl DisplayIndex for UuidValueDisplayIndex<'_> {
+    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+        if self.array.is_null(idx) {
+            write!(f, "arrow.uuid(NULL)")?;
+            return Ok(());
         }
+
+        let bytes = Bytes::try_from(self.array.value(idx))
+            .expect("FixedSizeBinaryArray length checked in create_array_formatter");
+        let uuid = uuid::Uuid::from_bytes(bytes);
+        write!(f, "arrow.uuid({uuid})")?;
+        Ok(())
     }
 }
 
@@ -87,24 +98,9 @@ impl LogicalType for Opaque {
             parameters: vec![parameter],
         }
     }
-
-    fn pretty_printer(&self) -> &Arc<dyn ValuePrettyPrinter> {
-        static PRETTY_PRINTER: LazyLock<Arc<dyn ValuePrettyPrinter>> =
-            LazyLock::new(|| Arc::new(OpaqueValuePrettyPrinter {}));
-        &PRETTY_PRINTER
-    }
 }
 
 // TODO Other canonical extension types.
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-struct OpaqueValuePrettyPrinter;
-
-impl ValuePrettyPrinter for OpaqueValuePrettyPrinter {
-    fn pretty_print_scalar(&self, value: &ScalarValue) -> Result<String> {
-        Ok(format!("arrow.opaque({value})"))
-    }
-}
 
 /// Represents an unresolved extension type with a given native type and name.
 ///
@@ -162,21 +158,6 @@ impl LogicalType for UnresolvedExtensionType {
             parameters: vec![inner_type],
         }
     }
-
-    fn pretty_printer(&self) -> &Arc<dyn ValuePrettyPrinter> {
-        static PRETTY_PRINTER: LazyLock<Arc<dyn ValuePrettyPrinter>> =
-            LazyLock::new(|| Arc::new(UnresolvedValuePrettyPrinter {}));
-        &PRETTY_PRINTER
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-struct UnresolvedValuePrettyPrinter {}
-
-impl ValuePrettyPrinter for UnresolvedValuePrettyPrinter {
-    fn pretty_print_scalar(&self, value: &ScalarValue) -> Result<String> {
-        Ok(format!("datafusion.unresolved({value})"))
-    }
 }
 
 #[cfg(test)]
@@ -186,12 +167,18 @@ mod tests {
     #[test]
     pub fn test_pretty_print_uuid() {
         let my_uuid = uuid::Uuid::nil();
-        let uuid = ScalarValue::FixedSizeBinary(16, Some(my_uuid.as_bytes().to_vec()));
+        let uuid = ScalarValue::FixedSizeBinary(16, Some(my_uuid.as_bytes().to_vec()))
+            .to_array_of_size(1)
+            .unwrap();
 
-        let printer = UuidValuePrettyPrinter::default();
-        let pretty_printed = printer.pretty_print_scalar(&uuid).unwrap();
+        let type_instance = Uuid::try_new(uuid.data_type(), ()).unwrap();
+        let formatter = type_instance
+            .create_array_formatter(uuid.as_ref(), &FormatOptions::default())
+            .unwrap()
+            .unwrap();
+
         assert_eq!(
-            pretty_printed,
+            formatter.value(0).to_string(),
             "arrow.uuid(00000000-0000-0000-0000-000000000000)"
         );
     }

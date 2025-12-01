@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{NativeType, ValuePrettyPrinter};
+use super::NativeType;
 use crate::error::Result;
+use arrow::array::Array;
 use arrow::datatypes::DataType;
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use core::fmt;
 use std::{cmp::Ordering, hash::Hash, sync::Arc};
 
@@ -88,8 +90,17 @@ pub trait LogicalType: Sync + Send {
         self.native().default_cast_for(origin)
     }
 
-    /// Returns a pretty-printer that can format values of this type.
-    fn pretty_printer(&self) -> &Arc<dyn ValuePrettyPrinter>;
+    /// Returns an [`ArrayFormatter`] that can format values of this type.
+    ///
+    /// If `Ok(None)` is returned, the default implementation will be used.
+    /// If an error is returned, there was an error creating the formatter.
+    fn create_array_formatter<'fmt>(
+        &self,
+        _array: &'fmt dyn Array,
+        _options: &FormatOptions<'fmt>,
+    ) -> Result<Option<ArrayFormatter<'fmt>>> {
+        Ok(None)
+    }
 }
 
 impl fmt::Debug for dyn LogicalType {
