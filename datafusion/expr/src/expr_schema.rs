@@ -643,7 +643,16 @@ impl ExprSchemable for Expr {
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
             Expr::Cast(Cast { expr, field }) => expr
                 .to_field(schema)
-                .map(|(_, f)| f.retyped(data_type.clone())),
+                .map(|(_, f)| {
+                    // This currently propagates the nullability of the input
+                    // expression as the resulting physical expression does
+                    // not currently consider the nullability specified here
+                    f.as_ref()
+                        .clone()
+                        .with_data_type(field.data_type().clone())
+                        .with_metadata(f.metadata().clone())
+                })
+                .map(Arc::new),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
