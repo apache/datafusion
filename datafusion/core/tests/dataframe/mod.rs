@@ -3333,13 +3333,9 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |     ProjectionExec: expr=[a@2 as a, b@3 as b, count(*)@0 as count(*), __always_true@1 as __always_true]                      |
     |               |       CoalesceBatchesExec: target_batch_size=8192                                                                            |
     |               |         HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@1, a@0)], projection=[count(*)@0, __always_true@2, a@3, b@4] |
-    |               |           CoalescePartitionsExec                                                                                             |
-    |               |             ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                            |
-    |               |               AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                   |
-    |               |                 CoalesceBatchesExec: target_batch_size=8192                                                                  |
-    |               |                   RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                           |
-    |               |                     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                      |
-    |               |                       DataSourceExec: partitions=1, partition_sizes=[1]                                                      |
+    |               |           ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                              |
+    |               |             AggregateExec: mode=Single, gby=[a@0 as a], aggr=[count(Int64(1))]                                               |
+    |               |               DataSourceExec: partitions=1, partition_sizes=[1]                                                              |
     |               |           DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
     |               |                                                                                                                              |
     +---------------+------------------------------------------------------------------------------------------------------------------------------+
@@ -3391,13 +3387,9 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |     ProjectionExec: expr=[a@2 as a, b@3 as b, count(*)@0 as count(*), __always_true@1 as __always_true]                      |
     |               |       CoalesceBatchesExec: target_batch_size=8192                                                                            |
     |               |         HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@1, a@0)], projection=[count(*)@0, __always_true@2, a@3, b@4] |
-    |               |           CoalescePartitionsExec                                                                                             |
-    |               |             ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                   |
-    |               |               AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                          |
-    |               |                 CoalesceBatchesExec: target_batch_size=8192                                                                  |
-    |               |                   RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                           |
-    |               |                     AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                             |
-    |               |                       DataSourceExec: partitions=1, partition_sizes=[1]                                                      |
+    |               |           ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                     |
+    |               |             AggregateExec: mode=Single, gby=[a@0 as a], aggr=[count(*)]                                                      |
+    |               |               DataSourceExec: partitions=1, partition_sizes=[1]                                                              |
     |               |           DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
     |               |                                                                                                                              |
     +---------------+------------------------------------------------------------------------------------------------------------------------------+
