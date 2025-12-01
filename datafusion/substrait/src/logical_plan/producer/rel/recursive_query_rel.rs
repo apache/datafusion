@@ -119,8 +119,7 @@ pub fn decode_recursive_query_detail(
 ) -> datafusion::common::Result<(String, bool)> {
     let detail = RecursiveQueryDetail::decode(bytes).map_err(|e| {
         datafusion::common::DataFusionError::Substrait(format!(
-            "Failed to decode RecursiveQueryDetail: {}",
-            e
+            "Failed to decode RecursiveQueryDetail: {e}"
         ))
     })?;
 
@@ -135,8 +134,7 @@ pub fn decode_recursive_query_detail(
 pub fn decode_recursive_scan_detail(bytes: &[u8]) -> datafusion::common::Result<String> {
     let detail = RecursiveScanDetail::decode(bytes).map_err(|e| {
         datafusion::common::DataFusionError::Substrait(format!(
-            "Failed to decode RecursiveScanDetail: {}",
-            e
+            "Failed to decode RecursiveScanDetail: {e}"
         ))
     })?;
 

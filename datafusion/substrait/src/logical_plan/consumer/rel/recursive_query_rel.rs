@@ -24,8 +24,10 @@ use substrait::proto::ExtensionMultiRel;
 /// Deserializes Substrait ExtensionMultiRel back into DataFusion RecursiveQuery.
 ///
 /// RecursiveQuery is encoded as ExtensionMultiRel with exactly two inputs:
+///
 /// - inputs[0]: static_term
 /// - inputs[1]: recursive_term
+///
 /// The detail field contains the encoded name and is_distinct metadata.
 pub async fn from_recursive_query_rel(
     consumer: &impl SubstraitConsumer,

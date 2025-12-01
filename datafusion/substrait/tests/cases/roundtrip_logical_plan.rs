@@ -2008,15 +2008,14 @@ async fn roundtrip_recursive_query() -> Result<()> {
         LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
             LogicalPlan::RecursiveQuery(ref rq) => rq,
             _ => panic!(
-                "Expected RecursiveQuery inside Projection, got: {:?}",
-                plan2
+                "Expected RecursiveQuery inside Projection, got: {plan2:?}"
             ),
         },
-        _ => panic!("Expected RecursiveQuery or Projection, got: {:?}", plan2),
+        _ => panic!("Expected RecursiveQuery or Projection, got: {plan2:?}"),
     };
 
     assert_eq!(recursive_query.name, "nodes");
-    assert_eq!(recursive_query.is_distinct, false);
+    assert!(!recursive_query.is_distinct);
 
     Ok(())
 }
@@ -2060,15 +2059,14 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
         LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
             LogicalPlan::RecursiveQuery(ref rq) => rq,
             _ => panic!(
-                "Expected RecursiveQuery inside Projection, got: {:?}",
-                plan2
+                "Expected RecursiveQuery inside Projection, got: {plan2:?}"
             ),
         },
-        _ => panic!("Expected RecursiveQuery or Projection, got: {:?}", plan2),
+        _ => panic!("Expected RecursiveQuery or Projection, got: {plan2:?}"),
     };
 
     assert_eq!(recursive_query.name, "cte");
-    assert_eq!(recursive_query.is_distinct, true);
+    assert!(recursive_query.is_distinct);
 
     Ok(())
 }
@@ -2114,19 +2112,17 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
         LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
             LogicalPlan::RecursiveQuery(ref rq) => rq,
             _ => panic!(
-                "Expected RecursiveQuery inside Projection, got: {:?}",
-                roundtrip_plan
+                "Expected RecursiveQuery inside Projection, got: {roundtrip_plan:?}"
             ),
         },
         _ => panic!(
-            "Expected RecursiveQuery or Projection, got: {:?}",
-            roundtrip_plan
+            "Expected RecursiveQuery or Projection, got: {roundtrip_plan:?}"
         ),
     };
 
     // Verify metadata is preserved
     assert_eq!(roundtrip_rq.name, "test_cte");
-    assert_eq!(roundtrip_rq.is_distinct, false);
+    assert!(!roundtrip_rq.is_distinct);
 
     // Verify static_term structure is preserved
     // The static term should contain a projection
@@ -2137,11 +2133,10 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
             let expr_str = format!("{:?}", proj.expr[0]);
             assert!(
                 expr_str.contains("42") || expr_str.contains("Int64(42)"),
-                "Static term should contain literal 42, got: {}",
-                expr_str
+                "Static term should contain literal 42, got: {expr_str}"
             );
         }
-        other => panic!("Expected static_term to be Projection, got: {:?}", other),
+        other => panic!("Expected static_term to be Projection, got: {other:?}"),
     }
 
     // Verify recursive_term structure is preserved
@@ -2160,8 +2155,7 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
                     let filter_str = format!("{:?}", filter.predicate);
                     assert!(
                         filter_str.contains("a") && filter_str.contains("5"),
-                        "Filter should contain 'a > 5', got: {}",
-                        filter_str
+                        "Filter should contain 'a > 5', got: {filter_str}"
                     );
                     // Verify there's a table scan underneath
                     assert!(
@@ -2169,10 +2163,10 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
                         "Expected TableScan under filter"
                     );
                 }
-                other => panic!("Expected Filter under projection, got: {:?}", other),
+                other => panic!("Expected Filter under projection, got: {other:?}"),
             }
         }
-        other => panic!("Expected recursive_term to be Projection, got: {:?}", other),
+        other => panic!("Expected recursive_term to be Projection, got: {other:?}"),
     }
 
     Ok(())
