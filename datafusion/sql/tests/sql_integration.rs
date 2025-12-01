@@ -3972,6 +3972,13 @@ Limit: skip=3, fetch=5
 }
 
 #[test]
+fn fetch_clause_is_not_supported() {
+    let sql = "SELECT 1 FETCH NEXT 1 ROW ONLY";
+    let err = logical_plan(sql).unwrap_err();
+    assert_contains!(err.to_string(), "FETCH clause is not supported yet");
+}
+
+#[test]
 fn test_offset_before_limit() {
     let sql = "select id from person where person.id > 100 OFFSET 3 LIMIT 5;";
     let plan = logical_plan(sql).unwrap();
