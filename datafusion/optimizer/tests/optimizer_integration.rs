@@ -536,14 +536,15 @@ fn recursive_cte_projection_pushdown() -> Result<()> {
     // columns from the base table and recursive table, eliminating unused columns
     assert_snapshot!(
         format!("{plan}"),
-        @r#"SubqueryAlias: nodes
-  RecursiveQuery: is_distinct=false
-    Projection: test.col_int32 AS id
-      TableScan: test projection=[col_int32]
-    Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32)
-      Filter: nodes.id < Int32(3)
-        TableScan: nodes projection=[id]
-"#
+        @r"
+    SubqueryAlias: nodes
+      RecursiveQuery: is_distinct=false
+        Projection: test.col_int32 AS id
+          TableScan: test projection=[col_int32]
+        Projection: CAST(CAST(nodes.id AS Int64) + Int64(1) AS Int32) AS id
+          Filter: nodes.id < Int32(3)
+            TableScan: nodes projection=[id]
+    "
     );
     Ok(())
 }
@@ -559,14 +560,16 @@ fn recursive_cte_with_aliased_self_reference() -> Result<()> {
 
     assert_snapshot!(
         format!("{plan}"),
-        @r#"SubqueryAlias: nodes
-  RecursiveQuery: is_distinct=false
-    Projection: test.col_int32 AS id
-      TableScan: test projection=[col_int32]
-    Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32)
-      SubqueryAlias: child
-        Filter: nodes.id < Int32(3)
-          TableScan: nodes projection=[id]"#,
+        @r"
+    SubqueryAlias: nodes
+      RecursiveQuery: is_distinct=false
+        Projection: test.col_int32 AS id
+          TableScan: test projection=[col_int32]
+        Projection: CAST(CAST(child.id AS Int64) + Int64(1) AS Int32) AS id
+          SubqueryAlias: child
+            Filter: nodes.id < Int32(3)
+              TableScan: nodes projection=[id]
+    ",
     );
     Ok(())
 }
@@ -618,15 +621,16 @@ fn recursive_cte_projection_pushdown_baseline() -> Result<()> {
     // and only the needed column is selected from the recursive table
     assert_snapshot!(
         format!("{plan}"),
-        @r#"SubqueryAlias: countdown
-  RecursiveQuery: is_distinct=false
-    Projection: test.col_int32 AS n
-      Filter: test.col_int32 = Int32(5)
-        TableScan: test projection=[col_int32]
-    Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32)
-      Filter: countdown.n > Int32(1)
-        TableScan: countdown projection=[n]
-"#
+        @r"
+    SubqueryAlias: countdown
+      RecursiveQuery: is_distinct=false
+        Projection: test.col_int32 AS n
+          Filter: test.col_int32 = Int32(5)
+            TableScan: test projection=[col_int32]
+        Projection: CAST(CAST(countdown.n AS Int64) - Int64(1) AS Int32) AS n
+          Filter: countdown.n > Int32(1)
+            TableScan: countdown projection=[n]
+    "
     );
     Ok(())
 }
