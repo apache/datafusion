@@ -32,8 +32,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, internal_err, DataFusionError, Result,
-    ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, internal_err, Result, ScalarValue,
 };
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,

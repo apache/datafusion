@@ -24,10 +24,9 @@
 use std::cmp::Ordering;
 
 use arrow::datatypes::{
-    DataType, TimeUnit, MAX_DECIMAL128_FOR_EACH_PRECISION,
-    MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
-    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
-    MIN_DECIMAL64_FOR_EACH_PRECISION,
+    DataType, MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
+    MAX_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
+    MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION, TimeUnit,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::ScalarValue;
@@ -382,7 +381,7 @@ fn try_cast_binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::compute::{cast_with_options, CastOptions};
+    use arrow::compute::{CastOptions, cast_with_options};
     use arrow::datatypes::{Field, Fields, TimeUnit};
     use std::sync::Arc;
 

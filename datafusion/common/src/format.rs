@@ -176,9 +176,9 @@ impl FromStr for ExplainFormat {
             "tree" => Ok(ExplainFormat::Tree),
             "pgjson" => Ok(ExplainFormat::PostgresJSON),
             "graphviz" => Ok(ExplainFormat::Graphviz),
-            _ => {
-                Err(DataFusionError::Configuration(format!("Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'")))
-            }
+            _ => Err(DataFusionError::Configuration(format!(
+                "Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'"
+            ))),
         }
     }
 }

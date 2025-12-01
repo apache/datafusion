@@ -32,9 +32,7 @@ use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, DataFusionError, Result,
-};
+use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
 use datafusion_execution::TaskContext;
 
 use futures::stream::{Stream, StreamExt};
