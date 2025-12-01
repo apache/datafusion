@@ -28,9 +28,9 @@ use crate::expr::interval::FFI_Interval;
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ExprProperties {
-    pub sort_properties: FFI_SortProperties,
-    pub range: FFI_Interval,
-    pub preserves_lex_ordering: bool,
+    sort_properties: FFI_SortProperties,
+    range: FFI_Interval,
+    preserves_lex_ordering: bool,
 }
 
 impl TryFrom<&ExprProperties> for FFI_ExprProperties {

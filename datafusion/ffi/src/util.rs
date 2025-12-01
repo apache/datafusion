@@ -31,8 +31,8 @@ macro_rules! df_result {
     ( $x:expr ) => {
         match $x {
             abi_stable::std_types::RResult::ROk(v) => Ok(v),
-            abi_stable::std_types::RResult::RErr(e) => {
-                datafusion_common::exec_err!("FFI error: {}", e)
+            abi_stable::std_types::RResult::RErr(err) => {
+                datafusion_common::ffi_err!("{err}")
             }
         }
     };
@@ -145,12 +145,12 @@ mod tests {
         assert!(returned_err_result.is_err());
         assert!(
             returned_err_result.unwrap_err().strip_backtrace()
-                == format!("Execution error: FFI error: {ERROR_VALUE}")
+                == format!("FFI error: {ERROR_VALUE}")
         );
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
         let err_result: Result<String, DataFusionError> =
-            datafusion_common::exec_err!("{ERROR_VALUE}");
+            datafusion_common::ffi_err!("{ERROR_VALUE}");
 
         let returned_ok_r_result = wrap_result(ok_result);
         assert!(returned_ok_r_result == RResult::ROk(VALID_VALUE.into()));
@@ -159,6 +159,6 @@ mod tests {
         assert!(returned_err_r_result.is_err());
         assert!(returned_err_r_result
             .unwrap_err()
-            .starts_with(format!("Execution error: {ERROR_VALUE}").as_str()));
+            .starts_with(format!("FFI error: {ERROR_VALUE}").as_str()));
     }
 }

@@ -32,7 +32,7 @@ use datafusion::{
     error::DataFusionError,
     execution::{RecordBatchStream, SendableRecordBatchStream},
 };
-use datafusion_common::{exec_datafusion_err, exec_err};
+use datafusion_common::{ffi_datafusion_err, ffi_err};
 use futures::{Stream, TryStreamExt};
 use tokio::runtime::Handle;
 
@@ -166,7 +166,7 @@ pub(crate) fn wrapped_array_to_record_batch(array: WrappedArray) -> Result<Recor
     let struct_array = array
         .as_any()
         .downcast_ref::<StructArray>()
-        .ok_or_else(|| exec_datafusion_err!(
+        .ok_or_else(|| ffi_datafusion_err!(
         "Unexpected array type during record batch collection in FFI_RecordBatchStream - expected StructArray"
     ))?;
 
@@ -180,7 +180,7 @@ fn maybe_wrapped_array_to_record_batch(
         ROption::RSome(RResult::ROk(wrapped_array)) => {
             Some(wrapped_array_to_record_batch(wrapped_array))
         }
-        ROption::RSome(RResult::RErr(e)) => Some(exec_err!("FFI error: {e}")),
+        ROption::RSome(RResult::RErr(e)) => Some(ffi_err!("{e}")),
         ROption::RNone => None,
     }
 }
@@ -200,7 +200,7 @@ impl Stream for FFI_RecordBatchStream {
                 Poll::Ready(maybe_wrapped_array_to_record_batch(array))
             }
             FfiPoll::Pending => Poll::Pending,
-            FfiPoll::Panicked => Poll::Ready(Some(exec_err!(
+            FfiPoll::Panicked => Poll::Ready(Some(ffi_err!(
                 "Panic occurred during poll_next on FFI_RecordBatchStream"
             ))),
         }

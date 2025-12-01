@@ -31,8 +31,8 @@ use crate::physical_expr::FFI_PhysicalExpr;
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_PhysicalSortExpr {
-    pub expr: FFI_PhysicalExpr,
-    pub options: FFI_SortOptions,
+    expr: FFI_PhysicalExpr,
+    options: FFI_SortOptions,
 }
 
 impl From<&PhysicalSortExpr> for FFI_PhysicalSortExpr {

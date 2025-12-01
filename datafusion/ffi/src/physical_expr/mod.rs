@@ -35,7 +35,7 @@ use arrow::{
     datatypes::SchemaRef,
 };
 use arrow_schema::{ffi::FFI_ArrowSchema, DataType, Field, FieldRef, Schema};
-use datafusion_common::{exec_datafusion_err, Result};
+use datafusion_common::{ffi_datafusion_err, Result};
 use datafusion_expr::{
     interval_arithmetic::Interval, sort_properties::ExprProperties,
     statistics::Distribution, ColumnarValue,
@@ -219,7 +219,7 @@ unsafe extern "C" fn evaluate_selection_fn_wrapper(
     let selection = rresult_return!(selection
         .as_any()
         .downcast_ref::<BooleanArray>()
-        .ok_or(exec_datafusion_err!("Unexpected selection array type")));
+        .ok_or(ffi_datafusion_err!("Unexpected selection array type")));
     rresult!(expr
         .inner()
         .evaluate_selection(&batch, selection)
@@ -460,10 +460,10 @@ impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
 /// This wrapper struct exists on the receiver side of the FFI interface, so it has
 /// no guarantees about being able to access the data in `private_data`. Any functions
 /// defined on this struct must only use the stable functions provided in
-/// FFI_PhysicalExpr to interact with the foreign table provider.
+/// FFI_PhysicalExpr to interact with the expression.
 #[derive(Debug)]
 pub struct ForeignPhysicalExpr {
-    pub expr: FFI_PhysicalExpr,
+    expr: FFI_PhysicalExpr,
     children: Vec<Arc<dyn PhysicalExpr>>,
 }
 
@@ -704,8 +704,10 @@ impl Display for ForeignPhysicalExpr {
 
 #[cfg(test)]
 mod tests {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    use std::sync::Arc;
+    use std::{
+        hash::{DefaultHasher, Hash, Hasher},
+        sync::Arc,
+    };
 
     use arrow::array::{record_batch, BooleanArray, RecordBatch};
     use datafusion_common::{tree_node::DynTreeNode, DataFusionError, ScalarValue};
