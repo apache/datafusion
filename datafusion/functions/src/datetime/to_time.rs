@@ -1,13 +1,30 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
 use arrow::array::cast::AsArray;
 use arrow::array::{Array, PrimitiveArray};
+use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::Time64NanosecondType;
 use arrow::datatypes::TimeUnit::Nanosecond;
-use arrow::datatypes::DataType;
 use chrono::{DateTime, NaiveTime, Timelike};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -135,112 +152,120 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
 
     fn parse_time_str(s: &str) -> Result<i64> {
         if let Ok(t) = NaiveTime::parse_from_str(s, "%H:%M:%S") {
-            let nanos = (t.hour() as i64 * 3600
-                + t.minute() as i64 * 60
-                + t.second() as i64)
-                * 1_000_000_000
-                + t.nanosecond() as i64;
+            let nanos =
+                (t.hour() as i64 * 3600 + t.minute() as i64 * 60 + t.second() as i64)
+                    * 1_000_000_000
+                    + t.nanosecond() as i64;
             return Ok(nanos);
         }
         if let Ok(t) = NaiveTime::parse_from_str(s, "%H:%M:%S%.f") {
-            let nanos = (t.hour() as i64 * 3600
-                + t.minute() as i64 * 60
-                + t.second() as i64)
-                * 1_000_000_000
-                + t.nanosecond() as i64;
+            let nanos =
+                (t.hour() as i64 * 3600 + t.minute() as i64 * 60 + t.second() as i64)
+                    * 1_000_000_000
+                    + t.nanosecond() as i64;
             return Ok(nanos);
         }
         string_to_timestamp_nanos_shim(s).map(time_from_timestamp)
     }
 
     match args.len() {
-        1 => {
-            match &args[0] {
-                ColumnarValue::Array(a) => {
-                    let nanos_array = match a.data_type() {
-                        Utf8View => {
-                            let array = a.as_string_view();
-                            let mut builder = PrimitiveArray::<Time64NanosecondType>::builder(array.len());
-                            for i in 0..array.len() {
-                                if array.is_null(i) {
-                                    builder.append_null();
-                                } else {
-                                    let s = array.value(i);
-                                    match parse_time_str(s) {
-                                        Ok(nanos) => builder.append_value(nanos),
-                                        Err(e) => return Err(e),
-                                    }
+        1 => match &args[0] {
+            ColumnarValue::Array(a) => {
+                let nanos_array = match a.data_type() {
+                    Utf8View => {
+                        let array = a.as_string_view();
+                        let mut builder =
+                            PrimitiveArray::<Time64NanosecondType>::builder(array.len());
+                        for i in 0..array.len() {
+                            if array.is_null(i) {
+                                builder.append_null();
+                            } else {
+                                let s = array.value(i);
+                                match parse_time_str(s) {
+                                    Ok(nanos) => builder.append_value(nanos),
+                                    Err(e) => return Err(e),
                                 }
                             }
-                            builder.finish()
                         }
-                        LargeUtf8 => {
-                            let array = a.as_string::<i64>();
-                            let mut builder = PrimitiveArray::<Time64NanosecondType>::builder(array.len());
-                            for i in 0..array.len() {
-                                if array.is_null(i) {
-                                    builder.append_null();
-                                } else {
-                                    let s = array.value(i);
-                                    match parse_time_str(s) {
-                                        Ok(nanos) => builder.append_value(nanos),
-                                        Err(e) => return Err(e),
-                                    }
-                                }
-                            }
-                            builder.finish()
-                        }
-                        Utf8 => {
-                            let array = a.as_string::<i32>();
-                            let mut builder = PrimitiveArray::<Time64NanosecondType>::builder(array.len());
-                            for i in 0..array.len() {
-                                if array.is_null(i) {
-                                    builder.append_null();
-                                } else {
-                                    let s = array.value(i);
-                                    match parse_time_str(s) {
-                                        Ok(nanos) => builder.append_value(nanos),
-                                        Err(e) => return Err(e),
-                                    }
-                                }
-                            }
-                            builder.finish()
-                        }
-                        other => return exec_err!("Unsupported data type {other:?} for function {name}"),
-                    };
-                    Ok(ColumnarValue::Array(Arc::new(nanos_array)))
-                }
-                ColumnarValue::Scalar(scalar) => {
-                    match scalar {
-                        ScalarValue::Utf8(Some(s)) | ScalarValue::LargeUtf8(Some(s)) => {
-                            let nanos = parse_time_str(s)?;
-                            Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(nanos))))
-                        }
-                        ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None)))
-                        }
-                        _ => exec_err!("Unsupported data type {scalar:?} for function {name}"),
+                        builder.finish()
                     }
-                }
+                    LargeUtf8 => {
+                        let array = a.as_string::<i64>();
+                        let mut builder =
+                            PrimitiveArray::<Time64NanosecondType>::builder(array.len());
+                        for i in 0..array.len() {
+                            if array.is_null(i) {
+                                builder.append_null();
+                            } else {
+                                let s = array.value(i);
+                                match parse_time_str(s) {
+                                    Ok(nanos) => builder.append_value(nanos),
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                        }
+                        builder.finish()
+                    }
+                    Utf8 => {
+                        let array = a.as_string::<i32>();
+                        let mut builder =
+                            PrimitiveArray::<Time64NanosecondType>::builder(array.len());
+                        for i in 0..array.len() {
+                            if array.is_null(i) {
+                                builder.append_null();
+                            } else {
+                                let s = array.value(i);
+                                match parse_time_str(s) {
+                                    Ok(nanos) => builder.append_value(nanos),
+                                    Err(e) => return Err(e),
+                                }
+                            }
+                        }
+                        builder.finish()
+                    }
+                    other => {
+                        return exec_err!(
+                            "Unsupported data type {other:?} for function {name}"
+                        )
+                    }
+                };
+                Ok(ColumnarValue::Array(Arc::new(nanos_array)))
             }
-        }
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Utf8(Some(s)) | ScalarValue::LargeUtf8(Some(s)) => {
+                    let nanos = parse_time_str(s)?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(
+                        nanos,
+                    ))))
+                }
+                ScalarValue::Utf8(None)
+                | ScalarValue::LargeUtf8(None)
+                | ScalarValue::Utf8View(None) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None)))
+                }
+                _ => exec_err!("Unsupported data type {scalar:?} for function {name}"),
+            },
+        },
         n if n >= 2 => {
             let mut formats = Vec::new();
             for arg in &args[1..] {
                 match arg {
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(f))) | 
-                    ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(f))) => {
+                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(f)))
+                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(f))) => {
                         formats.push(f.as_str());
                     }
                     _ => {}
                 }
             }
             if formats.is_empty() {
-                return exec_err!("to_time with formats requires at least one format string");
+                return exec_err!(
+                    "to_time with formats requires at least one format string"
+                );
             }
             match &args[0] {
                 ColumnarValue::Array(a) => {
-                    let mut builder = PrimitiveArray::<Time64NanosecondType>::builder(a.len());
+                    let mut builder =
+                        PrimitiveArray::<Time64NanosecondType>::builder(a.len());
                     for i in 0..a.len() {
                         if a.is_null(i) {
                             builder.append_null();
@@ -249,11 +274,17 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
                                 Utf8View => a.as_string_view().value(i),
                                 LargeUtf8 => a.as_string::<i64>().value(i),
                                 Utf8 => a.as_string::<i32>().value(i),
-                                _ => return exec_err!("Unsupported data type for function {name}"),
+                                _ => {
+                                    return exec_err!(
+                                        "Unsupported data type for function {name}"
+                                    )
+                                }
                             };
                             let mut parsed = false;
                             for fmt in formats.iter() {
-                                if let Ok(nanos) = string_to_timestamp_nanos_formatted(s, fmt) {
+                                if let Ok(nanos) =
+                                    string_to_timestamp_nanos_formatted(s, fmt)
+                                {
                                     builder.append_value(time_from_timestamp(nanos));
                                     parsed = true;
                                     break;
@@ -269,14 +300,26 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
                 ColumnarValue::Scalar(scalar) => {
                     let s = match scalar {
                         ScalarValue::Utf8(Some(s)) | ScalarValue::LargeUtf8(Some(s)) => s,
-                        ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None) => {
-                            return Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None)));
+                        ScalarValue::Utf8(None)
+                        | ScalarValue::LargeUtf8(None)
+                        | ScalarValue::Utf8View(None) => {
+                            return Ok(ColumnarValue::Scalar(
+                                ScalarValue::Time64Nanosecond(None),
+                            ));
                         }
-                        _ => return exec_err!("Unsupported data type {scalar:?} for function {name}"),
+                        _ => {
+                            return exec_err!(
+                                "Unsupported data type {scalar:?} for function {name}"
+                            )
+                        }
                     };
                     for fmt in formats.iter() {
                         if let Ok(nanos) = string_to_timestamp_nanos_formatted(s, fmt) {
-                            return Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(time_from_timestamp(nanos)))));
+                            return Ok(ColumnarValue::Scalar(
+                                ScalarValue::Time64Nanosecond(Some(time_from_timestamp(
+                                    nanos,
+                                ))),
+                            ));
                         }
                     }
                     exec_err!("Unable to parse time from '{s}' using provided formats")
@@ -349,13 +392,13 @@ mod tests {
 
     #[test]
     fn test_to_time_null() {
-        let res = invoke_to_time_with_args(
-            vec![ColumnarValue::Scalar(ScalarValue::Null)],
-            1,
-        )
-        .expect("that to_time handled null without error");
+        let res =
+            invoke_to_time_with_args(vec![ColumnarValue::Scalar(ScalarValue::Null)], 1)
+                .expect("that to_time handled null without error");
 
-        assert!(matches!(res, ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None))));
+        assert!(matches!(
+            res,
+            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None))
+        ));
     }
 }
-

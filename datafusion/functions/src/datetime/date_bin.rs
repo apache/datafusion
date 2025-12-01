@@ -21,11 +21,11 @@ use std::sync::Arc;
 use arrow::array::temporal_conversions::NANOSECONDS;
 use arrow::array::types::{
     ArrowTimestampType, IntervalDayTimeType, IntervalMonthDayNanoType,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, Time64NanosecondType,
+    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{ArrayRef, PrimitiveArray};
-use arrow::datatypes::DataType::{Null, Timestamp, Time64, Utf8};
+use arrow::datatypes::DataType::{Null, Time64, Timestamp, Utf8};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
@@ -155,10 +155,7 @@ impl DateBinFunc {
                 Time64(Nanosecond),
                 Time64(Nanosecond),
             ]),
-            Exact(vec![
-                DataType::Interval(DayTime),
-                Time64(Nanosecond),
-            ]),
+            Exact(vec![DataType::Interval(DayTime), Time64(Nanosecond)]),
         ];
 
         let full_sig = [Nanosecond, Microsecond, Millisecond, Second]
@@ -390,7 +387,9 @@ fn date_bin_impl(
     };
 
     let (origin, is_time) = match origin {
-        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), _)) => (*v, false),
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), _)) => {
+            (*v, false)
+        }
         ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(v))) => (*v, true),
         ColumnarValue::Scalar(v) => {
             return exec_err!(
@@ -464,9 +463,7 @@ fn date_bin_impl(
                 return exec_err!("DATE_BIN with Time64 source requires Time64 origin");
             }
             let apply_stride_fn = move |x: i64| stride_fn(stride, x, origin);
-            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(
-                v.map(apply_stride_fn),
-            ))
+            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v.map(apply_stride_fn)))
         }
 
         ColumnarValue::Array(array) => {
@@ -512,12 +509,15 @@ fn date_bin_impl(
                 }
                 Time64(Nanosecond) => {
                     if !is_time {
-                        return exec_err!("DATE_BIN with Time64 source requires Time64 origin");
+                        return exec_err!(
+                            "DATE_BIN with Time64 source requires Time64 origin"
+                        );
                     }
                     use arrow::array::cast::AsArray;
                     let array = array.as_primitive::<Time64NanosecondType>();
                     let apply_stride_fn = move |x: i64| stride_fn(stride, x, origin);
-                    let array: PrimitiveArray<Time64NanosecondType> = array.unary(apply_stride_fn);
+                    let array: PrimitiveArray<Time64NanosecondType> =
+                        array.unary(apply_stride_fn);
                     ColumnarValue::Array(Arc::new(array))
                 }
                 _ => {

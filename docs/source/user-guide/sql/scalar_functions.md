@@ -2450,8 +2450,8 @@ date_bin(interval, expression, origin-timestamp)
 #### Arguments
 
 - **interval**: Bin interval.
-- **expression**: Time expression to operate on. Can be a constant, column, or function. Supports timestamp and time (Time64) types.
-- **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC) for timestamps, or 00:00:00 for time values. The following intervals are supported:
+- **expression**: Time expression to operate on. Can be a constant, column, or function.
+- **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
 
   - nanoseconds
   - microseconds
@@ -2841,6 +2841,8 @@ to_time(expression[, ..., format_n])
 || 14:30:45.123456789                                |
 +---------------------------------------------------+
 ```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp`
 
