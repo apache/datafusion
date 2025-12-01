@@ -286,7 +286,6 @@ fn regexp_instr(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn regexp_instr_inner<'a, S>(
     values: &S,
     regex_array: &S,

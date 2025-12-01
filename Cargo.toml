@@ -91,25 +91,25 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "57.0.0", features = [
+arrow = { version = "57.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "57.0.0", default-features = false }
-arrow-flight = { version = "57.0.0", features = [
+arrow-buffer = { version = "57.1.0", default-features = false }
+arrow-flight = { version = "57.1.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "57.0.0", default-features = false, features = [
+arrow-ipc = { version = "57.1.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "57.0.0", default-features = false }
-arrow-schema = { version = "57.0.0", default-features = false }
+arrow-ord = { version = "57.1.0", default-features = false }
+arrow-schema = { version = "57.1.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
 bzip2 = "0.6.1"
 chrono = { version = "0.4.42", default-features = false }
-criterion = "0.7"
+criterion = "0.8"
 ctor = "0.6.1"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "51.0.0", default-features = false }
@@ -166,7 +166,7 @@ log = "^0.4"
 num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "57.0.0", default-features = false, features = [
+parquet = { version = "57.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -197,6 +197,7 @@ or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
 inefficient_to_string = "warn"
+# https://github.com/apache/datafusion/issues/18503
 needless_pass_by_value = "warn"
 
 [workspace.lints.rust]

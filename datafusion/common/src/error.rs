@@ -768,7 +768,7 @@ impl DataFusionErrorBuilder {
 macro_rules! unwrap_or_internal_err {
     ($Value: ident) => {
         $Value.ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            $crate::DataFusionError::Internal(format!(
                 "{} should not be None",
                 stringify!($Value)
             ))
@@ -789,7 +789,7 @@ macro_rules! unwrap_or_internal_err {
 macro_rules! assert_or_internal_err {
     ($cond:expr) => {
         if !$cond {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {}",
                 stringify!($cond)
             )));
@@ -797,7 +797,7 @@ macro_rules! assert_or_internal_err {
     };
     ($cond:expr, $($arg:tt)+) => {
         if !$cond {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {}: {}",
                 stringify!($cond),
                 format!($($arg)+)
@@ -821,7 +821,7 @@ macro_rules! assert_eq_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
@@ -834,7 +834,7 @@ macro_rules! assert_eq_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val != right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {} == {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
@@ -861,7 +861,7 @@ macro_rules! assert_ne_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?})",
                 stringify!($left),
                 stringify!($right),
@@ -874,7 +874,7 @@ macro_rules! assert_ne_or_internal_err {
         let left_val = &$left;
         let right_val = &$right;
         if left_val == right_val {
-            return Err(DataFusionError::Internal(format!(
+            return Err($crate::DataFusionError::Internal(format!(
                 "Assertion failed: {} != {} (left: {:?}, right: {:?}): {}",
                 stringify!($left),
                 stringify!($right),
@@ -935,14 +935,9 @@ macro_rules! make_error {
             }
 
 
-            // Note: Certain macros are used in this  crate, but not all.
-            // This macro generates a use or all of them in case they are needed
-            // so we allow unused code to avoid warnings when they are not used
             #[doc(hidden)]
-            #[allow(unused)]
             pub use $NAME_ERR as [<_ $NAME_ERR>];
             #[doc(hidden)]
-            #[allow(unused)]
             pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
         }
     };
@@ -973,7 +968,7 @@ make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
 #[macro_export]
 macro_rules! sql_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::SQL(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        let err = $crate::DataFusionError::SQL(Box::new($ERR), Some($crate::DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -985,7 +980,7 @@ macro_rules! sql_datafusion_err {
 #[macro_export]
 macro_rules! sql_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = datafusion_common::sql_datafusion_err!($ERR);
+        let err = $crate::sql_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -997,7 +992,7 @@ macro_rules! sql_err {
 #[macro_export]
 macro_rules! arrow_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = DataFusionError::ArrowError(Box::new($ERR), Some(DataFusionError::get_back_trace()));
+        let err = $crate::DataFusionError::ArrowError(Box::new($ERR), Some($crate::DataFusionError::get_back_trace()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -1010,7 +1005,7 @@ macro_rules! arrow_datafusion_err {
 macro_rules! arrow_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {
     {
-        let err = datafusion_common::arrow_datafusion_err!($ERR);
+        let err = $crate::arrow_datafusion_err!($ERR);
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -1022,9 +1017,9 @@ macro_rules! arrow_err {
 #[macro_export]
 macro_rules! schema_datafusion_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = $crate::error::DataFusionError::SchemaError(
+        let err = $crate::DataFusionError::SchemaError(
             Box::new($ERR),
-            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
+            Box::new(Some($crate::DataFusionError::get_back_trace())),
         );
         $(
             let err = err.with_diagnostic($DIAG);
@@ -1037,9 +1032,9 @@ macro_rules! schema_datafusion_err {
 #[macro_export]
 macro_rules! schema_err {
     ($ERR:expr $(; diagnostic = $DIAG:expr)?) => {{
-        let err = $crate::error::DataFusionError::SchemaError(
+        let err = $crate::DataFusionError::SchemaError(
             Box::new($ERR),
-            Box::new(Some($crate::error::DataFusionError::get_back_trace())),
+            Box::new(Some($crate::DataFusionError::get_back_trace())),
         );
         $(
             let err = err.with_diagnostic($DIAG);
@@ -1238,7 +1233,6 @@ mod test {
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
@@ -1266,7 +1260,6 @@ mod test {
 
     #[cfg(not(feature = "backtrace"))]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_disabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err().to_string();
@@ -1336,7 +1329,6 @@ mod test {
     }
 
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_make_error_parse_input() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();

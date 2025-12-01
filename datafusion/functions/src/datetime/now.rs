@@ -148,7 +148,7 @@ impl ScalarUDFImpl for NowFunc {
 mod tests {
     use super::*;
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[test]
     fn now_func_default_matches_config() {
         let default_config = ConfigOptions::default();
