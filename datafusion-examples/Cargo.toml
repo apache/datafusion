@@ -29,32 +29,11 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
-
-[[example]]
-name = "flight_sql_server"
-path = "examples/flight/flight_sql_server.rs"
-
-[[example]]
-name = "flight_server"
-path = "examples/flight/flight_server.rs"
-
-[[example]]
-name = "flight_client"
-path = "examples/flight/flight_client.rs"
-
-[[example]]
-name = "dataframe_to_s3"
-path = "examples/external_dependency/dataframe-to-s3.rs"
-
-[[example]]
-name = "query_aws_s3"
-path = "examples/external_dependency/query-aws-s3.rs"
-
-[[example]]
-name = "custom_file_casts"
-path = "examples/custom_file_casts.rs"
 
 [dev-dependencies]
 arrow = { workspace = true }
@@ -67,7 +46,6 @@ dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 base64 = "0.22.1"
 datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
-datafusion-ffi = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-proto = { workspace = true }
 env_logger = { workspace = true }

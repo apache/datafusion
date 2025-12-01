@@ -22,6 +22,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Spark Expression packages for [DataFusion].
 //!
@@ -88,7 +89,7 @@
 //! use datafusion_spark::expr_fn::sha2;
 //! // Create the expression `sha2(my_data, 256)`
 //! let expr = sha2(col("my_data"), lit(256));
-//!```
+//! ```
 //!
 //![`Expr`]: datafusion_expr::Expr
 

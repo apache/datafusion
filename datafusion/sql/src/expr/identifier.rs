@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    Column, DFSchema, Result, Span, TableReference,
+    assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, DFSchema, Result, Span, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
@@ -81,7 +81,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                     return Ok(Expr::OuterReferenceColumn(
-                        Arc::new(field.clone()),
+                        Arc::clone(field),
                         Column::from((qualifier, field)),
                     ));
                 }
@@ -104,9 +104,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        if ids.len() < 2 {
-            return internal_err!("Not a compound identifier: {ids:?}");
-        }
+        assert_or_internal_err!(ids.len() >= 2, "Not a compound identifier: {ids:?}");
 
         let ids_span = Span::union_iter(
             ids.iter()
@@ -191,7 +189,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
-                                        Arc::new(field.clone()),
+                                        Arc::clone(field),
                                         Column::from((qualifier, field)),
                                     ))
                                 }
@@ -303,7 +301,7 @@ fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
 ) -> Option<(
-    &'schema Field,
+    &'schema FieldRef,
     Option<&'schema TableReference>,
     &'ids [String],
 )> {

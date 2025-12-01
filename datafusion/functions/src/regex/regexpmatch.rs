@@ -21,9 +21,9 @@ use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 use datafusion_common::exec_err;
+use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::{arrow_datafusion_err, plan_err};
-use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -48,7 +48,7 @@ use std::sync::Arc;
             | [B]                                               |
             +---------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
     argument(

@@ -125,7 +125,6 @@ use futures::{Stream, StreamExt};
 ///    available during merge operations.
 /// 2. **Adaptive Buffer Sizing**: Reduces buffer sizes when memory is constrained
 /// 3. **Spill-to-Disk**: Spill to disk when we cannot merge all files in memory
-///
 pub(crate) struct MultiLevelMergeBuilder {
     spill_manager: SpillManager,
     schema: SchemaRef,
@@ -146,7 +145,7 @@ impl Debug for MultiLevelMergeBuilder {
 }
 
 impl MultiLevelMergeBuilder {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         spill_manager: SpillManager,
         schema: SchemaRef,

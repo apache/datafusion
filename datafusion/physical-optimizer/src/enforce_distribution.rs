@@ -30,6 +30,7 @@ use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
+use crate::OptimizerContext;
 
 use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
@@ -190,11 +191,12 @@ impl EnforceDistribution {
 }
 
 impl PhysicalOptimizerRule for EnforceDistribution {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.session_config().options();
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
 
         let adjusted = if top_down_join_key_reordering {
@@ -281,7 +283,6 @@ pub type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
 /// 3) If the current plan is RepartitionExec, CoalescePartitionsExec or WindowAggExec, clear all the requirements, return the unchanged plan
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
-///
 pub fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
@@ -1274,7 +1275,8 @@ pub fn ensure_distribution(
                     child = add_merge_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    if add_roundrobin {
+                    // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
+                    if add_roundrobin && !hash_necessary {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;

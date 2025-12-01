@@ -22,11 +22,11 @@ mod tests {
     use arrow::array::{create_array, ArrayRef};
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::expr::Sort;
-    use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF};
+    use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
     use datafusion::prelude::SessionContext;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_ffi::udwf::ForeignWindowUDF;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_rank_udwf() -> Result<()> {
@@ -39,9 +39,9 @@ mod tests {
                     "External table provider failed to implement create_scalar_udf"
                         .to_string(),
                 ))?();
-        let foreign_rank_func: ForeignWindowUDF = (&ffi_rank_func).try_into()?;
+        let foreign_rank_func: Arc<dyn WindowUDFImpl> = (&ffi_rank_func).try_into()?;
 
-        let udwf: WindowUDF = foreign_rank_func.into();
+        let udwf = WindowUDF::new_from_shared_impl(foreign_rank_func);
 
         let ctx = SessionContext::default();
         let df = ctx.read_batch(create_record_batch(-5, 5))?;

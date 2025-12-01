@@ -20,7 +20,6 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
-use datafusion_common::error::DataFusionError;
 use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -53,7 +52,7 @@ Note: `to_date` returns Date32, which represents its values as the number of day
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     standard_argument(name = "expression", prefix = "String"),
     argument(

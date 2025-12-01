@@ -23,20 +23,18 @@ extern crate datafusion;
 mod data_utils;
 
 use crate::criterion::Criterion;
+use arrow::array::PrimitiveArray;
 use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::ArrowNativeTypeOp;
+use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
-use arrow_schema::TimeUnit::Nanosecond;
 use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use datafusion::prelude::DataFrame;
 use datafusion_common::{config::Dialect, ScalarValue};
-use datafusion_expr::Expr::Literal;
-use datafusion_expr::{cast, col, lit, not, try_cast, when};
-use datafusion_functions::expr_fn::{
-    btrim, length, regexp_like, regexp_replace, to_timestamp, upper,
-};
-use std::ops::Rem;
+use datafusion_expr::col;
+use rand_distr::num_traits::NumCast;
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
 use test_utils::tpcds::tpcds_schemas;
@@ -50,12 +48,12 @@ const CLICKBENCH_DATA_PATH: &str = "data/hits_partitioned/";
 
 /// Create a logical plan from the specified sql
 fn logical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
-    criterion::black_box(rt.block_on(ctx.sql(sql)).unwrap());
+    black_box(rt.block_on(ctx.sql(sql)).unwrap());
 }
 
 /// Create a physical ExecutionPlan (by way of logical plan)
 fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
-    criterion::black_box(rt.block_on(async {
+    black_box(rt.block_on(async {
         ctx.sql(sql)
             .await
             .unwrap()
@@ -63,150 +61,6 @@ fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
             .await
             .unwrap()
     }));
-}
-
-/// Build a dataframe for testing logical plan optimization
-fn build_test_data_frame(ctx: &SessionContext, rt: &Runtime) -> DataFrame {
-    register_string_table(ctx, 100, 1000);
-
-    rt.block_on(async {
-        let mut df = ctx.table("t").await.unwrap();
-        // add some columns in
-        for i in 100..150 {
-            df = df
-                .with_column(&format!("c{i}"), Literal(ScalarValue::Utf8(None), None))
-                .unwrap();
-        }
-        // add in some columns with string encoded timestamps
-        for i in 150..175 {
-            df = df
-                .with_column(
-                    &format!("c{i}"),
-                    Literal(ScalarValue::Utf8(Some("2025-08-21 09:43:17".into())), None),
-                )
-                .unwrap();
-        }
-        // do a bunch of ops on the columns
-        for i in 0..175 {
-            // trim the columns
-            df = df
-                .with_column(&format!("c{i}"), btrim(vec![col(format!("c{i}"))]))
-                .unwrap();
-        }
-
-        for i in 0..175 {
-            let c_name = format!("c{i}");
-            let c = col(&c_name);
-
-            // random ops
-            if i % 5 == 0 && i < 150 {
-                // the actual ops here are largely unimportant as they are just a sample
-                // of ops that could occur on a dataframe
-                df = df
-                    .with_column(&c_name, cast(c.clone(), DataType::Utf8))
-                    .unwrap()
-                    .with_column(
-                        &c_name,
-                        when(
-                            cast(c.clone(), DataType::Int32).gt(lit(135)),
-                            cast(
-                                cast(c.clone(), DataType::Int32) - lit(i + 3),
-                                DataType::Utf8,
-                            ),
-                        )
-                        .otherwise(c.clone())
-                        .unwrap(),
-                    )
-                    .unwrap()
-                    .with_column(
-                        &c_name,
-                        when(
-                            c.clone().is_not_null().and(
-                                cast(c.clone(), DataType::Int32)
-                                    .between(lit(120), lit(130)),
-                            ),
-                            Literal(ScalarValue::Utf8(None), None),
-                        )
-                        .otherwise(
-                            when(
-                                c.clone().is_not_null().and(regexp_like(
-                                    cast(c.clone(), DataType::Utf8View),
-                                    lit("[0-9]*"),
-                                    None,
-                                )),
-                                upper(c.clone()),
-                            )
-                            .otherwise(c.clone())
-                            .unwrap(),
-                        )
-                        .unwrap(),
-                    )
-                    .unwrap()
-                    .with_column(
-                        &c_name,
-                        when(
-                            c.clone().is_not_null().and(
-                                cast(c.clone(), DataType::Int32)
-                                    .between(lit(90), lit(100)),
-                            ),
-                            cast(c.clone(), DataType::Utf8View),
-                        )
-                        .otherwise(Literal(ScalarValue::Date32(None), None))
-                        .unwrap(),
-                    )
-                    .unwrap()
-                    .with_column(
-                        &c_name,
-                        when(
-                            c.clone().is_not_null().and(
-                                cast(c.clone(), DataType::Int32).rem(lit(10)).gt(lit(7)),
-                            ),
-                            regexp_replace(
-                                cast(c.clone(), DataType::Utf8View),
-                                lit("1"),
-                                lit("a"),
-                                None,
-                            ),
-                        )
-                        .otherwise(Literal(ScalarValue::Date32(None), None))
-                        .unwrap(),
-                    )
-                    .unwrap()
-            }
-            if i >= 150 {
-                df = df
-                    .with_column(
-                        &c_name,
-                        try_cast(
-                            to_timestamp(vec![c.clone(), lit("%Y-%m-%d %H:%M:%S")]),
-                            DataType::Timestamp(Nanosecond, Some("UTC".into())),
-                        ),
-                    )
-                    .unwrap()
-                    .with_column(&c_name, try_cast(c.clone(), DataType::Date32))
-                    .unwrap()
-            }
-
-            // add in a few unions
-            if i % 30 == 0 {
-                let df1 = df
-                    .clone()
-                    .filter(length(c.clone()).gt(lit(2)))
-                    .unwrap()
-                    .with_column(&format!("c{i}_filtered"), lit(true))
-                    .unwrap();
-                let df2 = df
-                    .filter(not(length(c.clone()).gt(lit(2))))
-                    .unwrap()
-                    .with_column(&format!("c{i}_filtered"), lit(false))
-                    .unwrap();
-
-                df = df1.union_by_name(df2).unwrap()
-            }
-        }
-
-        df
-    })
 }
 
 /// Create schema with the specified number of columns
@@ -239,6 +93,7 @@ fn create_context() -> SessionContext {
 
 /// Register the table definitions as a MemTable with the context and return the
 /// context
+#[expect(clippy::needless_pass_by_value)]
 fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     defs.iter().for_each(|TableDef { name, schema }| {
         ctx.register_table(
@@ -296,7 +151,7 @@ fn benchmark_with_param_values_many_columns(
         rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
     b.iter(|| {
         let plan = plan.clone();
-        criterion::black_box(plan.with_param_values(vec![ScalarValue::from(1)]).unwrap());
+        black_box(plan.with_param_values(vec![ScalarValue::from(1)]).unwrap());
     });
 }
 
@@ -305,18 +160,30 @@ fn benchmark_with_param_values_many_columns(
 /// 0,100...9900
 /// 0,200...19800
 /// 0,300...29700
-fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows: usize) {
-    // ("c0", [0, 0, ...])
-    // ("c1": [100, 200, ...])
-    // etc
-    let iter = (0..num_columns).map(|i| i as u64).map(|i| {
-        let array: ArrayRef = Arc::new(arrow::array::UInt64Array::from_iter_values(
-            (0..num_rows)
-                .map(|j| j as u64 * 100 + i)
-                .collect::<Vec<_>>(),
-        ));
+fn register_union_order_table_generic<T>(
+    ctx: &SessionContext,
+    num_columns: usize,
+    num_rows: usize,
+) where
+    T: ArrowPrimitiveType,
+    T::Native: ArrowNativeTypeOp + NumCast,
+{
+    let iter = (0..num_columns).map(|i| {
+        let array_data: Vec<T::Native> = (0..num_rows)
+            .map(|j| {
+                let value = (j as u64) * 100 + (i as u64);
+                <T::Native as NumCast>::from(value).unwrap_or_else(|| {
+                    panic!("Failed to cast numeric value to Native type")
+                })
+            })
+            .collect();
+
+        // Use PrimitiveArray which is generic over the ArrowPrimitiveType T
+        let array: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter_values(array_data));
+
         (format!("c{i}"), array)
     });
+
     let batch = RecordBatch::try_from_iter(iter).unwrap();
     let schema = batch.schema();
     let partitions = vec![vec![batch]];
@@ -333,34 +200,6 @@ fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows
 
     ctx.register_table("t", Arc::new(table)).unwrap();
 }
-
-/// Registers a table like this:
-/// c0,c1,c2...,c99
-/// "0","100"..."9900"
-/// "0","200"..."19800"
-/// "0","300"..."29700"
-fn register_string_table(ctx: &SessionContext, num_columns: usize, num_rows: usize) {
-    // ("c0", ["0", "0", ...])
-    // ("c1": ["100", "200", ...])
-    // etc
-    let iter = (0..num_columns).map(|i| i as u64).map(|i| {
-        let array: ArrayRef = Arc::new(arrow::array::StringViewArray::from_iter_values(
-            (0..num_rows)
-                .map(|j| format!("c{}", j as u64 * 100 + i))
-                .collect::<Vec<_>>(),
-        ));
-        (format!("c{i}"), array)
-    });
-    let batch = RecordBatch::try_from_iter(iter).unwrap();
-    let schema = batch.schema();
-    let partitions = vec![vec![batch]];
-
-    // create the table
-    let table = MemTable::try_new(schema, partitions).unwrap();
-
-    ctx.register_table("t", Arc::new(table)).unwrap();
-}
-
 /// return a query like
 /// ```sql
 /// select c1, 2 as c2, ... n as cn from t ORDER BY c1
@@ -579,13 +418,23 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     // -- Sorted Queries --
-    for column_count in [10, 50, 100, 200, 300] {
-        register_union_order_table(&ctx, column_count, 1000);
+    // 100, 200 && 300 is taking too long - https://github.com/apache/datafusion/issues/18366
+    // Logical Plan for datatype Int64 and UInt64 differs, UInt64 Logical Plan's Union are wrapped
+    // up in Projection, and EliminateNestedUnion OptimezerRule is not applied leading to significantly
+    // longer execution time.
+    // https://github.com/apache/datafusion/issues/17261
+
+    for column_count in [10, 50 /* 100, 200, 300 */] {
+        register_union_order_table_generic::<arrow::datatypes::Int64Type>(
+            &ctx,
+            column_count,
+            1000,
+        );
 
         // this query has many expressions in its sort order so stresses
         // order equivalence validation
         c.bench_function(
-            &format!("physical_sorted_union_order_by_{column_count}"),
+            &format!("physical_sorted_union_order_by_{column_count}_int64"),
             |b| {
                 // SELECT ... UNION ALL ...
                 let query = union_orderby_query(column_count);
@@ -596,19 +445,23 @@ fn criterion_benchmark(c: &mut Criterion) {
         let _ = ctx.deregister_table("t");
     }
 
-    // -- validate logical plan optimize performance
-    let df = build_test_data_frame(&ctx, &rt);
+    for column_count in [10, 50 /* 100, 200, 300 */] {
+        register_union_order_table_generic::<arrow::datatypes::UInt64Type>(
+            &ctx,
+            column_count,
+            1000,
+        );
+        c.bench_function(
+            &format!("physical_sorted_union_order_by_{column_count}_uint64"),
+            |b| {
+                // SELECT ... UNION ALL ...
+                let query = union_orderby_query(column_count);
+                b.iter(|| physical_plan(&ctx, &rt, &query))
+            },
+        );
 
-    c.bench_function("logical_plan_optimize", |b| {
-        b.iter(|| {
-            let df_clone = df.clone();
-            criterion::black_box(
-                rt.block_on(async { df_clone.into_optimized_plan().unwrap() }),
-            );
-        })
-    });
-
-    let _ = ctx.deregister_table("t");
+        let _ = ctx.deregister_table("t");
+    }
 
     // --- TPC-H ---
 
@@ -667,9 +520,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
 
     let raw_tpcds_sql_queries = (1..100)
-        // skip query 75 until it is fixed
-        // https://github.com/apache/datafusion/issues/17801
-        .filter(|q| *q != 75)
         .map(|q| std::fs::read_to_string(format!("{tests_path}tpc-ds/{q}.sql")).unwrap())
         .collect::<Vec<_>>();
 

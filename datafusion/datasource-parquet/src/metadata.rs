@@ -314,7 +314,7 @@ impl<'a> DFParquetMetadata<'a> {
 
             get_col_stats(
                 table_schema,
-                null_counts_array,
+                &null_counts_array,
                 &mut max_accs,
                 &mut min_accs,
                 &mut is_max_value_exact,
@@ -362,7 +362,7 @@ fn create_max_min_accs(
 
 fn get_col_stats(
     schema: &Schema,
-    null_counts: Vec<Precision<usize>>,
+    null_counts: &[Precision<usize>],
     max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
     is_max_value_exact: &mut [Option<bool>],
@@ -432,9 +432,9 @@ fn summarize_min_max_null_counts(
         max_acc.update_batch(&[Arc::clone(&max_values)])?;
         let mut cur_max_acc = max_acc.clone();
         accumulators.is_max_value_exact[arrow_schema_index] = has_any_exact_match(
-            cur_max_acc.evaluate()?,
-            max_values,
-            is_max_value_exact_stat,
+            &cur_max_acc.evaluate()?,
+            &max_values,
+            &is_max_value_exact_stat,
         );
     }
 
@@ -442,9 +442,9 @@ fn summarize_min_max_null_counts(
         min_acc.update_batch(&[Arc::clone(&min_values)])?;
         let mut cur_min_acc = min_acc.clone();
         accumulators.is_min_value_exact[arrow_schema_index] = has_any_exact_match(
-            cur_min_acc.evaluate()?,
-            min_values,
-            is_min_value_exact_stat,
+            &cur_min_acc.evaluate()?,
+            &min_values,
+            &is_min_value_exact_stat,
         );
     }
 
@@ -475,13 +475,13 @@ fn summarize_min_max_null_counts(
 /// values are `[true, false, false]`. Since at least one is `true`, the
 /// function returns `Some(true)`.
 fn has_any_exact_match(
-    value: ScalarValue,
-    array: ArrayRef,
-    exactness: BooleanArray,
+    value: &ScalarValue,
+    array: &ArrayRef,
+    exactness: &BooleanArray,
 ) -> Option<bool> {
     let scalar_array = value.to_scalar().ok()?;
     let eq_mask = eq(&scalar_array, &array).ok()?;
-    let combined_mask = and(&eq_mask, &exactness).ok()?;
+    let combined_mask = and(&eq_mask, exactness).ok()?;
     Some(combined_mask.true_count() > 0)
 }
 
@@ -531,7 +531,7 @@ mod tests {
             let exactness =
                 BooleanArray::from(vec![true, false, false, false, false, false]);
 
-            let result = has_any_exact_match(computed_min, row_group_mins, exactness);
+            let result = has_any_exact_match(&computed_min, &row_group_mins, &exactness);
             assert_eq!(result, Some(true));
         }
         // Case 2: All inexact matches
@@ -542,7 +542,7 @@ mod tests {
             let exactness =
                 BooleanArray::from(vec![false, false, false, false, false, false]);
 
-            let result = has_any_exact_match(computed_min, row_group_mins, exactness);
+            let result = has_any_exact_match(&computed_min, &row_group_mins, &exactness);
             assert_eq!(result, Some(false));
         }
         // Case 3: All exact matches
@@ -553,7 +553,7 @@ mod tests {
             let exactness =
                 BooleanArray::from(vec![false, true, true, true, false, true]);
 
-            let result = has_any_exact_match(computed_max, row_group_maxes, exactness);
+            let result = has_any_exact_match(&computed_max, &row_group_maxes, &exactness);
             assert_eq!(result, Some(true));
         }
         // Case 4: All maxes are null values
@@ -563,7 +563,7 @@ mod tests {
                 Arc::new(Int32Array::from(vec![None, None, None, None])) as ArrayRef;
             let exactness = BooleanArray::from(vec![None, Some(true), None, Some(false)]);
 
-            let result = has_any_exact_match(computed_max, row_group_maxes, exactness);
+            let result = has_any_exact_match(&computed_max, &row_group_maxes, &exactness);
             assert_eq!(result, Some(false));
         }
     }

@@ -19,12 +19,13 @@ extern crate criterion;
 
 use arrow::array::{StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
+use std::hint::black_box;
 use std::str::Chars;
 use std::sync::Arc;
 

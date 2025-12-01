@@ -18,11 +18,12 @@
 use arrow::array::{Array, ArrayRef, Float32Array, Int32Array, StringArray};
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::{col, in_list, lit};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn do_bench(c: &mut Criterion, name: &str, values: ArrayRef, exprs: &[ScalarValue]) {

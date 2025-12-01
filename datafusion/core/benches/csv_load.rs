@@ -21,17 +21,20 @@ extern crate arrow;
 extern crate datafusion;
 
 mod data_utils;
+
 use crate::criterion::Criterion;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::test_util::csv::TestCsvFile;
 use parking_lot::Mutex;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 use test_utils::AccessLogGenerator;
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn load_csv(
     ctx: Arc<Mutex<SessionContext>>,
     rt: &Runtime,
@@ -39,7 +42,7 @@ fn load_csv(
     options: CsvReadOptions,
 ) {
     let df = rt.block_on(ctx.lock().read_csv(path, options)).unwrap();
-    criterion::black_box(rt.block_on(df.collect()).unwrap());
+    black_box(rt.block_on(df.collect()).unwrap());
 }
 
 fn create_context() -> Result<Arc<Mutex<SessionContext>>> {
