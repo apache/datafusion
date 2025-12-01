@@ -203,26 +203,22 @@ main() {
                     # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 tpch_mem)
-                    # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 tpch_csv)
-                    # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "csv"
                     ;;
                 tpch10)
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 tpch_mem10)
-                    # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 tpch_csv10)
-                    # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "csv"
                     ;;
                 clickbench_1)
                     data_clickbench_1
@@ -537,7 +533,7 @@ main() {
 # Creates TPCH data at a certain scale factor, if it doesn't already
 # exist
 #
-# call like: data_tpch($scale_factor)
+# call like: data_tpch($scale_factor, format)
 #
 # Creates data in $DATA_DIR/tpch_sf1 for scale factor 1
 # Creates data in $DATA_DIR/tpch_sf10 for scale factor 10
@@ -548,9 +544,10 @@ data_tpch() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
+    FORMAT=$2
 
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-    echo "Creating tpch dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
+    echo "Creating tpch $FORMAT dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
 
     # Ensure the target data directory exists
     mkdir -p "${TPCH_DIR}"
@@ -560,15 +557,6 @@ data_tpch() {
     then
         echo "tpchgen_cli could not be found, please install it via 'cargo install tpchgen-cli'"
         exit 1
-    fi
-
-    # Create 'tbl' (CSV format) data into $DATA_DIR if it does not already exist
-    FILE="${TPCH_DIR}/supplier.tbl"
-    if test -f "${FILE}"; then
-        echo " tbl files exist ($FILE exists)."
-    else
-        echo " creating tbl files with tpchgen-cli..."
-        tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format tbl --output-dir "${TPCH_DIR}"
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
@@ -581,23 +569,32 @@ data_tpch() {
         docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
-    # Create 'parquet' files, one directory per file
-    FILE="${TPCH_DIR}/supplier"
-    if test -d "${FILE}"; then
-        echo " parquet files exist ($FILE exists)."
-    else
-        echo " creating parquet files using tpchgen-cli ..."
-        tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format parquet --parquet-compression='ZSTD(1)' --parts=1 --output-dir "${TPCH_DIR}"
+    if [ "$FORMAT" = "parquet" ]; then
+      # Create 'parquet' files, one directory per file
+      FILE="${TPCH_DIR}/supplier"
+      if test -d "${FILE}"; then
+          echo " parquet files exist ($FILE exists)."
+      else
+          echo " creating parquet files using tpchgen-cli ..."
+          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format parquet --parquet-compression='ZSTD(1)' --parts=1 --output-dir "${TPCH_DIR}"
+      fi
+      return
     fi
 
-    # Create 'csv' files
-    FILE="${TPCH_DIR}/csv/supplier"
-    if test -d "${FILE}"; then
-        echo " csv files exist ($FILE exists)."
-    else
-        echo " creating csv files using tpchgen-cli binary ..."
-        tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format csv --output-dir "${TPCH_DIR}/csv"
+    # Create 'csv' files, one directory per file
+    if [ "$FORMAT" = "csv" ]; then
+      FILE="${TPCH_DIR}/csv/supplier"
+      if test -d "${FILE}"; then
+          echo " csv files exist ($FILE exists)."
+      else
+          echo " creating csv files using tpchgen-cli binary ..."
+          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format csv --parts=1 --output-dir "${TPCH_DIR}/csv"
+      fi
+      return
     fi
+
+    echo "Error: unknown format '$FORMAT' for tpch data generation, expected 'parquet' or 'csv'"
+    exit 1
 }
 
 # Runs the tpch benchmark
@@ -614,10 +611,10 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     FORMAT=$2
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
-# Runs the tpch in memory
+# Runs the tpch in memory (needs tpch parquet data)
 run_tpch_mem() {
     SCALE_FACTOR=$1
     if [ -z "$SCALE_FACTOR" ] ; then
@@ -630,7 +627,7 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the compile profile benchmark helper
