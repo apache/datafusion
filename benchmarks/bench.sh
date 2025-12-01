@@ -314,6 +314,9 @@ main() {
                 compile_profile)
                     data_tpch "1"
                     ;;
+                sorted_data)
+                    data_sorted_clickbench
+                    ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
                     usage
@@ -496,6 +499,12 @@ main() {
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
+                    ;;
+                sorted_data_sorted)
+                    run_sorted_data_sorted_only
+                    ;;
+                sorted_data_unsorted)
+                    run_sorted_data_unsorted_only
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -1187,6 +1196,99 @@ compare_benchmarks() {
         fi
     done
 
+}
+
+# Creates sorted ClickBench data from hits.parquet using DataFusion
+data_sorted_clickbench() {
+    SORTED_FILE="${DATA_DIR}/hits_sorted.parquet"
+    ORIGINAL_FILE="${DATA_DIR}/hits.parquet"
+
+    echo "Creating sorted ClickBench dataset from hits.parquet..."
+
+    # Check if original data exists
+    if [ ! -f "${ORIGINAL_FILE}" ]; then
+        echo "hits.parquet not found. Running data_clickbench_1 first..."
+        data_clickbench_1
+    fi
+
+    # Check if sorted file already exists
+    if [ -f "${SORTED_FILE}" ]; then
+        echo "Sorted hits.parquet already exists at ${SORTED_FILE}"
+        return 0
+    fi
+
+    echo "Sorting hits.parquet by EventTime using DataFusion..."
+
+    # Detect OS and available memory
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        TOTAL_MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
+        TOTAL_MEM_GB=$((TOTAL_MEM_BYTES / 1024 / 1024 / 1024))
+    else
+        TOTAL_MEM_GB=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}' || echo "0")
+    fi
+
+    # Set memory limit (use less than total to leave room for OS)
+    if [ "$TOTAL_MEM_GB" -gt 20 ]; then
+        MEM_LIMIT_MB=$((16 * 1024))  # 16GB
+    elif [ "$TOTAL_MEM_GB" -gt 16 ]; then
+        MEM_LIMIT_MB=$((8 * 1024))  # 8GB
+    else
+        MEM_LIMIT_MB=$((4 * 1024))  # 4GB
+    fi
+
+    echo "System has ${TOTAL_MEM_GB}GB RAM, using ${MEM_LIMIT_MB}MB memory limit"
+    echo "DataFusion will spill to disk when memory limit is reached"
+    echo ""
+
+    # Run the DataFusion sort utility
+    $CARGO_COMMAND --bin sort_data -- \
+        "${ORIGINAL_FILE}" \
+        "${SORTED_FILE}" \
+        "EventTime" \
+        "${MEM_LIMIT_MB}"
+
+    local result=$?
+
+    if [ $result -eq 0 ]; then
+        echo ""
+        echo "✓ Successfully created sorted ClickBench dataset"
+        echo "  Location: ${SORTED_FILE}"
+        return 0
+    else
+        echo ""
+        echo "✗ Error: Failed to create sorted dataset"
+        return 1
+    fi
+}
+
+# Runs the sorted data benchmark (sorted only)
+run_sorted_data_sorted_only() {
+    RESULTS_FILE="${RESULTS_DIR}/sorted_data_sorted_only.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sorted data benchmark (sorted only)..."
+
+    data_sorted_clickbench
+
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
+        --iterations 5 \
+        --path "${DATA_DIR}/hits_sorted.parquet" \
+        --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
+        -o "${RESULTS_FILE}" \
+        ${QUERY_ARG}
+}
+
+# Runs the sorted data benchmark (unsorted only)
+run_sorted_data_unsorted_only() {
+    RESULTS_FILE="${RESULTS_DIR}/sorted_data_unsorted_only.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sorted data benchmark (unsorted only)..."
+
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
+        --iterations 5 \
+        --path "${DATA_DIR}/hits.parquet" \
+        --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
+        -o "${RESULTS_FILE}" \
+        ${QUERY_ARG}
 }
 
 setup_venv() {
