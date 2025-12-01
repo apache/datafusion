@@ -1305,7 +1305,7 @@ mod test {
             true,
             plan.clone(),
             @r"
-        Projection: CAST(a AS LargeUtf8)
+        Projection: CAST(a AS LargeUtf8) AS a
           EmptyRelation: rows=0
         "
         )?;
@@ -1436,7 +1436,7 @@ mod test {
             true,
             plan.clone(),
             @r"
-        Projection: CAST(a AS LargeBinary)
+        Projection: CAST(a AS LargeBinary) AS a
           EmptyRelation: rows=0
         "
         )?;
