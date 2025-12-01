@@ -797,7 +797,7 @@ select log(arrow_cast(100, 'Decimal32(9, 2)'));
 query R
 select log(2.0, arrow_cast(12345.67, 'Decimal32(9, 2)'));
 ----
-13.591717513271785
+13.591717513272
 
 # log for small decimal64
 query R
@@ -813,7 +813,7 @@ select log(arrow_cast(100, 'Decimal64(18, 2)'));
 query R
 select log(2.0, arrow_cast(12345.6789, 'Decimal64(15, 4)'));
 ----
-13.591718553311024
+13.591718553311
 
 
 # log for small decimal128
