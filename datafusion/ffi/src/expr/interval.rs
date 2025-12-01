@@ -20,6 +20,9 @@ use abi_stable::StableAbi;
 use datafusion_common::DataFusionError;
 use datafusion_expr::interval_arithmetic::Interval;
 
+/// A stable struct for sharing [`Interval`] across FFI boundaries.
+/// See [`Interval`] for the meaning of each field. Scalar values
+/// are passed as Arrow arrays of length 1.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]

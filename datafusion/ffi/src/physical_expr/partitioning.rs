@@ -23,18 +23,14 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::physical_expr::FFI_PhysicalExpr;
 
+/// A stable struct for sharing [`Partitioning`] across FFI boundaries.
+/// See ['Partitioning'] for the meaning of each variant.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub enum FFI_Partitioning {
-    /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
-
-    /// Allocate rows based on a hash of one of more expressions and the specified number of
-    /// partitions
     Hash(RVec<FFI_PhysicalExpr>, usize),
-
-    /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
 

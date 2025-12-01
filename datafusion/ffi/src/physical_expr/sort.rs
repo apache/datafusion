@@ -25,6 +25,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use crate::expr::expr_properties::FFI_SortOptions;
 use crate::physical_expr::FFI_PhysicalExpr;
 
+/// A stable struct for sharing [`PhysicalSortExpr`] across FFI boundaries.
+/// See [`PhysicalSortExpr`] for the meaning of each field.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]

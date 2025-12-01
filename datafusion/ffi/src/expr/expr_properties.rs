@@ -22,6 +22,8 @@ use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 
 use crate::expr::interval::FFI_Interval;
 
+/// A stable struct for sharing [`ExprProperties`] across FFI boundaries.
+/// See [`ExprProperties`] for the meaning of each field.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]

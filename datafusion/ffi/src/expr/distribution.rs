@@ -24,6 +24,8 @@ use datafusion_expr::statistics::{
     GenericDistribution, UniformDistribution,
 };
 
+/// A stable struct for sharing [`Distribution`] across FFI boundaries.
+/// See ['Distribution'] for the meaning of each variant.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]

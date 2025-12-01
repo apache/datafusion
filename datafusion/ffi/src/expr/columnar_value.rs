@@ -21,6 +21,8 @@ use datafusion_expr::ColumnarValue;
 
 use crate::arrow_wrappers::WrappedArray;
 
+/// A stable struct for sharing [`ColumnarValue`] across FFI boundaries.
+/// Scalar values are passed as an Arrow array of length 1.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
