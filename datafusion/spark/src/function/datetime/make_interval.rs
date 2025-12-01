@@ -22,11 +22,11 @@ use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray}
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::{DataType, IntervalMonthDayNano};
-use datafusion_common::{
-    exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::types::{logical_float64, logical_int32, NativeType};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -43,8 +43,39 @@ impl Default for SparkMakeInterval {
 
 impl SparkMakeInterval {
     pub fn new() -> Self {
+        fn int32_coercion() -> Coercion {
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_int32()),
+                vec![TypeSignatureClass::Integer],
+                NativeType::Int32,
+            )
+        }
+
+        fn float64_coercion() -> Coercion {
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_float64()),
+                vec![TypeSignatureClass::Numeric],
+                NativeType::Float64,
+            )
+        }
+
+        let mut variants = Vec::with_capacity(8);
+        variants.push(TypeSignature::Nullary);
+
+        for len in 1..=7 {
+            let mut args = Vec::with_capacity(len);
+            for idx in 0..len {
+                if idx == 6 {
+                    args.push(float64_coercion());
+                } else {
+                    args.push(int32_coercion());
+                }
+            }
+            variants.push(TypeSignature::Coercible(args));
+        }
+
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(variants, Volatility::Immutable),
         }
     }
 }
@@ -73,27 +104,6 @@ impl ScalarUDFImpl for SparkMakeInterval {
             )));
         }
         make_scalar_function(make_interval_kernel, vec![])(&args.args)
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let length = arg_types.len();
-        match length {
-            x if x > 7 => {
-                exec_err!(
-                    "make_interval expects between 0 and 7 arguments, got {}",
-                    arg_types.len()
-                )
-            }
-            _ => Ok((0..arg_types.len())
-                .map(|i| {
-                    if i == 6 {
-                        DataType::Float64
-                    } else {
-                        DataType::Int32
-                    }
-                })
-                .collect()),
-        }
     }
 }
 
