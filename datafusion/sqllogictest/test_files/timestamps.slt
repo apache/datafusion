@@ -3136,8 +3136,10 @@ drop table table_time_strings;
 query error DataFusion error: Execution error: Error parsing time from 'invalid' with provided formats
 select to_time('invalid', '%H:%M:%S');
 
-query error DataFusion error: Execution error: Unsupported data type Null for function to_time
+query D
 select to_time(null);
+----
+NULL
 
 
 ##########

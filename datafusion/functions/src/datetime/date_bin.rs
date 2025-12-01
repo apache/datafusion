@@ -151,10 +151,16 @@ impl DateBinFunc {
 
         let time_sig = vec![
             Exact(vec![
+                DataType::Interval(MonthDayNano),
+                Time64(Nanosecond),
+                Time64(Nanosecond),
+            ]),
+            Exact(vec![
                 DataType::Interval(DayTime),
                 Time64(Nanosecond),
                 Time64(Nanosecond),
             ]),
+            Exact(vec![DataType::Interval(MonthDayNano), Time64(Nanosecond)]),
             Exact(vec![DataType::Interval(DayTime), Time64(Nanosecond)]),
         ];
 
@@ -462,7 +468,10 @@ fn date_bin_impl(
             if !is_time {
                 return exec_err!("DATE_BIN with Time64 source requires Time64 origin");
             }
-            let apply_stride_fn = move |x: i64| stride_fn(stride, x, origin);
+            let apply_stride_fn = move |x: i64| {
+                let binned_nanos = stride_fn(stride, x, origin);
+                binned_nanos % (24 * 3600 * 1_000_000_000)
+            };
             ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v.map(apply_stride_fn)))
         }
 
