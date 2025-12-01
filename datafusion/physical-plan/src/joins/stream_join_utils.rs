@@ -37,9 +37,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::memory::estimate_memory_size;
-use datafusion_common::{
-    arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
-};
+use datafusion_common::{arrow_datafusion_err, HashSet, JoinSide, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;

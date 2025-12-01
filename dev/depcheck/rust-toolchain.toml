@@ -15,12 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Circular dependency checker for DataFusion
-[package]
-name = "depcheck"
-edition = "2024"
+# This file specifies the default version of Rust used
+# to compile this workspace and run CI jobs.
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-cargo = "0.92.0"
+[toolchain]
+channel = "1.89.0"
+components = ["rustfmt", "clippy"]

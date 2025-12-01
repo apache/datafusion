@@ -84,7 +84,6 @@ macro_rules! export_functions {
 #[macro_export]
 macro_rules! make_udf_function {
     ($UDF:ty, $NAME:ident, $CTOR:expr) => {
-        #[allow(rustdoc::redundant_explicit_links)]
         #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             // Singleton instance of the function
@@ -109,7 +108,6 @@ macro_rules! make_udf_function {
 #[macro_export]
 macro_rules! make_udf_function_with_config {
     ($UDF:ty, $NAME:ident) => {
-        #[allow(rustdoc::redundant_explicit_links)]
         #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
         pub fn $NAME(config: &datafusion_common::config::ConfigOptions) -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(

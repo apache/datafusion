@@ -62,8 +62,7 @@ use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
     arrow_err, assert_eq_or_internal_err, internal_datafusion_err, internal_err,
-    project_schema, unwrap_or_internal_err, DataFusionError, JoinSide, Result,
-    ScalarValue, Statistics,
+    project_schema, unwrap_or_internal_err, JoinSide, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -76,7 +75,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::Mutex;
 
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 /// NestedLoopJoinExec is a build-probe join operator designed for joins that
 /// do not have equijoin keys in their `ON` clause.
 ///
@@ -786,7 +785,7 @@ pub(crate) struct NestedLoopJoinStream {
     left_exhausted: bool,
     /// If we can buffer all left data in one pass
     /// TODO(now): this is for the (unimplemented) memory-limited execution
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     left_buffered_in_one_pass: bool,
 
     // Probe(right) side
@@ -1014,7 +1013,7 @@ impl RecordBatchStream for NestedLoopJoinStream {
 }
 
 impl NestedLoopJoinStream {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         schema: Arc<Schema>,
         filter: Option<JoinFilter>,
