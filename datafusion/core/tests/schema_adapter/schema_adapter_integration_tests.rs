@@ -214,6 +214,213 @@ impl PhysicalExprAdapter for UppercasePhysicalExprAdapter {
     }
 }
 
+/// Test reading a Parquet file where the table schema is flipped (c, b, a) vs. the physical file schema (a, b, c)
+#[cfg(feature = "parquet")]
+#[tokio::test]
+async fn test_parquet_flipped_projection() -> Result<()> {
+    // Create test data
+    use datafusion::assert_batches_eq;
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
+            Arc::new(arrow::array::StringArray::from(vec!["x", "y", "z"])),
+            Arc::new(arrow::array::Float64Array::from(vec![1.1, 2.2, 3.3])),
+        ],
+    )?;
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let path = "flipped.parquet";
+    write_parquet(batch.clone(), store.clone(), path).await;
+
+    // Get the actual file size from the object store
+    let object_meta = store.head(&Path::from(path)).await?;
+    let file_size = object_meta.size;
+
+    // Create a session context and register the object store
+    let ctx = SessionContext::new();
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+    // Create a table schema with flipped column order (c, b, a)
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("c", DataType::Float64, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("a", DataType::Int32, false),
+    ]));
+
+    // Create a ParquetSource with the table schema
+    let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
+
+    // Use PhysicalExprAdapterFactory to map flipped columns
+    let config = FileScanConfigBuilder::new(store_url.clone(), file_source)
+        .with_file(PartitionedFile::new(path, file_size))
+        .with_expr_adapter(None)
+        .build();
+
+    // Create a data source executor
+    let exec = DataSourceExec::from_data_source(config);
+
+    // Collect results
+    let task_ctx = ctx.task_ctx();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+    #[rustfmt::skip]
+    let expected = [
+        "+-----+---+---+",
+        "| c   | b | a |",
+        "+-----+---+---+",
+        "| 1.1 | x | 1 |",
+        "| 2.2 | y | 2 |",
+        "| 3.3 | z | 3 |",
+        "+-----+---+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // And now with a projection applied that selects (`b`, `a`)
+    let projection = datafusion_physical_expr::projection::ProjectionExprs::from_indices(
+        &[1, 2],
+        &table_schema,
+    );
+    let source = Arc::new(ParquetSource::new(table_schema.clone()))
+        .try_pushdown_projection(&projection)
+        .unwrap()
+        .unwrap();
+    let config = FileScanConfigBuilder::new(store_url, source)
+        .with_file(PartitionedFile::new(path, file_size))
+        .with_expr_adapter(None)
+        .build();
+    // Create a data source executor
+    let exec = DataSourceExec::from_data_source(config);
+    // Collect results
+    let task_ctx = ctx.task_ctx();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+    #[rustfmt::skip]
+    let expected = [
+        "+---+---+",
+        "| b | a |",
+        "+---+---+",
+        "| x | 1 |",
+        "| y | 2 |",
+        "| z | 3 |",
+        "+---+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    Ok(())
+}
+
+/// Test reading a Parquet file that is missing a column specified in the table schema, which should get filled in with nulls by default.
+/// We test with the file having columns (a, c) and the table schema having (a, b, c)
+#[cfg(feature = "parquet")]
+#[tokio::test]
+async fn test_parquet_missing_column() -> Result<()> {
+    // Create test data with columns (a, c)
+    use datafusion::assert_batches_eq;
+    use datafusion_physical_expr::projection::ProjectionExprs;
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("c", DataType::Float64, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
+            Arc::new(arrow::array::Float64Array::from(vec![1.1, 2.2, 3.3])),
+        ],
+    )?;
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    let path = "missing_column.parquet";
+    write_parquet(batch.clone(), store.clone(), path).await;
+
+    // Get the actual file size from the object store
+    let object_meta = store.head(&Path::from(path)).await?;
+    let file_size = object_meta.size;
+
+    // Create a session context and register the object store
+    let ctx = SessionContext::new();
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+    // Create a table schema with an extra column 'b' (a, b, c)
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Float64, false),
+    ]));
+
+    // Create a ParquetSource with the table schema
+    let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
+
+    // Use PhysicalExprAdapterFactory to handle missing column
+    let config = FileScanConfigBuilder::new(store_url.clone(), file_source)
+        .with_file(PartitionedFile::new(path, file_size))
+        .with_expr_adapter(None)
+        .build();
+
+    // Create a data source executor
+    let exec = DataSourceExec::from_data_source(config);
+
+    // Collect results
+    let task_ctx = ctx.task_ctx();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+    #[rustfmt::skip]
+    let expected = [
+        "+---+---+-----+",
+        "| a | b | c   |",
+        "+---+---+-----+",
+        "| 1 |   | 1.1 |",
+        "| 2 |   | 2.2 |",
+        "| 3 |   | 3.3 |",
+        "+---+---+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // And with a projection applied that selects (`c, `a`, `b`)
+    let projection = ProjectionExprs::from_indices(&[2, 0, 1], &table_schema);
+    let source = Arc::new(ParquetSource::new(table_schema.clone()))
+        .try_pushdown_projection(&projection)
+        .unwrap()
+        .unwrap();
+    let config = FileScanConfigBuilder::new(store_url, source)
+        .with_file(PartitionedFile::new(path, file_size))
+        .with_expr_adapter(None)
+        .build();
+    // Create a data source executor
+    let exec = DataSourceExec::from_data_source(config);
+    // Collect results
+    let task_ctx = ctx.task_ctx();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+    #[rustfmt::skip]
+    let expected = [
+        "+-----+---+---+",
+        "| c   | a | b |",
+        "+-----+---+---+",
+        "| 1.1 | 1 |   |",
+        "| 2.2 | 2 |   |",
+        "| 3.3 | 3 |   |",
+        "+-----+---+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    Ok(())
+}
+
 #[cfg(feature = "parquet")]
 #[tokio::test]
 async fn test_parquet_integration_with_physical_expr_adapter() -> Result<()> {
