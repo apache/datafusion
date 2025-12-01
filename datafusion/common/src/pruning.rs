@@ -172,7 +172,7 @@ impl PartitionPruningStatistics {
     ///
     /// # Example
     ///
-    /// To to create [`PartitionPruningStatistics`] for two partition columns `a` and `b`,
+    /// To create [`PartitionPruningStatistics`] for two partition columns `a` and `b`,
     /// for three containers like this:
     ///
     /// | a | b |
