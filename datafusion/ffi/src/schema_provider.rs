@@ -170,8 +170,10 @@ unsafe extern "C" fn table_exist_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SchemaProvider) {
+    debug_assert!(!provider.private_data.is_null());
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
     drop(private_data);
+    provider.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(

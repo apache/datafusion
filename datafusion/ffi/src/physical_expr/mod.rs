@@ -378,8 +378,10 @@ unsafe extern "C" fn hash_fn_wrapper(expr: &FFI_PhysicalExpr) -> u64 {
 }
 
 unsafe extern "C" fn release_fn_wrapper(expr: &mut FFI_PhysicalExpr) {
+    debug_assert!(!expr.private_data.is_null());
     let private_data = Box::from_raw(expr.private_data as *mut PhysicalExprPrivateData);
     drop(private_data);
+    expr.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalExpr {

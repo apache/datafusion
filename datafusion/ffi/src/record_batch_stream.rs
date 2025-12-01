@@ -102,9 +102,11 @@ unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> Wrappe
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
+    debug_assert!(!provider.private_data.is_null());
     let private_data =
         Box::from_raw(provider.private_data as *mut RecordBatchStreamPrivateData);
     drop(private_data);
+    provider.private_data = std::ptr::null_mut();
 }
 
 pub(crate) fn record_batch_to_wrapped_array(

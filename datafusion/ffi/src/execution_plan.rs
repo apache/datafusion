@@ -132,8 +132,10 @@ unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
 }
 
 unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
+    debug_assert!(!plan.private_data.is_null());
     let private_data = Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
     drop(private_data);
+    plan.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan {

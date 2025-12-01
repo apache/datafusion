@@ -221,6 +221,7 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator)
         let private_data =
             Box::from_raw(accumulator.private_data as *mut GroupsAccumulatorPrivateData);
         drop(private_data);
+        accumulator.private_data = null_mut();
     }
 }
 

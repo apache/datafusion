@@ -179,6 +179,7 @@ unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) 
         let private_data =
             Box::from_raw(evaluator.private_data as *mut PartitionEvaluatorPrivateData);
         drop(private_data);
+        evaluator.private_data = std::ptr::null_mut();
     }
 }
 

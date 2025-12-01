@@ -180,8 +180,10 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) {
+    debug_assert!(!udwf.private_data.is_null());
     let private_data = Box::from_raw(udwf.private_data as *mut WindowUDFPrivateData);
     drop(private_data);
+    udwf.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {

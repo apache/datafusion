@@ -326,8 +326,10 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(udaf: &mut FFI_AggregateUDF) {
+    debug_assert!(!udaf.private_data.is_null());
     let private_data = Box::from_raw(udaf.private_data as *mut AggregateUDFPrivateData);
     drop(private_data);
+    udaf.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udaf: &FFI_AggregateUDF) -> FFI_AggregateUDF {

@@ -207,8 +207,10 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(udf: &mut FFI_ScalarUDF) {
+    debug_assert!(!udf.private_data.is_null());
     let private_data = Box::from_raw(udf.private_data as *mut ScalarUDFPrivateData);
     drop(private_data);
+    udf.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udf: &FFI_ScalarUDF) -> FFI_ScalarUDF {

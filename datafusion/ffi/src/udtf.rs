@@ -107,8 +107,10 @@ unsafe extern "C" fn call_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
+    debug_assert!(!udtf.private_data.is_null());
     let private_data = Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
     drop(private_data);
+    udtf.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udtf: &FFI_TableFunction) -> FFI_TableFunction {

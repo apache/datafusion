@@ -144,9 +144,11 @@ unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> Wrapp
 }
 
 unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
+    debug_assert!(!props.private_data.is_null());
     let private_data =
         Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
     drop(private_data);
+    props.private_data = std::ptr::null_mut();
 }
 
 impl Drop for FFI_PlanProperties {
