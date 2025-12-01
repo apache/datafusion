@@ -61,7 +61,17 @@ pub fn from_recursive_query(
 }
 
 /// Type URL to identify RecursiveQuery in Substrait extensions
+/// Type URL to identify RecursiveQuery in Substrait extensions
 pub const RECURSIVE_QUERY_TYPE_URL: &str = "datafusion.RecursiveQuery";
+
+/// Type URL to identify recursive scan (work-table used for recursive CTEs)
+/// in Substrait `ReadRel` advanced_extension payloads.
+///
+/// This value is used when serializing a `TableScan` that represents a
+/// `CteWorkTable` (the internal work-table for a recursive common-table
+/// expression). The consumer side checks for this type URL and decodes the
+/// `RecursiveScanDetail` to recreate a `CteWorkTable` source when deserializing
+/// a `ReadRel` coming from Substrait.
 pub const RECURSIVE_SCAN_TYPE_URL: &str = "datafusion.RecursiveScan";
 
 /// Simple protobuf message to encode RecursiveQuery metadata
