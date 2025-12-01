@@ -20,6 +20,7 @@ use datafusion_common::{
     assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, Result, Span, TableReference,
 };
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};

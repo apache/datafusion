@@ -43,6 +43,7 @@ use datafusion_common::{
     assert_eq_or_internal_err, assert_or_internal_err, internal_datafusion_err,
     internal_err, not_impl_err, plan_err, Column, Result, ScalarValue,
 };
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
