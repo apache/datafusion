@@ -893,13 +893,13 @@ impl Stream for SortMergeJoinStream {
                         .debug_assert_metadata_aligned();
 
                     // if there is still something not processed
-                    if !self.staging_output_record_batches.is_empty() {
+                    return if !self.staging_output_record_batches.is_empty() {
                         if self.needs_deferred_filtering() {
                             let record_batch = self.filter_joined_batch()?;
-                            return Poll::Ready(Some(Ok(record_batch)));
+                            Poll::Ready(Some(Ok(record_batch)))
                         } else {
                             let record_batch = self.output_record_batch_and_reset()?;
-                            return Poll::Ready(Some(Ok(record_batch)));
+                            Poll::Ready(Some(Ok(record_batch)))
                         }
                     } else if !self.output.is_empty() {
                         self.output
@@ -909,9 +909,9 @@ impl Stream for SortMergeJoinStream {
                             .output
                             .next_completed_batch()
                             .expect("Failed to get last batch");
-                        return Poll::Ready(Some(Ok(record_batch)));
+                        Poll::Ready(Some(Ok(record_batch)))
                     } else {
-                        return Poll::Ready(None);
+                        Poll::Ready(None)
                     }
                 }
             }
