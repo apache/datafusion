@@ -870,16 +870,13 @@ impl Stream for SortMergeJoinStream {
                             .debug_assert_metadata_aligned();
 
                         if !self.staging_output_record_batches.is_empty() {
-                            let record_batch = self.output_record_batch_and_reset()?;
-                            // For non-filtered join output whenever the target output batch size
-                            // is hit. For filtered join its needed to output on later phase
-                            // because target output batch size can be hit in the middle of
-                            // filtering causing the filtering to be incomplete and causing
-                            // correctness issues
+                            // For filtered joins, skip concat here and let Init state handle it
+                            // to avoid double-concatenation
                             if self.needs_deferred_filtering() {
                                 continue;
                             }
 
+                            let record_batch = self.output_record_batch_and_reset()?;
                             return Poll::Ready(Some(Ok(record_batch)));
                         }
                         return Poll::Pending;
