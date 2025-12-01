@@ -46,6 +46,7 @@ arrow = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+hashbrown = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

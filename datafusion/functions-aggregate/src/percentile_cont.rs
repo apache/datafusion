@@ -33,11 +33,12 @@ use arrow::{
 
 use arrow::array::ArrowNativeTypeOp;
 
-use crate::min_max::{max_udaf, min_udaf};
+use ahash::RandomState;
 use datafusion_common::{
     assert_eq_or_internal_err, internal_datafusion_err, plan_err,
-    utils::take_function_args, DataFusionError, Result, ScalarValue,
+    utils::take_function_args, DataFusionError, HashSet, Result, ScalarValue,
 };
+
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -52,9 +53,10 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
+use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
 
+use crate::min_max::{max_udaf, min_udaf};
 use crate::utils::validate_percentile_expr;
 
 /// Precision multiplier for linear interpolation calculations.
@@ -747,12 +749,14 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
 
 #[derive(Debug)]
 struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
-    distinct_values: GenericDistinctBuffer<T>,
+    distinct_values: GenericDistinctBuffer<T, HashSet<Hashable<T::Native>, RandomState>>,
     data_type: DataType,
     percentile: f64,
 }
 
-impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumulator<T> {
+impl<T: ArrowNumericType + Send + Sync + Debug> Accumulator
+    for DistinctPercentileContAccumulator<T>
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.distinct_values.state()
     }
@@ -766,10 +770,7 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values.values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
+        let d = self.distinct_values.drain_values();
         let value = calculate_percentile::<T>(d, self.percentile);
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }

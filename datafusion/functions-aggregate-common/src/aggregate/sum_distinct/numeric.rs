@@ -30,12 +30,17 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 
-use crate::utils::GenericDistinctBuffer;
+use crate::utils::{GenericDistinctBuffer, Hashable};
 
 /// Accumulator for computing SUM(DISTINCT expr)
+///
+/// Uses Hashable storage to correctly handle floats and other numeric types
 #[derive(Debug)]
 pub struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
-    values: GenericDistinctBuffer<T>,
+    values: GenericDistinctBuffer<
+        T,
+        datafusion_common::HashSet<Hashable<T::Native>, ahash::RandomState>,
+    >,
     data_type: DataType,
 }
 
@@ -48,11 +53,13 @@ impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
     }
 
     pub fn distinct_count(&self) -> usize {
-        self.values.values.len()
+        self.values.len()
     }
 }
 
-impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
+impl<T: ArrowPrimitiveType + Send + Sync + Debug> Accumulator
+    for DistinctSumAccumulator<T>
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.values.state()
     }
@@ -70,8 +77,8 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
             ScalarValue::new_primitive::<T>(None, &self.data_type)
         } else {
             let mut acc = T::Native::usize_as(0);
-            for distinct_value in self.values.values.iter() {
-                acc = acc.add_wrapping(distinct_value.0)
+            for distinct_value in self.values.iter_values() {
+                acc = acc.add_wrapping(distinct_value)
             }
             ScalarValue::new_primitive::<T>(Some(acc), &self.data_type)
         }

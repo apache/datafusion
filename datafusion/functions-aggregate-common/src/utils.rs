@@ -88,6 +88,100 @@ impl<T: ArrowNativeTypeOp> PartialEq for Hashable<T> {
 
 impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}
 
+/// Trait for abstracting distinct value storage strategies.
+///
+/// This trait allows [`GenericDistinctBuffer`] to work with different storage
+/// implementations: native `HashSet<T>` for types that are natively hashable
+/// (like integers), and `HashSet<Hashable<T>>` for types that need special
+/// handling (like floats).
+pub trait DistinctStorage: Default + std::fmt::Debug + Send + Sync {
+    /// The native type being stored
+    type Native: ArrowNativeType;
+
+    /// Iterator type returned by [`DistinctStorage::iter_values`]
+    type Iter<'a>: Iterator<Item = Self::Native> + 'a
+    where
+        Self: 'a;
+
+    /// Insert a value into the storage, returning whether it was newly inserted
+    fn insert(&mut self, value: Self::Native) -> bool;
+
+    /// Return the number of distinct values stored
+    fn len(&self) -> usize;
+
+    /// Return whether the storage is empty
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Iterate over the stored values
+    fn iter_values(&self) -> Self::Iter<'_>;
+
+    /// Drain the storage, returning the distinct values collected so far.
+    fn drain_values(&mut self) -> Vec<Self::Native>;
+}
+
+/// Implementation of [`DistinctStorage`] for natively hashable types (integers, etc.)
+impl<T> DistinctStorage for HashSet<T, RandomState>
+where
+    T: ArrowNativeType + Eq + std::hash::Hash,
+{
+    type Native = T;
+    type Iter<'a> = std::iter::Copied<hashbrown::hash_set::Iter<'a, T>>;
+
+    fn insert(&mut self, value: Self::Native) -> bool {
+        HashSet::insert(self, value)
+    }
+
+    fn len(&self) -> usize {
+        HashSet::len(self)
+    }
+
+    fn iter_values(&self) -> Self::Iter<'_> {
+        self.iter().copied()
+    }
+
+    fn drain_values(&mut self) -> Vec<Self::Native> {
+        let mut taken = HashSet::default();
+        std::mem::swap(self, &mut taken);
+        taken.into_iter().collect()
+    }
+}
+
+/// Implementation of [`DistinctStorage`] for types requiring special hashing (floats)
+impl<T> DistinctStorage for HashSet<Hashable<T>, RandomState>
+where
+    T: ArrowNativeType + ToByteSlice + ArrowNativeTypeOp,
+{
+    type Native = T;
+    type Iter<'a> =
+        std::iter::Map<hashbrown::hash_set::Iter<'a, Hashable<T>>, fn(&Hashable<T>) -> T>;
+
+    fn insert(&mut self, value: Self::Native) -> bool {
+        HashSet::insert(self, Hashable(value))
+    }
+
+    fn len(&self) -> usize {
+        HashSet::len(self)
+    }
+
+    fn iter_values(&self) -> Self::Iter<'_> {
+        fn extract<T>(hashable: &Hashable<T>) -> T
+        where
+            T: ArrowNativeType + ToByteSlice + ArrowNativeTypeOp,
+        {
+            hashable.0
+        }
+        self.iter().map(extract::<T>)
+    }
+
+    fn drain_values(&mut self) -> Vec<Self::Native> {
+        let mut taken = HashSet::default();
+        std::mem::swap(self, &mut taken);
+        taken.into_iter().map(|v| v.0).collect()
+    }
+}
+
 /// Computes averages for `Decimal128`/`Decimal256` values, checking for overflow
 ///
 /// This is needed because different precisions for Decimal128/Decimal256 can
@@ -182,12 +276,22 @@ impl<T: DecimalType> DecimalAverager<T> {
 /// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
 /// in the final evaluation step so that we avoid expensive conversions and
 /// allocations during `update_batch`.
-pub struct GenericDistinctBuffer<T: ArrowPrimitiveType> {
-    pub values: HashSet<Hashable<T::Native>, RandomState>,
+///
+/// This struct is generic over the storage strategy `S`, allowing it to use
+/// native `HashSet<T>` for natively hashable types (integers) or
+/// `HashSet<Hashable<T>>` for types requiring special handling (floats).
+pub struct GenericDistinctBuffer<
+    T: ArrowPrimitiveType,
+    S: DistinctStorage<Native = T::Native>,
+> {
+    pub values: S,
     data_type: DataType,
+    _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: ArrowPrimitiveType> std::fmt::Debug for GenericDistinctBuffer<T> {
+impl<T: ArrowPrimitiveType, S: DistinctStorage<Native = T::Native>> std::fmt::Debug
+    for GenericDistinctBuffer<T, S>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -198,18 +302,21 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for GenericDistinctBuffer<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
+impl<T: ArrowPrimitiveType, S: DistinctStorage<Native = T::Native>>
+    GenericDistinctBuffer<T, S>
+{
     pub fn new(data_type: DataType) -> Self {
         Self {
-            values: HashSet::default(),
+            values: S::default(),
             data_type,
+            _phantom: std::marker::PhantomData,
         }
     }
 
     /// Mirrors [`Accumulator::state`].
     pub fn state(&self) -> Result<Vec<ScalarValue>> {
         let arr = Arc::new(
-            PrimitiveArray::<T>::from_iter_values(self.values.iter().map(|v| v.0))
+            PrimitiveArray::<T>::from_iter_values(self.values.iter_values())
                 // Ideally we'd just use T::DATA_TYPE but this misses things like
                 // decimal scale/precision and timestamp timezones, which need to
                 // match up with Accumulator::state_fields
@@ -232,10 +339,13 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
 
         let arr = as_primitive_array::<T>(&values[0])?;
         if arr.null_count() > 0 {
-            self.values.extend(arr.iter().flatten().map(Hashable));
+            for value in arr.iter().flatten() {
+                self.values.insert(value);
+            }
         } else {
-            self.values
-                .extend(arr.values().iter().cloned().map(Hashable));
+            for value in arr.values().iter().copied() {
+                self.values.insert(value);
+            }
         }
 
         Ok(())
@@ -260,5 +370,26 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
         let num_elements = self.values.len();
         let fixed_size = size_of_val(self) + size_of_val(&self.values);
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+    }
+
+    /// Number of distinct values tracked so far.
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Whether no values have been collected.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Iterate over the current distinct values.
+    pub fn iter_values(&self) -> S::Iter<'_> {
+        self.values.iter_values()
+    }
+
+    /// Drain the collected values into a Vec. Intended for final evaluation steps
+    /// that need to process the distinct values directly.
+    pub fn drain_values(&mut self) -> Vec<T::Native> {
+        self.values.drain_values()
     }
 }
