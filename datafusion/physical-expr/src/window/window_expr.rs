@@ -281,7 +281,7 @@ pub trait AggregateWindowExpr: WindowExpr {
     /// * `window_frame_ctx`: Details about the window frame (see [`WindowFrameContext`]).
     /// * `idx`: The index of the current row in the record batch.
     /// * `not_end`: is the current row not the end of the partition (see [`PartitionBatchState`]).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn get_result_column(
         &self,
         accumulator: &mut Box<dyn Accumulator>,
