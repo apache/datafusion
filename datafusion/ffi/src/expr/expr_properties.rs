@@ -35,7 +35,7 @@ impl TryFrom<&ExprProperties> for FFI_ExprProperties {
     type Error = DataFusionError;
     fn try_from(value: &ExprProperties) -> Result<Self, Self::Error> {
         let sort_properties = (&value.sort_properties).into();
-        let range = (&value.range).try_into()?;
+        let range = value.range.clone().try_into()?;
 
         Ok(FFI_ExprProperties {
             sort_properties,
@@ -45,11 +45,11 @@ impl TryFrom<&ExprProperties> for FFI_ExprProperties {
     }
 }
 
-impl TryFrom<&FFI_ExprProperties> for ExprProperties {
+impl TryFrom<FFI_ExprProperties> for ExprProperties {
     type Error = DataFusionError;
-    fn try_from(value: &FFI_ExprProperties) -> Result<Self, Self::Error> {
+    fn try_from(value: FFI_ExprProperties) -> Result<Self, Self::Error> {
         let sort_properties = (&value.sort_properties).into();
-        let range = (&value.range).try_into()?;
+        let range = value.range.try_into()?;
         Ok(ExprProperties {
             sort_properties,
             range,

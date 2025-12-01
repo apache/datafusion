@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::std_types::RVec;
+use crate::arrow_wrappers::WrappedArray;
+use crate::expr::interval::FFI_Interval;
 use abi_stable::StableAbi;
 use datafusion_common::DataFusionError;
 use datafusion_expr::statistics::{
@@ -23,12 +24,10 @@ use datafusion_expr::statistics::{
     GenericDistribution, UniformDistribution,
 };
 
-use crate::expr::interval::FFI_Interval;
-use crate::expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8};
-
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
+#[expect(clippy::large_enum_variant)]
 pub enum FFI_Distribution {
     Uniform(FFI_UniformDistribution),
     Exponential(FFI_ExponentialDistribution),
@@ -52,9 +51,9 @@ impl TryFrom<&Distribution> for FFI_Distribution {
     }
 }
 
-impl TryFrom<&FFI_Distribution> for Distribution {
+impl TryFrom<FFI_Distribution> for Distribution {
     type Error = DataFusionError;
-    fn try_from(value: &FFI_Distribution) -> Result<Self, Self::Error> {
+    fn try_from(value: FFI_Distribution) -> Result<Self, Self::Error> {
         match value {
             FFI_Distribution::Uniform(d) => d.try_into(),
             FFI_Distribution::Exponential(d) => d.try_into(),
@@ -76,8 +75,8 @@ pub struct FFI_UniformDistribution {
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ExponentialDistribution {
-    rate: RVec<u8>,
-    offset: RVec<u8>,
+    rate: WrappedArray,
+    offset: WrappedArray,
     positive_tail: bool,
 }
 
@@ -85,24 +84,24 @@ pub struct FFI_ExponentialDistribution {
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_GaussianDistribution {
-    mean: RVec<u8>,
-    variance: RVec<u8>,
+    mean: WrappedArray,
+    variance: WrappedArray,
 }
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_BernoulliDistribution {
-    p: RVec<u8>,
+    p: WrappedArray,
 }
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_GenericDistribution {
-    mean: RVec<u8>,
-    median: RVec<u8>,
-    variance: RVec<u8>,
+    mean: WrappedArray,
+    median: WrappedArray,
+    variance: WrappedArray,
     range: FFI_Interval,
 }
 
@@ -118,8 +117,8 @@ impl TryFrom<&UniformDistribution> for FFI_UniformDistribution {
 impl TryFrom<&ExponentialDistribution> for FFI_ExponentialDistribution {
     type Error = DataFusionError;
     fn try_from(value: &ExponentialDistribution) -> Result<Self, Self::Error> {
-        let rate = scalar_value_to_rvec_u8(value.rate())?;
-        let offset = scalar_value_to_rvec_u8(value.offset())?;
+        let rate = value.rate().try_into()?;
+        let offset = value.offset().try_into()?;
 
         Ok(Self {
             rate,
@@ -132,8 +131,8 @@ impl TryFrom<&ExponentialDistribution> for FFI_ExponentialDistribution {
 impl TryFrom<&GaussianDistribution> for FFI_GaussianDistribution {
     type Error = DataFusionError;
     fn try_from(value: &GaussianDistribution) -> Result<Self, Self::Error> {
-        let mean = scalar_value_to_rvec_u8(value.mean())?;
-        let variance = scalar_value_to_rvec_u8(value.variance())?;
+        let mean = value.mean().try_into()?;
+        let variance = value.variance().try_into()?;
 
         Ok(Self { mean, variance })
     }
@@ -142,7 +141,7 @@ impl TryFrom<&GaussianDistribution> for FFI_GaussianDistribution {
 impl TryFrom<&BernoulliDistribution> for FFI_BernoulliDistribution {
     type Error = DataFusionError;
     fn try_from(value: &BernoulliDistribution) -> Result<Self, Self::Error> {
-        let p = scalar_value_to_rvec_u8(value.p_value())?;
+        let p = value.p_value().try_into()?;
 
         Ok(Self { p })
     }
@@ -151,9 +150,9 @@ impl TryFrom<&BernoulliDistribution> for FFI_BernoulliDistribution {
 impl TryFrom<&GenericDistribution> for FFI_GenericDistribution {
     type Error = DataFusionError;
     fn try_from(value: &GenericDistribution) -> Result<Self, Self::Error> {
-        let mean = scalar_value_to_rvec_u8(value.mean())?;
-        let median = scalar_value_to_rvec_u8(value.median())?;
-        let variance = scalar_value_to_rvec_u8(value.variance())?;
+        let mean = value.mean().try_into()?;
+        let median = value.median().try_into()?;
+        let variance = value.variance().try_into()?;
 
         Ok(Self {
             mean,
@@ -164,50 +163,50 @@ impl TryFrom<&GenericDistribution> for FFI_GenericDistribution {
     }
 }
 
-impl TryFrom<&FFI_UniformDistribution> for Distribution {
+impl TryFrom<FFI_UniformDistribution> for Distribution {
     type Error = DataFusionError;
-    fn try_from(value: &FFI_UniformDistribution) -> Result<Self, Self::Error> {
-        let interval = (&value.interval).try_into()?;
+    fn try_from(value: FFI_UniformDistribution) -> Result<Self, Self::Error> {
+        let interval = value.interval.try_into()?;
         Distribution::new_uniform(interval)
     }
 }
 
-impl TryFrom<&FFI_ExponentialDistribution> for Distribution {
+impl TryFrom<FFI_ExponentialDistribution> for Distribution {
     type Error = DataFusionError;
-    fn try_from(value: &FFI_ExponentialDistribution) -> Result<Self, Self::Error> {
-        let rate = rvec_u8_to_scalar_value(&value.rate)?;
-        let offset = rvec_u8_to_scalar_value(&value.offset)?;
+    fn try_from(value: FFI_ExponentialDistribution) -> Result<Self, Self::Error> {
+        let rate = value.rate.try_into()?;
+        let offset = value.offset.try_into()?;
 
         Distribution::new_exponential(rate, offset, value.positive_tail)
     }
 }
 
-impl TryFrom<&FFI_GaussianDistribution> for Distribution {
+impl TryFrom<FFI_GaussianDistribution> for Distribution {
     type Error = DataFusionError;
-    fn try_from(value: &FFI_GaussianDistribution) -> Result<Self, Self::Error> {
-        let mean = rvec_u8_to_scalar_value(&value.mean)?;
-        let variance = rvec_u8_to_scalar_value(&value.variance)?;
+    fn try_from(value: FFI_GaussianDistribution) -> Result<Self, Self::Error> {
+        let mean = value.mean.try_into()?;
+        let variance = value.variance.try_into()?;
 
         Distribution::new_gaussian(mean, variance)
     }
 }
 
-impl TryFrom<&FFI_BernoulliDistribution> for Distribution {
+impl TryFrom<FFI_BernoulliDistribution> for Distribution {
     type Error = DataFusionError;
-    fn try_from(value: &FFI_BernoulliDistribution) -> Result<Self, Self::Error> {
-        let p = rvec_u8_to_scalar_value(&value.p)?;
+    fn try_from(value: FFI_BernoulliDistribution) -> Result<Self, Self::Error> {
+        let p = value.p.try_into()?;
 
         Distribution::new_bernoulli(p)
     }
 }
 
-impl TryFrom<&FFI_GenericDistribution> for Distribution {
+impl TryFrom<FFI_GenericDistribution> for Distribution {
     type Error = DataFusionError;
-    fn try_from(value: &FFI_GenericDistribution) -> Result<Self, Self::Error> {
-        let mean = rvec_u8_to_scalar_value(&value.mean)?;
-        let median = rvec_u8_to_scalar_value(&value.median)?;
-        let variance = rvec_u8_to_scalar_value(&value.variance)?;
-        let range = (&value.range).try_into()?;
+    fn try_from(value: FFI_GenericDistribution) -> Result<Self, Self::Error> {
+        let mean = value.mean.try_into()?;
+        let median = value.median.try_into()?;
+        let variance = value.variance.try_into()?;
+        let range = value.range.try_into()?;
 
         Distribution::new_generic(mean, median, variance, range)
     }

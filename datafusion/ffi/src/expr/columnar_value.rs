@@ -15,21 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{std_types::RVec, StableAbi};
-use datafusion_common::DataFusionError;
+use abi_stable::StableAbi;
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
-use crate::{
-    arrow_wrappers::WrappedArray,
-    expr::util::{rvec_u8_to_scalar_value, scalar_value_to_rvec_u8},
-};
+use crate::arrow_wrappers::WrappedArray;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub enum FFI_ColumnarValue {
     Array(WrappedArray),
-    Scalar(RVec<u8>),
+    Scalar(WrappedArray),
 }
 
 impl TryFrom<ColumnarValue> for FFI_ColumnarValue {
@@ -40,7 +37,7 @@ impl TryFrom<ColumnarValue> for FFI_ColumnarValue {
                 FFI_ColumnarValue::Array(WrappedArray::try_from(&v)?)
             }
             ColumnarValue::Scalar(v) => {
-                FFI_ColumnarValue::Scalar(scalar_value_to_rvec_u8(&v)?)
+                FFI_ColumnarValue::Scalar(WrappedArray::try_from(&v)?)
             }
         })
     }
@@ -52,7 +49,7 @@ impl TryFrom<FFI_ColumnarValue> for ColumnarValue {
         Ok(match value {
             FFI_ColumnarValue::Array(v) => ColumnarValue::Array(v.try_into()?),
             FFI_ColumnarValue::Scalar(v) => {
-                ColumnarValue::Scalar(rvec_u8_to_scalar_value(&v)?)
+                ColumnarValue::Scalar(ScalarValue::try_from(v)?)
             }
         })
     }

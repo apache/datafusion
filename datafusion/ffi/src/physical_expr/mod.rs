@@ -88,31 +88,31 @@ pub struct FFI_PhysicalExpr {
 
     pub evaluate_bounds: unsafe extern "C" fn(
         &Self,
-        children: &RVec<FFI_Interval>,
+        children: RVec<FFI_Interval>,
     ) -> FFIResult<FFI_Interval>,
 
     pub propagate_constraints:
         unsafe extern "C" fn(
             &Self,
-            interval: &FFI_Interval,
-            children: &RVec<FFI_Interval>,
+            interval: FFI_Interval,
+            children: RVec<FFI_Interval>,
         ) -> FFIResult<ROption<RVec<FFI_Interval>>>,
 
     pub evaluate_statistics: unsafe extern "C" fn(
         &Self,
-        children: &RVec<FFI_Distribution>,
+        children: RVec<FFI_Distribution>,
     ) -> FFIResult<FFI_Distribution>,
 
     pub propagate_statistics:
         unsafe extern "C" fn(
             &Self,
-            parent: &FFI_Distribution,
-            children: &RVec<FFI_Distribution>,
+            parent: FFI_Distribution,
+            children: RVec<FFI_Distribution>,
         ) -> FFIResult<ROption<RVec<FFI_Distribution>>>,
 
     pub get_properties: unsafe extern "C" fn(
         &Self,
-        children: &RVec<FFI_ExprProperties>,
+        children: RVec<FFI_ExprProperties>,
     ) -> FFIResult<FFI_ExprProperties>,
 
     pub fmt_sql: unsafe extern "C" fn(&Self) -> FFIResult<RString>,
@@ -248,11 +248,11 @@ unsafe extern "C" fn new_with_children_fn_wrapper(
 
 unsafe extern "C" fn evaluate_bounds_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    children: &RVec<FFI_Interval>,
+    children: RVec<FFI_Interval>,
 ) -> FFIResult<FFI_Interval> {
     let expr = expr.inner();
     let children = rresult_return!(children
-        .iter()
+        .into_iter()
         .map(Interval::try_from)
         .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
@@ -264,13 +264,13 @@ unsafe extern "C" fn evaluate_bounds_fn_wrapper(
 
 unsafe extern "C" fn propagate_constraints_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    interval: &FFI_Interval,
-    children: &RVec<FFI_Interval>,
+    interval: FFI_Interval,
+    children: RVec<FFI_Interval>,
 ) -> FFIResult<ROption<RVec<FFI_Interval>>> {
     let expr = expr.inner();
     let interval = rresult_return!(Interval::try_from(interval));
     let children = rresult_return!(children
-        .iter()
+        .into_iter()
         .map(Interval::try_from)
         .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
@@ -290,11 +290,11 @@ unsafe extern "C" fn propagate_constraints_fn_wrapper(
 
 unsafe extern "C" fn evaluate_statistics_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    children: &RVec<FFI_Distribution>,
+    children: RVec<FFI_Distribution>,
 ) -> FFIResult<FFI_Distribution> {
     let expr = expr.inner();
     let children = rresult_return!(children
-        .iter()
+        .into_iter()
         .map(Distribution::try_from)
         .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
@@ -305,13 +305,13 @@ unsafe extern "C" fn evaluate_statistics_fn_wrapper(
 
 unsafe extern "C" fn propagate_statistics_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    parent: &FFI_Distribution,
-    children: &RVec<FFI_Distribution>,
+    parent: FFI_Distribution,
+    children: RVec<FFI_Distribution>,
 ) -> FFIResult<ROption<RVec<FFI_Distribution>>> {
     let expr = expr.inner();
     let parent = rresult_return!(Distribution::try_from(parent));
     let children = rresult_return!(children
-        .iter()
+        .into_iter()
         .map(Distribution::try_from)
         .collect::<Result<Vec<_>>>());
     let children_borrowed = children.iter().collect::<Vec<_>>();
@@ -329,11 +329,11 @@ unsafe extern "C" fn propagate_statistics_fn_wrapper(
 
 unsafe extern "C" fn get_properties_fn_wrapper(
     expr: &FFI_PhysicalExpr,
-    children: &RVec<FFI_ExprProperties>,
+    children: RVec<FFI_ExprProperties>,
 ) -> FFIResult<FFI_ExprProperties> {
     let expr = expr.inner();
     let children = rresult_return!(children
-        .iter()
+        .into_iter()
         .map(ExprProperties::try_from)
         .collect::<Result<Vec<_>>>());
     rresult!(expr
@@ -568,7 +568,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
                 .iter()
                 .map(|interval| FFI_Interval::try_from(*interval))
                 .collect::<Result<RVec<_>>>()?;
-            df_result!((self.expr.evaluate_bounds)(&self.expr, &children))
+            df_result!((self.expr.evaluate_bounds)(&self.expr, children))
                 .and_then(Interval::try_from)
         }
     }
@@ -585,7 +585,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
                 .map(|interval| FFI_Interval::try_from(*interval))
                 .collect::<Result<RVec<_>>>()?;
             let result = df_result!((self.expr.propagate_constraints)(
-                &self.expr, &interval, &children
+                &self.expr, interval, children
             ))?;
 
             let result: Option<_> = result
@@ -608,8 +608,8 @@ impl PhysicalExpr for ForeignPhysicalExpr {
                 .collect::<Result<RVec<_>>>()?;
 
             let result =
-                df_result!((self.expr.evaluate_statistics)(&self.expr, &children))?;
-            Distribution::try_from(&result)
+                df_result!((self.expr.evaluate_statistics)(&self.expr, children))?;
+            Distribution::try_from(result)
         }
     }
 
@@ -625,13 +625,13 @@ impl PhysicalExpr for ForeignPhysicalExpr {
                 .map(|dist| FFI_Distribution::try_from(*dist))
                 .collect::<Result<RVec<_>>>()?;
             let result = df_result!((self.expr.propagate_statistics)(
-                &self.expr, &parent, &children
+                &self.expr, parent, children
             ))?;
 
             let result: Option<Result<Vec<Distribution>>> = result
                 .map(|dists| {
                     dists
-                        .iter()
+                        .into_iter()
                         .map(Distribution::try_from)
                         .collect::<Result<Vec<_>>>()
                 })
@@ -647,8 +647,8 @@ impl PhysicalExpr for ForeignPhysicalExpr {
                 .iter()
                 .map(FFI_ExprProperties::try_from)
                 .collect::<Result<RVec<_>>>()?;
-            df_result!((self.expr.get_properties)(&self.expr, &children))
-                .and_then(|p| ExprProperties::try_from(&p))
+            df_result!((self.expr.get_properties)(&self.expr, children))
+                .and_then(ExprProperties::try_from)
         }
     }
 
