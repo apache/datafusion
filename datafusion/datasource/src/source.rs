@@ -263,17 +263,15 @@ impl ExecutionPlan for DataSourceExec {
             self.properties().eq_properties.output_ordering(),
         )?;
 
-        if let Some(source) = data_source {
+        Ok(data_source.map(|source| {
             let output_partitioning = source.output_partitioning();
             let plan = self
                 .clone()
                 .with_data_source(source)
                 // Changing source partitioning may invalidate output partitioning. Update it also
                 .with_partitioning(output_partitioning);
-            Ok(Some(Arc::new(plan)))
-        } else {
-            Ok(Some(Arc::new(self.clone())))
-        }
+            Arc::new(plan) as _
+        }))
     }
 
     fn execute(
