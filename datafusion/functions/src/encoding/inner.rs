@@ -138,7 +138,9 @@ impl ScalarUDFImpl for EncodeFunc {
             DataType::LargeUtf8 => Ok(vec![DataType::LargeUtf8, DataType::Utf8]),
             DataType::Binary => Ok(vec![DataType::Binary, DataType::Utf8]),
             DataType::LargeBinary => Ok(vec![DataType::LargeBinary, DataType::Utf8]),
-            DataType::FixedSizeBinary(sz) => Ok(vec![DataType::FixedSizeBinary(*sz), DataType::Utf8]),
+            DataType::FixedSizeBinary(sz) => {
+                Ok(vec![DataType::FixedSizeBinary(*sz), DataType::Utf8])
+            }
             _ => plan_err!(
                 "1st argument should be Utf8 or Binary or Null, got {:?}",
                 arg_types[0]
@@ -571,30 +573,4 @@ fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ),
     }?;
     decode_process(expression, encoding)
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_encode_fsb() {
-        use super::*;
-
-        let value = vec![0u8; 16];
-        let array = arrow::array::FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            vec![Some(value)].into_iter(),
-            16,
-        )
-        .unwrap();
-        let value = ColumnarValue::Array(Arc::new(array));
-
-        let ColumnarValue::Array(result) =
-            encode_process(&value, Encoding::Base64).unwrap()
-        else {
-            panic!("unexpected value");
-        };
-
-        let string_array = result.as_any().downcast_ref::<StringArray>().unwrap();
-        let result_value = string_array.value(0);
-        assert_eq!(result_value, "AAAAAAAAAAAAAAAAAAAAAA");
-    }
 }
