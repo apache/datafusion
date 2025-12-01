@@ -536,6 +536,11 @@ mod tests {
     async fn test_statistics_cache_prewarming() {
         let factory = ListingTableFactory::new();
 
+        let location = PathBuf::from(parquet_test_data())
+            .join("alltypes_tiny_pages_plain.parquet")
+            .to_string_lossy()
+            .to_string();
+
         // Test with collect_statistics enabled
         let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
         let cache_config = CacheManagerConfig::default()
@@ -553,7 +558,7 @@ mod tests {
 
         let cmd = CreateExternalTable {
             name,
-            location: parquet_test_data(),
+            location: location.clone(),
             file_type: "parquet".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
@@ -592,7 +597,7 @@ mod tests {
 
         let cmd = CreateExternalTable {
             name,
-            location: parquet_test_data(),
+            location,
             file_type: "parquet".to_string(),
             schema: Arc::new(DFSchema::empty()),
             table_partition_cols: vec![],
