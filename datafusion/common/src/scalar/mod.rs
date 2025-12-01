@@ -60,16 +60,16 @@ use arrow::array::{
     BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal32Array,
     Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
     DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-    DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array,
-    Float32Array, Float64Array, GenericListArray, Int8Array, Int16Array, Int32Array,
-    Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
-    MutableArrayData, OffsetSizeTrait, PrimitiveArray, Scalar, StringArray,
-    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-    UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray, new_empty_array,
-    new_null_array,
+    DurationSecondArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
+    Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
+    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
+    PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array, UnionArray, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -3059,7 +3059,14 @@ impl ScalarValue {
                     )
                     .unwrap(),
                 ),
-                None => Arc::new(FixedSizeBinaryArray::new_null(*s, size)),
+                None => {
+                    // TODO: Replace with FixedSizeBinaryArray::new_null once a fix for
+                    // https://github.com/apache/arrow-rs/issues/8900 is in the used arrow-rs
+                    // version.
+                    let mut builder = FixedSizeBinaryBuilder::new(*s);
+                    builder.append_nulls(size);
+                    Arc::new(builder.finish())
+                }
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
@@ -5317,6 +5324,18 @@ mod tests {
         assert_eq!(empty_array.len(), 0);
     }
 
+    /// See https://github.com/apache/datafusion/issues/18870
+    #[test]
+    fn test_to_array_of_size_for_none_fsb() {
+        let sv = ScalarValue::FixedSizeBinary(5, None);
+        let result = sv
+            .to_array_of_size(2)
+            .expect("Failed to convert to array of size");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(result.as_fixed_size_binary().values().len(), 10);
+    }
+
     #[test]
     fn test_list_to_array_string() {
         let scalars = vec![
@@ -6330,8 +6349,6 @@ mod tests {
     }
 
     #[test]
-    // despite clippy claiming they are useless, the code doesn't compile otherwise.
-    #[allow(clippy::useless_vec)]
     fn scalar_iter_to_array_boolean() {
         check_scalar_iter!(Boolean, BooleanArray, vec![Some(true), None, Some(false)]);
         check_scalar_iter!(Float32, Float32Array, vec![Some(1.9), None, Some(-2.1)]);
@@ -6381,12 +6398,12 @@ mod tests {
         check_scalar_iter_binary!(
             Binary,
             BinaryArray,
-            vec![Some(b"foo"), None, Some(b"bar")]
+            [Some(b"foo"), None, Some(b"bar")]
         );
         check_scalar_iter_binary!(
             LargeBinary,
             LargeBinaryArray,
-            vec![Some(b"foo"), None, Some(b"bar")]
+            [Some(b"foo"), None, Some(b"bar")]
         );
     }
 
@@ -7766,7 +7783,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(arithmetic_overflow)] // we want to test them
     fn test_scalar_negative_overflows() -> Result<()> {
         macro_rules! test_overflow_on_value {
             ($($val:expr),* $(,)?) => {$(

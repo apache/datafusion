@@ -935,14 +935,9 @@ macro_rules! make_error {
             }
 
 
-            // Note: Certain macros are used in this  crate, but not all.
-            // This macro generates a use or all of them in case they are needed
-            // so we allow unused code to avoid warnings when they are not used
             #[doc(hidden)]
-            #[allow(unused)]
             pub use $NAME_ERR as [<_ $NAME_ERR>];
             #[doc(hidden)]
-            #[allow(unused)]
             pub use $NAME_DF_ERR as [<_ $NAME_DF_ERR>];
         }
     };
@@ -1238,7 +1233,7 @@ mod test {
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
+    #[expect(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
@@ -1266,7 +1261,6 @@ mod test {
 
     #[cfg(not(feature = "backtrace"))]
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_disabled_backtrace() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err().to_string();
@@ -1336,7 +1330,6 @@ mod test {
     }
 
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_make_error_parse_input() {
         let res: Result<(), DataFusionError> = plan_err!("Err");
         let res = res.unwrap_err();
