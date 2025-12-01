@@ -73,7 +73,7 @@ use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::Result;
+use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
@@ -234,11 +234,23 @@ impl FilterCandidateBuilder {
         );
 
         // Compute the projection into the file schema by matching column names
-        let projection_into_file_schema: Vec<usize> = projected_table_schema
+        let mut projection_into_file_schema: Vec<usize> = projected_table_schema
             .fields()
             .iter()
             .filter_map(|f| self.file_schema.index_of(f.name()).ok())
             .collect();
+        // Sort and remove duplicates
+        let original_len = projection_into_file_schema.len();
+        projection_into_file_schema.sort_unstable();
+        projection_into_file_schema.dedup();
+        if projection_into_file_schema.len() < original_len {
+            // This should not happen, as we built projected_table_schema from
+            // the table schema which should not have duplicate column names.
+            return Err(internal_datafusion_err!(
+                "Duplicate column names found when building filter candidate: {:?}",
+                projection_into_file_schema
+            ));
+        }
 
         let required_bytes = size_of_columns(&projection_into_file_schema, metadata)?;
         let can_use_index = columns_sorted(&projection_into_file_schema, metadata)?;
