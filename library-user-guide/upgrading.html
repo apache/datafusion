@@ -407,6 +407,19 @@
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code><a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
 <p>You can see the current <a class="reference external" href="https://github.com/apache/datafusion/issues/18566">status of the <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code>release here</a></p>
+<section id="changes-to-dfschema-api">
+<h3>Changes to DFSchema API<a class="headerlink" href="#changes-to-dfschema-api" title="Link to this heading">#</a></h3>
+<p>To permit more efficient planning, several methods on <code class="docutils literal notranslate"><span class="pre">DFSchema</span></code> have been
+changed to return references to the underlying [<code class="docutils literal notranslate"><span class="pre">&amp;FieldRef</span></code>] rather than
+[<code class="docutils literal notranslate"><span class="pre">&amp;Field</span></code>]. This allows planners to more cheaply copy the references via
+<code class="docutils literal notranslate"><span class="pre">Arc::clone</span></code> rather than cloning the entire <code class="docutils literal notranslate"><span class="pre">Field</span></code> structure.</p>
+<p>You may need to change code to use <code class="docutils literal notranslate"><span class="pre">Arc::clone</span></code> instead of <code class="docutils literal notranslate"><span class="pre">.as_ref().clone()</span></code>
+directly on the <code class="docutils literal notranslate"><span class="pre">Field</span></code>. For example:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let field = df_schema.field(&quot;my_column&quot;).as_ref().clone();</span>
+<span class="gi">+ let field = Arc::clone(df_schema.field(&quot;my_column&quot;));</span>
+</pre></div>
+</div>
+</section>
 <section id="removal-of-pyarrow-feature">
 <h3>Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature<a class="headerlink" href="#removal-of-pyarrow-feature" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature flag has been removed. This feature has been migrated to
@@ -1893,6 +1906,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changes-to-dfschema-api">Changes to DFSchema API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#removal-of-pyarrow-feature">Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax">Planner now requires explicit opt-in for WITHIN GROUP syntax</a></li>
