@@ -229,9 +229,9 @@ pub fn decimal32_to_f64(value: i32, precision: u8, scale: i8) -> Result<f64, Arr
             "Negative scale is not supported".into(),
         ))
     } else if scale as u8 > precision {
-        Err(ArrowError::ComputeError(
-            "scale {scale} is greater than precision {precision}".into(),
-        ))
+        Err(ArrowError::ComputeError(format!(
+            "scale {scale} is greater than precision {precision}"
+        )))
     } else {
         validate_decimal32_precision(value, precision, scale)?;
 
@@ -246,9 +246,9 @@ pub fn decimal64_to_f64(value: i64, precision: u8, scale: i8) -> Result<f64, Arr
             "Negative scale is not supported".into(),
         ))
     } else if scale as u8 > precision {
-        Err(ArrowError::ComputeError(
-            "scale {scale} is greater than precision {precision}".into(),
-        ))
+        Err(ArrowError::ComputeError(format!(
+            "scale {scale} is greater than precision {precision}"
+        )))
     } else {
         validate_decimal64_precision(value, precision, scale)?;
 
@@ -422,6 +422,7 @@ pub mod test {
             (1230, 7, 1, Some(123.0)),
             (123000, 7, 3, Some(123.0)),
             (1234567, 7, 2, Some(12345.67)),
+            (-1234567, 7, 2, Some(-12345.67)),
             (1, 7, 0, Some(1.0)),
             (123, 7, -3, None),
             (123, 7, i8::MAX, None),
