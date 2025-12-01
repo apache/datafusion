@@ -524,7 +524,10 @@ fn date_bin_impl(
                     }
                     use arrow::array::cast::AsArray;
                     let array = array.as_primitive::<Time64NanosecondType>();
-                    let apply_stride_fn = move |x: i64| stride_fn(stride, x, origin);
+                    let apply_stride_fn = move |x: i64| {
+                        let binned_nanos = stride_fn(stride, x, origin);
+                        binned_nanos % (24 * 3600 * 1_000_000_000)
+                    };
                     let array: PrimitiveArray<Time64NanosecondType> =
                         array.unary(apply_stride_fn);
                     ColumnarValue::Array(Arc::new(array))
