@@ -9,7 +9,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int32, Int64, Time64, UInt32, UInt64, Utf8, Utf8View};
 use arrow::datatypes::Time64NanosecondType;
 use arrow::datatypes::TimeUnit::Nanosecond;
-use chrono::NaiveTime;
+use chrono::{NaiveTime, Timelike};
 
 use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
@@ -114,7 +114,7 @@ impl ScalarUDFImpl for MakeTimeFunc {
         let minutes = minutes.cast_to(&Int32, None)?;
         let seconds = seconds.cast_to(&Int32, None)?;
 
-        let scalar_value_fn = |col: &ColumnarValue| -> Result<i32> {
+        let get_scalar = |col: &ColumnarValue| -> Result<i32> {
             let ColumnarValue::Scalar(s) = col else {
                 return exec_err!("Expected scalar value");
             };
@@ -125,22 +125,19 @@ impl ScalarUDFImpl for MakeTimeFunc {
         };
 
         let value = if let Some(array_size) = len {
-            let to_primitive_array_fn =
-                |col: &ColumnarValue| -> PrimitiveArray<Int32Type> {
-                    match col {
-                        ColumnarValue::Array(a) => {
-                            a.as_primitive::<Int32Type>().to_owned()
-                        }
-                        _ => {
-                            let v = scalar_value_fn(col).unwrap();
-                            PrimitiveArray::<Int32Type>::from_value(v, array_size)
-                        }
+            let to_array = |col: &ColumnarValue| -> PrimitiveArray<Int32Type> {
+                match col {
+                    ColumnarValue::Array(a) => a.as_primitive::<Int32Type>().to_owned(),
+                    _ => {
+                        let v = get_scalar(col).unwrap();
+                        PrimitiveArray::<Int32Type>::from_value(v, array_size)
                     }
-                };
+                }
+            };
 
-            let hours = to_primitive_array_fn(&hours);
-            let minutes = to_primitive_array_fn(&minutes);
-            let seconds = to_primitive_array_fn(&seconds);
+            let hours = to_array(&hours);
+            let minutes = to_array(&minutes);
+            let seconds = to_array(&seconds);
 
             let mut builder: PrimitiveBuilder<Time64NanosecondType> =
                 PrimitiveArray::builder(array_size);
@@ -157,15 +154,15 @@ impl ScalarUDFImpl for MakeTimeFunc {
 
             ColumnarValue::Array(Arc::new(arr))
         } else {
-            let mut value = 0i64;
+            let mut result = 0i64;
             make_time_inner(
-                scalar_value_fn(&hours)?,
-                scalar_value_fn(&minutes)?,
-                scalar_value_fn(&seconds)?,
-                |nanos: i64| value = nanos,
+                get_scalar(&hours)?,
+                get_scalar(&minutes)?,
+                get_scalar(&seconds)?,
+                |nanos: i64| result = nanos,
             )?;
 
-            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(value)))
+            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(result)))
         };
 
         Ok(value)
@@ -179,7 +176,7 @@ fn make_time_inner<F: FnMut(i64)>(
     hour: i32,
     minute: i32,
     second: i32,
-    mut time_consumer_fn: F,
+    mut f: F,
 ) -> Result<()> {
     let Ok(h) = u32::try_from(hour) else {
         return exec_err!("Hour value '{hour}' is out of range");
@@ -191,9 +188,13 @@ fn make_time_inner<F: FnMut(i64)>(
         return exec_err!("Second value '{second}' is out of range");
     };
 
-    if let Some(_time) = NaiveTime::from_hms_opt(h, m, s) {
-        let nanos = (h as i64 * 3600 + m as i64 * 60 + s as i64) * 1_000_000_000;
-        time_consumer_fn(nanos);
+    if let Some(time) = NaiveTime::from_hms_opt(h, m, s) {
+        let nanos = (time.hour() as i64 * 3600
+            + time.minute() as i64 * 60
+            + time.second() as i64)
+            * 1_000_000_000
+            + time.nanosecond() as i64;
+        f(nanos);
         Ok(())
     } else {
         exec_err!("Unable to parse time from {hour}, {minute}, {second}")

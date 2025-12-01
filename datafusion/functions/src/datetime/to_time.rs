@@ -119,39 +119,39 @@ impl ScalarUDFImpl for ToTimeFunc {
 }
 
 fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
-    let extract_time_nanos = |nanos: i64| -> i64 {
+    fn time_from_timestamp(nanos: i64) -> i64 {
         let secs = nanos / 1_000_000_000;
         let nsecs = (nanos % 1_000_000_000) as u32;
         if let Some(dt) = DateTime::from_timestamp(secs, nsecs) {
-            let hour = dt.hour() as i64;
-            let minute = dt.minute() as i64;
-            let second = dt.second() as i64;
-            let nanosecond = dt.nanosecond() as i64;
-            (hour * 3600 + minute * 60 + second) * 1_000_000_000 + nanosecond
+            let h = dt.hour() as i64;
+            let m = dt.minute() as i64;
+            let s = dt.second() as i64;
+            let ns = dt.nanosecond() as i64;
+            (h * 3600 + m * 60 + s) * 1_000_000_000 + ns
         } else {
             0
         }
-    };
+    }
 
-    let parse_time_string = |s: &str| -> Result<i64> {
-        if let Ok(time) = NaiveTime::parse_from_str(s, "%H:%M:%S") {
-            let nanos = (time.hour() as i64 * 3600
-                + time.minute() as i64 * 60
-                + time.second() as i64)
+    fn parse_time_str(s: &str) -> Result<i64> {
+        if let Ok(t) = NaiveTime::parse_from_str(s, "%H:%M:%S") {
+            let nanos = (t.hour() as i64 * 3600
+                + t.minute() as i64 * 60
+                + t.second() as i64)
                 * 1_000_000_000
-                + time.nanosecond() as i64;
+                + t.nanosecond() as i64;
             return Ok(nanos);
         }
-        if let Ok(time) = NaiveTime::parse_from_str(s, "%H:%M:%S%.f") {
-            let nanos = (time.hour() as i64 * 3600
-                + time.minute() as i64 * 60
-                + time.second() as i64)
+        if let Ok(t) = NaiveTime::parse_from_str(s, "%H:%M:%S%.f") {
+            let nanos = (t.hour() as i64 * 3600
+                + t.minute() as i64 * 60
+                + t.second() as i64)
                 * 1_000_000_000
-                + time.nanosecond() as i64;
+                + t.nanosecond() as i64;
             return Ok(nanos);
         }
-        string_to_timestamp_nanos_shim(s).map(extract_time_nanos)
-    };
+        string_to_timestamp_nanos_shim(s).map(time_from_timestamp)
+    }
 
     match args.len() {
         1 => {
@@ -166,7 +166,7 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
                                     builder.append_null();
                                 } else {
                                     let s = array.value(i);
-                                    match parse_time_string(s) {
+                                    match parse_time_str(s) {
                                         Ok(nanos) => builder.append_value(nanos),
                                         Err(e) => return Err(e),
                                     }
@@ -182,7 +182,7 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
                                     builder.append_null();
                                 } else {
                                     let s = array.value(i);
-                                    match parse_time_string(s) {
+                                    match parse_time_str(s) {
                                         Ok(nanos) => builder.append_value(nanos),
                                         Err(e) => return Err(e),
                                     }
@@ -198,7 +198,7 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
                                     builder.append_null();
                                 } else {
                                     let s = array.value(i);
-                                    match parse_time_string(s) {
+                                    match parse_time_str(s) {
                                         Ok(nanos) => builder.append_value(nanos),
                                         Err(e) => return Err(e),
                                     }
@@ -213,7 +213,7 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
                 ColumnarValue::Scalar(scalar) => {
                     match scalar {
                         ScalarValue::Utf8(Some(s)) | ScalarValue::LargeUtf8(Some(s)) => {
-                            let nanos = parse_time_string(s)?;
+                            let nanos = parse_time_str(s)?;
                             Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(nanos))))
                         }
                         ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None) => {
@@ -252,14 +252,11 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
                                 _ => return exec_err!("Unsupported data type for function {name}"),
                             };
                             let mut parsed = false;
-                            for format in formats.iter() {
-                                match string_to_timestamp_nanos_formatted(s, format) {
-                                    Ok(nanos) => {
-                                        builder.append_value(extract_time_nanos(nanos));
-                                        parsed = true;
-                                        break;
-                                    }
-                                    Err(_) => continue,
+                            for fmt in formats.iter() {
+                                if let Ok(nanos) = string_to_timestamp_nanos_formatted(s, fmt) {
+                                    builder.append_value(time_from_timestamp(nanos));
+                                    parsed = true;
+                                    break;
                                 }
                             }
                             if !parsed {
@@ -277,9 +274,9 @@ fn to_time_impl(args: &[ColumnarValue], name: &str) -> Result<ColumnarValue> {
                         }
                         _ => return exec_err!("Unsupported data type {scalar:?} for function {name}"),
                     };
-                    for format in formats.iter() {
-                        if let Ok(nanos) = string_to_timestamp_nanos_formatted(s, format) {
-                            return Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(extract_time_nanos(nanos)))));
+                    for fmt in formats.iter() {
+                        if let Ok(nanos) = string_to_timestamp_nanos_formatted(s, fmt) {
+                            return Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(time_from_timestamp(nanos)))));
                         }
                     }
                     exec_err!("Unable to parse time from '{s}' using provided formats")
