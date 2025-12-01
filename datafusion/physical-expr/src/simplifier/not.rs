@@ -34,7 +34,7 @@ use crate::expressions::{in_list, lit, BinaryExpr, InListExpr, Literal, NotExpr}
 use crate::PhysicalExpr;
 
 /// Attempts to simplify NOT expressions
-pub(crate) fn simplify_not_expr(
+pub(crate) fn simplify_not_expr_impl(
     expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
@@ -48,10 +48,8 @@ pub(crate) fn simplify_not_expr(
 
     // Handle NOT(NOT(expr)) -> expr (double negation elimination)
     if let Some(inner_not) = inner_expr.as_any().downcast_ref::<NotExpr>() {
-        // Recursively simplify the inner expression
-        let simplified = simplify_not_expr_recursive(inner_not.arg(), schema)?;
         // We eliminated double negation, so always return transformed=true
-        return Ok(Transformed::yes(simplified.data));
+        return Ok(Transformed::yes(Arc::clone(inner_not.arg())));
     }
 
     // Handle NOT(literal) -> !literal
@@ -81,10 +79,8 @@ pub(crate) fn simplify_not_expr(
     if let Some(binary_expr) = inner_expr.as_any().downcast_ref::<BinaryExpr>() {
         if let Some(negated_op) = negate_operator(binary_expr.op()) {
             // Recursively simplify the left and right expressions first
-            let left_simplified =
-                simplify_not_expr_recursive(binary_expr.left(), schema)?;
-            let right_simplified =
-                simplify_not_expr_recursive(binary_expr.right(), schema)?;
+            let left_simplified = simplify_not_expr(binary_expr.left(), schema)?;
+            let right_simplified = simplify_not_expr(binary_expr.right(), schema)?;
 
             let new_binary = Arc::new(BinaryExpr::new(
                 left_simplified.data,
@@ -105,8 +101,8 @@ pub(crate) fn simplify_not_expr(
                     Arc::new(NotExpr::new(Arc::clone(binary_expr.right())));
 
                 // Recursively simplify the NOT expressions
-                let simplified_left = simplify_not_expr_recursive(&not_left, schema)?;
-                let simplified_right = simplify_not_expr_recursive(&not_right, schema)?;
+                let simplified_left = simplify_not_expr(&not_left, schema)?;
+                let simplified_right = simplify_not_expr(&not_right, schema)?;
 
                 let new_binary = Arc::new(BinaryExpr::new(
                     simplified_left.data,
@@ -123,8 +119,8 @@ pub(crate) fn simplify_not_expr(
                     Arc::new(NotExpr::new(Arc::clone(binary_expr.right())));
 
                 // Recursively simplify the NOT expressions
-                let simplified_left = simplify_not_expr_recursive(&not_left, schema)?;
-                let simplified_right = simplify_not_expr_recursive(&not_right, schema)?;
+                let simplified_left = simplify_not_expr(&not_left, schema)?;
+                let simplified_right = simplify_not_expr(&not_right, schema)?;
 
                 let new_binary = Arc::new(BinaryExpr::new(
                     simplified_left.data,
@@ -141,43 +137,43 @@ pub(crate) fn simplify_not_expr(
     Ok(Transformed::no(expr))
 }
 
-/// Helper function that recursively simplifies expressions, including NOT expressions
-pub fn simplify_not_expr_recursive(
+pub fn simplify_not_expr(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    // First, try to simplify any NOT expressions in this expression
-    let not_simplified = simplify_not_expr(Arc::clone(expr), schema)?;
+    let mut current_expr = Arc::clone(expr);
+    let mut overall_transformed = false;
 
-    // If the expression was transformed, we might have created new opportunities for simplification
-    if not_simplified.transformed {
-        // Recursively simplify the result
-        let further_simplified =
-            simplify_not_expr_recursive(&not_simplified.data, schema)?;
-        if further_simplified.transformed {
-            return Ok(Transformed::yes(further_simplified.data));
-        } else {
-            return Ok(not_simplified);
+    loop {
+        let not_simplified = simplify_not_expr_impl(Arc::clone(&current_expr), schema)?;
+        if not_simplified.transformed {
+            overall_transformed = true;
+            current_expr = not_simplified.data;
+            continue;
         }
+
+        if let Some(binary_expr) = current_expr.as_any().downcast_ref::<BinaryExpr>() {
+            let left_simplified = simplify_not_expr(binary_expr.left(), schema)?;
+            let right_simplified = simplify_not_expr(binary_expr.right(), schema)?;
+
+            if left_simplified.transformed || right_simplified.transformed {
+                let new_binary = Arc::new(BinaryExpr::new(
+                    left_simplified.data,
+                    *binary_expr.op(),
+                    right_simplified.data,
+                ));
+                return Ok(Transformed::yes(new_binary));
+            }
+        }
+
+        break;
     }
 
-    // If this expression wasn't a NOT expression, try to simplify its children
-    // This handles cases where NOT expressions might be nested deeper in the tree
-    if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        let left_simplified = simplify_not_expr_recursive(binary_expr.left(), schema)?;
-        let right_simplified = simplify_not_expr_recursive(binary_expr.right(), schema)?;
-
-        if left_simplified.transformed || right_simplified.transformed {
-            let new_binary = Arc::new(BinaryExpr::new(
-                left_simplified.data,
-                *binary_expr.op(),
-                right_simplified.data,
-            ));
-            return Ok(Transformed::yes(new_binary));
-        }
+    if overall_transformed {
+        Ok(Transformed::yes(current_expr))
+    } else {
+        Ok(Transformed::no(current_expr))
     }
-
-    Ok(not_simplified)
 }
 
 /// Returns the negated version of a comparison operator, if possible
@@ -224,7 +220,7 @@ mod tests {
         let inner_not = Arc::new(NotExpr::new(Arc::clone(&inner_expr)));
         let double_not: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(inner_not));
 
-        let result = simplify_not_expr_recursive(&double_not, &schema)?;
+        let result = simplify_not_expr(&double_not, &schema)?;
 
         assert!(result.transformed);
         // Should be simplified back to the original b > 5
@@ -238,7 +234,7 @@ mod tests {
 
         // NOT(TRUE) -> FALSE
         let not_true = Arc::new(NotExpr::new(lit(ScalarValue::Boolean(Some(true)))));
-        let result = simplify_not_expr(not_true, &schema)?;
+        let result = simplify_not_expr_impl(not_true, &schema)?;
         assert!(result.transformed);
 
         if let Some(literal) = result.data.as_any().downcast_ref::<Literal>() {
@@ -250,7 +246,7 @@ mod tests {
         // NOT(FALSE) -> TRUE
         let not_false: Arc<dyn PhysicalExpr> =
             Arc::new(NotExpr::new(lit(ScalarValue::Boolean(Some(false)))));
-        let result = simplify_not_expr_recursive(&not_false, &schema)?;
+        let result = simplify_not_expr(&not_false, &schema)?;
         assert!(result.transformed);
 
         if let Some(literal) = result.data.as_any().downcast_ref::<Literal>() {
@@ -274,7 +270,7 @@ mod tests {
         ));
         let not_eq: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(eq_expr));
 
-        let result = simplify_not_expr_recursive(&not_eq, &schema)?;
+        let result = simplify_not_expr(&not_eq, &schema)?;
         assert!(result.transformed);
 
         if let Some(binary) = result.data.as_any().downcast_ref::<BinaryExpr>() {
@@ -298,7 +294,7 @@ mod tests {
         ));
         let not_and: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(and_expr));
 
-        let result = simplify_not_expr_recursive(&not_and, &schema)?;
+        let result = simplify_not_expr(&not_and, &schema)?;
         assert!(result.transformed);
 
         if let Some(binary) = result.data.as_any().downcast_ref::<BinaryExpr>() {
@@ -325,7 +321,7 @@ mod tests {
         ));
         let not_or: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(or_expr));
 
-        let result = simplify_not_expr_recursive(&not_or, &schema)?;
+        let result = simplify_not_expr(&not_or, &schema)?;
         assert!(result.transformed);
 
         if let Some(binary) = result.data.as_any().downcast_ref::<BinaryExpr>() {
@@ -359,7 +355,7 @@ mod tests {
         let and_expr = Arc::new(BinaryExpr::new(eq1, Operator::And, eq2));
         let not_and: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(and_expr));
 
-        let result = simplify_not_expr_recursive(&not_and, &schema)?;
+        let result = simplify_not_expr(&not_and, &schema)?;
         assert!(result.transformed, "Expression should be transformed");
 
         // Verify the result is an OR expression
@@ -401,7 +397,7 @@ mod tests {
         let and_expr = Arc::new(BinaryExpr::new(not_a, Operator::And, not_b));
         let not_and: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(and_expr));
 
-        let result = simplify_not_expr_recursive(&not_and, &schema)?;
+        let result = simplify_not_expr(&not_and, &schema)?;
         assert!(result.transformed, "Expression should be transformed");
 
         // Verify the result is an OR expression
@@ -435,7 +431,7 @@ mod tests {
         let in_list_expr = in_list(col("b", &schema)?, list, &false, &schema)?;
         let not_in: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(in_list_expr));
 
-        let result = simplify_not_expr_recursive(&not_in, &schema)?;
+        let result = simplify_not_expr(&not_in, &schema)?;
         assert!(result.transformed, "Expression should be transformed");
 
         // Verify the result is an InList expression with negated=true
@@ -469,7 +465,7 @@ mod tests {
         let not_in_list_expr = in_list(col("b", &schema)?, list, &true, &schema)?;
         let not_not_in: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(not_in_list_expr));
 
-        let result = simplify_not_expr_recursive(&not_not_in, &schema)?;
+        let result = simplify_not_expr(&not_not_in, &schema)?;
         assert!(result.transformed, "Expression should be transformed");
 
         // Verify the result is an InList expression with negated=false
@@ -504,7 +500,7 @@ mod tests {
         let not_in = Arc::new(NotExpr::new(in_list_expr));
         let double_not: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(not_in));
 
-        let result = simplify_not_expr_recursive(&double_not, &schema)?;
+        let result = simplify_not_expr(&double_not, &schema)?;
         assert!(result.transformed, "Expression should be transformed");
 
         // After double negation elimination, we should get back the original IN expression
@@ -520,6 +516,53 @@ mod tests {
             );
         } else {
             panic!("Expected InListExpr result");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_deeply_nested_not() -> Result<()> {
+        let schema = test_schema();
+
+        // Create a deeply nested NOT expression: NOT(NOT(NOT(...NOT(b > 5)...)))
+        // This tests that we don't get stack overflow with many nested NOTs
+        let inner_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("b", &schema)?,
+            Operator::Gt,
+            lit(ScalarValue::Int32(Some(5))),
+        ));
+
+        let mut expr = Arc::clone(&inner_expr);
+        // Create 20000 layers of NOT
+        for _ in 0..20000 {
+            expr = Arc::new(NotExpr::new(expr));
+        }
+
+        let result = simplify_not_expr(&expr, &schema)?;
+
+        // With 20000 NOTs (even number), should simplify back to the original expression
+        assert_eq!(
+            result.data.to_string(),
+            inner_expr.to_string(),
+            "Should simplify back to original expression"
+        );
+
+        // Manually dismantle the deep input expression to avoid Stack Overflow on Drop
+        // If we just let `expr` go out of scope, Rust's recursive Drop will blow the stack.
+        // We peel off layers one by one.
+        while let Some(not_expr) = expr.as_any().downcast_ref::<NotExpr>() {
+            // Clone the child (Arc increment).
+            // Now child has 2 refs: one in parent, one in `child`.
+            let child = Arc::clone(not_expr.arg());
+
+            // Reassign `expr` to `child`.
+            // This drops the old `expr` (Parent).
+            // Parent refcount -> 0, Parent is dropped.
+            // Parent drops its reference to Child.
+            // Child refcount decrements 2 -> 1.
+            // Child is NOT dropped recursively because we still hold it in `expr`
+            expr = child;
         }
 
         Ok(())

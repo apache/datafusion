@@ -24,7 +24,7 @@ use datafusion_common::{
 };
 use std::sync::Arc;
 
-use crate::{simplifier::not::simplify_not_expr_recursive, PhysicalExpr};
+use crate::{simplifier::not::simplify_not_expr, PhysicalExpr};
 
 pub mod not;
 pub mod unwrap_cast;
@@ -58,7 +58,7 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
 
     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
         // Apply NOT expression simplification first
-        let not_expr_simplified = simplify_not_expr_recursive(&node, self.schema)?;
+        let not_expr_simplified = simplify_not_expr(&node, self.schema)?;
         let node = not_expr_simplified.data;
         let transformed = not_expr_simplified.transformed;
 
