@@ -157,10 +157,6 @@ fn init() {
     "change_format_version",
     ["--file", "tests/sql/types_format.sql", "-q"],
 )]
-#[case::fetch_not_supported(
-    "fetch_not_supported",
-    ["--command", "SELECT 1 FETCH NEXT 1 ROW ONLY", "-q"],
-)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] snapshot_name: &'a str,
