@@ -29,11 +29,13 @@ pub mod date_part;
 pub mod date_trunc;
 pub mod from_unixtime;
 pub mod make_date;
+pub mod make_time;
 pub mod now;
 pub mod planner;
 pub mod to_char;
 pub mod to_date;
 pub mod to_local_time;
+pub mod to_time;
 pub mod to_timestamp;
 pub mod to_unixtime;
 
@@ -44,10 +46,12 @@ make_udf_function!(date_bin::DateBinFunc, date_bin);
 make_udf_function!(date_part::DatePartFunc, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, date_trunc);
 make_udf_function!(make_date::MakeDateFunc, make_date);
+make_udf_function!(make_time::MakeTimeFunc, make_time);
 make_udf_function!(from_unixtime::FromUnixtimeFunc, from_unixtime);
 make_udf_function!(to_char::ToCharFunc, to_char);
 make_udf_function!(to_date::ToDateFunc, to_date);
 make_udf_function!(to_local_time::ToLocalTimeFunc, to_local_time);
+make_udf_function!(to_time::ToTimeFunc, to_time);
 make_udf_function!(to_unixtime::ToUnixtimeFunc, to_unixtime);
 make_udf_function!(to_timestamp::ToTimestampFunc, to_timestamp);
 make_udf_function!(to_timestamp::ToTimestampSecondsFunc, to_timestamp_seconds);
@@ -86,10 +90,14 @@ pub mod expr_fn {
         date_trunc,
         "truncates the date to a specified level of precision",
         part date
-    ),(
+    ),    (
         make_date,
         "make a date from year, month and day component parts",
         year month day
+    ),(
+        make_time,
+        "make a time from hour, minute and second component parts",
+        hour minute second
     ),(
         now,
         "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement",
@@ -103,6 +111,10 @@ pub mod expr_fn {
     (
         to_unixtime,
         "converts a string and optional formats to a Unixtime",
+        args,
+    ),(
+        to_time,
+        "converts a string and optional formats to a Time64",
         args,
     ),(
         to_timestamp,
@@ -267,10 +279,12 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_trunc(),
         from_unixtime(),
         make_date(),
+        make_time(),
         now(&ConfigOptions::default()),
         to_char(),
         to_date(),
         to_local_time(),
+        to_time(),
         to_unixtime(),
         to_timestamp(),
         to_timestamp_seconds(),
