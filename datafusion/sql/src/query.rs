@@ -51,9 +51,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             body,
             order_by,
             limit_clause,
-            pipe_operators,
             fetch,
-            ..
+            locks: _,
+            for_clause: _,
+            settings: _,
+            format_clause: _,
+            pipe_operators,
         } = query;
 
         if fetch.is_some() {
