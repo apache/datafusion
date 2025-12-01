@@ -30,7 +30,9 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{internal_err, plan_err, Column, Result, ScalarValue};
+use datafusion_common::{
+    assert_or_internal_err, plan_err, Column, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
@@ -94,9 +96,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     config.alias_generator(),
                 )?;
 
-                if subqueries.is_empty() {
-                    return internal_err!("Expected subqueries not found in filter");
-                }
+                assert_or_internal_err!(
+                    !subqueries.is_empty(),
+                    "Expected subqueries not found in filter"
+                );
 
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = filter.input.as_ref().clone();
@@ -154,9 +157,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     all_subqueries.extend(subqueries);
                     expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
                 }
-                if all_subqueries.is_empty() {
-                    return internal_err!("Expected subqueries not found in projection");
-                }
+                assert_or_internal_err!(
+                    !all_subqueries.is_empty(),
+                    "Expected subqueries not found in projection"
+                );
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueries {

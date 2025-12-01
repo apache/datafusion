@@ -27,7 +27,9 @@ use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
-use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_or_internal_err, exec_err, not_impl_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -206,10 +208,11 @@ impl TrivialNthValueAccumulator {
     /// Create a new order-insensitive NTH_VALUE accumulator based on the given
     /// item data type.
     pub fn try_new(n: i64, datatype: &DataType) -> Result<Self> {
-        if n == 0 {
-            // n cannot be 0
-            return internal_err!("Nth value indices are 1 based. 0 is invalid index");
-        }
+        // n cannot be 0
+        assert_or_internal_err!(
+            n != 0,
+            "Nth value indices are 1 based. 0 is invalid index"
+        );
         Ok(Self {
             n,
             values: VecDeque::new(),
@@ -339,10 +342,11 @@ impl NthValueAccumulator {
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
     ) -> Result<Self> {
-        if n == 0 {
-            // n cannot be 0
-            return internal_err!("Nth value indices are 1 based. 0 is invalid index");
-        }
+        // n cannot be 0
+        assert_or_internal_err!(
+            n != 0,
+            "Nth value indices are 1 based. 0 is invalid index"
+        );
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
         Ok(Self {

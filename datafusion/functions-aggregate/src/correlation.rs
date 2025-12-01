@@ -196,14 +196,23 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let n = self.covar.get_count();
-        if n < 2 {
-            return Ok(ScalarValue::Float64(None));
-        }
-
         let covar = self.covar.evaluate()?;
         let stddev1 = self.stddev1.evaluate()?;
         let stddev2 = self.stddev2.evaluate()?;
+
+        // First check if we have NaN values by examining the internal state
+        // This handles the case where both inputs are NaN even with count=1
+        let mean1 = self.covar.get_mean1();
+        let mean2 = self.covar.get_mean2();
+
+        // If both means are NaN, then both input columns contain only NaN values
+        if mean1.is_nan() && mean2.is_nan() {
+            return Ok(ScalarValue::Float64(Some(f64::NAN)));
+        }
+        let n = self.covar.get_count();
+        if mean1.is_nan() || mean2.is_nan() || n < 2 {
+            return Ok(ScalarValue::Float64(None));
+        }
 
         if let ScalarValue::Float64(Some(c)) = covar {
             if let ScalarValue::Float64(Some(s1)) = stddev1 {
@@ -402,6 +411,81 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         Ok(())
     }
 
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let n = match emit_to {
+            EmitTo::All => self.count.len(),
+            EmitTo::First(n) => n,
+        };
+
+        let mut values = Vec::with_capacity(n);
+        let mut nulls = NullBufferBuilder::new(n);
+
+        // Notes for `Null` handling:
+        // - If the `count` state of a group is 0, no valid records are accumulated
+        //   for this group, so the aggregation result is `Null`.
+        // - Correlation can't be calculated when a group only has 1 record, or when
+        //   the `denominator` state is 0. In these cases, the final aggregation
+        //   result should be `Null` (according to PostgreSQL's behavior).
+        // - However, if any of the accumulated values contain NaN, the result should
+        //   be NaN regardless of the count (even for single-row groups).
+        //
+        for i in 0..n {
+            let count = self.count[i];
+            let sum_x = self.sum_x[i];
+            let sum_y = self.sum_y[i];
+            let sum_xy = self.sum_xy[i];
+            let sum_xx = self.sum_xx[i];
+            let sum_yy = self.sum_yy[i];
+
+            // If BOTH sum_x AND sum_y are NaN, then both input values are NaN → return NaN
+            // If only ONE of them is NaN, then only one input value is NaN → return NULL
+            if sum_x.is_nan() && sum_y.is_nan() {
+                // Both inputs are NaN → return NaN
+                values.push(f64::NAN);
+                nulls.append_non_null();
+                continue;
+            } else if count < 2 || sum_x.is_nan() || sum_y.is_nan() {
+                // Only one input is NaN → return NULL
+                values.push(0.0);
+                nulls.append_null();
+                continue;
+            }
+
+            let mean_x = sum_x / count as f64;
+            let mean_y = sum_y / count as f64;
+
+            let numerator = sum_xy - sum_x * mean_y;
+            let denominator =
+                ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
+
+            if denominator == 0.0 {
+                values.push(0.0);
+                nulls.append_null();
+            } else {
+                values.push(numerator / denominator);
+                nulls.append_non_null();
+            }
+        }
+
+        Ok(Arc::new(Float64Array::new(values.into(), nulls.finish())))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let n = match emit_to {
+            EmitTo::All => self.count.len(),
+            EmitTo::First(n) => n,
+        };
+
+        Ok(vec![
+            Arc::new(UInt64Array::from(self.count[0..n].to_vec())),
+            Arc::new(Float64Array::from(self.sum_x[0..n].to_vec())),
+            Arc::new(Float64Array::from(self.sum_y[0..n].to_vec())),
+            Arc::new(Float64Array::from(self.sum_xy[0..n].to_vec())),
+            Arc::new(Float64Array::from(self.sum_xx[0..n].to_vec())),
+            Arc::new(Float64Array::from(self.sum_yy[0..n].to_vec())),
+        ])
+    }
+
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
@@ -448,71 +532,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         );
 
         Ok(())
-    }
-
-    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let n = match emit_to {
-            EmitTo::All => self.count.len(),
-            EmitTo::First(n) => n,
-        };
-
-        let mut values = Vec::with_capacity(n);
-        let mut nulls = NullBufferBuilder::new(n);
-
-        // Notes for `Null` handling:
-        // - If the `count` state of a group is 0, no valid records are accumulated
-        //   for this group, so the aggregation result is `Null`.
-        // - Correlation can't be calculated when a group only has 1 record, or when
-        //   the `denominator` state is 0. In these cases, the final aggregation
-        //   result should be `Null` (according to PostgreSQL's behavior).
-        //
-        for i in 0..n {
-            if self.count[i] < 2 {
-                values.push(0.0);
-                nulls.append_null();
-                continue;
-            }
-
-            let count = self.count[i];
-            let sum_x = self.sum_x[i];
-            let sum_y = self.sum_y[i];
-            let sum_xy = self.sum_xy[i];
-            let sum_xx = self.sum_xx[i];
-            let sum_yy = self.sum_yy[i];
-
-            let mean_x = sum_x / count as f64;
-            let mean_y = sum_y / count as f64;
-
-            let numerator = sum_xy - sum_x * mean_y;
-            let denominator =
-                ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
-
-            if denominator == 0.0 {
-                values.push(0.0);
-                nulls.append_null();
-            } else {
-                values.push(numerator / denominator);
-                nulls.append_non_null();
-            }
-        }
-
-        Ok(Arc::new(Float64Array::new(values.into(), nulls.finish())))
-    }
-
-    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let n = match emit_to {
-            EmitTo::All => self.count.len(),
-            EmitTo::First(n) => n,
-        };
-
-        Ok(vec![
-            Arc::new(UInt64Array::from(self.count[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_x[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_y[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_xy[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_xx[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_yy[0..n].to_vec())),
-        ])
     }
 
     fn size(&self) -> usize {

@@ -157,12 +157,10 @@ macro_rules! config_namespace {
                             // $(#[allow(deprecated)])?
                             {
                                 $(let value = $transform(value);)? // Apply transformation if specified
-                                #[allow(deprecated)]
                                 let ret = self.$field_name.set(rem, value.as_ref());
 
                                 $(if !$warn.is_empty() {
                                     let default: $field_type = $default;
-                                    #[allow(deprecated)]
                                     if default != self.$field_name {
                                         log::warn!($warn);
                                     }
@@ -181,14 +179,36 @@ macro_rules! config_namespace {
                 $(
                     let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     self.$field_name.visit(v, key.as_str(), desc);
                 )*
+            }
+
+            fn reset(&mut self, key: &str) -> $crate::error::Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
+                    $(
+                        stringify!($field_name) => {
+                                    {
+                                if rem.is_empty() {
+                                    let default_value: $field_type = $default;
+                                    self.$field_name = default_value;
+                                    Ok(())
+                                } else {
+                                    self.$field_name.reset(rem)
+                                }
+                            }
+                        },
+                    )*
+                    _ => $crate::error::_config_err!(
+                        "Config value \"{}\" not found on {}",
+                        key,
+                        stringify!($struct_name)
+                    ),
+                }
             }
         }
         impl Default for $struct_name {
             fn default() -> Self {
-                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -1096,7 +1116,7 @@ impl<'a> TryInto<arrow::util::display::FormatOptions<'a>> for &'a FormatOptions 
                 return _config_err!(
                     "Invalid duration format: {}. Valid values are pretty or iso8601",
                     self.duration_format
-                )
+                );
             }
         };
 
@@ -1167,6 +1187,45 @@ impl ConfigField for ConfigOptions {
             "sql_parser" => self.sql_parser.set(rem, value),
             "format" => self.format.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
+        }
+    }
+
+    /// Reset a configuration option back to its default value
+    fn reset(&mut self, key: &str) -> Result<()> {
+        let Some((prefix, rest)) = key.split_once('.') else {
+            return _config_err!("could not find config namespace for key \"{key}\"");
+        };
+
+        if prefix != "datafusion" {
+            return _config_err!("Could not find config namespace \"{prefix}\"");
+        }
+
+        let (section, rem) = rest.split_once('.').unwrap_or((rest, ""));
+        if rem.is_empty() {
+            return _config_err!("could not find config field for key \"{key}\"");
+        }
+
+        match section {
+            "catalog" => self.catalog.reset(rem),
+            "execution" => self.execution.reset(rem),
+            "optimizer" => {
+                if rem == "enable_dynamic_filter_pushdown" {
+                    let defaults = OptimizerOptions::default();
+                    self.optimizer.enable_dynamic_filter_pushdown =
+                        defaults.enable_dynamic_filter_pushdown;
+                    self.optimizer.enable_topk_dynamic_filter_pushdown =
+                        defaults.enable_topk_dynamic_filter_pushdown;
+                    self.optimizer.enable_join_dynamic_filter_pushdown =
+                        defaults.enable_join_dynamic_filter_pushdown;
+                    Ok(())
+                } else {
+                    self.optimizer.reset(rem)
+                }
+            }
+            "explain" => self.explain.reset(rem),
+            "sql_parser" => self.sql_parser.reset(rem),
+            "format" => self.format.reset(rem),
+            other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }
 }
@@ -1460,6 +1519,14 @@ impl Extensions {
         let e = self.0.get_mut(T::PREFIX)?;
         e.0.as_any_mut().downcast_mut()
     }
+
+    /// Iterates all the config extension entries yielding their prefix and their
+    /// [ExtensionOptions] implementation.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &Box<dyn ExtensionOptions>)> {
+        self.0.iter().map(|(k, v)| (*k, &v.0))
+    }
 }
 
 #[derive(Debug)]
@@ -1477,6 +1544,10 @@ pub trait ConfigField {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str);
 
     fn set(&mut self, key: &str, value: &str) -> Result<()>;
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        _config_err!("Reset is not supported for this config field, key: {}", key)
+    }
 }
 
 impl<F: ConfigField + Default> ConfigField for Option<F> {
@@ -1489,6 +1560,15 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         self.get_or_insert_with(Default::default).set(key, value)
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = Default::default();
+            Ok(())
+        } else {
+            self.get_or_insert_with(Default::default).reset(key)
+        }
     }
 }
 
@@ -1553,6 +1633,19 @@ macro_rules! config_field {
             fn set(&mut self, _: &str, $arg: &str) -> $crate::error::Result<()> {
                 *self = $transform;
                 Ok(())
+            }
+
+            fn reset(&mut self, key: &str) -> $crate::error::Result<()> {
+                if key.is_empty() {
+                    *self = <$t as Default>::default();
+                    Ok(())
+                } else {
+                    $crate::error::_config_err!(
+                        "Config field is a scalar {} and does not have nested field \"{}\"",
+                        stringify!($t),
+                        key
+                    )
+                }
             }
         }
     };
@@ -1753,8 +1846,7 @@ macro_rules! extensions_options {
                             // Safely apply deprecated attribute if present
                             // $(#[allow(deprecated)])?
                             {
-                                #[allow(deprecated)]
-                                self.$field_name.set(rem, value.as_ref())
+                                            self.$field_name.set(rem, value.as_ref())
                             }
                         },
                     )*
@@ -1768,7 +1860,6 @@ macro_rules! extensions_options {
                 $(
                     let key = stringify!($field_name).to_string();
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -2159,13 +2250,13 @@ impl ConfigField for TableParquetOptions {
                 [_meta] | [_meta, ""] => {
                     return _config_err!(
                         "Invalid metadata key provided, missing key in metadata::<key>"
-                    )
+                    );
                 }
                 [_meta, k] => k.into(),
                 _ => {
                     return _config_err!(
                         "Invalid metadata key provided, found too many '::' in \"{key}\""
-                    )
+                    );
                 }
             };
             self.key_value_metadata.insert(k, Some(value.into()));
@@ -2211,7 +2302,6 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                        stringify!($field_name) => {
                            // Handle deprecated fields
-                           #[allow(deprecated)] // Allow deprecated fields
                            $(let value = $transform(value);)?
                            self.$field_name.set(rem, value.as_ref())
                        },
@@ -2227,7 +2317,6 @@ macro_rules! config_namespace_with_hashmap {
                 let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                 let desc = concat!($($d),*).trim();
                 // Handle deprecated fields
-                #[allow(deprecated)]
                 self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -2235,7 +2324,6 @@ macro_rules! config_namespace_with_hashmap {
 
         impl Default for $struct_name {
             fn default() -> Self {
-                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -2263,7 +2351,6 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                     let key = format!("{}.{field}::{}", key_prefix, column_name, field = stringify!($field_name));
                     let desc = concat!($($d),*).trim();
-                    #[allow(deprecated)]
                     col_options.$field_name.visit(v, key.as_str(), desc);
                     )*
                 }
@@ -2562,7 +2649,7 @@ impl ConfigField for ConfigFileDecryptionProperties {
                 self.footer_signature_verification.set(rem, value.as_ref())
             }
             _ => _config_err!(
-                "Config value \"{}\" not found on ConfigFileEncryptionProperties",
+                "Config value \"{}\" not found on ConfigFileDecryptionProperties",
                 key
             ),
         }
@@ -2842,7 +2929,7 @@ config_namespace! {
 pub trait OutputFormatExt: Display {}
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "parquet", expect(clippy::large_enum_variant))]
 pub enum OutputFormat {
     CSV(CsvOptions),
     JSON(JsonOptions),
@@ -2876,7 +2963,6 @@ mod tests {
     };
     use std::any::Any;
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     #[derive(Default, Debug, Clone)]
     pub struct TestExtensionConfig {
@@ -2949,6 +3035,16 @@ mod tests {
     }
 
     #[test]
+    fn iter_test_extension_config() {
+        let mut extension = Extensions::new();
+        extension.insert(TestExtensionConfig::default());
+        let table_config = TableOptions::new().with_extensions(extension);
+        let extensions = table_config.extensions.iter().collect::<Vec<_>>();
+        assert_eq!(extensions.len(), 1);
+        assert_eq!(extensions[0].0, TestExtensionConfig::PREFIX);
+    }
+
+    #[test]
     fn csv_u8_table_options() {
         let mut table_config = TableOptions::new();
         table_config.set_config_format(ConfigFileType::CSV);
@@ -2991,6 +3087,19 @@ mod tests {
         assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
+    #[test]
+    fn reset_nested_scalar_reports_helpful_error() {
+        let mut value = true;
+        let err = <bool as ConfigField>::reset(&mut value, "nested").unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.starts_with(
+                "Invalid or Unsupported Configuration: Config field is a scalar bool and does not have nested field \"nested\""
+            ),
+            "unexpected error message: {message}"
+        );
+    }
+
     #[cfg(feature = "parquet")]
     #[test]
     fn parquet_table_options() {
@@ -3013,6 +3122,7 @@ mod tests {
         };
         use parquet::encryption::decrypt::FileDecryptionProperties;
         use parquet::encryption::encrypt::FileEncryptionProperties;
+        use std::sync::Arc;
 
         let footer_key = b"0123456789012345".to_vec(); // 128bit/16
         let column_names = vec!["double_field", "float_field"];
@@ -3166,9 +3276,11 @@ mod tests {
             .set("format.bloom_filter_enabled::col1", "true")
             .unwrap();
         let entries = table_config.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key == "format.bloom_filter_enabled::col1"))
+        assert!(
+            entries
+                .iter()
+                .any(|item| item.key == "format.bloom_filter_enabled::col1")
+        )
     }
 
     #[cfg(feature = "parquet")]
@@ -3182,10 +3294,10 @@ mod tests {
             )
             .unwrap();
         let entries = table_parquet_options.entries();
-        assert!(entries
-            .iter()
-            .any(|item| item.key
-                == "crypto.file_encryption.column_key_as_hex::double_field"))
+        assert!(
+            entries.iter().any(|item| item.key
+                == "crypto.file_encryption.column_key_as_hex::double_field")
+        )
     }
 
     #[cfg(feature = "parquet")]

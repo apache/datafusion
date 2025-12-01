@@ -86,7 +86,6 @@ impl Regr {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[allow(clippy::upper_case_acronyms)]
 pub enum RegrType {
     /// Variant for `regr_slope` aggregate expression
     /// Returns the slope of the linear regression line for non-null pairs in aggregate columns.

@@ -30,7 +30,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{exec_err, internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, exec_err, not_impl_err, DataFusionError, Result,
+    ScalarValue,
+};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -247,9 +250,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
         let dt = output_interval.data_type();
         if dt.eq(&DataType::Boolean) {
-            let p = if output_interval.eq(&Interval::CERTAINLY_TRUE) {
+            let p = if output_interval.eq(&Interval::TRUE) {
                 ScalarValue::new_one(&dt)
-            } else if output_interval.eq(&Interval::CERTAINLY_FALSE) {
+            } else if output_interval.eq(&Interval::FALSE) {
                 ScalarValue::new_zero(&dt)
             } else {
                 ScalarValue::try_from(&dt)
@@ -309,9 +312,9 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
                     Ok((*child).clone())
                 } else if new_interval.data_type().eq(&DataType::Boolean) {
                     let dt = old_interval.data_type();
-                    let p = if new_interval.eq(&Interval::CERTAINLY_TRUE) {
+                    let p = if new_interval.eq(&Interval::TRUE) {
                         ScalarValue::new_one(&dt)
-                    } else if new_interval.eq(&Interval::CERTAINLY_FALSE) {
+                    } else if new_interval.eq(&Interval::FALSE) {
                         ScalarValue::new_zero(&dt)
                     } else {
                         unreachable!("Given that we have a range reduction for a boolean interval, we should have certainty")
@@ -453,9 +456,13 @@ pub fn with_new_children_if_necessary(
     children: Vec<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let old_children = expr.children();
-    if children.len() != old_children.len() {
-        internal_err!("PhysicalExpr: Wrong number of children")
-    } else if children.is_empty()
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "PhysicalExpr: Wrong number of children"
+    );
+
+    if children.is_empty()
         || children
             .iter()
             .zip(old_children.iter())
