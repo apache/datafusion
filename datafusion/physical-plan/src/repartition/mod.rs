@@ -1616,7 +1616,6 @@ mod tests {
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
-    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use insta::assert_snapshot;
 
