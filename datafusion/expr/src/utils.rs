@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap,
-    Result, TableReference,
+    internal_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap, Result,
+    TableReference,
 };
 
 #[cfg(not(feature = "sql"))]
@@ -66,6 +66,23 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     }
 }
 
+/// Internal helper that generates indices for powerset subsets using bitset iteration.
+/// Returns an iterator of index vectors, where each vector contains the indices
+/// of elements to include in that subset.
+fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
+    (0..(1 << len)).map(move |mask| {
+        let mut indices = vec![];
+        let mut bitset = mask;
+        while bitset > 0 {
+            let rightmost: u64 = bitset & !(bitset - 1);
+            let idx = rightmost.trailing_zeros() as usize;
+            indices.push(idx);
+            bitset &= bitset - 1;
+        }
+        indices
+    })
+}
+
 /// The [power set] (or powerset) of a set S is the set of all subsets of S, \
 /// including the empty set and S itself.
 ///
@@ -83,26 +100,14 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 ///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
 ///
 /// [power set]: https://en.wikipedia.org/wiki/Power_set
-fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
+pub fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>> {
     if slice.len() >= 64 {
-        return Err("The size of the set must be less than 64.".into());
+        return plan_err!("The size of the set must be less than 64");
     }
 
-    let mut v = Vec::new();
-    for mask in 0..(1 << slice.len()) {
-        let mut ss = vec![];
-        let mut bitset = mask;
-        while bitset > 0 {
-            let rightmost: u64 = bitset & !(bitset - 1);
-            let idx = rightmost.trailing_zeros();
-            let item = slice.get(idx as usize).unwrap();
-            ss.push(item);
-            // zero the trailing bit
-            bitset &= bitset - 1;
-        }
-        v.push(ss);
-    }
-    Ok(v)
+    Ok(powerset_indices(slice.len())
+        .map(|indices| indices.iter().map(|&idx| &slice[idx]).collect())
+        .collect())
 }
 
 /// check the number of expressions contained in the grouping_set
@@ -207,8 +212,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     grouping_sets.iter().map(|e| e.iter().collect()).collect()
                 }
                 Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
-                    let grouping_sets = powerset(group_exprs)
-                        .map_err(|e| plan_datafusion_err!("{}", e))?;
+                    let grouping_sets = powerset(group_exprs)?;
                     check_grouping_sets_size_limit(grouping_sets.len())?;
                     grouping_sets
                 }
@@ -354,7 +358,7 @@ fn get_excluded_columns(
 /// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
 fn get_exprs_except_skipped(
     schema: &DFSchema,
-    columns_to_skip: HashSet<Column>,
+    columns_to_skip: &HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema.iter().map(Expr::from).collect::<Vec<Expr>>()
@@ -419,7 +423,7 @@ pub fn expand_wildcard(
     };
     // Add each excluded `Column` to columns_to_skip
     columns_to_skip.extend(excluded_columns);
-    Ok(get_exprs_except_skipped(schema, columns_to_skip))
+    Ok(get_exprs_except_skipped(schema, &columns_to_skip))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
@@ -464,7 +468,7 @@ pub fn expand_qualified_wildcard(
     columns_to_skip.extend(excluded_columns);
     Ok(get_exprs_except_skipped(
         &qualified_dfschema,
-        columns_to_skip,
+        &columns_to_skip,
     ))
 }
 
@@ -928,6 +932,7 @@ pub fn find_valid_equijoin_key_pair(
 ///     round(Float64)
 ///     round(Float32)
 /// ```
+#[expect(clippy::needless_pass_by_value)]
 pub fn generate_signature_error_msg(
     func_name: &str,
     func_signature: Signature,

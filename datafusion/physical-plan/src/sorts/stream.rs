@@ -25,6 +25,7 @@ use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Fuse, StreamExt};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -98,8 +99,8 @@ impl ReusableRows {
         })
     }
     // save the Rows
-    fn save(&mut self, stream_idx: usize, rows: Arc<Rows>) {
-        self.inner[stream_idx][1] = Some(Arc::clone(&rows));
+    fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) {
+        self.inner[stream_idx][1] = Some(Arc::clone(rows));
         // swap the current with the previous one, so that the next poll can reuse the Rows from the previous poll
         let [a, b] = &mut self.inner[stream_idx];
         std::mem::swap(a, b);
@@ -164,11 +165,7 @@ impl RowCursorStream {
         batch: &RecordBatch,
         stream_idx: usize,
     ) -> Result<RowValues> {
-        let cols = self
-            .column_expressions
-            .iter()
-            .map(|expr| expr.evaluate(batch)?.into_array(batch.num_rows()))
-            .collect::<Result<Vec<_>>>()?;
+        let cols = evaluate_expressions_to_arrays(&self.column_expressions, batch)?;
 
         // At this point, ownership should of this Rows should be unique
         let mut rows = self.rows.take_next(stream_idx)?;
@@ -180,7 +177,7 @@ impl RowCursorStream {
 
         let rows = Arc::new(rows);
 
-        self.rows.save(stream_idx, Arc::clone(&rows));
+        self.rows.save(stream_idx, &rows);
 
         // track the memory in the newly created Rows.
         let mut rows_reservation = self.reservation.new_empty();

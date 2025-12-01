@@ -37,9 +37,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::memory::estimate_memory_size;
-use datafusion_common::{
-    arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
-};
+use datafusion_common::{arrow_datafusion_err, HashSet, JoinSide, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
@@ -682,8 +680,6 @@ pub struct StreamJoinMetrics {
     pub(crate) right: StreamJoinSideMetrics,
     /// Memory used by sides in bytes
     pub(crate) stream_memory_usage: metrics::Gauge,
-    /// Number of batches produced by this operator
-    pub(crate) output_batches: metrics::Count,
     /// Number of rows produced by this operator
     pub(crate) baseline_metrics: BaselineMetrics,
 }
@@ -709,13 +705,9 @@ impl StreamJoinMetrics {
         let stream_memory_usage =
             MetricBuilder::new(metrics).gauge("stream_memory_usage", partition);
 
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
-
         Self {
             left,
             right,
-            output_batches,
             stream_memory_usage,
             baseline_metrics: BaselineMetrics::new(metrics, partition),
         }

@@ -27,7 +27,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::joins::SharedBitmapBuilder;
-use crate::metrics::{self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::metrics::{
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricType,
+};
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
@@ -75,6 +77,7 @@ use datafusion_physical_expr::{
 };
 
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -411,11 +414,11 @@ struct PartialJoinStatistics {
 pub(crate) fn estimate_join_statistics(
     left_stats: Statistics,
     right_stats: Statistics,
-    on: JoinOn,
+    on: &JoinOn,
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
-    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
+    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
         None => (Precision::Absent, Statistics::unknown_column(schema)),
@@ -564,16 +567,26 @@ fn estimate_inner_join_cardinality(
         return Some(estimation);
     };
 
+    let Statistics {
+        num_rows: left_num_rows,
+        column_statistics: left_column_statistics,
+        ..
+    } = left_stats;
+    let Statistics {
+        num_rows: right_num_rows,
+        column_statistics: right_column_statistics,
+        ..
+    } = right_stats;
+
     // The algorithm here is partly based on the non-histogram selectivity estimation
     // from Spark's Catalyst optimizer.
     let mut join_selectivity = Precision::Absent;
-    for (left_stat, right_stat) in left_stats
-        .column_statistics
+    for (left_stat, right_stat) in left_column_statistics
         .iter()
-        .zip(right_stats.column_statistics.iter())
+        .zip(right_column_statistics.iter())
     {
-        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat);
-        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat);
+        let left_max_distinct = max_distinct_count(&left_num_rows, left_stat);
+        let right_max_distinct = max_distinct_count(&right_num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -1128,8 +1141,8 @@ pub(crate) fn append_right_indices(
 ) -> Result<(UInt64Array, UInt32Array)> {
     if preserve_order_for_right {
         Ok(append_probe_indices_in_order(
-            left_indices,
-            right_indices,
+            &left_indices,
+            &right_indices,
             adjust_range,
         ))
     } else {
@@ -1273,8 +1286,8 @@ fn build_range_bitmap<T: ArrowPrimitiveType>(
 /// - A `PrimitiveArray` of `UInt64Type` with the newly constructed build indices.
 /// - A `PrimitiveArray` of `UInt32Type` with the newly constructed probe indices.
 fn append_probe_indices_in_order(
-    build_indices: PrimitiveArray<UInt64Type>,
-    probe_indices: PrimitiveArray<UInt32Type>,
+    build_indices: &PrimitiveArray<UInt64Type>,
+    probe_indices: &PrimitiveArray<UInt32Type>,
     range: Range<usize>,
 ) -> (PrimitiveArray<UInt64Type>, PrimitiveArray<UInt32Type>) {
     // Builders for new indices:
@@ -1327,8 +1340,10 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) input_batches: metrics::Count,
     /// Number of rows consumed by probe-side this operator
     pub(crate) input_rows: metrics::Count,
-    /// Number of batches produced by this operator
-    pub(crate) output_batches: metrics::Count,
+    /// Fraction of probe rows that found more than one match
+    pub(crate) probe_hit_rate: metrics::RatioMetrics,
+    /// Average number of build matches per matched probe row
+    pub(crate) avg_fanout: metrics::RatioMetrics,
 }
 
 // This Drop implementation updates the elapsed compute part of the metrics.
@@ -1372,8 +1387,13 @@ impl BuildProbeJoinMetrics {
 
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
 
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
+        let probe_hit_rate = MetricBuilder::new(metrics)
+            .with_type(MetricType::SUMMARY)
+            .ratio_metrics("probe_hit_rate", partition);
+
+        let avg_fanout = MetricBuilder::new(metrics)
+            .with_type(MetricType::SUMMARY)
+            .ratio_metrics("avg_fanout", partition);
 
         Self {
             build_time,
@@ -1383,8 +1403,9 @@ impl BuildProbeJoinMetrics {
             join_time,
             input_batches,
             input_rows,
-            output_batches,
             baseline,
+            probe_hit_rate,
+            avg_fanout,
         }
     }
 }
@@ -1669,15 +1690,12 @@ pub fn update_hash(
     hash_map: &mut dyn JoinHashMapType,
     offset: usize,
     random_state: &RandomState,
-    hashes_buffer: &mut Vec<u64>,
+    hashes_buffer: &mut [u64],
     deleted_offset: usize,
     fifo_hashmap: bool,
 ) -> Result<()> {
     // evaluate the keys
-    let keys_values = on
-        .iter()
-        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
+    let keys_values = evaluate_expressions_to_arrays(on, batch)?;
 
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;

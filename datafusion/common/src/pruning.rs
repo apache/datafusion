@@ -485,8 +485,8 @@ impl PruningStatistics for CompositePruningStatistics {
 #[cfg(test)]
 mod tests {
     use crate::{
-        cast::{as_int32_array, as_uint64_array},
         ColumnStatistics,
+        cast::{as_int32_array, as_uint64_array},
     };
 
     use super::*;

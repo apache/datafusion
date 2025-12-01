@@ -153,11 +153,10 @@ physical_plan
 04)------CoalescePartitionsExec
 05)--------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------CoalesceBatchesExec: target_batch_size=8192
-08)--------------FilterExec: CAST(val@1 AS Int64) + 1 IS NOT DISTINCT FROM 11
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
-10)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
-11)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------------FilterExec: CAST(val@1 AS Int64) + 1 IS NOT DISTINCT FROM 11
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
+10)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Mixed join predicate with `IS DISTINCT FROM` and `IS NOT DISTINCT FROM`
 query IIII rowsort

@@ -46,8 +46,10 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
-use datafusion_common::{internal_err, ColumnStatistics, HashMap};
-use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::{
+    assert_or_internal_err, internal_err, ColumnStatistics, DataFusionError, HashMap,
+};
+use datafusion_common::{not_impl_err, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -58,6 +60,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -225,10 +228,10 @@ impl Debug for RepartitionExecState {
 impl RepartitionExecState {
     fn ensure_input_streams_initialized(
         &mut self,
-        input: Arc<dyn ExecutionPlan>,
-        metrics: ExecutionPlanMetricsSet,
+        input: &Arc<dyn ExecutionPlan>,
+        metrics: &ExecutionPlanMetricsSet,
         output_partitions: usize,
-        ctx: Arc<TaskContext>,
+        ctx: &Arc<TaskContext>,
     ) -> Result<()> {
         if !matches!(self, RepartitionExecState::NotInitialized) {
             return Ok(());
@@ -238,10 +241,10 @@ impl RepartitionExecState {
         let mut streams_and_metrics = Vec::with_capacity(num_input_partitions);
 
         for i in 0..num_input_partitions {
-            let metrics = RepartitionMetrics::new(i, output_partitions, &metrics);
+            let metrics = RepartitionMetrics::new(i, output_partitions, metrics);
 
             let timer = metrics.fetch_time.timer();
-            let stream = input.execute(i, Arc::clone(&ctx))?;
+            let stream = input.execute(i, Arc::clone(ctx))?;
             timer.done();
 
             streams_and_metrics.push((stream, metrics));
@@ -253,21 +256,21 @@ impl RepartitionExecState {
     #[expect(clippy::too_many_arguments)]
     fn consume_input_streams(
         &mut self,
-        input: Arc<dyn ExecutionPlan>,
-        metrics: ExecutionPlanMetricsSet,
-        partitioning: Partitioning,
+        input: &Arc<dyn ExecutionPlan>,
+        metrics: &ExecutionPlanMetricsSet,
+        partitioning: &Partitioning,
         preserve_order: bool,
-        name: String,
-        context: Arc<TaskContext>,
+        name: &str,
+        context: &Arc<TaskContext>,
         spill_manager: SpillManager,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
                 self.ensure_input_streams_initialized(
-                    Arc::clone(&input),
-                    metrics.clone(),
+                    input,
+                    metrics,
                     partitioning.partition_count(),
-                    Arc::clone(&context),
+                    context,
                 )?;
                 let RepartitionExecState::InputStreamsInitialized(value) = self else {
                     // This cannot happen, as ensure_input_streams_initialized() was just called,
@@ -379,6 +382,9 @@ impl RepartitionExecState {
                 txs,
                 partitioning.clone(),
                 metrics,
+                // preserve_order depends on partition index to start from 0
+                if preserve_order { 0 } else { i },
+                num_input_partitions,
             ));
 
             // In a separate task, wait for each input to be done
@@ -406,7 +412,6 @@ pub struct BatchPartitioner {
 
 enum BatchPartitionerState {
     Hash {
-        random_state: ahash::RandomState,
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
         hash_buffer: Vec<u64>,
@@ -417,23 +422,33 @@ enum BatchPartitionerState {
     },
 }
 
+/// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
+/// executions and runs.
+pub const REPARTITION_RANDOM_STATE: ahash::RandomState =
+    ahash::RandomState::with_seeds(0, 0, 0, 0);
+
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
     ///
     /// The time spent repartitioning will be recorded to `timer`
-    pub fn try_new(partitioning: Partitioning, timer: metrics::Time) -> Result<Self> {
+    pub fn try_new(
+        partitioning: Partitioning,
+        timer: metrics::Time,
+        input_partition: usize,
+        num_input_partitions: usize,
+    ) -> Result<Self> {
         let state = match partitioning {
             Partitioning::RoundRobinBatch(num_partitions) => {
                 BatchPartitionerState::RoundRobin {
                     num_partitions,
-                    next_idx: 0,
+                    // Distribute starting index evenly based on input partition, number of input partitions and number of partitions
+                    // to avoid they all start at partition 0 and heavily skew on the lower partitions
+                    next_idx: ((input_partition * num_partitions) / num_input_partitions),
                 }
             }
             Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
                 exprs,
                 num_partitions,
-                // Use fixed random hash
-                random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
@@ -481,7 +496,6 @@ impl BatchPartitioner {
                     Box::new(std::iter::once(Ok((idx, batch))))
                 }
                 BatchPartitionerState::Hash {
-                    random_state,
                     exprs,
                     num_partitions: partitions,
                     hash_buffer,
@@ -489,15 +503,13 @@ impl BatchPartitioner {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
-                    let arrays = exprs
-                        .iter()
-                        .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                        .collect::<Result<Vec<_>>>()?;
+                    let arrays =
+                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
 
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(&arrays, random_state, hash_buffer)?;
+                    create_hashes(&arrays, &REPARTITION_RANDOM_STATE, hash_buffer)?;
 
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| Vec::with_capacity(batch.num_rows()))
@@ -738,6 +750,7 @@ impl RepartitionExec {
 
 impl DisplayAs for RepartitionExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        let input_partition_count = self.input.output_partitioning().partition_count();
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
@@ -745,11 +758,17 @@ impl DisplayAs for RepartitionExec {
                     "{}: partitioning={}, input_partitions={}",
                     self.name(),
                     self.partitioning(),
-                    self.input.output_partitioning().partition_count()
+                    input_partition_count,
                 )?;
 
                 if self.preserve_order {
                     write!(f, ", preserve_order=true")?;
+                } else if input_partition_count <= 1
+                    && self.input.output_ordering().is_some()
+                {
+                    // Make it explicit that repartition maintains sortedness for a single input partition even
+                    // when `preserve_sort order` is false
+                    write!(f, ", maintains_sort_order=true")?;
                 }
 
                 if let Some(sort_exprs) = self.sort_exprs() {
@@ -759,9 +778,6 @@ impl DisplayAs for RepartitionExec {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
-
-                let input_partition_count =
-                    self.input.output_partitioning().partition_count();
                 let output_partition_count = self.partitioning().partition_count();
                 let input_to_output_partition_str =
                     format!("{input_partition_count} -> {output_partition_count}");
@@ -852,10 +868,10 @@ impl ExecutionPlan for RepartitionExec {
         let state = Arc::clone(&self.state);
         if let Some(mut state) = state.try_lock() {
             state.ensure_input_streams_initialized(
-                Arc::clone(&input),
-                metrics.clone(),
+                &input,
+                &metrics,
                 partitioning.partition_count(),
-                Arc::clone(&context),
+                &context,
             )?;
         }
 
@@ -867,12 +883,12 @@ impl ExecutionPlan for RepartitionExec {
                 // lock mutexes
                 let mut state = state.lock();
                 let state = state.consume_input_streams(
-                    Arc::clone(&input),
-                    metrics.clone(),
-                    partitioning,
+                    &input,
+                    &metrics,
+                    &partitioning,
                     preserve_order,
-                    name.clone(),
-                    Arc::clone(&context),
+                    &name,
+                    &context,
                     spill_manager.clone(),
                 )?;
 
@@ -915,6 +931,7 @@ impl ExecutionPlan for RepartitionExec {
                             Arc::clone(&reservation),
                             spill_stream,
                             1, // Each receiver handles one input partition
+                            BaselineMetrics::new(&metrics, partition),
                         )) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
@@ -952,6 +969,7 @@ impl ExecutionPlan for RepartitionExec {
                     reservation,
                     spill_stream,
                     num_input_partitions,
+                    BaselineMetrics::new(&metrics, partition),
                 )) as SendableRecordBatchStream)
             }
         })
@@ -975,13 +993,12 @@ impl ExecutionPlan for RepartitionExec {
                 return Ok(Statistics::new_unknown(&self.schema()));
             }
 
-            if partition >= partition_count {
-                return internal_err!(
-                    "RepartitionExec invalid partition {} (expected less than {})",
-                    partition,
-                    self.partitioning().partition_count()
-                );
-            }
+            assert_or_internal_err!(
+                partition < partition_count,
+                "RepartitionExec invalid partition {} (expected less than {})",
+                partition,
+                partition_count
+            );
 
             let mut stats = self.input.partition_statistics(None)?;
 
@@ -1103,8 +1120,7 @@ impl RepartitionExec {
         partitioning: Partitioning,
     ) -> Result<Self> {
         let preserve_order = false;
-        let cache =
-            Self::compute_properties(&input, partitioning.clone(), preserve_order);
+        let cache = Self::compute_properties(&input, partitioning, preserve_order);
         Ok(RepartitionExec {
             input,
             state: Default::default(),
@@ -1193,10 +1209,16 @@ impl RepartitionExec {
         mut output_channels: HashMap<usize, OutputChannel>,
         partitioning: Partitioning,
         metrics: RepartitionMetrics,
+        input_partition: usize,
+        num_input_partitions: usize,
     ) -> Result<()> {
         let is_hash_partitioning = matches!(&partitioning, Partitioning::Hash(_, _));
-        let mut partitioner =
-            BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
+        let mut partitioner = BatchPartitioner::try_new(
+            partitioning,
+            metrics.repartition_time.clone(),
+            input_partition,
+            num_input_partitions,
+        )?;
 
         let mut row_counts = vec![0usize; partitioner.num_partitions()];
 
@@ -1412,6 +1434,9 @@ struct PerPartitionStream {
     /// In non-preserve-order mode, multiple input partitions send to the same channel,
     /// each sending None when complete. We must wait for all of them.
     remaining_partitions: usize,
+
+    /// Execution metrics
+    baseline_metrics: BaselineMetrics,
 }
 
 impl PerPartitionStream {
@@ -1422,6 +1447,7 @@ impl PerPartitionStream {
         reservation: SharedMemoryReservation,
         spill_stream: SendableRecordBatchStream,
         num_input_partitions: usize,
+        baseline_metrics: BaselineMetrics,
     ) -> Self {
         Self {
             schema,
@@ -1431,18 +1457,17 @@ impl PerPartitionStream {
             spill_stream,
             state: StreamState::ReadingMemory,
             remaining_partitions: num_input_partitions,
+            baseline_metrics,
         }
     }
-}
 
-impl Stream for PerPartitionStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
+    fn poll_next_inner(
+        self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         use futures::StreamExt;
+        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
+        let _timer = cloned_time.timer();
 
         loop {
             match self.state {
@@ -1515,6 +1540,18 @@ impl Stream for PerPartitionStream {
                 }
             }
         }
+    }
+}
+
+impl Stream for PerPartitionStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let poll = self.poll_next_inner(cx);
+        self.baseline_metrics.record_poll(poll)
     }
 }
 
@@ -1854,16 +1891,16 @@ mod tests {
         // output stream 1 should *not* error and have one of the input batches
         let batches = crate::common::collect(output_stream1).await.unwrap();
 
-        assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +------------------+
-            | my_awesome_field |
-            +------------------+
-            | baz              |
-            | frob             |
-            | gaz              |
-            | grob             |
-            +------------------+
-            "#);
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +------------------+
+        | my_awesome_field |
+        +------------------+
+        | baz              |
+        | frob             |
+        | gar              |
+        | goo              |
+        +------------------+
+        ");
     }
 
     #[tokio::test]
@@ -2424,7 +2461,7 @@ mod test {
 
         // Repartition should not preserve order
         assert_plan!(&exec, @r"
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
           DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
         ");
 
@@ -2487,7 +2524,8 @@ mod test {
         // Create physical plan with order preservation
         let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?
             .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs])?;
-        let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
+        let exec = Arc::new(exec);
+        let exec = Arc::new(TestMemoryExec::update_cache(&exec));
         // Repartition into 3 partitions with order preservation
         // We expect 1 batch per output partition after repartitioning
         let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(3))?
@@ -2603,7 +2641,8 @@ mod test {
 
         // Create physical plan with hash partitioning
         let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = Arc::new(TestMemoryExec::update_cache(Arc::new(exec)));
+        let exec = Arc::new(exec);
+        let exec = Arc::new(TestMemoryExec::update_cache(&exec));
         // Hash partition into 2 partitions by column c0
         let hash_expr = col("c0", &schema)?;
         let exec =
@@ -2661,7 +2700,7 @@ mod test {
 
         // Repartition should not preserve order
         assert_plan!(exec.as_ref(), @r"
-        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1, maintains_sort_order=true
           DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
         ");
         Ok(())
@@ -2687,11 +2726,11 @@ mod test {
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(TestMemoryExec::update_cache(Arc::new(
-            TestMemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
-                .unwrap()
-                .try_with_sort_information(vec![sort_exprs])
-                .unwrap(),
-        )))
+        let exec = TestMemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
+            .unwrap()
+            .try_with_sort_information(vec![sort_exprs])
+            .unwrap();
+        let exec = Arc::new(exec);
+        Arc::new(TestMemoryExec::update_cache(&exec))
     }
 }

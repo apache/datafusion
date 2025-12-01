@@ -52,7 +52,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -489,7 +489,9 @@ impl TestConfig {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Add the ancillary output requirements operator at the start:
         let optimizer = OutputRequirements::new_add_mode();
-        let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
+        let session_config = SessionConfig::from(self.config.clone());
+        let optimizer_context = OptimizerContext::new(session_config.clone());
+        let mut optimized = optimizer.optimize_plan(plan.clone(), &optimizer_context)?;
 
         // This file has 2 rules that use tree node, apply these rules to original plan consecutively
         // After these operations tree nodes should be in a consistent state.
@@ -525,21 +527,25 @@ impl TestConfig {
         }
 
         for run in optimizers_to_run {
+            let session_config = SessionConfig::from(self.config.clone());
+            let optimizer_context = OptimizerContext::new(session_config.clone());
             optimized = match run {
                 Run::Distribution => {
                     let optimizer = EnforceDistribution::new();
-                    optimizer.optimize(optimized, &self.config)?
+                    optimizer.optimize_plan(optimized, &optimizer_context)?
                 }
                 Run::Sorting => {
                     let optimizer = EnforceSorting::new();
-                    optimizer.optimize(optimized, &self.config)?
+                    optimizer.optimize_plan(optimized, &optimizer_context)?
                 }
             };
         }
 
         // Remove the ancillary output requirements operator when done:
         let optimizer = OutputRequirements::new_remove_mode();
-        let optimized = optimizer.optimize(optimized, &self.config)?;
+        let session_config = SessionConfig::from(self.config.clone());
+        let optimizer_context = OptimizerContext::new(session_config.clone());
+        let optimized = optimizer.optimize_plan(optimized, &optimizer_context)?;
 
         Ok(optimized)
     }
@@ -628,16 +634,13 @@ fn multi_hash_joins() -> Result<()> {
                                 assert_plan!(plan_distrib, @r"
                                 HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, c@2)]
                                   HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, b1@1)]
-                                    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-                                      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-                                    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10
-                                      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                                        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-                                          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-                                  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-                                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                                    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
                                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1
+                                      ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+                                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                 ");
                             },
                     // Should include 4 RepartitionExecs
@@ -646,16 +649,13 @@ fn multi_hash_joins() -> Result<()> {
                                 HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, c@2)]
                                   RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
                                     HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, b1@1)]
-                                      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-                                        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                                      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+                                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1
+                                        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
                                           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-                                      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10
-                                        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                                          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-                                            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-                                  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-                                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+                                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                                 ");
                             },
                 };
@@ -700,16 +700,13 @@ fn multi_hash_joins() -> Result<()> {
                             assert_plan!(plan_distrib, @r"
                             HashJoinExec: mode=Partitioned, join_type=..., on=[(b1@1, c@2)]
                               HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, b1@1)]
-                                RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-                                  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-                                RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10
-                                  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                                    ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-                                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-                              RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-                                RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                                RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
                                   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1
+                                  ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                              RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+                                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                             ");
 
                             }
@@ -720,16 +717,13 @@ fn multi_hash_joins() -> Result<()> {
                             HashJoinExec: mode=Partitioned, join_type=..., on=[(b1@6, c@2)]
                               RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10
                                 HashJoinExec: mode=Partitioned, join_type=..., on=[(a@0, b1@1)]
-                                  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-                                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                                  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+                                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                  RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1
+                                    ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
                                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-                                  RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10
-                                    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                                      ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-                                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-                              RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-                                RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                              RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+                                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
                             ");
 
                             },
@@ -790,15 +784,12 @@ fn multi_joins_after_alias() -> Result<()> {
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a1@0, c@2)]
       ProjectionExec: expr=[a@0 as a1, a@0 as a2]
         HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]
-          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-          RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
     let plan_sort = test_config.to_plan(top_join, &SORT_DISTRIB_DISTRIB);
@@ -821,15 +812,12 @@ fn multi_joins_after_alias() -> Result<()> {
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a2@1, c@2)]
       ProjectionExec: expr=[a@0 as a1, a@0 as a2]
         HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]
-          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-          RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
     let plan_sort = test_config.to_plan(top_join, &SORT_DISTRIB_DISTRIB);
@@ -879,15 +867,12 @@ fn multi_joins_after_multi_alias() -> Result<()> {
         ProjectionExec: expr=[c1@0 as a]
           ProjectionExec: expr=[c@2 as c1]
             HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]
-              RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-                RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-              RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=10
-                RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+              RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+              RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
     let plan_sort = test_config.to_plan(top_join, &SORT_DISTRIB_DISTRIB);
@@ -1108,21 +1093,17 @@ fn multi_hash_join_key_ordering() -> Result<()> {
       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(B@2, b1@6), (C@3, c@2), (AA@1, a1@5)]
         ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]
           HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)]
-            RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=10
-              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-            RepartitionExec: partitioning=Hash([b1@1, c1@2, a1@0], 10), input_partitions=10
-              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
-                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)]
-          RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+            RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=1
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-          RepartitionExec: partitioning=Hash([b1@1, c1@2, a1@0], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+            RepartitionExec: partitioning=Hash([b1@1, c1@2, a1@0], 10), input_partitions=1
               ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
                 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(b@1, b1@1), (c@2, c1@2), (a@0, a1@0)]
+          RepartitionExec: partitioning=Hash([b@1, c@2, a@0], 10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([b1@1, c1@2, a1@0], 10), input_partitions=1
+            ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
     let plan_sort = test_config.to_plan(filter_top_join, &SORT_DISTRIB_DISTRIB);
@@ -1249,21 +1230,17 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
 HashJoinExec: mode=Partitioned, join_type=..., on=[(AA@1, a1@5), (B@2, b1@6), (C@3, c@2)]
   ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1), (c@2, c1@2)]
-      RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      RepartitionExec: partitioning=Hash([a1@0, b1@1, c1@2], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)]
-    RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a1@0, b1@1, c1@2], 10), input_partitions=1
         ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)]
+    RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=1
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=1
+      ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 ");}
     }
 
@@ -1381,21 +1358,17 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
 HashJoinExec: mode=Partitioned, join_type=..., on=[(C@3, c@2), (B@2, b1@6), (AA@1, a1@5)]
   ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0), (b@1, b1@1)]
-      RepartitionExec: partitioning=Hash([a@0, b@1], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      RepartitionExec: partitioning=Hash([a1@0, b1@1], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)]
-    RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a@0, b@1], 10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a1@0, b1@1], 10), input_partitions=1
         ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@2, c1@2), (b@1, b1@1), (a@0, a1@0)]
+    RepartitionExec: partitioning=Hash([c@2, b@1, a@0], 10), input_partitions=1
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    RepartitionExec: partitioning=Hash([c1@2, b1@1, a1@0], 10), input_partitions=1
+      ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 ");}
     }
 
@@ -1460,18 +1433,15 @@ fn multi_smj_joins() -> Result<()> {
 SortMergeJoin: join_type=..., on=[(a@0, c@2)]
   SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
     SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]
-      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]
-    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]
+      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1
+        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]
+    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 ");
                     }
                     // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
@@ -1490,18 +1460,15 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
     RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
       SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
         SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
         SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]
-          RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-              ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1
+            ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
   SortExec: expr=[c@2 ASC], preserve_partitioning=[true]
-    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 ");
                     }
                 }
@@ -1513,22 +1480,19 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
                     JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
                         // TODO(wiedld): show different test result if enforce distribution first.
                         assert_plan!(plan_sort, @r"
-SortMergeJoin: join_type=..., on=[(a@0, c@2)]
-  SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
-    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-        SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, preserve_order=true, sort_exprs=b1@1 ASC
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-        SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=c@2 ASC
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-");
+                        SortMergeJoin: join_type=..., on=[(a@0, c@2)]
+                          SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                            RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
+                              SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                            RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
+                              SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
+                                ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                          RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
+                            SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+                              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                        ");
                     }
                     // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
                     // Since ordering of the left child is not preserved after SortMergeJoin
@@ -1542,26 +1506,22 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
                     _ => {
                         // TODO(wiedld): show different test result if enforce distribution first.
                         assert_plan!(plan_sort, @r"
-SortMergeJoin: join_type=..., on=[(a@0, c@2)]
-  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-        CoalescePartitionsExec
-          SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
-            RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
-              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-            RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, preserve_order=true, sort_exprs=b1@1 ASC
-              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                  ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=c@2 ASC
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-");
+                        SortMergeJoin: join_type=..., on=[(a@0, c@2)]
+                          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
+                            SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                              CoalescePartitionsExec
+                                SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                                  RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
+                                    SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                  RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
+                                    SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
+                                      ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                          RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
+                            SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+                              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                        ");
                     }
                 }
 
@@ -1585,18 +1545,15 @@ SortMergeJoin: join_type=..., on=[(a@0, c@2)]
 SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
   SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
     SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]
-      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]
-    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]
+      RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1
+        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+  SortExec: expr=[c@2 ASC], preserve_partitioning=[true]
+    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 ");
                             }
                             // Should include 7 RepartitionExecs (4 hash, 3 round-robin) and 4 SortExecs
@@ -1608,18 +1565,15 @@ SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
     RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10
       SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
         SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
         SortExec: expr=[b1@1 ASC], preserve_partitioning=[true]
-          RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10
-            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-              ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1
+            ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
   SortExec: expr=[c@2 ASC], preserve_partitioning=[true]
-    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
 ");
                             }
                             // this match arm cannot be reached
@@ -1633,47 +1587,40 @@ SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
                             JoinType::Inner | JoinType::Right => {
                                 // TODO(wiedld): show different test result if enforce distribution first.
                                 assert_plan!(plan_sort, @r"
-SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
-  SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
-    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-        SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, preserve_order=true, sort_exprs=b1@1 ASC
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-        SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=c@2 ASC
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-");
+                                SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
+                                  SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                                    RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
+                                      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                    RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
+                                      SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
+                                        ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
+                                    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+                                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                ");
                             }
                             // Should include 8 RepartitionExecs (4 of them preserves order) and 4 SortExecs
                             JoinType::Left | JoinType::Full => {
                                 // TODO(wiedld): show different test result if enforce distribution first.
                                 assert_plan!(plan_sort, @r"
-SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
-  RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10, preserve_order=true, sort_exprs=b1@6 ASC
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[b1@6 ASC], preserve_partitioning=[false]
-        CoalescePartitionsExec
-          SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
-            RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
-              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-                  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-            RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=10, preserve_order=true, sort_exprs=b1@1 ASC
-              RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
-                  ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=c@2 ASC
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-");
+                                SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
+                                  RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=1, maintains_sort_order=true
+                                    SortExec: expr=[b1@6 ASC], preserve_partitioning=[false]
+                                      CoalescePartitionsExec
+                                        SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                                          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
+                                            SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+                                              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                          RepartitionExec: partitioning=Hash([b1@1], 10), input_partitions=1, maintains_sort_order=true
+                                            SortExec: expr=[b1@1 ASC], preserve_partitioning=[false]
+                                              ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]
+                                                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1, maintains_sort_order=true
+                                    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+                                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+                                ");
                             }
                             // this match arm cannot be reached
                             _ => unreachable!()
@@ -1762,29 +1709,27 @@ SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.to_plan(join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_sort, @r"
-SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
-  RepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=10, preserve_order=true, sort_exprs=b3@1 ASC, a3@0 ASC
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[false]
-        CoalescePartitionsExec
-          ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
-            ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
-              AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
-                RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
-                  AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
+    SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
+      RepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=1, maintains_sort_order=true
+        SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[false]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
+              ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
+                AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]
+                  RepartitionExec: partitioning=Hash([b1@0, a1@1], 10), input_partitions=10
+                    AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]
+                      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+                        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=1, maintains_sort_order=true
+        SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[false]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[a@1 as a2, b@0 as b2]
+              AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
+                RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
+                  AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
                     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-  RepartitionExec: partitioning=Hash([b2@1, a2@0], 10), input_partitions=10, preserve_order=true, sort_exprs=b2@1 ASC, a2@0 ASC
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[b2@1 ASC, a2@0 ASC], preserve_partitioning=[false]
-        CoalescePartitionsExec
-          ProjectionExec: expr=[a@1 as a2, b@0 as b2]
-            AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]
-              RepartitionExec: partitioning=Hash([b@0, a@1], 10), input_partitions=10
-                AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]
-                  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-                    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-");
+    ");
 
     Ok(())
 }
@@ -2041,12 +1986,12 @@ fn repartition_sorted_limit_with_filter() -> Result<()> {
     let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
                                                                                         @r"
-SortRequiredExec: [c@2 ASC]
-  FilterExec: c@2 = 0
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-");
+    SortRequiredExec: [c@2 ASC]
+      FilterExec: c@2 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+          SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
     // We can use repartition here, ordering requirement by SortRequiredExec
     // is still satisfied.
     let plan_sort = test_config.to_plan(plan, &SORT_DISTRIB_DISTRIB);
@@ -2236,11 +2181,11 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
     let plan_distrib = test_config.to_plan(plan.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib,
                                                                                         @r"
-SortRequiredExec: [d@3 ASC]
-  FilterExec: c@2 = 0
-    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet
-");
+    SortRequiredExec: [d@3 ASC]
+      FilterExec: c@2 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet
+    ");
     // during repartitioning ordering is preserved
     let plan_sort = test_config.to_plan(plan, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
@@ -2801,14 +2746,14 @@ fn parallelization_limit_with_filter() -> Result<()> {
     // SortExec doesn't benefit from input partitioning
     assert_plan!(plan_parquet_distrib,
         @r"
-GlobalLimitExec: skip=0, fetch=100
-  CoalescePartitionsExec
-    LocalLimitExec: fetch=100
-      FilterExec: c@2 = 0
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-");
+    GlobalLimitExec: skip=0, fetch=100
+      CoalescePartitionsExec
+        LocalLimitExec: fetch=100
+          FilterExec: c@2 = 0
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+              SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
     let plan_parquet_sort = test_config.to_plan(plan_parquet, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_parquet_distrib, plan_parquet_sort);
 
@@ -2819,14 +2764,14 @@ GlobalLimitExec: skip=0, fetch=100
     // SortExec doesn't benefit from input partitioning
     assert_plan!(plan_csv_distrib,
                                                                                     @r"
-GlobalLimitExec: skip=0, fetch=100
-  CoalescePartitionsExec
-    LocalLimitExec: fetch=100
-      FilterExec: c@2 = 0
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
-          SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-");
+    GlobalLimitExec: skip=0, fetch=100
+      CoalescePartitionsExec
+        LocalLimitExec: fetch=100
+          FilterExec: c@2 = 0
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+              SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
+                DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+    ");
     let plan_csv_sort = test_config.to_plan(plan_csv, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_csv_distrib, plan_csv_sort);
 
@@ -3433,7 +3378,10 @@ SortRequiredExec: [a@0 ASC]
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
-    let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let dist_plan =
+        EnforceDistribution::new().optimize_plan(physical_plan, &optimizer_context)?;
     // Since at the start of the rule ordering requirement is not satisfied
     // EnforceDistribution rule doesn't satisfy this requirement either.
     assert_plan!(dist_plan, @r"
@@ -3469,7 +3417,10 @@ SortRequiredExec: [a@0 ASC]
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
-    let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
+    let session_config = SessionConfig::from(config);
+    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let dist_plan =
+        EnforceDistribution::new().optimize_plan(physical_plan, &optimizer_context)?;
     // Since at the start of the rule ordering requirement is satisfied
     // EnforceDistribution rule satisfy this requirement also.
     assert_plan!(dist_plan, @r"

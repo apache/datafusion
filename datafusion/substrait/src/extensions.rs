@@ -38,7 +38,7 @@ impl Extensions {
     /// Registers a function and returns the anchor (reference) to it. If the function has already
     /// been registered, it returns the existing anchor.
     /// Function names are case-insensitive (converted to lowercase).
-    pub fn register_function(&mut self, function_name: String) -> u32 {
+    pub fn register_function(&mut self, function_name: &str) -> u32 {
         let function_name = function_name.to_lowercase();
 
         // Some functions are named differently in Substrait default extensions than in DF
@@ -64,7 +64,7 @@ impl Extensions {
 
     /// Registers a type and returns the anchor (reference) to it. If the type has already
     /// been registered, it returns the existing anchor.
-    pub fn register_type(&mut self, type_name: String) -> u32 {
+    pub fn register_type(&mut self, type_name: &str) -> u32 {
         let type_name = type_name.to_lowercase();
         match self.types.iter().find(|(_, t)| *t == &type_name) {
             Some((type_anchor, _)) => *type_anchor, // Type has been registered

@@ -69,11 +69,13 @@ mod tests {
         let store = state.runtime_env().object_store(&store_url).unwrap();
 
         let filename = "1.json";
+        let json_format: Arc<dyn FileFormat> = Arc::new(JsonFormat::default());
+
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
             filename,
             1,
-            Arc::new(JsonFormat::default()),
+            &json_format,
             file_compression_type.to_owned(),
             work_dir,
         )
@@ -104,11 +106,13 @@ mod tests {
         ctx.register_object_store(&url, store.clone());
         let filename = "1.json";
         let tmp_dir = TempDir::new()?;
+        let json_format: Arc<dyn FileFormat> = Arc::new(JsonFormat::default());
+
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
             filename,
             1,
-            Arc::new(JsonFormat::default()),
+            &json_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )
@@ -298,6 +302,7 @@ mod tests {
         let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file_groups(file_groups)
             .with_projection_indices(Some(vec![0, 2]))
+            .unwrap()
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
         let exec = DataSourceExec::from_data_source(conf);
@@ -345,7 +350,7 @@ mod tests {
         let source = Arc::new(JsonSource::new(Arc::clone(&file_schema)));
         let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file_groups(file_groups)
-            .with_projection_indices(Some(vec![3, 0, 2]))
+            .with_projection_indices(Some(vec![3, 0, 2]))?
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
         let exec = DataSourceExec::from_data_source(conf);
