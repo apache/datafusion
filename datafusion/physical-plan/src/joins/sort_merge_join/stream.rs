@@ -348,29 +348,71 @@ pub(super) struct SortMergeJoinStream {
     pub streamed_batch_counter: AtomicUsize,
 }
 
-/// Joined batches with attached join filter information
+/// Staging area for joined data before output
+///
+/// Accumulates joined rows until either:
+/// - Target batch size reached (for efficiency)
+/// - Stream exhausted (flush remaining data)
+///
+/// # Metadata Tracking (Critical for Filtered Joins)
+///
+/// Outer joins must emit at least one row per input row. When a join filter rejects
+/// all matches for an input row, we must emit a null-joined row. This requires grouping
+/// output rows by input row to check if ANY match passed the filter.
+///
+/// Metadata fields (one entry per output row):
+/// - `row_indices[i]`: Which input row within its batch (for grouping output rows)
+/// - `filter_mask[i]`: Did this output row pass the join filter? (detect if input row matched)
+/// - `batch_ids[i]`: Which input batch (disambiguates row_indices across batches)
+///
+/// Invariant: `metadata.len() == sum(batch.num_rows())` for all batches
+///
+/// # Usage Pattern: `is_empty()` Always Means "Any Data At All"
+///
+/// Called in three contexts, all checking for ANY remaining data (not optimal batch):
+/// 1. Init state: Filter accumulated data before next streamed row
+/// 2. JoinOutput state: Output accumulated data after hitting batch_size
+/// 3. Exhausted state: Flush any remaining data
+///
+/// # Future Refactor: Using BatchCoalescer
+///
+/// To replace `batches: Vec<RecordBatch>` with `BatchCoalescer`:
+/// - `is_empty()` → Must check BOTH buffered data AND completed batches
+/// - `concat_batches()` → Drain with `finish_buffered_batch()` + `next_completed_batch()`
+/// - Previous refactor failed: only checked `has_completed_batch()`, missing buffered data
+/// - BatchCoalescer preserves row order, so metadata alignment is maintained
 pub(super) struct JoinedRecordBatches {
     /// Joined batches. Each batch is already joined columns from left and right sources
     pub(super) batches: Vec<RecordBatch>,
+    /// UNUSED: Placeholder for future refactor. Requires proper is_empty() semantics.
     pub(super) joined_batches: BatchCoalescer,
-    /// Filter match mask for each row(matched/non-matched)
+    /// Did each output row pass the join filter? (detect if input row found any match)
     pub(super) filter_mask: BooleanBuilder,
-    /// Left row indices to glue together rows in `batches` and `filter_mask`
+    /// Which input row (within batch) produced each output row? (for grouping by input row)
     pub(super) row_indices: UInt64Builder,
-    /// Which unique batch id the row belongs to
-    /// It is necessary to differentiate rows that are distributed the way when they point to the same
-    /// row index but in not the same batches
+    /// Which input batch did each output row come from? (disambiguates row_indices)
     pub(super) batch_ids: Vec<usize>,
 }
 
 impl JoinedRecordBatches {
     /// Returns true if there are no batches accumulated
+    ///
+    /// Used in three contexts, all checking for ANY data (not optimal batch size):
+    /// 1. Init state: Filter accumulated data before next streamed row
+    /// 2. JoinOutput state: Output data after hitting batch_size threshold
+    /// 3. Exhausted state: Flush remaining data
+    ///
+    /// For future BatchCoalescer refactor, use `joined_batches.is_empty()`.
     #[inline]
     fn is_empty(&self) -> bool {
         self.batches.is_empty()
     }
 
     /// Concatenates all accumulated batches into a single RecordBatch
+    ///
+    /// For future BatchCoalescer refactor:
+    /// - Call `finish_buffered_batch()` to finalize partial data
+    /// - Drain with `next_completed_batch()` in a loop
     fn concat_batches(&self, schema: &SchemaRef) -> Result<RecordBatch> {
         Ok(concat_batches(schema, &self.batches)?)
     }
@@ -435,10 +477,12 @@ impl JoinedRecordBatches {
         }
     }
 
-    /// Pushes a batch with null metadata (used for Full join null-joined rows)
+    /// Pushes a batch with null metadata (Full join null-joined rows only)
     ///
-    /// This is used when outputting rows that didn't match any rows from the other side.
-    /// The metadata is set to nulls because these rows don't correspond to any input row index.
+    /// These buffered rows had NO matching streamed rows. Since we can't group
+    /// by input row (no input row exists), we use null metadata as a sentinel.
+    ///
+    /// Maintains invariant: N rows → N metadata entries (nulls)
     fn push_batch_with_null_metadata(&mut self, batch: RecordBatch, join_type: JoinType) {
         debug_assert!(
             matches!(join_type, JoinType::Full),
@@ -458,15 +502,15 @@ impl JoinedRecordBatches {
         self.batches.push(batch);
     }
 
-    /// Pushes a batch with filter metadata (used for filtered outer/semi/anti/mark joins)
+    /// Pushes a batch with filter metadata (filtered outer/semi/anti/mark joins)
     ///
-    /// This is the primary method for adding batches in filtered joins where we need to track:
-    /// - Which rows passed the filter (filter_mask)
-    /// - Which input row each output row came from (row_indices)
-    /// - Which input batch each output row came from (batch_ids)
+    /// Deferred filtering: An input row may join with multiple buffered rows, but we
+    /// don't know yet if ALL matches failed the filter. We track metadata so
+    /// `get_corrected_filter_mask()` can later group by input row and decide:
+    /// - If ANY match passed: emit passing rows
+    /// - If ALL matches failed: emit null-joined row
     ///
-    /// The metadata is essential for get_corrected_filter_mask() to implement outer join semantics
-    /// (ensuring at least one output row per input row, filling with nulls when needed).
+    /// Maintains invariant: N rows → N metadata entries
     fn push_batch_with_filter_metadata(
         &mut self,
         batch: RecordBatch,
@@ -507,16 +551,12 @@ impl JoinedRecordBatches {
         self.batches.push(batch);
     }
 
-    /// Pushes a batch without metadata (used for non-filtered joins)
+    /// Pushes a batch without metadata (non-filtered joins)
     ///
-    /// For non-filtered joins, we don't need to track row-level metadata because
-    /// the output is produced directly without deferred filter processing.
-    ///
-    /// Note: For Full joins without filters, metadata may exist from null-joined rows
-    /// that were produced earlier, but we don't add metadata for the regular joined rows.
+    /// No deferred filtering needed. Either every join match is output (Inner),
+    /// or null-joined rows are handled separately. No need to track which input
+    /// row produced which output row.
     fn push_batch_without_metadata(&mut self, batch: RecordBatch, _join_type: JoinType) {
-        // No preconditions to check - batches can be pushed regardless of metadata state
-        // because this is used in non-filtered paths where metadata isn't needed
         self.batches.push(batch);
     }
 
