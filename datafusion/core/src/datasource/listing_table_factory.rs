@@ -194,7 +194,7 @@ impl TableProviderFactory for ListingTableFactory {
         // Pre-warm statistics cache if collect_statistics is enabled
         if session_state.config().collect_statistics() {
             if let Err(e) = table.list_files_for_scan(state, &[], None).await {
-                log::warn!("Failed to pre-warm statistics cache: {}", e);
+                log::warn!("Failed to pre-warm statistics cache: {e}");
             }
         }
 
