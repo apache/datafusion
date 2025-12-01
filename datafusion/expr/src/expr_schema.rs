@@ -1007,4 +1007,21 @@ mod tests {
             Ok(&self.field)
         }
     }
+
+    #[test]
+    fn test_scalar_variable() {
+        let mut meta = HashMap::new();
+        meta.insert("bar".to_string(), "buzz".to_string());
+        let meta = FieldMetadata::from(meta);
+
+        let field = Field::new("foo", DataType::Int32, true);
+        let field = meta.add_to_field(field);
+        let field = Arc::new(field);
+
+        let expr = Expr::ScalarVariable(field, vec!["foo".to_string()]);
+
+        let schema = MockExprSchema::new();
+
+        assert_eq!(meta, expr.metadata(&schema).unwrap());
+    }
 }

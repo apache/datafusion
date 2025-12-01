@@ -26,6 +26,7 @@ use crate::{
     WindowFunctionDefinition, WindowUDF,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
