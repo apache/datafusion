@@ -493,8 +493,14 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use std::sync::Arc;
 
-    #[test]
-    fn test_partition_pruning_statistics() {
+    /// return a PartitionPruningStatistics for two columns 'a' and 'b'
+    /// and the following stats
+    ///
+    /// | a | b |
+    /// | - | - |
+    /// | 1 | 2 |
+    /// | 3 | 4 |
+    fn partition_pruning_statistics_setup() -> PartitionPruningStatistics {
         let partition_values = vec![
             vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
             vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
@@ -503,9 +509,12 @@ mod tests {
             Arc::new(Field::new("a", DataType::Int32, false)),
             Arc::new(Field::new("b", DataType::Int32, false)),
         ];
-        let partition_stats =
-            PartitionPruningStatistics::try_new(partition_values, partition_fields)
-                .unwrap();
+        PartitionPruningStatistics::try_new(partition_values, partition_fields).unwrap()
+    }
+
+    #[test]
+    fn test_partition_pruning_statistics() {
+        let partition_stats = partition_pruning_statistics_setup();
 
         let column_a = Column::new_unqualified("a");
         let column_b = Column::new_unqualified("b");
@@ -562,23 +571,29 @@ mod tests {
 
     #[test]
     fn test_partition_pruning_statistics_multiple_positive_values() {
-        let partition_values = vec![
-            vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
-            vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
-        ];
-        let partition_fields = vec![
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            Arc::new(Field::new("b", DataType::Int32, false)),
-        ];
-        let partition_stats =
-            PartitionPruningStatistics::try_new(partition_values, partition_fields)
-                .unwrap();
+        let partition_stats = partition_pruning_statistics_setup();
 
         let column_a = Column::new_unqualified("a");
 
+        // The two containers have `a` values 1 and 3, so they both only contain values from 1 and 3
         let values = HashSet::from([ScalarValue::from(1i32), ScalarValue::from(3i32)]);
         let contained_a = partition_stats.contained(&column_a, &values).unwrap();
         let expected_contained_a = BooleanArray::from(vec![true, true]);
+        assert_eq!(contained_a, expected_contained_a);
+    }
+
+    #[test]
+    fn test_partition_pruning_statistics_multiple_negative_values() {
+        let partition_stats = partition_pruning_statistics_setup();
+
+        let column_a = Column::new_unqualified("a");
+
+        // The two containers have `a` values 1 and 3,
+        // so the first contains ONLY values from 1,2
+        // but the second does not
+        let values = HashSet::from([ScalarValue::from(1i32), ScalarValue::from(2i32)]);
+        let contained_a = partition_stats.contained(&column_a, &values).unwrap();
+        let expected_contained_a = BooleanArray::from(vec![true, false]);
         assert_eq!(contained_a, expected_contained_a);
     }
 
