@@ -776,6 +776,7 @@ mod test {
         compute::cast,
         datatypes::{DataType, Field, Schema, SchemaRef},
     };
+    use arrow::record_batch::RecordBatch;
     use bytes::{BufMut, Bytes, BytesMut};
     use datafusion_common::{
         assert_batches_eq, record_batch, stats::Precision, ColumnStatistics,
@@ -796,6 +797,7 @@ mod test {
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
     use futures::{future::BoxFuture, FutureExt, Stream, StreamExt};
+    use futures::stream::BoxStream;
     use object_store::{memory::InMemory, path::Path, ObjectStore};
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::async_reader::AsyncFileReader;
@@ -812,7 +814,7 @@ mod test {
     async fn count_batches_and_rows(
         mut stream: std::pin::Pin<
             Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
+                dyn Stream<Item = Result<RecordBatch, DataFusionError>>
                     + Send,
             >,
         >,
@@ -827,13 +829,8 @@ mod test {
     }
 
     async fn collect_batches(
-        mut stream: std::pin::Pin<
-            Box<
-                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
-                    + Send,
-            >,
-        >,
-    ) -> Vec<arrow::array::RecordBatch> {
+        mut stream: BoxStream<'_, Result<RecordBatch, DataFusionError>>
+    ) -> Vec<RecordBatch> {
         let mut batches = vec![];
         while let Some(Ok(batch)) = stream.next().await {
             batches.push(batch);
@@ -844,7 +841,7 @@ mod test {
     async fn write_parquet(
         store: Arc<dyn ObjectStore>,
         filename: &str,
-        batch: arrow::record_batch::RecordBatch,
+        batch: RecordBatch,
     ) -> usize {
         let mut out = BytesMut::new().writer();
         {
@@ -862,7 +859,7 @@ mod test {
     async fn write_parquet_with_properties(
         store: Arc<dyn ObjectStore>,
         filename: &str,
-        batch: arrow::record_batch::RecordBatch,
+        batch: RecordBatch,
         properties: WriterProperties,
     ) -> (usize, Bytes) {
         let mut out = BytesMut::new().writer();
@@ -1650,8 +1647,8 @@ mod test {
         impl SchemaMapper for CustomSchemaMapper {
             fn map_batch(
                 &self,
-                batch: arrow::array::RecordBatch,
-            ) -> datafusion_common::Result<arrow::array::RecordBatch> {
+                batch: RecordBatch,
+            ) -> datafusion_common::Result<RecordBatch> {
                 let a_column = cast(batch.column(0), &DataType::UInt64)?;
                 // Add in a new column "b" with default value 0.0
                 let b_column =
