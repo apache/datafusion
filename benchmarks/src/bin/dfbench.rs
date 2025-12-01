@@ -34,7 +34,7 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use datafusion_benchmarks::{
-    cancellation, clickbench, h2o, hj, imdb, nlj, sort_tpch, tpch, tpcds
+    cancellation, clickbench, h2o, hj, imdb, nlj, sort_tpch, tpcds, tpch,
 };
 
 #[derive(Debug, StructOpt)]

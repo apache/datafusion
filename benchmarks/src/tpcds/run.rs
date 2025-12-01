@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -22,9 +23,7 @@ use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
-use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
@@ -35,7 +34,7 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
+use datafusion_common::{plan_err, DEFAULT_PARQUET_EXTENSION};
 
 use log::info;
 use structopt::StructOpt;
@@ -46,32 +45,49 @@ pub const TPCDS_QUERY_START_ID: usize = 1;
 pub const TPCDS_QUERY_END_ID: usize = 99;
 
 pub const TPCDS_TABLES: &[&str] = &[
-    "call_center", "customer_address", "household_demographics", "promotion", "store_sales", "web_page",
-    "catalog_page", "customer_demographics", "income_band", "reason", "store", "web_returns",
-    "catalog_returns", "customer", "inventory", "ship_mode", "time_dim", "web_sales",
-    "catalog_sales", "date_dim", "item", "store_returns", "warehouse", "web_site",
+    "call_center",
+    "customer_address",
+    "household_demographics",
+    "promotion",
+    "store_sales",
+    "web_page",
+    "catalog_page",
+    "customer_demographics",
+    "income_band",
+    "reason",
+    "store",
+    "web_returns",
+    "catalog_returns",
+    "customer",
+    "inventory",
+    "ship_mode",
+    "time_dim",
+    "web_sales",
+    "catalog_sales",
+    "date_dim",
+    "item",
+    "store_returns",
+    "warehouse",
+    "web_site",
 ];
 
 /// Get the SQL statements from the specified query file
-pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
+pub fn get_query_sql(base_query_path: &str, query: usize) -> Result<Vec<String>> {
     if query > 0 && query < 100 {
-        let possibilities = vec![
-            format!("queries/q{query}.sql"),
-        ];
+        let filename = format!("{base_query_path}/q{query}.sql");
         let mut errors = vec![];
-        for filename in possibilities {
-            match fs::read_to_string(&filename) {
-                Ok(contents) => {
-                    return Ok(contents
-                        .split(';')
-                        .map(|s| s.trim())
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                        .collect());
-                }
-                Err(e) => errors.push(format!("{filename}: {e}")),
-            };
-        }
+        match fs::read_to_string(&filename) {
+            Ok(contents) => {
+                return Ok(contents
+                    .split(';')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect());
+            }
+            Err(e) => errors.push(format!("{filename}: {e}")),
+        };
+
         plan_err!("invalid query. Could not find query: {:?}", errors)
     } else {
         plan_err!("invalid query. Expected value between 1 and 99")
@@ -180,7 +196,7 @@ impl RunOpt {
         // run benchmark
         let mut query_results = vec![];
 
-        let sql = &get_query_sql(query_id)?;
+        let sql = &get_query_sql(self.query_path.to_str().unwrap(), query_id)?;
 
         for i in 0..self.iterations() {
             let start = Instant::now();
@@ -296,11 +312,12 @@ impl RunOpt {
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
         let path = format!("{path}/{table}");
-        let format = ParquetFormat::default().with_options(ctx.state().table_options().parquet.clone());
+        let format = ParquetFormat::default()
+            .with_options(ctx.state().table_options().parquet.clone());
         let extension = DEFAULT_PARQUET_EXTENSION;
 
         let table_path = ListingTableUrl::parse(path)?;
-        let options = ListingOptions::new(format)
+        let options = ListingOptions::new(Arc::new(format))
             .with_file_extension(extension)
             .with_target_partitions(target_partitions)
             .with_collect_stat(state.config().collect_statistics());
