@@ -357,34 +357,6 @@ pub(super) struct SortMergeJoinStream {
 /// Accumulates joined rows until either:
 /// - Target batch size reached (for efficiency)
 /// - Stream exhausted (flush remaining data)
-///
-/// # Metadata Tracking (Critical for Filtered Joins)
-///
-/// Outer joins must emit at least one row per input row. When a join filter rejects
-/// all matches for an input row, we must emit a null-joined row. This requires grouping
-/// output rows by input row to check if ANY match passed the filter.
-///
-/// Metadata fields (one entry per output row):
-/// - `row_indices[i]`: Which input row within its batch (for grouping output rows)
-/// - `filter_mask[i]`: Did this output row pass the join filter? (detect if input row matched)
-/// - `batch_ids[i]`: Which input batch (disambiguates row_indices across batches)
-///
-/// Invariant: `metadata.len() == sum(batch.num_rows())` for all batches
-///
-/// # Usage Pattern: `is_empty()` Always Means "Any Data At All"
-///
-/// Called in three contexts, all checking for ANY remaining data (not optimal batch):
-/// 1. Init state: Filter accumulated data before next streamed row
-/// 2. JoinOutput state: Output accumulated data after hitting batch_size
-/// 3. Exhausted state: Flush any remaining data
-///
-/// # Future Refactor: Using BatchCoalescer
-///
-/// To replace `batches: Vec<RecordBatch>` with `BatchCoalescer`:
-/// - `is_empty()` → Must check BOTH buffered data AND completed batches
-/// - `concat_batches()` → Drain with `finish_buffered_batch()` + `next_completed_batch()`
-/// - Previous refactor failed: only checked `has_completed_batch()`, missing buffered data
-/// - BatchCoalescer preserves row order, so metadata alignment is maintained
 pub(super) struct JoinedRecordBatches {
     /// Joined batches. Each batch is already joined columns from left and right sources
     pub(super) joined_batches: BatchCoalescer,
@@ -402,10 +374,8 @@ impl JoinedRecordBatches {
     /// Must drain ALL batches from BatchCoalescer for filtered joins to ensure
     /// metadata alignment when applying get_corrected_filter_mask().
     pub(super) fn concat_batches(&mut self, schema: &SchemaRef) -> Result<RecordBatch> {
-        // Finish any buffered data to create final completed batch
         self.joined_batches.finish_buffered_batch()?;
 
-        // Collect all completed batches
         let mut all_batches = vec![];
         while let Some(batch) = self.joined_batches.next_completed_batch() {
             all_batches.push(batch);
@@ -505,10 +475,10 @@ impl JoinedRecordBatches {
     /// Pushes a batch with filter metadata (filtered outer/semi/anti/mark joins)
     ///
     /// Deferred filtering: An input row may join with multiple buffered rows, but we
-    /// don't know yet if ALL matches failed the filter. We track metadata so
+    /// don't know yet if all matches failed the filter. We track metadata so
     /// `get_corrected_filter_mask()` can later group by input row and decide:
-    /// - If ANY match passed: emit passing rows
-    /// - If ALL matches failed: emit null-joined row
+    /// - If any match passed: emit passing rows
+    /// - If all matches failed: emit null-joined row
     ///
     /// Maintains invariant: N rows → N metadata entries
     fn push_batch_with_filter_metadata(
@@ -565,11 +535,6 @@ impl JoinedRecordBatches {
     }
 
     fn clear(&mut self, schema: &SchemaRef, batch_size: usize) {
-        // Note: clear() can be called when batches still contains data!
-        // This happens in filter_joined_batch() after concat_batches() has read
-        // the batches but before they're removed. The batches have been processed
-        // into output, so clearing them here is the final cleanup step.
-
         // Replace with a new empty BatchCoalescer
         self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size);
 
@@ -887,7 +852,8 @@ impl Stream for SortMergeJoinStream {
                                 .joined_batches
                                 .next_completed_batch()
                                 .expect("has_completed_batch was true");
-                            (&record_batch).record_output(&self.join_metrics.baseline_metrics());
+                            (&record_batch)
+                                .record_output(&self.join_metrics.baseline_metrics());
                             return Poll::Ready(Some(Ok(record_batch)));
                         }
                         // Otherwise keep buffering (don't output yet)
@@ -909,7 +875,9 @@ impl Stream for SortMergeJoinStream {
 
                     // For non-filtered joins, finish buffered data first
                     if !self.joined_record_batches.joined_batches.is_empty() {
-                        self.joined_record_batches.joined_batches.finish_buffered_batch()?;
+                        self.joined_record_batches
+                            .joined_batches
+                            .finish_buffered_batch()?;
                     }
 
                     // Output one completed batch at a time (stay in Exhausted until empty)
@@ -923,7 +891,8 @@ impl Stream for SortMergeJoinStream {
                             .joined_batches
                             .next_completed_batch()
                             .expect("has_completed_batch was true");
-                        (&record_batch).record_output(&self.join_metrics.baseline_metrics());
+                        (&record_batch)
+                            .record_output(&self.join_metrics.baseline_metrics());
                         return Poll::Ready(Some(Ok(record_batch)));
                     }
 
