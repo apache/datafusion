@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::cache::cache_manager::{
-    FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
+    FileMetadata, FileMetadataCache, FileMetadataCacheEntry, FileStatisticsCache,
+    FileStatisticsCacheEntry,
 };
 use crate::cache::lru_queue::LruQueue;
 use crate::cache::CacheAccessor;
@@ -40,6 +41,29 @@ use object_store::ObjectMeta;
 #[derive(Default)]
 pub struct DefaultFileStatisticsCache {
     statistics: DashMap<Path, (ObjectMeta, Arc<Statistics>)>,
+}
+
+impl FileStatisticsCache for DefaultFileStatisticsCache {
+    fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry> {
+        let mut entries = HashMap::<Path, FileStatisticsCacheEntry>::new();
+
+        for entry in &self.statistics {
+            let path = entry.key();
+            let (object_meta, stats) = entry.value();
+            entries.insert(
+                path.clone(),
+                FileStatisticsCacheEntry {
+                    object_meta: object_meta.clone(),
+                    num_rows: stats.num_rows,
+                    num_columns: stats.column_statistics.len(),
+                    table_size_bytes: stats.total_byte_size,
+                    statistics_size_bytes: 0, // TODO: set to the real size in the future
+                },
+            );
+        }
+
+        entries
+    }
 }
 
 impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
@@ -430,7 +454,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::cache::cache_manager::{
-        FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
+        FileMetadata, FileMetadataCache, FileMetadataCacheEntry, FileStatisticsCache,
+        FileStatisticsCacheEntry,
     };
     use crate::cache::cache_unit::{
         DefaultFileStatisticsCache, DefaultFilesMetadataCache, DefaultListFilesCache,
@@ -438,6 +463,7 @@ mod tests {
     use crate::cache::CacheAccessor;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
+    use datafusion_common::stats::Precision;
     use datafusion_common::Statistics;
     use object_store::path::Path;
     use object_store::ObjectMeta;
@@ -481,9 +507,25 @@ mod tests {
         assert!(cache.get_with_extra(&meta2.location, &meta2).is_none());
 
         // different file
-        let mut meta2 = meta;
+        let mut meta2 = meta.clone();
         meta2.location = Path::from("test2");
         assert!(cache.get_with_extra(&meta2.location, &meta2).is_none());
+
+        // test the list_entries method
+        let entries = cache.list_entries();
+        assert_eq!(
+            entries,
+            HashMap::from([(
+                Path::from("test"),
+                FileStatisticsCacheEntry {
+                    object_meta: meta.clone(),
+                    num_rows: Precision::Absent,
+                    num_columns: 1,
+                    table_size_bytes: Precision::Absent,
+                    statistics_size_bytes: 0,
+                }
+            )])
+        );
     }
 
     #[test]
