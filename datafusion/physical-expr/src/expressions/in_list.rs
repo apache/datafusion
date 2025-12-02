@@ -1025,6 +1025,612 @@ mod tests {
     }
 
     #[test]
+    fn in_list_int8() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int8, true)]);
+        let a = Int8Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(0i8), lit(1i8)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(0i8), lit(1i8)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![lit(0i8), lit(1i8), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![lit(0i8), lit(1i8), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_int16() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int16, true)]);
+        let a = Int16Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(0i16), lit(1i16)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(0i16), lit(1i16)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![lit(0i16), lit(1i16), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![lit(0i16), lit(1i16), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_int32() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let a = Int32Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(0i32), lit(1i32)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(0i32), lit(1i32)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![lit(0i32), lit(1i32), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![lit(0i32), lit(1i32), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_uint8() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt8, true)]);
+        let a = UInt8Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(0u8), lit(1u8)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(0u8), lit(1u8)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![lit(0u8), lit(1u8), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![lit(0u8), lit(1u8), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_uint16() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt16, true)]);
+        let a = UInt16Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(0u16), lit(1u16)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(0u16), lit(1u16)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![lit(0u16), lit(1u16), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![lit(0u16), lit(1u16), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_uint32() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt32, true)]);
+        let a = UInt32Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(0u32), lit(1u32)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(0u32), lit(1u32)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![lit(0u32), lit(1u32), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![lit(0u32), lit(1u32), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_uint64() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt64, true)]);
+        let a = UInt64Array::from(vec![Some(0), Some(2), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in (0, 1)"
+        let list = vec![lit(0u64), lit(1u64)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1)"
+        let list = vec![lit(0u64), lit(1u64)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in (0, 1, NULL)"
+        let list = vec![lit(0u64), lit(1u64), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in (0, 1, NULL)"
+        let list = vec![lit(0u64), lit(1u64), lit(ScalarValue::Null)];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_large_utf8() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::LargeUtf8, true)]);
+        let a = LargeStringArray::from(vec![Some("a"), Some("d"), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in ("a", "b")"
+        let list = vec![lit("a"), lit("b")];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in ("a", "b")"
+        let list = vec![lit("a"), lit("b")];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in ("a", "b", null)"
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::LargeUtf8(None))];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in ("a", "b", null)"
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::LargeUtf8(None))];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_utf8_view() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8View, true)]);
+        let a = StringViewArray::from(vec![Some("a"), Some("d"), None]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in ("a", "b")"
+        let list = vec![lit("a"), lit("b")];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in ("a", "b")"
+        let list = vec![lit("a"), lit("b")];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in ("a", "b", null)"
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8View(None))];
+        in_list!(
+            batch,
+            list,
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in ("a", "b", null)"
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8View(None))];
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_large_binary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::LargeBinary, true)]);
+        let a = LargeBinaryArray::from(vec![
+            Some([1, 2, 3].as_slice()),
+            Some([1, 2, 2].as_slice()),
+            None,
+        ]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in ([1, 2, 3], [4, 5, 6])"
+        let list = vec![lit([1, 2, 3].as_slice()), lit([4, 5, 6].as_slice())];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in ([1, 2, 3], [4, 5, 6])"
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in ([1, 2, 3], [4, 5, 6], null)"
+        let list = vec![
+            lit([1, 2, 3].as_slice()),
+            lit([4, 5, 6].as_slice()),
+            lit(ScalarValue::LargeBinary(None)),
+        ];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in ([1, 2, 3], [4, 5, 6], null)"
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_binary_view() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::BinaryView, true)]);
+        let a = BinaryViewArray::from(vec![
+            Some([1, 2, 3].as_slice()),
+            Some([1, 2, 2].as_slice()),
+            None,
+        ]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        // expression: "a in ([1, 2, 3], [4, 5, 6])"
+        let list = vec![lit([1, 2, 3].as_slice()), lit([4, 5, 6].as_slice())];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), Some(false), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in ([1, 2, 3], [4, 5, 6])"
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), Some(true), None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a in ([1, 2, 3], [4, 5, 6], null)"
+        let list = vec![
+            lit([1, 2, 3].as_slice()),
+            lit([4, 5, 6].as_slice()),
+            lit(ScalarValue::BinaryView(None)),
+        ];
+        in_list!(
+            batch,
+            list.clone(),
+            &false,
+            vec![Some(true), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // expression: "a not in ([1, 2, 3], [4, 5, 6], null)"
+        in_list!(
+            batch,
+            list,
+            &true,
+            vec![Some(false), None, None],
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn in_list_date64() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Date64, true)]);
         let a = Date64Array::from(vec![Some(0), Some(2), None]);
