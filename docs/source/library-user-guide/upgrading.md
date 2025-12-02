@@ -344,7 +344,7 @@ The `PhysicalOptimizerRule` trait has been updated to provide optimizer rules wi
 
 1. **New `optimize_plan` method**: This is the preferred method for implementing optimization rules. It provides access to the full `SessionConfig` through `OptimizerContext`, rather than just `ConfigOptions`.
 
-2. **`optimize` method deprecated**: The old `optimize` method that takes `&ConfigOptions` is now deprecated and will be removed in DataFusion 54.0.0.
+2. **`optimize` method deprecated**: The old `optimize` method that takes `&ConfigOptions` is now deprecated and will be removed in DataFusion 58.0.0.
 
 **Migration guide:**
 
