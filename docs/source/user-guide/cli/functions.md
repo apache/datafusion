@@ -158,17 +158,17 @@ You can inspect the metadata cache by querying the `metadata_cache` function. Fo
 
 The columns of the returned table are:
 
-| column_name           | data_type | Description                                                                               |
-| --------------------- | --------- | ----------------------------------------------------------------------------------------- |
-| path                  | Utf8      | File path relative to the object store / filesystem root                                  |
-| file_modified         | Timestamp | Last modified time of the file                                                            |
-| file_size_bytes       | UInt64    | Size of the file in bytes                                                                 |
-| e_tag                 | Utf8      | [Entity Tag] (ETag) of the file if available                                              |
-| version               | Utf8      | Version of the file if available (for object stores that support versioning)              |
-| num_rows              | Utf8      | Number of rows in the table                                                               |
-| num_columns           | UInt64    | Number of columns in the table                                                            |
-| table_size_bytes      | Utf8      | Size of the table, in bytes                                                               |
-| statistics_size_bytes | UInt64    | Size of the cached statistics in memory                                                   |
+| column_name           | data_type | Description                                                                  |
+| --------------------- | --------- | ---------------------------------------------------------------------------- |
+| path                  | Utf8      | File path relative to the object store / filesystem root                     |
+| file_modified         | Timestamp | Last modified time of the file                                               |
+| file_size_bytes       | UInt64    | Size of the file in bytes                                                    |
+| e_tag                 | Utf8      | [Entity Tag] (ETag) of the file if available                                 |
+| version               | Utf8      | Version of the file if available (for object stores that support versioning) |
+| num_rows              | Utf8      | Number of rows in the table                                                  |
+| num_columns           | UInt64    | Number of columns in the table                                               |
+| table_size_bytes      | Utf8      | Size of the table, in bytes                                                  |
+| statistics_size_bytes | UInt64    | Size of the cached statistics in memory                                      |
 
 [`listingtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 [entity tag]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag
