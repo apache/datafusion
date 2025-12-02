@@ -3261,6 +3261,55 @@ Sort: avg(person.age) + avg(person.age) ASC NULLS LAST
     );
 }
 
+#[test]
+fn select_groupby_orderby_aggregate_on_non_selected_column() {
+    let sql = "SELECT state FROM person GROUP BY state ORDER BY MIN(age)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Sort: min(person.age) ASC NULLS LAST
+    Projection: person.state, min(person.age)
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
+        TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_multiple_aggregates_on_non_selected_columns() {
+    let sql =
+        "SELECT state FROM person GROUP BY state ORDER BY MIN(age), MAX(salary) DESC";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Sort: min(person.age) ASC NULLS LAST, max(person.salary) DESC NULLS FIRST
+    Projection: person.state, min(person.age), max(person.salary)
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age), max(person.salary)]]
+        TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
+    let sql = "SELECT id FROM person GROUP BY id ORDER BY min(age)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id
+  Sort: min(person.age) ASC NULLS LAST
+    Projection: person.id, min(person.age)
+      Aggregate: groupBy=[[person.id]], aggr=[[min(person.age)]]
+        TableScan: person
+"#
+    );
+}
+
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
@@ -3830,12 +3879,11 @@ fn order_by_unaliased_name() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: z, q
-  Sort: p.state ASC NULLS LAST
-    Projection: p.state AS z, sum(p.age) AS q, p.state
-      Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
-        SubqueryAlias: p
-          TableScan: person
+Sort: z ASC NULLS LAST
+  Projection: p.state AS z, sum(p.age) AS q
+    Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
+      SubqueryAlias: p
+        TableScan: person
 "#
     );
 }
@@ -3921,6 +3969,13 @@ Limit: skip=3, fetch=5
       TableScan: person
 "#
     );
+}
+
+#[test]
+fn fetch_clause_is_not_supported() {
+    let sql = "SELECT 1 FETCH NEXT 1 ROW ONLY";
+    let err = logical_plan(sql).unwrap_err();
+    assert_contains!(err.to_string(), "FETCH clause is not supported yet");
 }
 
 #[test]

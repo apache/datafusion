@@ -16,7 +16,7 @@
 // under the License.
 
 pub(crate) mod groups_accumulator {
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub(crate) mod accumulate {
         pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
     }
@@ -42,8 +42,7 @@ use crate::expressions::Column;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::{
-    assert_or_internal_err, internal_err, not_impl_err, DataFusionError, Result,
-    ScalarValue,
+    assert_or_internal_err, internal_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;

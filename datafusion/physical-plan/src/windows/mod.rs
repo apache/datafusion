@@ -88,7 +88,7 @@ pub fn schema_add_window_field(
 }
 
 /// Create a physical expression for window function
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn create_window_expr(
     fun: &WindowFunctionDefinition,
     name: String,

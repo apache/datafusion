@@ -31,8 +31,8 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Float64Type;
-use datafusion_common::cast::as_primitive_array;
 use datafusion_common::ScalarValue;
+use datafusion_common::cast::as_primitive_array;
 use std::cmp::Ordering;
 use std::mem::{size_of, size_of_val};
 

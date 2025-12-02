@@ -638,7 +638,9 @@ async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
     // The cache is on by default, and used when filter pushdown is enabled
     PredicateCacheTest {
         expected_inner_records: 8,
-        expected_records: 4,
+        // reads more than necessary from the cache as then another bitmap is applied
+        // See https://github.com/apache/datafusion/pull/18820 for setting and workaround
+        expected_records: 7,
     }
     .run(&ctx)
     .await
