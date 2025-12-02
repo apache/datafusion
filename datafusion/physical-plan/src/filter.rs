@@ -690,8 +690,8 @@ struct FilterExecMetrics {
     baseline_metrics: BaselineMetrics,
     // Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
-    // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics
-    // , or modifying metrics comments
+    // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
+    // or modifying metrics comments
 }
 
 impl FilterExecMetrics {
