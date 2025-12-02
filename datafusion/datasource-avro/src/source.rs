@@ -33,6 +33,7 @@ use datafusion_datasource::TableSchema;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
+use crate::read_avro_schema_from_reader;
 use object_store::ObjectStore;
 use serde_json::Value;
 
@@ -235,9 +236,44 @@ mod private {
 
     impl FileOpener for AvroOpener {
         fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
-            let config = Arc::clone(&self.config);
             let object_store = Arc::clone(&self.object_store);
+            let config = self.config.clone();
+
             Ok(Box::pin(async move {
+                // check if schema should be inferred
+                let r = object_store
+                    .get(&partitioned_file.object_meta.location)
+                    .await?;
+                let config = Arc::new(match r.payload {
+                    GetResultPayload::File(mut file, _) => {
+                        let schema = match config.table_schema.file_schema().metadata.get(SCHEMA_METADATA_KEY) {
+                            Some(_) => config.table_schema.file_schema().clone(),
+                            None => Arc::new(read_avro_schema_from_reader(&mut file).unwrap()), // if not inferred, read schema from file
+                        };
+                        AvroSource {
+                            table_schema: TableSchema::new(schema, config.table_schema.table_partition_cols().clone()),
+                            batch_size: config.batch_size,
+                            projection: config.projection.clone(),
+                            metrics: config.metrics.clone(),
+                            schema_adapter_factory: config.schema_adapter_factory.clone(),
+                        }
+                    }
+                    GetResultPayload::Stream(_) => {
+                        let bytes = r.bytes().await?;
+                        let schema = match config.table_schema.file_schema().metadata.get(SCHEMA_METADATA_KEY) {
+                            Some(_) => config.table_schema.file_schema().clone(),
+                            None => Arc::new(read_avro_schema_from_reader(&mut bytes.reader()).unwrap()), // if not inferred, read schema from file
+                        };
+                        AvroSource {
+                            table_schema: TableSchema::new(schema, config.table_schema.table_partition_cols().clone()),
+                            batch_size: config.batch_size,
+                            projection: config.projection.clone(),
+                            metrics: config.metrics.clone(),
+                            schema_adapter_factory: config.schema_adapter_factory.clone(),
+                        }
+                    }
+                });
+
                 let r = object_store
                     .get(&partitioned_file.object_meta.location)
                     .await?;
