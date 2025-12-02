@@ -199,14 +199,14 @@ select
   coalesce(array[1, 2], array[3, 4]),
   arrow_typeof(coalesce(array[1, 2], array[3, 4]));
 ----
-[1, 2] List(nullable Int64)
+[1, 2] List(Int64)
 
 query ?T
 select
   coalesce(null, array[3, 4]),
   arrow_typeof(coalesce(array[1, 2], array[3, 4]));
 ----
-[3, 4] List(nullable Int64)
+[3, 4] List(Int64)
 
 # coalesce with array
 query ?T
@@ -214,7 +214,7 @@ select
   coalesce(array[1, 2], array[arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32')]),
   arrow_typeof(coalesce(array[1, 2], array[arrow_cast(3, 'Int32'), arrow_cast(4, 'Int32')]));
 ----
-[1, 2] List(nullable Int64)
+[1, 2] List(Int64)
 
 # test dict(int32, utf8)
 statement ok

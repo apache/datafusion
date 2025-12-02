@@ -85,7 +85,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// `ExecutionPlan` with memory tracking and spilling support.
 ///
 /// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
-/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
+/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
@@ -1534,7 +1534,7 @@ mod tests {
     /// A compilation test to ensure that the `ExecutionPlan::name()` method can
     /// be called from a trait object.
     /// Related ticket: https://github.com/apache/datafusion/pull/11047
-    #[allow(dead_code)]
+    #[expect(unused)]
     fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
         let _ = plan.name();
     }

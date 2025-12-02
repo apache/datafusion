@@ -61,7 +61,7 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 | aAbBac                                                            |
 +-------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
     argument(

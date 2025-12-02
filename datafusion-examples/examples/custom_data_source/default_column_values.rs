@@ -258,7 +258,7 @@ impl TableProvider for DefaultValueTableProvider {
             ObjectStoreUrl::parse("memory://")?,
             Arc::new(parquet_source),
         )
-        .with_projection_indices(projection.cloned())
+        .with_projection_indices(projection.cloned())?
         .with_limit(limit)
         .with_file_group(file_group)
         .with_expr_adapter(Some(Arc::new(DefaultValuePhysicalExprAdapterFactory) as _));

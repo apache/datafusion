@@ -92,7 +92,7 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     create_physical_sort_exprs, LexOrdering, PhysicalSortExpr,
 };
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -1213,7 +1213,7 @@ impl DefaultPhysicalPlanner {
                         let filter_df_fields = filter_df_fields
                             .into_iter()
                             .map(|(qualifier, field)| {
-                                (qualifier.cloned(), Arc::new(field.clone()))
+                                (qualifier.cloned(), Arc::clone(field))
                             })
                             .collect();
 
@@ -2271,11 +2271,14 @@ impl DefaultPhysicalPlanner {
         // to verify that the plan fulfills the base requirements.
         InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
+        // Create optimizer context from session state
+        let optimizer_context = OptimizerContext::new(session_state.config().clone());
+
         let mut new_plan = Arc::clone(&plan);
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
-                .optimize(new_plan, session_state.config_options())
+                .optimize_plan(new_plan, &optimizer_context)
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
@@ -3106,7 +3109,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct("foo": Boolean), Utf8]"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct("foo": non-null Boolean), Utf8]"#
         );
 
         Ok(())
