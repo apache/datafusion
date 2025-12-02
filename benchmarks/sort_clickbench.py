@@ -17,7 +17,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#!/usr/bin/env python3
 """
 Sort ClickBench data by EventTime for reverse scan benchmark.
 Enhanced version with configurable row group size and optimization options.
