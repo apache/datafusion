@@ -111,7 +111,7 @@ def sort_clickbench_data(
         parquet_file = pq.ParquetFile(str(output_file))
         num_row_groups = parquet_file.num_row_groups
 
-        print(f"\n✓ Successfully created sorted file!")
+        print("\n✓ Successfully created sorted file!")
         print(f"  Input:  {input_size_mb:.1f} MB")
         print(f"  Output: {output_size_mb:.1f} MB")
         print(f"  Compression ratio: {input_size_mb/output_size_mb:.2f}x")
