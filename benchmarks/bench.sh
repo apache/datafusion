@@ -552,10 +552,10 @@ data_tpch() {
     # Ensure the target data directory exists
     mkdir -p "${TPCH_DIR}"
 
-    # check if tpchgen_cli is installed
+    # check if tpchgen-cli is installed
     if ! command -v tpchgen-cli &> /dev/null
     then
-        echo "tpchgen_cli could not be found, please install it via 'cargo install tpchgen-cli'"
+        echo "tpchgen-cli could not be found, please install it via 'cargo install tpchgen-cli'"
         exit 1
     fi
 

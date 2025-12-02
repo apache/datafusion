@@ -243,7 +243,7 @@ See the help for more details.
 You can enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`. For example:
 
 ```shell
-cargo run --release --features "mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+cargo run --release --features "mimalloc" --bin dfbench tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
