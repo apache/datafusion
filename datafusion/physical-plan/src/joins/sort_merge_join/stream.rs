@@ -402,8 +402,8 @@ impl JoinedRecordBatches {
     /// Returns true if there are no batches accumulated
     ///
     /// Used in three contexts, all checking for ANY data (not optimal batch size):
-    /// 1. Init state: Filter accumulated data before next streamed row
-    /// 2. JoinOutput state: Output data after hitting batch_size threshold
+    /// 1. Init state: Check if filtered data needs processing before next streamed row
+    /// 2. JoinOutput state: Check if freeze produced any batches to output
     /// 3. Exhausted state: Flush remaining data
     ///
     /// For future BatchCoalescer refactor, use `joined_batches.is_empty()`.
@@ -1646,9 +1646,6 @@ impl SortMergeJoinStream {
                             );
                         }
                     }
-                } else {
-                    self.joined_record_batches
-                        .push_batch_without_metadata(output_batch, self.join_type);
                 }
             } else {
                 self.joined_record_batches
