@@ -378,14 +378,27 @@ impl InListExpr {
             );
         }
 
-        // Evaluate the list as constants and create the static filter
-        let in_array = try_evaluate_constant_list(&list, schema)?;
-        Ok(Self::new(
-            expr,
-            list,
-            negated,
-            Some(instantiate_static_filter(in_array)?),
-        ))
+        match try_evaluate_constant_list(&list, schema) {
+            Ok(in_array) => Ok(Self::new(
+                expr,
+                list,
+                negated,
+                Some(instantiate_static_filter(in_array)?),
+            )),
+            Err(_) => {
+                // Fall back to non-static filter if list contains non-constant expressions
+                // Still need to validate types
+                let expr_data_type = expr.data_type(schema)?;
+                for list_expr in list.iter() {
+                    let list_expr_data_type = list_expr.data_type(schema)?;
+                    assert_or_internal_err!(
+                        DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type),
+                        "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
+                    );
+                }
+                Ok(Self::new(expr, list, negated, None))
+            }
+        }
     }
 }
 impl std::fmt::Display for InListExpr {
@@ -588,28 +601,12 @@ pub fn in_list(
     negated: &bool,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // Try to create with static filter (validates types and evaluates constant list)
-    match InListExpr::try_from_static_filter(
+    Ok(Arc::new(InListExpr::try_from_static_filter(
         Arc::clone(&expr),
         list.clone(),
         *negated,
         schema,
-    ) {
-        Ok(expr) => Ok(Arc::new(expr)),
-        Err(_) => {
-            // Fall back to non-static filter if list contains non-constant expressions
-            // Still need to validate types
-            let expr_data_type = expr.data_type(schema)?;
-            for list_expr in list.iter() {
-                let list_expr_data_type = list_expr.data_type(schema)?;
-                assert_or_internal_err!(
-                    DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type),
-                    "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-                );
-            }
-            Ok(Arc::new(InListExpr::new(expr, list, *negated, None)))
-        }
-    }
+    )?))
 }
 
 #[cfg(test)]
