@@ -55,6 +55,7 @@ parking_lot = { workspace = true }
 paste = { workspace = true }
 petgraph = "0.8.3"
 tokio = { workspace = true }
+half = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
