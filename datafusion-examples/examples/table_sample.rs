@@ -676,7 +676,7 @@ impl ScalarValueConverter<f64> for f64 {
     }
 }
 
-/// Helper functiom to parse a SQL numeric to a specified scalar type (e.g., int or float)
+/// Helper function to parse a SQL numeric to a specified scalar type (e.g., int or float)
 fn parse_sql_numeric_literal<T, S: ContextProvider>(
     expr: &ast::Expr,
     sql_to_rel: &SqlToRel<S>,
