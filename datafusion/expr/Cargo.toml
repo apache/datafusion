@@ -21,7 +21,7 @@ description = "Logical plan and expression representation for DataFusion query e
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
