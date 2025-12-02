@@ -1198,67 +1198,79 @@ compare_benchmarks() {
 
 }
 
-# Creates sorted ClickBench data from hits.parquet using DataFusion
+# Sorted Data Benchmark Functions (Optimized for hits_0.parquet)
+# Add these functions to bench.sh
+
+# Creates sorted ClickBench data from hits_0.parquet (partitioned dataset)
+# The data is sorted by EventTime in ascending order
+# Using hits_0.parquet (~150MB) instead of full hits.parquet (~14GB) for faster testing
 data_sorted_clickbench() {
-    SORTED_FILE="${DATA_DIR}/hits_sorted.parquet"
-    ORIGINAL_FILE="${DATA_DIR}/hits.parquet"
+    SORTED_FILE="${DATA_DIR}/hits_0_sorted.parquet"
+    ORIGINAL_FILE="${DATA_DIR}/hits_partitioned/hits_0.parquet"
 
-    echo "Creating sorted ClickBench dataset from hits.parquet..."
+    echo "Creating sorted ClickBench dataset from hits_0.parquet..."
 
-    # Check if original data exists
+    # Check if partitioned data exists
     if [ ! -f "${ORIGINAL_FILE}" ]; then
-        echo "hits.parquet not found. Running data_clickbench_1 first..."
-        data_clickbench_1
+        echo "hits_partitioned/hits_0.parquet not found. Running data_clickbench_partitioned first..."
+        data_clickbench_partitioned
     fi
 
     # Check if sorted file already exists
     if [ -f "${SORTED_FILE}" ]; then
-        echo "Sorted hits.parquet already exists at ${SORTED_FILE}"
+        echo "Sorted hits_0.parquet already exists at ${SORTED_FILE}"
         return 0
     fi
 
-    echo "Sorting hits.parquet by EventTime using DataFusion..."
+    echo "Sorting hits_0.parquet by EventTime (this takes ~10 seconds)..."
 
-    # Detect OS and available memory
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        TOTAL_MEM_BYTES=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
-        TOTAL_MEM_GB=$((TOTAL_MEM_BYTES / 1024 / 1024 / 1024))
-    else
-        TOTAL_MEM_GB=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}' || echo "0")
+    # Ensure virtual environment exists and has pyarrow
+    if [ ! -d "$VIRTUAL_ENV" ]; then
+        echo "Creating virtual environment at $VIRTUAL_ENV..."
+        python3 -m venv "$VIRTUAL_ENV"
     fi
 
-    # Set memory limit (use less than total to leave room for OS)
-    if [ "$TOTAL_MEM_GB" -gt 20 ]; then
-        MEM_LIMIT_MB=$((16 * 1024))  # 16GB
-    elif [ "$TOTAL_MEM_GB" -gt 16 ]; then
-        MEM_LIMIT_MB=$((8 * 1024))  # 8GB
-    else
-        MEM_LIMIT_MB=$((4 * 1024))  # 4GB
+    # Activate virtual environment
+    source "$VIRTUAL_ENV/bin/activate"
+
+    # Check and install pyarrow if needed
+    if ! python3 -c "import pyarrow" 2>/dev/null; then
+        echo "Installing pyarrow (this may take a minute)..."
+        pip install --quiet pyarrow
     fi
 
-    echo "System has ${TOTAL_MEM_GB}GB RAM, using ${MEM_LIMIT_MB}MB memory limit"
-    echo "DataFusion will spill to disk when memory limit is reached"
-    echo ""
-
-    # Run the DataFusion sort utility
-    $CARGO_COMMAND --bin sort_data -- \
-        "${ORIGINAL_FILE}" \
-        "${SORTED_FILE}" \
-        "EventTime" \
-        "${MEM_LIMIT_MB}"
-
+    # Use the standalone Python script to sort
+    python3 "${SCRIPT_DIR}"/sort_clickbench.py "${ORIGINAL_FILE}" "${SORTED_FILE}"
     local result=$?
 
+    # Deactivate virtual environment
+    deactivate
+
     if [ $result -eq 0 ]; then
-        echo ""
         echo "✓ Successfully created sorted ClickBench dataset"
-        echo "  Location: ${SORTED_FILE}"
         return 0
     else
-        echo ""
         echo "✗ Error: Failed to create sorted dataset"
         return 1
     fi
+}
+
+# Runs the sorted data benchmark
+run_sorted_data() {
+    RESULTS_FILE="${RESULTS_DIR}/sorted_data.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sorted data benchmark..."
+
+    # Ensure sorted data exists
+    data_sorted_clickbench
+
+    debug_run $CARGO_COMMAND --bin dfbench -- sorted-data \
+        --iterations 5 \
+        --path "${DATA_DIR}/hits_0_sorted.parquet" \
+        --unsorted-path "${DATA_DIR}/hits_partitioned/hits_0.parquet" \
+        --queries-path "${SCRIPT_DIR}/queries/sorted_data" \
+        -o "${RESULTS_FILE}" \
+        ${QUERY_ARG}
 }
 
 # Runs the sorted data benchmark (sorted only)
@@ -1271,21 +1283,7 @@ run_sorted_data_sorted_only() {
 
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
         --iterations 5 \
-        --path "${DATA_DIR}/hits_sorted.parquet" \
-        --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
-        -o "${RESULTS_FILE}" \
-        ${QUERY_ARG}
-}
-
-# Runs the sorted data benchmark (unsorted only)
-run_sorted_data_unsorted_only() {
-    RESULTS_FILE="${RESULTS_DIR}/sorted_data_unsorted_only.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running sorted data benchmark (unsorted only)..."
-
-    debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
-        --iterations 5 \
-        --path "${DATA_DIR}/hits.parquet" \
+        --path "${DATA_DIR}/hits_0_sorted.parquet" \
         --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
         -o "${RESULTS_FILE}" \
         ${QUERY_ARG}
