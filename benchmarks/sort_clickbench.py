@@ -115,7 +115,7 @@ def sort_clickbench_data(
         print(f"  Input:  {input_size_mb:.1f} MB")
         print(f"  Output: {output_size_mb:.1f} MB")
         print(f"  Compression ratio: {input_size_mb/output_size_mb:.2f}x")
-        print(f"\nRow Group Statistics:")
+        print("\nRow Group Statistics:")
         print(f"  Total row groups: {num_row_groups}")
         print(f"  Total rows: {len(sorted_table):,}")
 
