@@ -226,31 +226,61 @@ impl StaticFilter for Int32StaticFilter {
     }
 
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        // Handle dictionary arrays by recursing on the values
+        downcast_dictionary_array! {
+            v => {
+                let values_contains = self.contains(v.values().as_ref(), negated)?;
+                let result = take(&values_contains, v.keys(), None)?;
+                return Ok(downcast_array(result.as_ref()))
+            }
+            _ => {}
+        }
+
         let v = v
             .as_primitive_opt::<Int32Type>()
             .ok_or_else(|| exec_datafusion_err!("Failed to downcast array"))?;
 
-        let result = match (v.null_count() > 0, negated) {
-            (true, false) => {
-                // has nulls, not negated"
-                BooleanArray::from_iter(
-                    v.iter().map(|value| Some(self.values.contains(&value?))),
-                )
+        let haystack_has_nulls = self.null_count > 0;
+
+        let result = match (v.null_count() > 0, haystack_has_nulls, negated) {
+            (true, _, false) | (false, true, false) => {
+                // Either needle or haystack has nulls, not negated
+                BooleanArray::from_iter(v.iter().map(|value| match value {
+                    None => None,
+                    Some(v) => {
+                        if self.values.contains(&v) {
+                            Some(true)
+                        } else if haystack_has_nulls {
+                            None
+                        } else {
+                            Some(false)
+                        }
+                    }
+                }))
             }
-            (true, true) => {
-                // has nulls, negated
-                BooleanArray::from_iter(
-                    v.iter().map(|value| Some(!self.values.contains(&value?))),
-                )
+            (true, _, true) | (false, true, true) => {
+                // Either needle or haystack has nulls, negated
+                BooleanArray::from_iter(v.iter().map(|value| match value {
+                    None => None,
+                    Some(v) => {
+                        if self.values.contains(&v) {
+                            Some(false)
+                        } else if haystack_has_nulls {
+                            None
+                        } else {
+                            Some(true)
+                        }
+                    }
+                }))
             }
-            (false, false) => {
-                //no null, not negated
+            (false, false, false) => {
+                // No nulls anywhere, not negated
                 BooleanArray::from_iter(
                     v.values().iter().map(|value| self.values.contains(value)),
                 )
             }
-            (false, true) => {
-                // no null, negated
+            (false, false, true) => {
+                // No nulls anywhere, negated
                 BooleanArray::from_iter(
                     v.values().iter().map(|value| !self.values.contains(value)),
                 )
