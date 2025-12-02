@@ -782,18 +782,17 @@ impl ExternalSorter {
     ) -> Result<()> {
         let size = get_reserved_byte_for_record_batch(input);
 
-        match self.reservation.try_grow(size) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                if self.in_mem_batches.is_empty() {
-                    return Err(Self::err_with_oom_context(e));
-                }
+        loop {
+            match self.reservation.try_grow(size) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if self.in_mem_batches.is_empty() {
+                        return Err(Self::err_with_oom_context(e));
+                    }
 
-                // Spill and try again.
-                self.sort_and_spill_in_mem_batches().await?;
-                self.reservation
-                    .try_grow(size)
-                    .map_err(Self::err_with_oom_context)
+                    // Spill and try again.
+                    self.sort_and_spill_in_mem_batches().await?;
+                }
             }
         }
     }
