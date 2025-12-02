@@ -21,7 +21,6 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -29,11 +28,11 @@ use arrow::array::UInt32Array;
 use arrow::compute;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, SchemaRef};
 
 use datafusion::common::{
     arrow_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchemaRef, ResolvedTableReference, Statistics, TableReference,
+    DFSchemaRef, ResolvedTableReference, ScalarValue, Statistics, TableReference,
 };
 use datafusion::error::Result;
 use datafusion::logical_expr::sqlparser::ast::{
@@ -46,7 +45,7 @@ use datafusion::logical_expr::{
 
 use datafusion::datasource::provider_as_source;
 use datafusion::error::DataFusionError;
-use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::context::{ExecutionProps, QueryPlanner};
 use datafusion::execution::session_state::SessionContextProvider;
 use datafusion::execution::{
     SendableRecordBatchStream, SessionState, SessionStateBuilder, TaskContext,
@@ -66,10 +65,12 @@ use datafusion::physical_planner::{
     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
 };
 use datafusion::prelude::*;
-use datafusion::sql::planner::SqlToRel;
+use datafusion::sql::planner::{PlannerContext, SqlToRel};
 use datafusion::sql::sqlparser::ast;
 
 use async_trait::async_trait;
+use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use futures::stream::{Stream, StreamExt};
 use futures::{ready, TryStreamExt};
 use log::{debug, info};
@@ -641,37 +642,93 @@ struct TableSamplePlanner<'a, S: ContextProvider> {
     context_provider: &'a S,
 }
 
-fn evaluate_number<
-    T: FromStr + Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Div<Output = T>,
->(
+/// Helper trait to convert ScalarValue to different numeric types
+trait ScalarValueConverter<T> {
+    fn arrow_type() -> DataType;
+    fn convert_scalar(value: ScalarValue) -> Option<T>;
+}
+
+impl ScalarValueConverter<i64> for i64 {
+    fn arrow_type() -> DataType {
+        DataType::Int64
+    }
+
+    fn convert_scalar(value: ScalarValue) -> Option<i64> {
+        if let ScalarValue::Int64(v) = value {
+            v
+        } else {
+            None
+        }
+    }
+}
+
+impl ScalarValueConverter<f64> for f64 {
+    fn arrow_type() -> DataType {
+        DataType::Float64
+    }
+
+    fn convert_scalar(value: ScalarValue) -> Option<f64> {
+        if let ScalarValue::Float64(v) = value {
+            v
+        } else {
+            None
+        }
+    }
+}
+
+/// Helper functiom to parse a SQL numeric to a specified scalar type (e.g., int or float)
+fn parse_sql_numeric_literal<T, S: ContextProvider>(
     expr: &ast::Expr,
-) -> Option<T> {
-    match expr {
-        ast::Expr::BinaryOp { left, op, right } => {
-            let left = evaluate_number::<T>(left);
-            let right = evaluate_number::<T>(right);
-            match (left, right) {
-                (Some(left), Some(right)) => match op {
-                    ast::BinaryOperator::Plus => Some(left + right),
-                    ast::BinaryOperator::Minus => Some(left - right),
-                    ast::BinaryOperator::Multiply => Some(left * right),
-                    ast::BinaryOperator::Divide => Some(left / right),
-                    _ => None,
-                },
-                _ => None,
+    sql_to_rel: &SqlToRel<S>,
+    schema: &DFSchemaRef,
+) -> Result<T>
+where
+    T: ScalarValueConverter<T>,
+{
+    match sql_to_rel.sql_to_expr(
+        expr.clone(),
+        &schema.clone(),
+        &mut PlannerContext::new(),
+    ) {
+        Ok(logical_expr) => {
+            debug!(
+                "Parsing expr {:?} to type {}",
+                logical_expr,
+                T::arrow_type()
+            );
+
+            let execution_props = ExecutionProps::new();
+            let simplifier = ExprSimplifier::new(
+                SimplifyContext::new(&execution_props).with_schema(schema.clone()),
+            );
+            let simplified_expr = match simplifier.simplify(logical_expr.clone()) {
+                Ok(expr) => expr,
+                Err(err) => return plan_err!("Cannot simplify {expr:?} due to {err}"),
+            };
+            let casted_expr = simplifier.coerce(simplified_expr, schema)?;
+
+            debug!("Expression before cast: {:?}", &casted_expr);
+
+            match casted_expr.clone() {
+                Expr::Literal(scalar_value, _) => {
+                    if let Ok(res) = scalar_value.cast_to(&T::arrow_type()) {
+                        match T::convert_scalar(res) {
+                            Some(res) => Ok(res),
+                            None => plan_err!(
+                                "Cannot extract primitive value {}",
+                                std::any::type_name::<T>()
+                            ),
+                        }
+                    } else {
+                        plan_err!("Cannot cast to type {}", T::arrow_type())
+                    }
+                }
+                actual => plan_err!("Expected literal, found {actual:?}"),
             }
         }
-        ast::Expr::Value(value) => match &value.value {
-            ast::Value::Number(value, _) => {
-                let value = value.to_string();
-                let Ok(value) = value.parse::<T>() else {
-                    return None;
-                };
-                Some(value)
-            }
-            _ => None,
-        },
-        _ => None,
+        Err(err) => {
+            plan_err!("Cannot construct logical expression from {expr:?} due to {err}")
+        }
     }
 }
 
@@ -703,6 +760,7 @@ impl<'a, S: ContextProvider> TableSamplePlanner<'a, S> {
         &self,
         input: LogicalPlan,
         sample: ast::TableSampleKind,
+        sql_to_rel: &SqlToRel<S>,
     ) -> Result<LogicalPlan> {
         let sample = match sample {
             ast::TableSampleKind::BeforeTableAlias(sample) => sample,
@@ -748,14 +806,12 @@ impl<'a, S: ContextProvider> TableSamplePlanner<'a, S> {
         if let Some(quantity) = sample.quantity {
             return match quantity.unit {
                 Some(TableSampleUnit::Rows) => {
-                    let value = evaluate_number::<i64>(&quantity.value);
-                    if value.is_none() {
-                        return plan_err!(
-                            "quantity must be a number: {:?}",
-                            quantity.value
-                        );
-                    }
-                    let value = value.unwrap();
+                    let value: i64 = parse_sql_numeric_literal(
+                        &quantity.value,
+                        sql_to_rel,
+                        input.schema(),
+                    )?;
+
                     if value < 0 {
                         return plan_err!(
                             "quantity must be a non-negative number: {:?}",
@@ -767,26 +823,22 @@ impl<'a, S: ContextProvider> TableSamplePlanner<'a, S> {
                         .build()
                 }
                 Some(TableSampleUnit::Percent) => {
-                    let value = evaluate_number::<f64>(&quantity.value);
-                    if value.is_none() {
-                        return plan_err!(
-                            "quantity must be a number: {:?}",
-                            quantity.value
-                        );
-                    }
-                    let value = value.unwrap() / 100.0;
+                    let value: f64 = parse_sql_numeric_literal(
+                        &quantity.value,
+                        sql_to_rel,
+                        input.schema(),
+                    )?;
+                    let value = value / 100.0;
                     Self::new_node(input, value, None, seed)
                 }
                 None => {
                     // Clickhouse-style sample
-                    let value = evaluate_number::<f64>(&quantity.value);
-                    if value.is_none() {
-                        return plan_err!(
-                            "quantity must be a valid number: {:?}",
-                            quantity.value
-                        );
-                    }
-                    let value = value.unwrap();
+                    let value: f64 = parse_sql_numeric_literal(
+                        &quantity.value,
+                        sql_to_rel,
+                        input.schema(),
+                    )?;
+
                     if value < 0.0 {
                         return plan_err!(
                             "quantity must be a non-negative number: {:?}",
@@ -827,6 +879,7 @@ impl<'a, S: ContextProvider> TableSamplePlanner<'a, S> {
                             return self.sample_to_logical_plan(
                                 inner_plan,
                                 table_sample_kind.clone(),
+                                &sql_to_rel,
                             );
                         }
                     }
@@ -1051,6 +1104,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_logical_plan_expression_value() -> Result<()> {
+        let sql =
+            "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 2 + 20 where int_col = 1";
+        let (_, logical_plan) = parse_to_logical_plan(sql).await?;
+        if let LogicalPlan::Limit(limit) = logical_plan {
+            assert_eq!(limit.fetch, Some(Box::new(lit(22_i64))));
+            assert_eq!(limit.skip, None);
+        } else {
+            assert!(false, "Expected LogicalPlan::Limit");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_logical_plan_negative_value() -> Result<()> {
         let sql =
             "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 1-5 where int_col = 1";
@@ -1069,7 +1136,8 @@ mod tests {
             "SELECT int_col, double_col FROM alltypes_plain TABLESAMPLE 42 + int_col where int_col = 1";
         let err = parse_to_logical_plan(sql).await.err().expect("should fail");
         assert!(
-            err.to_string().contains("quantity must be a valid number"),
+            err.to_string()
+                .contains("Expected literal, found BinaryExpr"),
             "{err:?}"
         );
         Ok(())
