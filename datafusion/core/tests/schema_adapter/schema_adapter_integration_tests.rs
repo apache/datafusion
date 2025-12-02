@@ -477,6 +477,14 @@ async fn test_parquet_missing_column() -> Result<()> {
     ];
     assert_batches_eq!(expected, &batches);
 
+    // Filter `b is not null or a = 24` doesn't match any rows
+    let filter = col("b").is_not_null().or(col("a").eq(lit(24)));
+    let exec = push_down_filters(exec, &filter).unwrap();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+    // There should be zero batches
+    assert_eq!(batches.len(), 0);
+
     Ok(())
 }
 
