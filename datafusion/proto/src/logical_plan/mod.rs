@@ -38,7 +38,7 @@ use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     assert_or_internal_err, context, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err, DataFusionError, Result, TableReference, ToDFSchema,
+    plan_err, Result, TableReference, ToDFSchema,
 };
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
