@@ -43,13 +43,11 @@ impl Default for SparkMakeInterval {
 
 impl SparkMakeInterval {
     pub fn new() -> Self {
-        fn int32_coercion() -> Coercion {
-            Coercion::new_implicit(
-                TypeSignatureClass::Native(logical_int32()),
-                vec![TypeSignatureClass::Integer],
-                NativeType::Int32,
-            )
-        }
+        let int32 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int32()),
+            vec![TypeSignatureClass::Integer],
+            NativeType::Int32,
+        )
 
         fn float64_coercion() -> Coercion {
             Coercion::new_implicit(
