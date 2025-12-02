@@ -1654,6 +1654,86 @@ mod tests {
         Ok(())
     }
 
+    // Make sure we are not failing when got literal in case when but input is dictionary encoded
+    #[test]
+    fn case_with_expr_primitive_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt64)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![0u8, 1u8, 2u8, 3u8]);
+        let values = UInt64Array::from(vec![Some(10), Some(20), None, Some(30)]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN 10 THEN 123 WHEN 30 THEN 456 END
+        let when1 = lit(10_u64);
+        let then1 = lit(123_i32);
+        let when2 = lit(30_u64);
+        let then2 = lit(456_i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    // Make sure we are not failing when got literal in case when but input is dictionary encoded
+    #[test]
+    fn case_with_expr_boolean_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Boolean)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![0u8, 1u8, 2u8, 3u8]);
+        let values = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN true THEN 123 WHEN false THEN 456 END
+        let when1 = lit(true);
+        let then1 = lit(123i32);
+        let when2 = lit(false);
+        let then2 = lit(456i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(123), Some(456), None, Some(123)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
     #[test]
     fn case_with_expr_all_null_dictionary() -> Result<()> {
         let schema = Schema::new(vec![Field::new(

@@ -16,8 +16,10 @@
 // under the License.
 
 use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
-use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray};
-use arrow::datatypes::{i256, IntervalDayTime, IntervalMonthDayNano};
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, PrimitiveArray,
+};
+use arrow::datatypes::{i256, DataType, IntervalDayTime, IntervalMonthDayNano};
 use datafusion_common::{internal_err, HashMap, ScalarValue};
 use half::f16;
 use std::fmt::Debug;
@@ -29,6 +31,7 @@ where
     T: ArrowPrimitiveType,
     T::Native: ToHashableKey,
 {
+    data_type: DataType,
     /// Literal value to map index
     ///
     /// If searching this map becomes a bottleneck consider using linear map implementations for small hashmaps
@@ -75,22 +78,18 @@ where
             .map(|(map_index, value)| (value.into_hashable_key(), map_index as u32))
             .collect();
 
-        Ok(Self { map })
+        Ok(Self {
+            map,
+            data_type: input.data_type().clone(),
+        })
     }
-}
 
-impl<T> WhenLiteralIndexMap for PrimitiveIndexMap<T>
-where
-    T: ArrowPrimitiveType,
-    T::Native: ToHashableKey,
-{
-    fn map_to_when_indices(
+    fn map_primitive_array_to_when_indices(
         &self,
-        array: &ArrayRef,
+        array: &PrimitiveArray<T>,
         else_index: u32,
     ) -> datafusion_common::Result<Vec<u32>> {
         let indices = array
-            .as_primitive::<T>()
             .into_iter()
             .map(|value| match value {
                 Some(value) => self
@@ -104,6 +103,43 @@ where
             .collect::<Vec<u32>>();
 
         Ok(indices)
+    }
+}
+
+impl<T> WhenLiteralIndexMap for PrimitiveIndexMap<T>
+where
+    T: ArrowPrimitiveType,
+    T::Native: ToHashableKey,
+{
+    fn map_to_when_indices(
+        &self,
+        array: &ArrayRef,
+        else_index: u32,
+    ) -> datafusion_common::Result<Vec<u32>> {
+        match array.data_type() {
+            dt if dt == &self.data_type => {
+                let primitive_array = array.as_primitive::<T>();
+
+                self.map_primitive_array_to_when_indices(primitive_array, else_index)
+            }
+            // We support dictionary primitive array as we create the lookup table in `CaseWhen` expression
+            // creation when we don't know the schema, so we may receive dictionary encoded primitive arrays at execution time.
+            DataType::Dictionary(_, value_type)
+                if value_type.as_ref() == &self.data_type =>
+            {
+                // Cast here to simplify the implementation.
+                let converted = arrow::compute::cast(array.as_ref(), &self.data_type)?;
+                self.map_primitive_array_to_when_indices(
+                    converted.as_primitive::<T>(),
+                    else_index,
+                )
+            }
+            _ => internal_err!(
+                "PrimitiveIndexMap expected array of type {:?} but got {:?}",
+                self.data_type,
+                array.data_type()
+            ),
+        }
     }
 }
 

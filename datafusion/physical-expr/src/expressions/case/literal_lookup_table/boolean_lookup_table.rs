@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
-use arrow::array::{ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
+use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, ScalarValue};
 
 #[derive(Clone, Debug)]
@@ -72,6 +73,24 @@ impl BooleanIndexMap {
             false_index,
         })
     }
+
+    fn map_boolean_array_to_when_indices(
+        &self,
+        array: &BooleanArray,
+        else_index: u32,
+    ) -> datafusion_common::Result<Vec<u32>> {
+        let true_index = self.true_index.unwrap_or(else_index);
+        let false_index = self.false_index.unwrap_or(else_index);
+
+        Ok(array
+            .into_iter()
+            .map(|value| match value {
+                Some(true) => true_index,
+                Some(false) => false_index,
+                None => else_index,
+            })
+            .collect::<Vec<u32>>())
+    }
 }
 
 impl WhenLiteralIndexMap for BooleanIndexMap {
@@ -80,17 +99,24 @@ impl WhenLiteralIndexMap for BooleanIndexMap {
         array: &ArrayRef,
         else_index: u32,
     ) -> datafusion_common::Result<Vec<u32>> {
-        let true_index = self.true_index.unwrap_or(else_index);
-        let false_index = self.false_index.unwrap_or(else_index);
-
-        Ok(array
-            .as_boolean()
-            .into_iter()
-            .map(|value| match value {
-                Some(true) => true_index,
-                Some(false) => false_index,
-                None => else_index,
-            })
-            .collect::<Vec<u32>>())
+        match array.data_type() {
+            DataType::Boolean => {
+                self.map_boolean_array_to_when_indices(array.as_boolean(), else_index)
+            }
+            // We support dictionary boolean array as we create the lookup table in `CaseWhen` expression
+            // creation when we don't know the schema, so we may receive dictionary encoded boolean arrays at execution time.
+            DataType::Dictionary(_, value_type)
+                if value_type.as_ref() == &DataType::Boolean =>
+            {
+                // Since it is not common to have dictionary encoded boolean arrays
+                // at all than it is ok to do the cast here to simplify the implementation.
+                let converted = arrow::compute::cast(array.as_ref(), &DataType::Boolean)?;
+                self.map_boolean_array_to_when_indices(converted.as_boolean(), else_index)
+            }
+            _ => internal_err!(
+                "Expected boolean array for BooleanIndexMap, got {:?}",
+                array.data_type()
+            ),
+        }
     }
 }
