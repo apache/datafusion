@@ -2319,7 +2319,6 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
     ]));
 
     let mut batches = JoinedRecordBatches {
-        batches: vec![],
         joined_batches: BatchCoalescer::new(Arc::clone(&schema), 8192),
         filter_mask: BooleanBuilder::new(),
         row_indices: UInt64Builder::new(),
@@ -2327,7 +2326,7 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
     };
 
     // Insert already prejoined non-filtered rows
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1, 1])),
@@ -2335,9 +2334,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1, 1])),
             Arc::new(Int32Array::from(vec![11, 9])),
         ],
-    )?);
+    )?)?;
 
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1])),
@@ -2345,9 +2344,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1])),
             Arc::new(Int32Array::from(vec![12])),
         ],
-    )?);
+    )?)?;
 
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1, 1])),
@@ -2355,9 +2354,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1, 1])),
             Arc::new(Int32Array::from(vec![11, 13])),
         ],
-    )?);
+    )?)?;
 
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1])),
@@ -2365,9 +2364,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1])),
             Arc::new(Int32Array::from(vec![12])),
         ],
-    )?);
+    )?)?;
 
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1, 1])),
@@ -2375,7 +2374,7 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1, 1])),
             Arc::new(Int32Array::from(vec![12, 11])),
         ],
-    )?);
+    )?)?;
 
     let streamed_indices = vec![0, 0];
     batches.batch_ids.extend(vec![0; streamed_indices.len()]);
@@ -2425,9 +2424,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
 #[tokio::test]
 async fn test_left_outer_join_filtered_mask() -> Result<()> {
     let mut joined_batches = build_joined_record_batches()?;
-    let schema = joined_batches.batches.first().unwrap().schema();
+    let schema = joined_batches.joined_batches.schema();
 
-    let output = concat_batches(&schema, &joined_batches.batches)?;
+    let output = joined_batches.concat_batches(&schema)?;
     let out_mask = joined_batches.filter_mask.finish();
     let out_indices = joined_batches.row_indices.finish();
 
@@ -2632,9 +2631,9 @@ async fn test_left_outer_join_filtered_mask() -> Result<()> {
 async fn test_semi_join_filtered_mask() -> Result<()> {
     for join_type in [LeftSemi, RightSemi] {
         let mut joined_batches = build_joined_record_batches()?;
-        let schema = joined_batches.batches.first().unwrap().schema();
+        let schema = joined_batches.joined_batches.schema();
 
-        let output = concat_batches(&schema, &joined_batches.batches)?;
+        let output = joined_batches.concat_batches(&schema)?;
         let out_mask = joined_batches.filter_mask.finish();
         let out_indices = joined_batches.row_indices.finish();
 
@@ -2807,9 +2806,9 @@ async fn test_semi_join_filtered_mask() -> Result<()> {
 async fn test_anti_join_filtered_mask() -> Result<()> {
     for join_type in [LeftAnti, RightAnti] {
         let mut joined_batches = build_joined_record_batches()?;
-        let schema = joined_batches.batches.first().unwrap().schema();
+        let schema = joined_batches.joined_batches.schema();
 
-        let output = concat_batches(&schema, &joined_batches.batches)?;
+        let output = joined_batches.concat_batches(&schema)?;
         let out_mask = joined_batches.filter_mask.finish();
         let out_indices = joined_batches.row_indices.finish();
 

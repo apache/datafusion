@@ -387,8 +387,6 @@ pub(super) struct SortMergeJoinStream {
 /// - BatchCoalescer preserves row order, so metadata alignment is maintained
 pub(super) struct JoinedRecordBatches {
     /// Joined batches. Each batch is already joined columns from left and right sources
-    pub(super) batches: Vec<RecordBatch>,
-    /// UNUSED: Placeholder for future refactor. Requires proper is_empty() semantics.
     pub(super) joined_batches: BatchCoalescer,
     /// Did each output row pass the join filter? (detect if input row found any match)
     pub(super) filter_mask: BooleanBuilder,
@@ -399,26 +397,21 @@ pub(super) struct JoinedRecordBatches {
 }
 
 impl JoinedRecordBatches {
-    /// Returns true if there are no batches accumulated
-    ///
-    /// Used in three contexts, all checking for ANY data (not optimal batch size):
-    /// 1. Init state: Check if filtered data needs processing before next streamed row
-    /// 2. JoinOutput state: Check if freeze produced any batches to output
-    /// 3. Exhausted state: Flush remaining data
-    ///
-    /// For future BatchCoalescer refactor, use `joined_batches.is_empty()`.
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.batches.is_empty()
-    }
-
     /// Concatenates all accumulated batches into a single RecordBatch
     ///
-    /// For future BatchCoalescer refactor:
-    /// - Call `finish_buffered_batch()` to finalize partial data
-    /// - Drain with `next_completed_batch()` in a loop
-    fn concat_batches(&self, schema: &SchemaRef) -> Result<RecordBatch> {
-        Ok(concat_batches(schema, &self.batches)?)
+    /// Must drain ALL batches from BatchCoalescer for filtered joins to ensure
+    /// metadata alignment when applying get_corrected_filter_mask().
+    pub(super) fn concat_batches(&mut self, schema: &SchemaRef) -> Result<RecordBatch> {
+        // Finish any buffered data to create final completed batch
+        self.joined_batches.finish_buffered_batch()?;
+
+        // Collect all completed batches
+        let mut all_batches = vec![];
+        while let Some(batch) = self.joined_batches.next_completed_batch() {
+            all_batches.push(batch);
+        }
+
+        Ok(concat_batches(schema, &all_batches)?)
     }
 
     /// Finishes and returns the metadata arrays, clearing the builders
@@ -431,9 +424,10 @@ impl JoinedRecordBatches {
         (row_indices, filter_mask, &self.batch_ids)
     }
 
-    /// Clears only the batches vector (used in non-filtered path)
-    fn clear_batches(&mut self) {
-        self.batches.clear();
+    /// Clears only the batches (used in non-filtered path)
+    fn clear_batches(&mut self, schema: &SchemaRef, batch_size: usize) {
+        // Replace with a new empty BatchCoalescer
+        self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size);
     }
 
     /// Asserts that internal metadata arrays are consistent with each other
@@ -462,7 +456,7 @@ impl JoinedRecordBatches {
     /// Asserts that if batches is empty, metadata is also empty
     #[inline]
     fn debug_assert_empty_consistency(&self) {
-        if self.batches.is_empty() {
+        if self.joined_batches.is_empty() {
             debug_assert_eq!(
                 self.filter_mask.len(),
                 0,
@@ -503,7 +497,9 @@ impl JoinedRecordBatches {
         );
 
         self.debug_assert_metadata_aligned();
-        self.batches.push(batch);
+        self.joined_batches
+            .push_batch(batch)
+            .expect("Failed to push batch to BatchCoalescer");
     }
 
     /// Pushes a batch with filter metadata (filtered outer/semi/anti/mark joins)
@@ -552,7 +548,9 @@ impl JoinedRecordBatches {
             .resize(self.batch_ids.len() + row_indices.len(), streamed_batch_id);
 
         self.debug_assert_metadata_aligned();
-        self.batches.push(batch);
+        self.joined_batches
+            .push_batch(batch)
+            .expect("Failed to push batch to BatchCoalescer");
     }
 
     /// Pushes a batch without metadata (non-filtered joins)
@@ -561,16 +559,20 @@ impl JoinedRecordBatches {
     /// or null-joined rows are handled separately. No need to track which input
     /// row produced which output row.
     fn push_batch_without_metadata(&mut self, batch: RecordBatch, _join_type: JoinType) {
-        self.batches.push(batch);
+        self.joined_batches
+            .push_batch(batch)
+            .expect("Failed to push batch to BatchCoalescer");
     }
 
-    fn clear(&mut self) {
+    fn clear(&mut self, schema: &SchemaRef, batch_size: usize) {
         // Note: clear() can be called when batches still contains data!
         // This happens in filter_joined_batch() after concat_batches() has read
         // the batches but before they're removed. The batches have been processed
         // into output, so clearing them here is the final cleanup step.
 
-        self.batches.clear();
+        // Replace with a new empty BatchCoalescer
+        self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size);
+
         self.batch_ids.clear();
         self.filter_mask = BooleanBuilder::new();
         self.row_indices = UInt64Builder::new();
@@ -868,17 +870,27 @@ impl Stream for SortMergeJoinStream {
                         // Verify metadata alignment before checking if we have batches to output
                         self.joined_record_batches.debug_assert_metadata_aligned();
 
-                        if !self.joined_record_batches.is_empty() {
-                            // For filtered joins, skip concat here and let Init state handle it
-                            // to avoid double-concatenation
-                            if self.needs_deferred_filtering() {
-                                continue;
-                            }
+                        // For filtered joins, skip output and let Init state handle it
+                        if self.needs_deferred_filtering() {
+                            continue;
+                        }
 
-                            let record_batch = self.output_record_batch_and_reset()?;
+                        // For non-filtered joins, only output if we have a completed batch
+                        // (opportunistic output when target batch size is reached)
+                        if self
+                            .joined_record_batches
+                            .joined_batches
+                            .has_completed_batch()
+                        {
+                            let record_batch = self
+                                .joined_record_batches
+                                .joined_batches
+                                .next_completed_batch()
+                                .expect("has_completed_batch was true");
+                            (&record_batch).record_output(&self.join_metrics.baseline_metrics());
                             return Poll::Ready(Some(Ok(record_batch)));
                         }
-                        return Poll::Pending;
+                        // Otherwise keep buffering (don't output yet)
                     }
                 }
                 SortMergeJoinState::Exhausted => {
@@ -887,19 +899,37 @@ impl Stream for SortMergeJoinStream {
                     // Verify metadata alignment before final output
                     self.joined_record_batches.debug_assert_metadata_aligned();
 
-                    // if there is still something not processed
-                    return if !self.joined_record_batches.is_empty() {
-                        if self.needs_deferred_filtering() {
-                            let record_batch = self.filter_joined_batch()?;
-                            Poll::Ready(Some(Ok(record_batch)))
-                        } else {
-                            let record_batch = self.output_record_batch_and_reset()?;
-                            Poll::Ready(Some(Ok(record_batch)))
-                        }
-                    } else if !self.output.is_empty() {
-                        self.output
-                            .finish_buffered_batch()
-                            .expect("Failed to finish last batch");
+                    // For filtered joins, must concat and filter ALL data at once
+                    if self.needs_deferred_filtering()
+                        && !self.joined_record_batches.joined_batches.is_empty()
+                    {
+                        let record_batch = self.filter_joined_batch()?;
+                        return Poll::Ready(Some(Ok(record_batch)));
+                    }
+
+                    // For non-filtered joins, finish buffered data first
+                    if !self.joined_record_batches.joined_batches.is_empty() {
+                        self.joined_record_batches.joined_batches.finish_buffered_batch()?;
+                    }
+
+                    // Output one completed batch at a time (stay in Exhausted until empty)
+                    if self
+                        .joined_record_batches
+                        .joined_batches
+                        .has_completed_batch()
+                    {
+                        let record_batch = self
+                            .joined_record_batches
+                            .joined_batches
+                            .next_completed_batch()
+                            .expect("has_completed_batch was true");
+                        (&record_batch).record_output(&self.join_metrics.baseline_metrics());
+                        return Poll::Ready(Some(Ok(record_batch)));
+                    }
+
+                    // Finally check self.output BatchCoalescer (used by filtered joins)
+                    return if !self.output.is_empty() {
+                        self.output.finish_buffered_batch()?;
                         let record_batch = self
                             .output
                             .next_completed_batch()
@@ -961,7 +991,6 @@ impl SortMergeJoinStream {
             on_buffered,
             filter,
             joined_record_batches: JoinedRecordBatches {
-                batches: vec![],
                 joined_batches: BatchCoalescer::new(Arc::clone(&schema), batch_size),
                 filter_mask: BooleanBuilder::new(),
                 row_indices: UInt64Builder::new(),
@@ -1014,7 +1043,7 @@ impl SortMergeJoinStream {
         self.joined_record_batches.debug_assert_metadata_aligned();
 
         // If join is filtered and there is joined tuples waiting to be filtered
-        if !self.joined_record_batches.is_empty() {
+        if !self.joined_record_batches.joined_batches.is_empty() {
             // Apply filter on joined tuples and get filtered batch
             let out_filtered_batch = self.filter_joined_batch()?;
 
@@ -1658,20 +1687,6 @@ impl SortMergeJoinStream {
         Ok(())
     }
 
-    /// Output accumulated batches and reset staging (non-filtered joins only)
-    ///
-    /// Only called when !needs_deferred_filtering(), since filtered joins handle
-    /// output through filter_joined_batch() instead.
-    fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
-        self.joined_record_batches.debug_assert_metadata_aligned();
-
-        let record_batch = self.joined_record_batches.concat_batches(&self.schema)?;
-        (&record_batch).record_output(&self.join_metrics.baseline_metrics());
-        self.joined_record_batches.clear_batches();
-
-        Ok(record_batch)
-    }
-
     fn filter_joined_batch(&mut self) -> Result<RecordBatch> {
         // Metadata should be aligned before processing
         self.joined_record_batches.debug_assert_metadata_aligned();
@@ -1710,7 +1725,8 @@ impl SortMergeJoinStream {
         );
 
         if out_mask.is_empty() {
-            self.joined_record_batches.clear_batches();
+            self.joined_record_batches
+                .clear_batches(&self.schema, self.batch_size);
             return Ok(record_batch);
         }
 
@@ -1880,7 +1896,8 @@ impl SortMergeJoinStream {
             )?;
         }
 
-        self.joined_record_batches.clear();
+        self.joined_record_batches
+            .clear(&self.schema, self.batch_size);
 
         Ok(filtered_record_batch)
     }
