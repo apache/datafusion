@@ -1255,24 +1255,6 @@ data_sorted_clickbench() {
     fi
 }
 
-# Runs the sorted data benchmark
-run_sorted_data() {
-    RESULTS_FILE="${RESULTS_DIR}/sorted_data.json"
-    echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running sorted data benchmark..."
-
-    # Ensure sorted data exists
-    data_sorted_clickbench
-
-    debug_run $CARGO_COMMAND --bin dfbench -- sorted-data \
-        --iterations 5 \
-        --path "${DATA_DIR}/hits_0_sorted.parquet" \
-        --unsorted-path "${DATA_DIR}/hits_partitioned/hits_0.parquet" \
-        --queries-path "${SCRIPT_DIR}/queries/sorted_data" \
-        -o "${RESULTS_FILE}" \
-        ${QUERY_ARG}
-}
-
 # Runs the sorted data benchmark (sorted only)
 run_sorted_data_sorted_only() {
     RESULTS_FILE="${RESULTS_DIR}/sorted_data_sorted_only.json"
