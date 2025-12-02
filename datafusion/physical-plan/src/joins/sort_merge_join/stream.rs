@@ -329,7 +329,7 @@ pub(super) struct SortMergeJoinStream {
     /// Current state of the stream
     pub state: SortMergeJoinState,
     /// Staging output array builders
-    pub staging_output_record_batches: JoinedRecordBatches,
+    pub joined_record_batches: JoinedRecordBatches,
     /// Output buffer. Currently used by filtering as it requires double buffering
     /// to avoid small/empty batches. Non-filtered join outputs directly from `staging_output_record_batches.batches`
     pub output: BatchCoalescer,
@@ -866,10 +866,9 @@ impl Stream for SortMergeJoinStream {
                         self.freeze_all()?;
 
                         // Verify metadata alignment before checking if we have batches to output
-                        self.staging_output_record_batches
-                            .debug_assert_metadata_aligned();
+                        self.joined_record_batches.debug_assert_metadata_aligned();
 
-                        if !self.staging_output_record_batches.is_empty() {
+                        if !self.joined_record_batches.is_empty() {
                             // For filtered joins, skip concat here and let Init state handle it
                             // to avoid double-concatenation
                             if self.needs_deferred_filtering() {
@@ -886,11 +885,10 @@ impl Stream for SortMergeJoinStream {
                     self.freeze_all()?;
 
                     // Verify metadata alignment before final output
-                    self.staging_output_record_batches
-                        .debug_assert_metadata_aligned();
+                    self.joined_record_batches.debug_assert_metadata_aligned();
 
                     // if there is still something not processed
-                    return if !self.staging_output_record_batches.is_empty() {
+                    return if !self.joined_record_batches.is_empty() {
                         if self.needs_deferred_filtering() {
                             let record_batch = self.filter_joined_batch()?;
                             Poll::Ready(Some(Ok(record_batch)))
@@ -909,7 +907,7 @@ impl Stream for SortMergeJoinStream {
                         Poll::Ready(Some(Ok(record_batch)))
                     } else {
                         Poll::Ready(None)
-                    }
+                    };
                 }
             }
         }
@@ -962,7 +960,7 @@ impl SortMergeJoinStream {
             on_streamed,
             on_buffered,
             filter,
-            staging_output_record_batches: JoinedRecordBatches {
+            joined_record_batches: JoinedRecordBatches {
                 batches: vec![],
                 joined_batches: BatchCoalescer::new(Arc::clone(&schema), batch_size),
                 filter_mask: BooleanBuilder::new(),
@@ -1013,11 +1011,10 @@ impl SortMergeJoinStream {
         self.freeze_all()?;
 
         // Verify metadata alignment before checking if we have batches to filter
-        self.staging_output_record_batches
-            .debug_assert_metadata_aligned();
+        self.joined_record_batches.debug_assert_metadata_aligned();
 
         // If join is filtered and there is joined tuples waiting to be filtered
-        if !self.staging_output_record_batches.is_empty() {
+        if !self.joined_record_batches.is_empty() {
             // Apply filter on joined tuples and get filtered batch
             let out_filtered_batch = self.filter_joined_batch()?;
 
@@ -1383,8 +1380,7 @@ impl SortMergeJoinStream {
         self.freeze_streamed()?;
 
         // After freezing, metadata should be aligned
-        self.staging_output_record_batches
-            .debug_assert_metadata_aligned();
+        self.joined_record_batches.debug_assert_metadata_aligned();
 
         Ok(())
     }
@@ -1399,8 +1395,7 @@ impl SortMergeJoinStream {
         self.freeze_buffered(1)?;
 
         // After freezing, metadata should be aligned
-        self.staging_output_record_batches
-            .debug_assert_metadata_aligned();
+        self.joined_record_batches.debug_assert_metadata_aligned();
 
         Ok(())
     }
@@ -1424,7 +1419,7 @@ impl SortMergeJoinStream {
                 &buffered_indices,
                 buffered_batch,
             )? {
-                self.staging_output_record_batches
+                self.joined_record_batches
                     .push_batch_with_null_metadata(record_batch, self.join_type);
             }
             buffered_batch.null_joined.clear();
@@ -1457,7 +1452,7 @@ impl SortMergeJoinStream {
             &buffered_indices,
             buffered_batch,
         )? {
-            self.staging_output_record_batches
+            self.joined_record_batches
                 .push_batch_with_null_metadata(record_batch, self.join_type);
         }
         buffered_batch.join_filter_not_matched_map.clear();
@@ -1610,18 +1605,17 @@ impl SortMergeJoinStream {
                             pre_mask
                         };
 
-                        self.staging_output_record_batches
-                            .push_batch_with_filter_metadata(
-                                output_batch,
-                                &left_indices,
-                                mask_to_use,
-                                self.streamed_batch_counter.load(Relaxed),
-                                self.join_type,
-                            );
+                        self.joined_record_batches.push_batch_with_filter_metadata(
+                            output_batch,
+                            &left_indices,
+                            mask_to_use,
+                            self.streamed_batch_counter.load(Relaxed),
+                            self.join_type,
+                        );
                     } else {
                         // INNER joins: filter immediately and push without metadata
                         let filtered_batch = filter_record_batch(&output_batch, &mask)?;
-                        self.staging_output_record_batches
+                        self.joined_record_batches
                             .push_batch_without_metadata(filtered_batch, self.join_type);
                     }
 
@@ -1653,11 +1647,11 @@ impl SortMergeJoinStream {
                         }
                     }
                 } else {
-                    self.staging_output_record_batches
+                    self.joined_record_batches
                         .push_batch_without_metadata(output_batch, self.join_type);
                 }
             } else {
-                self.staging_output_record_batches
+                self.joined_record_batches
                     .push_batch_without_metadata(output_batch, self.join_type);
             }
         }
@@ -1667,42 +1661,27 @@ impl SortMergeJoinStream {
         Ok(())
     }
 
+    /// Output accumulated batches and reset staging (non-filtered joins only)
+    ///
+    /// Only called when !needs_deferred_filtering(), since filtered joins handle
+    /// output through filter_joined_batch() instead.
     fn output_record_batch_and_reset(&mut self) -> Result<RecordBatch> {
-        // Metadata should be aligned before we concat and output
-        self.staging_output_record_batches
-            .debug_assert_metadata_aligned();
+        self.joined_record_batches.debug_assert_metadata_aligned();
 
-        let record_batch = self
-            .staging_output_record_batches
-            .concat_batches(&self.schema)?;
+        let record_batch = self.joined_record_batches.concat_batches(&self.schema)?;
         (&record_batch).record_output(&self.join_metrics.baseline_metrics());
-
-        if !self.needs_deferred_filtering() {
-            // For non-filtered outer joins, we clear batches immediately after concat
-            // since we don't need them for deferred filter processing
-            self.staging_output_record_batches.clear_batches();
-        } else {
-            // For filtered outer joins, we keep the batches for later filter processing
-            // in filter_joined_batch(). Batches should still contain data.
-            debug_assert!(
-                !self.staging_output_record_batches.is_empty(),
-                "For filtered outer joins, batches should not be empty after concat since they're needed for filter processing"
-            );
-        }
+        self.joined_record_batches.clear_batches();
 
         Ok(record_batch)
     }
 
     fn filter_joined_batch(&mut self) -> Result<RecordBatch> {
         // Metadata should be aligned before processing
-        self.staging_output_record_batches
-            .debug_assert_metadata_aligned();
+        self.joined_record_batches.debug_assert_metadata_aligned();
 
-        let record_batch = self
-            .staging_output_record_batches
-            .concat_batches(&self.schema)?;
+        let record_batch = self.joined_record_batches.concat_batches(&self.schema)?;
         let (mut out_indices, mut out_mask, mut batch_ids) =
-            self.staging_output_record_batches.finish_metadata();
+            self.joined_record_batches.finish_metadata();
         let default_batch_ids = vec![0; record_batch.num_rows()];
 
         // If only nulls come in and indices sizes doesn't match with expected record batch count
@@ -1734,7 +1713,7 @@ impl SortMergeJoinStream {
         );
 
         if out_mask.is_empty() {
-            self.staging_output_record_batches.clear_batches();
+            self.joined_record_batches.clear_batches();
             return Ok(record_batch);
         }
 
@@ -1904,7 +1883,7 @@ impl SortMergeJoinStream {
             )?;
         }
 
-        self.staging_output_record_batches.clear();
+        self.joined_record_batches.clear();
 
         Ok(filtered_record_batch)
     }
