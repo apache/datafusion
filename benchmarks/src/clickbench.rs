@@ -78,6 +78,16 @@ pub struct RunOpt {
     /// If present, write results json here
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
+
+    /// Column name that the data is sorted by (e.g., "EventTime")
+    /// If specified, DataFusion will be informed that the data has this sort order
+    /// using CREATE EXTERNAL TABLE with WITH ORDER clause
+    #[structopt(long = "sorted-by")]
+    sorted_by: Option<String>,
+
+    /// Sort order: ASC or DESC (default: ASC)
+    #[structopt(long = "sort-order", default_value = "ASC")]
+    sort_order: String,
 }
 
 /// Get the SQL file path
@@ -125,6 +135,16 @@ impl RunOpt {
 
         // configure parquet options
         let mut config = self.common.config()?;
+
+        // CRITICAL: If sorted_by is specified, force target_partitions=1
+        // This ensures the file is not split into multiple partitions,
+        // which would prevent output_ordering from being set
+        if self.sorted_by.is_some() {
+            println!("⚠️  Forcing target_partitions=1 to preserve sort order");
+            println!("⚠️  (Multiple partitions would prevent output_ordering from being set)");
+            config = config.with_target_partitions(1);
+        }
+
         {
             let parquet_options = &mut config.options_mut().execution.parquet;
             // The hits_partitioned dataset specifies string columns
@@ -140,6 +160,11 @@ impl RunOpt {
 
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+
+        // Debug: print actual target_partitions being used
+        println!("📊 Session config target_partitions: {}",
+                 ctx.state().config().target_partitions());
+
         self.register_hits(&ctx).await?;
 
         let mut benchmark_run = BenchmarkRun::new();
@@ -214,17 +239,51 @@ impl RunOpt {
     }
 
     /// Registers the `hits.parquet` as a table named `hits`
+    /// If sorted_by is specified, uses CREATE EXTERNAL TABLE with WITH ORDER
     async fn register_hits(&self, ctx: &SessionContext) -> Result<()> {
-        let options = Default::default();
         let path = self.path.as_os_str().to_str().unwrap();
-        ctx.register_parquet("hits", path, options)
-            .await
-            .map_err(|e| {
-                DataFusionError::Context(
-                    format!("Registering 'hits' as {path}"),
-                    Box::new(e),
-                )
-            })
+
+        // If sorted_by is specified, use CREATE EXTERNAL TABLE with WITH ORDER
+        if let Some(ref sort_column) = self.sorted_by {
+            println!("Registering table with sort order: {} {}", sort_column, self.sort_order);
+
+            // Escape column name with double quotes
+            let escaped_column = if sort_column.contains('"') {
+                sort_column.clone()
+            } else {
+                format!("\"{}\"", sort_column)
+            };
+
+            // Build CREATE EXTERNAL TABLE DDL with WITH ORDER clause
+            // Schema will be automatically inferred from the Parquet file
+            let create_table_sql = format!(
+                "CREATE EXTERNAL TABLE hits \
+                 STORED AS PARQUET \
+                 LOCATION '{}' \
+                 WITH ORDER ({} {})",
+                path,
+                escaped_column,
+                self.sort_order.to_uppercase()
+            );
+
+            println!("Executing: {}", create_table_sql);
+
+            // Execute the CREATE EXTERNAL TABLE statement
+            ctx.sql(&create_table_sql).await?.collect().await?;
+
+            Ok(())
+        } else {
+            // Original registration without sort order
+            let options = Default::default();
+            ctx.register_parquet("hits", path, options)
+                .await
+                .map_err(|e| {
+                    DataFusionError::Context(
+                        format!("Registering 'hits' as {path}"),
+                        Box::new(e),
+                    )
+                })
+        }
     }
 
     fn iterations(&self) -> usize {

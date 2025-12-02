@@ -1255,18 +1255,25 @@ data_sorted_clickbench() {
     fi
 }
 
-# Runs the sorted data benchmark (sorted only)
+# Sorted Data Benchmark Functions for bench.sh
+# Add these functions to your bench.sh script
+
+# Runs the sorted data benchmark (sorted only) with sort order information
 run_sorted_data_sorted_only() {
     RESULTS_FILE="${RESULTS_DIR}/sorted_data_sorted_only.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running sorted data benchmark (sorted only)..."
+    echo "Running sorted data benchmark (sorted only) with sort order optimization..."
 
+    # Ensure sorted data exists
     data_sorted_clickbench
 
+    # Run benchmark with --sorted-by parameter to inform DataFusion about the sort order
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
         --iterations 5 \
         --path "${DATA_DIR}/hits_0_sorted.parquet" \
         --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
+        --sorted-by "EventTime" \
+        --sort-order "ASC" \
         -o "${RESULTS_FILE}" \
         ${QUERY_ARG}
 }
