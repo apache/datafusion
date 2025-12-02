@@ -25,23 +25,6 @@
 
 You can see the current [status of the `52.0.0`release here](https://github.com/apache/datafusion/issues/18566)
 
-### ListingTableProvider now caches `LIST` commands
-
-In prior versions, `ListingTableProvider` would issue `LIST` commands to
-the underlying object store each time it needed to list files for a query.
-To improve performance, `ListingTableProvider` now caches the results of
-`LIST` commands for the lifetime of the `ListingTableProvider` instance.
-
-Note that by default the cache has no expiration time, so if files are added or removed
-from the underlying object store, the `ListingTableProvider` will not see
-those changes until the `ListingTableProvider` instance is dropped and recreated.
-
-You will be able to configure the cache expiration time via a configuration option:
-
-See <https://github.com/apache/datafusion/issues/19056> for more details.
-
-Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
-
 ### Changes to DFSchema API
 
 To permit more efficient planning, several methods on `DFSchema` have been
@@ -56,6 +39,23 @@ directly on the `Field`. For example:
 - let field = df_schema.field("my_column").as_ref().clone();
 + let field = Arc::clone(df_schema.field("my_column"));
 ```
+
+### ListingTableProvider now caches `LIST` commands
+
+In prior versions, `ListingTableProvider` would issue `LIST` commands to
+the underlying object store each time it needed to list files for a query.
+To improve performance, `ListingTableProvider` now caches the results of
+`LIST` commands for the lifetime of the `ListingTableProvider` instance.
+
+Note that by default the cache has no expiration time, so if files are added or removed
+from the underlying object store, the `ListingTableProvider` will not see
+those changes until the `ListingTableProvider` instance is dropped and recreated.
+
+You will be able to configure the maximum cache size and cache expiration time via a configuration option:
+
+See <https://github.com/apache/datafusion/issues/19056> for more details.
+
+Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
 
 ### Removal of `pyarrow` feature
 
@@ -233,6 +233,217 @@ Instead this should now be:
 Additionally, the FFI structure for Scalar UDF's no longer contains a
 `return_type` call. This code was not used since the `ForeignScalarUDF`
 struct implements the `return_field_from_args` instead.
+
+### Projection handling moved from FileScanConfig to FileSource
+
+Projection handling has been moved from `FileScanConfig` into `FileSource` implementations. This enables format-specific projection pushdown (e.g., Parquet can push down struct field access, Vortex can push down computed expressions into un-decoded data).
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations
+- Users who use `FileScanConfigBuilder::with_projection_indices` directly
+
+**Breaking changes:**
+
+1. **`FileSource::with_projection` replaced with `try_pushdown_projection`:**
+
+   The `with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>` method has been removed and replaced with `try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>>`.
+
+2. **`FileScanConfig.projection_exprs` field removed:**
+
+   Projections are now stored in the `FileSource` directly, not in `FileScanConfig`.
+   Various public helper methods that access projection information have been removed from `FileScanConfig`.
+
+3. **`FileScanConfigBuilder::with_projection_indices` now returns `Result<Self>`:**
+
+   This method can now fail if the projection pushdown fails.
+
+4. **`FileSource::create_file_opener` now returns `Result<Arc<dyn FileOpener>>`:**
+
+   Previously returned `Arc<dyn FileOpener>` directly.
+   Any `FileSource` implementation that may fail to create a `FileOpener` should now return an appropriate error.
+
+5. **`DataSource::try_swapping_with_projection` signature changed:**
+
+   Parameter changed from `&[ProjectionExpr]` to `&ProjectionExprs`.
+
+**Migration guide:**
+
+If you have a custom `FileSource` implementation:
+
+**Before:**
+
+```rust,ignore
+impl FileSource for MyCustomSource {
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
+        // Apply projection from config
+        Arc::new(Self { /* ... */ })
+    }
+
+    fn create_file_opener(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(MyOpener { /* ... */ })
+    }
+}
+```
+
+**After:**
+
+```rust,ignore
+impl FileSource for MyCustomSource {
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        // Return None if projection cannot be pushed down
+        // Return Some(new_source) with projection applied if it can
+        Ok(Some(Arc::new(Self {
+            projection: Some(projection.clone()),
+            /* ... */
+        })))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        self.projection.as_ref()
+    }
+
+    fn create_file_opener(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Result<Arc<dyn FileOpener>> {
+        Ok(Arc::new(MyOpener { /* ... */ }))
+    }
+}
+```
+
+We recommend you look at [#18627](https://github.com/apache/datafusion/pull/18627)
+that introduced these changes for more examples for how this was handled for the various built in file sources.
+
+We have added [`SplitProjection`](https://docs.rs/datafusion-datasource/latest/datafusion_datasource/projection/struct.SplitProjection.html) and [`ProjectionOpener`](https://docs.rs/datafusion-datasource/latest/datafusion_datasource/projection/struct.ProjectionOpener.html) helpers to make it easier to handle projections in your `FileSource` implementations.
+
+For file sources that can only handle simple column selections (not computed expressions), use the `SplitProjection` and `ProjectionOpener` helpers to split the projection into pushdownable and non-pushdownable parts:
+
+```rust,ignore
+use datafusion_datasource::projection::{SplitProjection, ProjectionOpener};
+
+// In try_pushdown_projection:
+let split = SplitProjection::new(projection, self.table_schema())?;
+// Use split.file_projection() for what to push down to the file format
+// The ProjectionOpener wrapper will handle the rest
+```
+
+**For `FileScanConfigBuilder` users:**
+
+```diff
+let config = FileScanConfigBuilder::new(url, source)
+-   .with_projection_indices(Some(vec![0, 2, 3]))
++   .with_projection_indices(Some(vec![0, 2, 3]))?
+    .build();
+```
+
+**Handling projections in `FileSource`:**
+
+### `PhysicalOptimizerRule::optimize` deprecated in favor of `optimize_plan`
+
+The `PhysicalOptimizerRule` trait has been updated to provide optimizer rules with access to broader session context. A new method `optimize_plan` has been added that accepts an `OptimizerContext` parameter, and the existing `optimize` method has been deprecated.
+
+**Who is affected:**
+
+- Users who have implemented custom `PhysicalOptimizerRule` implementations
+
+**Breaking changes:**
+
+1. **New `optimize_plan` method**: This is the preferred method for implementing optimization rules. It provides access to the full `SessionConfig` through `OptimizerContext`, rather than just `ConfigOptions`.
+
+2. **`optimize` method deprecated**: The old `optimize` method that takes `&ConfigOptions` is now deprecated and will be removed in DataFusion 58.0.0.
+
+**Migration guide:**
+
+If you have a custom `PhysicalOptimizerRule` implementation, update it to implement `optimize_plan` instead of `optimize`:
+
+**Before:**
+
+```rust
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_physical_plan::ExecutionPlan;
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct MyOptimizerRule;
+
+#[allow(deprecated)]
+impl PhysicalOptimizerRule for MyOptimizerRule {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Use config.optimizer, config.execution, etc.
+        // ... optimization logic ...
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+```
+
+**After:**
+
+```rust
+use datafusion::physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
+use datafusion_common::Result;
+use datafusion_physical_plan::ExecutionPlan;
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct MyOptimizerRule;
+
+impl PhysicalOptimizerRule for MyOptimizerRule {
+    fn optimize_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &OptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Access ConfigOptions through session_config
+        let _config = context.session_config().options();
+        // Or access extensions through session_config
+        let _extensions = context.session_config().extensions();
+        // ... optimization logic ...
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+```
+
+**What is `OptimizerContext`?**
+
+`OptimizerContext` is a new struct that provides context during physical plan optimization, similar to how `TaskContext` provides context during execution. It wraps `SessionConfig`, giving optimizer rules access to:
+
+- Configuration options via `context.session_config().options()`
+- Session extensions via `context.session_config().extensions()`
+
+This enables optimizer rules to access custom extensions registered with the session, which was not possible with the old `&ConfigOptions` parameter.
 
 ## DataFusion `51.0.0`
 

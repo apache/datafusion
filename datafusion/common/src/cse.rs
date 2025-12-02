@@ -19,12 +19,12 @@
 //! a [`CSEController`], that defines how to eliminate common subtrees from a particular
 //! [`TreeNode`] tree.
 
+use crate::Result;
 use crate::hash_utils::combine_hashes;
 use crate::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
     TreeNodeVisitor,
 };
-use crate::Result;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
@@ -676,13 +676,13 @@ where
 
 #[cfg(test)]
 mod test {
+    use crate::Result;
     use crate::alias::AliasGenerator;
     use crate::cse::{
-        CSEController, HashNode, IdArray, Identifier, NodeStats, NormalizeEq,
-        Normalizeable, CSE,
+        CSE, CSEController, HashNode, IdArray, Identifier, NodeStats, NormalizeEq,
+        Normalizeable,
     };
     use crate::tree_node::tests::TestTreeNode;
-    use crate::Result;
     use std::collections::HashSet;
     use std::hash::{Hash, Hasher};
 

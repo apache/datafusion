@@ -177,8 +177,9 @@ struct BuiltinExprBuilder {
 impl BuiltinExprBuilder {
     pub fn try_from_name(name: &str) -> Option<Self> {
         match name {
-            "not" | "like" | "ilike" | "is_null" | "is_not_null" | "is_true"
-            | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
+            "not" | "like" | "ilike" | "like_match" | "like_imatch"
+            | "like_not_match" | "like_not_imatch" | "is_null" | "is_not_null"
+            | "is_true" | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
             | "is_not_unknown" | "negative" | "negate" | "and_not" | "xor"
             | "between" | "logb" => Some(Self {
                 expr_name: name.to_string(),
@@ -194,8 +195,12 @@ impl BuiltinExprBuilder {
         args: Vec<Expr>,
     ) -> Result<Expr> {
         match self.expr_name.as_str() {
-            "like" => Self::build_like_expr(false, f, args).await,
-            "ilike" => Self::build_like_expr(true, f, args).await,
+            "like" => Self::build_like_expr(false, false, f, args).await,
+            "ilike" => Self::build_like_expr(true, false, f, args).await,
+            "like_match" => Self::build_like_expr(false, false, f, args).await,
+            "like_imatch" => Self::build_like_expr(true, false, f, args).await,
+            "like_not_match" => Self::build_like_expr(false, true, f, args).await,
+            "like_not_imatch" => Self::build_like_expr(true, true, f, args).await,
             "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
             | "is_not_unknown" => Self::build_unary_expr(&self.expr_name, args).await,
@@ -236,6 +241,7 @@ impl BuiltinExprBuilder {
 
     async fn build_like_expr(
         case_insensitive: bool,
+        negated: bool,
         f: &ScalarFunction,
         args: Vec<Expr>,
     ) -> Result<Expr> {
@@ -274,7 +280,7 @@ impl BuiltinExprBuilder {
         };
 
         Ok(Expr::Like(Like {
-            negated: false,
+            negated,
             expr: Box::new(expr),
             pattern: Box::new(pattern),
             escape_char,
@@ -474,6 +480,98 @@ mod tests {
 
         // Consume the expression and ensure we don't get an error
         let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_like_match_conversion() -> Result<()> {
+        // 1. Setup the consumer with the "like_match" function registered
+        let mut extensions = Extensions::default();
+        extensions
+            .functions
+            .insert(0, "like_match:str_str".to_string());
+        extensions
+            .functions
+            .insert(1, "like_not_match:str_str".to_string());
+        extensions
+            .functions
+            .insert(2, "like_imatch:str_str".to_string());
+
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+
+        // 2. Create the arguments (column "a" and pattern "%foo%")
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let col_arg = FunctionArgument {
+            arg_type: Some(ArgType::Value(Expression {
+                rex_type: Some(RexType::Selection(Box::new(
+                    substrait::proto::expression::FieldReference {
+                        reference_type: Some(substrait::proto::expression::field_reference::ReferenceType::DirectReference(
+                            substrait::proto::expression::ReferenceSegment {
+                                reference_type: Some(substrait::proto::expression::reference_segment::ReferenceType::StructField(
+                                    Box::new(substrait::proto::expression::reference_segment::StructField {
+                                        field: 0,
+                                        child: None,
+                                    })
+                                )),
+                            }
+                        )),
+                        root_type: Some(substrait::proto::expression::field_reference::RootType::RootReference(
+                            substrait::proto::expression::field_reference::RootReference {}
+                        )),
+                    }
+                ))),
+            })),
+        };
+
+        let pattern_arg = FunctionArgument {
+            arg_type: Some(ArgType::Value(Expression {
+                rex_type: Some(RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::String("foo".to_string())),
+                })),
+            })),
+        };
+
+        // 3. Test "like_match" (Standard LIKE)
+        let func_like = ScalarFunction {
+            function_reference: 0,
+            arguments: vec![col_arg.clone(), pattern_arg.clone()],
+            ..Default::default()
+        };
+
+        let result = consumer
+            .consume_scalar_function(&func_like, &df_schema)
+            .await?;
+
+        if let Expr::Like(like) = result {
+            assert!(!like.negated);
+            assert!(!like.case_insensitive);
+            assert_eq!(format!("{}", like.pattern), "Utf8(\"foo\")");
+        } else {
+            panic!("Expected Expr::Like, got {result:?}");
+        }
+
+        // 4. Test "like_not_match" (NOT LIKE)
+        let func_not_like = ScalarFunction {
+            function_reference: 1,
+            arguments: vec![col_arg.clone(), pattern_arg.clone()],
+            ..Default::default()
+        };
+
+        let result = consumer
+            .consume_scalar_function(&func_not_like, &df_schema)
+            .await?;
+
+        if let Expr::Like(like) = result {
+            assert!(like.negated);
+            assert!(!like.case_insensitive);
+        } else {
+            panic!("Expected Expr::Like (negated), got {result:?}");
+        }
+
         Ok(())
     }
 }
