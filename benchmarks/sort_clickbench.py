@@ -38,8 +38,9 @@ except ImportError:
 def sort_clickbench_data(
         input_path: str,
         output_path: str,
-        row_group_size: int = 1024 * 1024,  # 1M rows default
+        row_group_size: int = 64 * 1024,  # 64k rows default
         compression: str = 'zstd',
+        compression_level: int = 3,
         verify: bool = True
 ):
     """Sort parquet file by EventTime column with optimized settings."""
@@ -100,7 +101,7 @@ def sort_clickbench_data(
             # Batch size for writing
             write_batch_size=min(row_group_size, 1024 * 64),
             # Enable compression for all columns
-            compression_level=None,  # Use default compression level
+            compression_level=compression_level,  # Use default compression level
         )
 
         # Report results
@@ -170,7 +171,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic usage (1M rows per group)
+  # Basic usage (64k rows per group)
   %(prog)s input.parquet output.parquet
   
   # Custom row group size (2M rows)
@@ -239,6 +240,7 @@ Examples:
         args.output,
         row_group_size=args.row_group_size,
         compression=args.compression,
+        compression_level=args.compression_level,
         verify=not args.no_verify
     )
 

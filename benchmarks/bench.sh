@@ -1206,9 +1206,6 @@ compare_benchmarks() {
 
 }
 
-# Sorted Data Benchmark Functions (Optimized for hits_0.parquet)
-# Add these functions to bench.sh
-
 # Creates sorted ClickBench data from hits_0.parquet (partitioned dataset)
 # The data is sorted by EventTime in ascending order
 # Using hits_0.parquet (~150MB) instead of full hits.parquet (~14GB) for faster testing
@@ -1262,9 +1259,6 @@ data_sorted_clickbench() {
         return 1
     fi
 }
-
-# Sorted Data Benchmark Functions for bench.sh
-# Add these functions to your bench.sh script
 
 # Runs the sorted data benchmark (sorted only) with sort order information
 run_data_sorted_clickbench() {
