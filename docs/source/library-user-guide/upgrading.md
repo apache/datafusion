@@ -25,6 +25,38 @@
 
 You can see the current [status of the `52.0.0`release here](https://github.com/apache/datafusion/issues/18566)
 
+### ListingTableProvider now caches `LIST` commands
+
+In prior versions, `ListingTableProvider` would issue `LIST` commands to
+the underlying object store each time it needed to list files for a query.
+To improve performance, `ListingTableProvider` now caches the results of
+`LIST` commands for the lifetime of the `ListingTableProvider` instance.
+
+Note that by default the cache has no expiration time, so if files are added or removed
+from the underlying object store, the `ListingTableProvider` will not see
+those changes until the `ListingTableProvider` instance is dropped and recreated.
+
+You will be able to configure the cache expiration time via a configuration option:
+
+See <https://github.com/apache/datafusion/issues/19056> for more details.
+
+Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
+
+### Changes to DFSchema API
+
+To permit more efficient planning, several methods on `DFSchema` have been
+changed to return references to the underlying [`&FieldRef`] rather than
+[`&Field`]. This allows planners to more cheaply copy the references via
+`Arc::clone` rather than cloning the entire `Field` structure.
+
+You may need to change code to use `Arc::clone` instead of `.as_ref().clone()`
+directly on the `Field`. For example:
+
+```diff
+- let field = df_schema.field("my_column").as_ref().clone();
++ let field = Arc::clone(df_schema.field("my_column"));
+```
+
 ### Removal of `pyarrow` feature
 
 The `pyarrow` feature flag has been removed. This feature has been migrated to
