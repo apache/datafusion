@@ -394,9 +394,8 @@ impl JoinedRecordBatches {
         (row_indices, filter_mask, &self.batch_ids)
     }
 
-    /// Clears only the batches (used in non-filtered path)
+    /// Clears batches without touching metadata (for early return when no filtering needed)
     fn clear_batches(&mut self, schema: &SchemaRef, batch_size: usize) {
-        // Replace with a new empty BatchCoalescer
         self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size);
     }
 
@@ -535,14 +534,10 @@ impl JoinedRecordBatches {
     }
 
     fn clear(&mut self, schema: &SchemaRef, batch_size: usize) {
-        // Replace with a new empty BatchCoalescer
         self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size);
-
         self.batch_ids.clear();
         self.filter_mask = BooleanBuilder::new();
         self.row_indices = UInt64Builder::new();
-
-        // After clear, everything should be empty
         self.debug_assert_empty_consistency();
     }
 }
@@ -575,9 +570,7 @@ fn last_index_for_row(
     );
     debug_assert!(
         row_index < indices_len,
-        "row_index {} should be < indices_len {}",
-        row_index,
-        indices_len
+        "row_index {row_index} should be < indices_len {indices_len}",
     );
 
     row_index == indices_len - 1
@@ -1008,15 +1001,10 @@ impl SortMergeJoinStream {
     fn process_filtered_batches(&mut self) -> Poll<Option<Result<RecordBatch>>> {
         self.freeze_all()?;
 
-        // Verify metadata alignment before checking if we have batches to filter
         self.joined_record_batches.debug_assert_metadata_aligned();
 
-        // If join is filtered and there is joined tuples waiting to be filtered
         if !self.joined_record_batches.joined_batches.is_empty() {
-            // Apply filter on joined tuples and get filtered batch
             let out_filtered_batch = self.filter_joined_batch()?;
-
-            // Append filtered batch to the output buffer
             self.output
                 .push_batch(out_filtered_batch)
                 .expect("Failed to push output batch");
