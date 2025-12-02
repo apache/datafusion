@@ -198,6 +198,10 @@ impl RunOpt {
 
         let sql = &get_query_sql(self.query_path.to_str().unwrap(), query_id)?;
 
+        if self.common.debug {
+            println!("=== SQL for query {query_id} ===\n{}\n", sql.join(";\n"));
+        }
+
         for i in 0..self.iterations() {
             let start = Instant::now();
 
@@ -311,17 +315,27 @@ impl RunOpt {
 
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
-        let path = format!("{path}/{table}");
+        let path = format!("{path}/{table}.parquet");
+        
+        // Check if the file exists
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("Warning: Table file does not exist: {}", path);
+        }
+        
         let format = ParquetFormat::default()
             .with_options(ctx.state().table_options().parquet.clone());
-        let extension = DEFAULT_PARQUET_EXTENSION;
 
         let table_path = ListingTableUrl::parse(path)?;
         let options = ListingOptions::new(Arc::new(format))
-            .with_file_extension(extension)
+            .with_file_extension(DEFAULT_PARQUET_EXTENSION)
             .with_target_partitions(target_partitions)
             .with_collect_stat(state.config().collect_statistics());
         let schema = options.infer_schema(&state, &table_path).await?;
+
+        if self.common.debug {
+            println!("Inferred schema from {table_path} for table '{table}':\n{schema:#?}\n");
+        }
+
         let options = if self.sorted {
             let key_column_name = schema.fields()[0].name();
             options

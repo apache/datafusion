@@ -231,3 +231,112 @@ fn assert_metadata(batches: &[RecordBatch], expected_metadata: &HashMap<String, 
         assert_eq!(batch.schema().metadata(), expected_metadata,);
     }
 }
+
+#[tokio::test]
+async fn infer_schema_from_gzip_parquet() {
+    // Test schema inference from a gzip-compressed parquet file
+    let file_path = "../../../datafusion-benchmarks/tpcds/data/sf1/web_site.parquet";
+    
+    // Check if the file exists
+    if !Path::new(file_path).exists() {
+        eprintln!("Skipping test: file not found at {}", file_path);
+        return;
+    }
+
+    let ctx = SessionContext::new();
+    
+    // Read the parquet file and infer schema
+    let df = ctx
+        .read_parquet(file_path, ParquetReadOptions::default())
+        .await
+        .expect("Failed to read parquet file");
+    
+    let schema = df.schema();
+    
+    // Verify that schema was successfully inferred
+    assert!(
+        !schema.fields().is_empty(),
+        "Schema should have at least one field"
+    );
+    
+    // Print schema for debugging
+    println!("Inferred schema from gzip parquet file:");
+    for field in schema.fields() {
+        println!("  - {}: {:?}", field.name(), field.data_type());
+    }
+    
+    // Verify we can actually read data from the file
+    let results = df.collect().await.expect("Failed to collect results");
+    
+    // Verify we got some data
+    let total_rows: usize = results.iter().map(|batch| batch.num_rows()).sum();
+    println!("Total rows read: {}", total_rows);
+    
+    assert!(
+        total_rows > 0,
+        "Should have read at least one row from the file"
+    );
+}
+
+#[tokio::test]
+async fn infer_schema_from_gzip_parquet_with_listing_options() {
+    use datafusion::datasource::file_format::parquet::ParquetFormat;
+    use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
+    use datafusion_common::file_options::file_type::DEFAULT_PARQUET_EXTENSION;
+    
+    // Test schema inference using ListingOptions and ParquetFormat
+    let file_path = "../../../datafusion-benchmarks/tpcds/data/sf1/web_site.parquet";
+    
+    // Check if the file exists
+    if !Path::new(file_path).exists() {
+        eprintln!("Skipping test: file not found at {}", file_path);
+        return;
+    }
+
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    
+    // Create ParquetFormat with options from the session state
+    let format = ParquetFormat::default()
+        .with_options(state.table_options().parquet.clone());
+
+    // Parse the file path as a ListingTableUrl
+    let table_path = ListingTableUrl::parse(file_path)
+        .expect("Failed to parse table path");
+    
+    // Create ListingOptions with the ParquetFormat
+    let options = ListingOptions::new(Arc::new(format))
+        .with_file_extension(DEFAULT_PARQUET_EXTENSION)
+        .with_target_partitions(state.config().target_partitions())
+        .with_collect_stat(state.config().collect_statistics());
+    
+    // Infer schema using the ListingOptions
+    let schema = options
+        .infer_schema(&state, &table_path)
+        .await
+        .expect("Failed to infer schema");
+    
+    // Verify that schema was successfully inferred
+    assert!(
+        !schema.fields().is_empty(),
+        "Schema should have at least one field"
+    );
+    
+    // Print schema for debugging
+    println!("Inferred schema using ListingOptions:");
+    for field in schema.fields() {
+        println!("  - {}: {:?}", field.name(), field.data_type());
+    }
+    
+    // Verify expected number of fields for web_site table
+    assert_eq!(
+        schema.fields().len(),
+        26,
+        "web_site table should have 26 fields"
+    );
+    
+    // Verify some specific fields exist
+    assert!(schema.field_with_name("web_site_sk").is_ok());
+    assert!(schema.field_with_name("web_site_id").is_ok());
+    assert!(schema.field_with_name("web_name").is_ok());
+}
