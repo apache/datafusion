@@ -57,15 +57,20 @@ impl SparkMakeInterval {
 
         let variants = vec![
             TypeSignature::Nullary,
+            // year
             TypeSignature::Coercible(vec![int32.clone()]),
+            // year, month
             TypeSignature::Coercible(vec![int32.clone(), int32.clone()]),
+            // year, month, week
             TypeSignature::Coercible(vec![int32.clone(), int32.clone(), int32.clone()]),
+            // year, month, week, day
             TypeSignature::Coercible(vec![
                 int32.clone(),
                 int32.clone(),
                 int32.clone(),
                 int32.clone(),
             ]),
+            // year, month, week, day, hour
             TypeSignature::Coercible(vec![
                 int32.clone(),
                 int32.clone(),
@@ -73,6 +78,7 @@ impl SparkMakeInterval {
                 int32.clone(),
                 int32.clone(),
             ]),
+            // year, month, week, day, hour, minute
             TypeSignature::Coercible(vec![
                 int32.clone(),
                 int32.clone(),
@@ -81,6 +87,7 @@ impl SparkMakeInterval {
                 int32.clone(),
                 int32.clone(),
             ]),
+            // year, month, week, day, hour, minute, second
             TypeSignature::Coercible(vec![
                 int32.clone(),
                 int32.clone(),
