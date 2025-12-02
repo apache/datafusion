@@ -34,7 +34,6 @@ const ARRAY_FIELD_DEFAULT_NAME: &str = "element";
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for SparkArray {
@@ -50,7 +49,6 @@ impl SparkArray {
                 vec![TypeSignature::UserDefined, TypeSignature::Nullary],
                 Volatility::Immutable,
             ),
-            aliases: vec![],
         }
     }
 }
@@ -107,7 +105,7 @@ impl ScalarUDFImpl for SparkArray {
     }
 
     fn aliases(&self) -> &[String] {
-        &self.aliases
+        &[]
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
