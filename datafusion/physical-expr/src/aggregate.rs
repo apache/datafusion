@@ -16,7 +16,7 @@
 // under the License.
 
 pub(crate) mod groups_accumulator {
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub(crate) mod accumulate {
         pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
     }
