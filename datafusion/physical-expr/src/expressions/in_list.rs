@@ -355,6 +355,38 @@ impl InListExpr {
             Some(instantiate_static_filter(array)?),
         ))
     }
+
+    /// Create a new InList expression with a static filter for constant list expressions.
+    ///
+    /// This validates data types, evaluates the list as constants, and uses specialized
+    /// StaticFilter implementations for better performance (e.g., Int32StaticFilter for Int32).
+    ///
+    /// Returns an error if data types don't match or if the list contains non-constant expressions.
+    pub fn try_from_static_filter(
+        expr: Arc<dyn PhysicalExpr>,
+        list: Vec<Arc<dyn PhysicalExpr>>,
+        negated: bool,
+        schema: &Schema,
+    ) -> Result<Self> {
+        // Check the data types match
+        let expr_data_type = expr.data_type(schema)?;
+        for list_expr in list.iter() {
+            let list_expr_data_type = list_expr.data_type(schema)?;
+            assert_or_internal_err!(
+                DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type),
+                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
+            );
+        }
+
+        // Evaluate the list as constants and create the static filter
+        let in_array = try_evaluate_constant_list(&list, schema)?;
+        Ok(Self::new(
+            expr,
+            list,
+            negated,
+            Some(instantiate_static_filter(in_array)?),
+        ))
+    }
 }
 impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -556,30 +588,28 @@ pub fn in_list(
     negated: &bool,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // check the data type
-    let expr_data_type = expr.data_type(schema)?;
-    for list_expr in list.iter() {
-        let list_expr_data_type = list_expr.data_type(schema)?;
-        assert_or_internal_err!(
-            DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type),
-            "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-        );
-    }
-
-    // Try to create a static filter for constant expressions
-    let static_filter = try_evaluate_constant_list(&list, schema)
-        .and_then(ArrayStaticFilter::try_new)
-        .ok()
-        .map(|static_filter| {
-            Arc::new(static_filter) as Arc<dyn StaticFilter + Send + Sync>
-        });
-
-    Ok(Arc::new(InListExpr::new(
-        expr,
-        list,
+    // Try to create with static filter (validates types and evaluates constant list)
+    match InListExpr::try_from_static_filter(
+        Arc::clone(&expr),
+        list.clone(),
         *negated,
-        static_filter,
-    )))
+        schema,
+    ) {
+        Ok(expr) => Ok(Arc::new(expr)),
+        Err(_) => {
+            // Fall back to non-static filter if list contains non-constant expressions
+            // Still need to validate types
+            let expr_data_type = expr.data_type(schema)?;
+            for list_expr in list.iter() {
+                let list_expr_data_type = list_expr.data_type(schema)?;
+                assert_or_internal_err!(
+                    DFSchema::datatype_is_logically_equal(&expr_data_type, &list_expr_data_type),
+                    "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
+                );
+            }
+            Ok(Arc::new(InListExpr::new(expr, list, *negated, None)))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3419,6 +3449,39 @@ mod tests {
             vec![Some(false)],
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_dictionary_int32() -> Result<()> {
+        // Test that Int32StaticFilter handles dictionary-encoded Int32 columns.
+        // This exposes a bug where as_primitive_opt::<Int32Type>() returns None
+        // for dictionary arrays, causing an error.
+
+        // Create schema with dictionary-encoded Int32 column
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32));
+        let schema = Schema::new(vec![Field::new("a", dict_type.clone(), false)]);
+        let col_a = col("a", &schema)?;
+
+        // Create IN list with Int32 literals: (1, 2, 3)
+        let list = vec![lit(1i32), lit(2i32), lit(3i32)];
+
+        // Create InListExpr via in_list() - this uses Int32StaticFilter for Int32 lists
+        let expr = in_list(col_a, list, &false, &schema)?;
+
+        // Create dictionary-encoded batch with values [1, 2, 5]
+        // Dictionary: keys [0, 1, 2] -> values [1, 2, 5]
+        let keys = Int8Array::from(vec![0, 1, 2]);
+        let values = Int32Array::from(vec![1, 2, 5]);
+        let dict_array: ArrayRef =
+            Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![dict_array])?;
+
+        // Expected: [1 IN (1,2,3), 2 IN (1,2,3), 5 IN (1,2,3)] = [true, true, false]
+        let result = expr.evaluate(&batch)?.into_array(3)?;
+        let result = as_boolean_array(&result);
+        assert_eq!(result, &BooleanArray::from(vec![true, true, false]));
         Ok(())
     }
 }
