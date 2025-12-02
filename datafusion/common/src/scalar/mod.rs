@@ -60,15 +60,15 @@ use arrow::array::{
     Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
     DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
-    PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array, UnionArray,
+    FixedSizeBinaryBuilder, FixedSizeListArray, Float16Array, Float32Array, Float64Array,
+    GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
+    MutableArrayData, OffsetSizeTrait, PrimitiveArray, Scalar, StringArray,
+    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{cast_with_options, CastOptions};
@@ -2989,7 +2989,14 @@ impl ScalarValue {
                     )
                     .unwrap(),
                 ),
-                None => Arc::new(FixedSizeBinaryArray::new_null(*s, size)),
+                None => {
+                    // TODO: Replace with FixedSizeBinaryArray::new_null once a fix for
+                    // https://github.com/apache/arrow-rs/issues/8900 is in the used arrow-rs
+                    // version.
+                    let mut builder = FixedSizeBinaryBuilder::new(*s);
+                    builder.append_nulls(size);
+                    Arc::new(builder.finish())
+                }
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => Arc::new(
@@ -5170,6 +5177,18 @@ mod tests {
             .expect("Failed to convert to empty array");
 
         assert_eq!(empty_array.len(), 0);
+    }
+
+    /// See https://github.com/apache/datafusion/issues/18870
+    #[test]
+    fn test_to_array_of_size_for_none_fsb() {
+        let sv = ScalarValue::FixedSizeBinary(5, None);
+        let result = sv
+            .to_array_of_size(2)
+            .expect("Failed to convert to array of size");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(result.as_fixed_size_binary().values().len(), 10);
     }
 
     #[test]
