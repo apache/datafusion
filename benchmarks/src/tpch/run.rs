@@ -94,11 +94,7 @@ pub struct RunOpt {
 
     /// If true then Piecewise Merge Join can be used, if false then it will opt for Nested Loop Join
     /// True by default.
-    #[structopt(
-        
-        long = "enable_piecewise_merge_join",
-        default_value = "false"
-    )]
+    #[structopt(long = "enable_piecewise_merge_join", default_value = "false")]
 
     /// False by default.
     #[structopt(long = "enable_piecewise_merge_join", default_value = "false")]

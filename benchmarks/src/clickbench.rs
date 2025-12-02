@@ -141,7 +141,9 @@ impl RunOpt {
         // which would prevent output_ordering from being set
         if self.sorted_by.is_some() {
             println!("⚠️  Forcing target_partitions=1 to preserve sort order");
-            println!("⚠️  (Multiple partitions would prevent output_ordering from being set)");
+            println!(
+                "⚠️  (Multiple partitions would prevent output_ordering from being set)"
+            );
             config = config.with_target_partitions(1);
         }
 
@@ -162,8 +164,10 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
 
         // Debug: print actual target_partitions being used
-        println!("📊 Session config target_partitions: {}",
-                 ctx.state().config().target_partitions());
+        println!(
+            "📊 Session config target_partitions: {}",
+            ctx.state().config().target_partitions()
+        );
 
         self.register_hits(&ctx).await?;
 
@@ -245,13 +249,16 @@ impl RunOpt {
 
         // If sorted_by is specified, use CREATE EXTERNAL TABLE with WITH ORDER
         if let Some(ref sort_column) = self.sorted_by {
-            println!("Registering table with sort order: {} {}", sort_column, self.sort_order);
+            println!(
+                "Registering table with sort order: {} {}",
+                sort_column, self.sort_order
+            );
 
             // Escape column name with double quotes
             let escaped_column = if sort_column.contains('"') {
                 sort_column.clone()
             } else {
-                format!("\"{}\"", sort_column)
+                format!("\"{sort_column}\"")
             };
 
             // Build CREATE EXTERNAL TABLE DDL with WITH ORDER clause
@@ -266,7 +273,7 @@ impl RunOpt {
                 self.sort_order.to_uppercase()
             );
 
-            println!("Executing: {}", create_table_sql);
+            println!("Executing: {create_table_sql}");
 
             // Execute the CREATE EXTERNAL TABLE statement
             ctx.sql(&create_table_sql).await?.collect().await?;
