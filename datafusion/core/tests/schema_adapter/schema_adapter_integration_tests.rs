@@ -27,8 +27,9 @@ use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::{
     ArrowSource, CsvSource, FileSource, JsonSource,
 };
+use datafusion::logical_expr::{col, lit};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{ColumnStatistics, ScalarValue};
@@ -36,12 +37,21 @@ use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
+
+use datafusion::assert_batches_eq;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::TableSchema;
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_expr::Expr;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::planner::logical2physical;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::{
+    filter_pushdown::FilterPushdown, OptimizerContext, PhysicalOptimizerRule,
+};
+use datafusion_physical_plan::filter::FilterExec;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 
@@ -214,12 +224,24 @@ impl PhysicalExprAdapter for UppercasePhysicalExprAdapter {
     }
 }
 
-/// Test reading a Parquet file where the table schema is flipped (c, b, a) vs. the physical file schema (a, b, c)
+fn push_down_filters(
+    plan: Arc<dyn ExecutionPlan>,
+    filter: Expr,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let filter_expr = logical2physical(&filter, &plan.schema());
+    let plan = Arc::new(FilterExec::try_new(filter_expr, plan)?);
+    let cfg = SessionConfig::new()
+        .set_str("datafusion.execution.parquet.pushdown_filters", "true");
+    let optimizer_context = OptimizerContext::new(cfg);
+    let optimizer = FilterPushdown::new();
+    optimizer.optimize_plan(plan, &optimizer_context)
+}
+
+/// Test reading and filtering a Parquet file where the table schema is flipped (c, b, a) vs. the physical file schema (a, b, c)
 #[cfg(feature = "parquet")]
 #[tokio::test]
 async fn test_parquet_flipped_projection() -> Result<()> {
     // Create test data
-    use datafusion::assert_batches_eq;
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -284,10 +306,7 @@ async fn test_parquet_flipped_projection() -> Result<()> {
     assert_batches_eq!(expected, &batches);
 
     // And now with a projection applied that selects (`b`, `a`)
-    let projection = datafusion_physical_expr::projection::ProjectionExprs::from_indices(
-        &[1, 2],
-        &table_schema,
-    );
+    let projection = ProjectionExprs::from_indices(&[1, 2], &table_schema);
     let source = Arc::new(ParquetSource::new(table_schema.clone()))
         .try_pushdown_projection(&projection)
         .unwrap()
@@ -300,7 +319,7 @@ async fn test_parquet_flipped_projection() -> Result<()> {
     let exec = DataSourceExec::from_data_source(config);
     // Collect results
     let task_ctx = ctx.task_ctx();
-    let stream = exec.execute(0, task_ctx)?;
+    let stream = exec.execute(0, task_ctx.clone())?;
     let batches = datafusion::physical_plan::common::collect(stream).await?;
     // There should be one batch
     assert_eq!(batches.len(), 1);
@@ -316,6 +335,27 @@ async fn test_parquet_flipped_projection() -> Result<()> {
     ];
     assert_batches_eq!(expected, &batches);
 
+    // And with a filter on `b`, `a`
+    // a = 1 or b != 'foo' and a = 3 -> matches [{a=1,b=x},{b=z,a=3}]
+    let filter = col("a")
+        .eq(lit(1))
+        .or(col("b").not_eq(lit("foo")).and(col("a").eq(lit(3))));
+    let exec = push_down_filters(exec, filter).unwrap();
+    let stream = exec.execute(0, task_ctx)?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+    #[rustfmt::skip]
+    let expected = [
+        "+---+---+",
+        "| b | a |",
+        "+---+---+",
+        "| x | 1 |",
+        "| z | 3 |",
+        "+---+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
     Ok(())
 }
 
@@ -325,8 +365,6 @@ async fn test_parquet_flipped_projection() -> Result<()> {
 #[tokio::test]
 async fn test_parquet_missing_column() -> Result<()> {
     // Create test data with columns (a, c)
-    use datafusion::assert_batches_eq;
-    use datafusion_physical_expr::projection::ProjectionExprs;
     let batch = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -402,7 +440,7 @@ async fn test_parquet_missing_column() -> Result<()> {
     let exec = DataSourceExec::from_data_source(config);
     // Collect results
     let task_ctx = ctx.task_ctx();
-    let stream = exec.execute(0, task_ctx)?;
+    let stream = exec.execute(0, task_ctx.clone())?;
     let batches = datafusion::physical_plan::common::collect(stream).await?;
     // There should be one batch
     assert_eq!(batches.len(), 1);
@@ -413,6 +451,27 @@ async fn test_parquet_missing_column() -> Result<()> {
         "+-----+---+---+",
         "| 1.1 | 1 |   |",
         "| 2.2 | 2 |   |",
+        "| 3.3 | 3 |   |",
+        "+-----+---+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // And with a filter on a, b
+    // a = 1 or b is null and a = 3
+    let filter = col("a")
+        .eq(lit(1))
+        .or(col("b").is_null().and(col("a").eq(lit(3))));
+    let exec = push_down_filters(exec, filter).unwrap();
+    let stream = exec.execute(0, task_ctx.clone())?;
+    let batches = datafusion::physical_plan::common::collect(stream).await?;
+    // There should be one batch
+    assert_eq!(batches.len(), 1);
+    #[rustfmt::skip]
+    let expected = [
+        "+-----+---+---+",
+        "| c   | a | b |",
+        "+-----+---+---+",
+        "| 1.1 | 1 |   |",
         "| 3.3 | 3 |   |",
         "+-----+---+---+",
     ];
