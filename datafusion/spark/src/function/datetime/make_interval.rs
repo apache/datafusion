@@ -47,30 +47,50 @@ impl SparkMakeInterval {
             TypeSignatureClass::Native(logical_int32()),
             vec![TypeSignatureClass::Integer],
             NativeType::Int32,
-        )
+        );
 
-        fn float64_coercion() -> Coercion {
-            Coercion::new_implicit(
-                TypeSignatureClass::Native(logical_float64()),
-                vec![TypeSignatureClass::Numeric],
-                NativeType::Float64,
-            )
-        }
+        let float64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
 
-        let mut variants = Vec::with_capacity(8);
-        variants.push(TypeSignature::Nullary);
-
-        for len in 1..=7 {
-            let mut args = Vec::with_capacity(len);
-            for idx in 0..len {
-                if idx == 6 {
-                    args.push(float64_coercion());
-                } else {
-                    args.push(int32_coercion());
-                }
-            }
-            variants.push(TypeSignature::Coercible(args));
-        }
+        let variants = vec![
+            TypeSignature::Nullary,
+            TypeSignature::Coercible(vec![int32.clone()]),
+            TypeSignature::Coercible(vec![int32.clone(), int32.clone()]),
+            TypeSignature::Coercible(vec![int32.clone(), int32.clone(), int32.clone()]),
+            TypeSignature::Coercible(vec![
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+            ]),
+            TypeSignature::Coercible(vec![
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+            ]),
+            TypeSignature::Coercible(vec![
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+            ]),
+            TypeSignature::Coercible(vec![
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                float64.clone(),
+            ]),
+        ];
 
         Self {
             signature: Signature::one_of(variants, Volatility::Immutable),
