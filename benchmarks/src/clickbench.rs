@@ -137,12 +137,12 @@ impl RunOpt {
         let mut config = self.common.config()?;
 
         // CRITICAL: If sorted_by is specified, force target_partitions=1
-        // This ensures the file is not split into multiple partitions,
-        // which would prevent output_ordering from being set
+        // This ensures the file is not split into multiple partitions, we
+        // can get the pure performance benefit of sorted data to compare.
         if self.sorted_by.is_some() {
             println!("⚠️  Forcing target_partitions=1 to preserve sort order");
             println!(
-                "⚠️  (Multiple partitions would prevent output_ordering from being set)"
+                "⚠️  (Because we want to get the pure performance benefit of sorted data to compare)"
             );
             config = config.with_target_partitions(1);
         }
@@ -155,6 +155,13 @@ impl RunOpt {
 
             // Turn on Parquet filter pushdown if requested
             if self.pushdown {
+                parquet_options.pushdown_filters = true;
+                parquet_options.reorder_filters = true;
+            }
+
+            if self.sorted_by.is_some() {
+                // We should compare the dynamic topk optimization when data is sorted, so we make the
+                // assumption that filter pushdown is also enabled in this case.
                 parquet_options.pushdown_filters = true;
                 parquet_options.reorder_filters = true;
             }
