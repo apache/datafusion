@@ -316,12 +316,12 @@ impl RunOpt {
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
         let path = format!("{path}/{table}.parquet");
-        
+
         // Check if the file exists
         if !std::path::Path::new(&path).exists() {
-            eprintln!("Warning: Table file does not exist: {}", path);
+            eprintln!("Warning registering {table}: Table file does not exist: {path}");
         }
-        
+
         let format = ParquetFormat::default()
             .with_options(ctx.state().table_options().parquet.clone());
 
@@ -333,7 +333,9 @@ impl RunOpt {
         let schema = options.infer_schema(&state, &table_path).await?;
 
         if self.common.debug {
-            println!("Inferred schema from {table_path} for table '{table}':\n{schema:#?}\n");
+            println!(
+                "Inferred schema from {table_path} for table '{table}':\n{schema:#?}\n"
+            );
         }
 
         let options = if self.sorted {
