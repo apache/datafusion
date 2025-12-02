@@ -226,7 +226,7 @@ impl PhysicalExprAdapter for UppercasePhysicalExprAdapter {
 
 fn push_down_filters(
     plan: Arc<dyn ExecutionPlan>,
-    filter: Expr,
+    filter: &Expr,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let filter_expr = logical2physical(&filter, &plan.schema());
     let plan = Arc::new(FilterExec::try_new(filter_expr, plan)?);
@@ -340,7 +340,7 @@ async fn test_parquet_flipped_projection() -> Result<()> {
     let filter = col("a")
         .eq(lit(1))
         .or(col("b").not_eq(lit("foo")).and(col("a").eq(lit(3))));
-    let exec = push_down_filters(exec, filter).unwrap();
+    let exec = push_down_filters(exec, &filter).unwrap();
     let stream = exec.execute(0, task_ctx)?;
     let batches = datafusion::physical_plan::common::collect(stream).await?;
     // There should be one batch
@@ -461,7 +461,7 @@ async fn test_parquet_missing_column() -> Result<()> {
     let filter = col("a")
         .eq(lit(1))
         .or(col("b").is_null().and(col("a").eq(lit(3))));
-    let exec = push_down_filters(exec, filter).unwrap();
+    let exec = push_down_filters(exec, &filter).unwrap();
     let stream = exec.execute(0, task_ctx.clone())?;
     let batches = datafusion::physical_plan::common::collect(stream).await?;
     // There should be one batch
