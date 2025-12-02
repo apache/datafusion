@@ -24,7 +24,7 @@ use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, Decimal128Type, DecimalType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -558,9 +558,11 @@ impl TypeSignature {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
-                vec![std::iter::repeat_n("Any", *arg_count)
-                    .collect::<Vec<&str>>()
-                    .join(", ")]
+                vec![
+                    std::iter::repeat_n("Any", *arg_count)
+                        .collect::<Vec<&str>>()
+                        .join(", "),
+                ]
             }
             TypeSignature::UserDefined => {
                 vec!["UserDefined".to_string()]
@@ -607,87 +609,103 @@ impl TypeSignature {
         match self {
             TypeSignature::Exact(types) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .zip(types.iter())
-                        .map(|(name, typ)| format!("{name}: {typ}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .zip(types.iter())
+                            .map(|(name, typ)| format!("{name}: {typ}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     vec![Self::join_types(types, ", ")]
                 }
             }
             TypeSignature::Any(count) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: Any"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: Any"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
-                    vec![std::iter::repeat_n("Any", *count)
-                        .collect::<Vec<&str>>()
-                        .join(", ")]
+                    vec![
+                        std::iter::repeat_n("Any", *count)
+                            .collect::<Vec<&str>>()
+                            .join(", "),
+                    ]
                 }
             }
             TypeSignature::Uniform(count, types) => {
                 if let Some(names) = parameter_names {
                     let type_str = Self::join_types(types, "/");
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: {type_str}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: {type_str}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     self.to_string_repr()
                 }
             }
             TypeSignature::Coercible(coercions) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .zip(coercions.iter())
-                        .map(|(name, coercion)| format!("{name}: {coercion}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .zip(coercions.iter())
+                            .map(|(name, coercion)| format!("{name}: {coercion}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     vec![Self::join_types(coercions, ", ")]
                 }
             }
             TypeSignature::Comparable(count) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: Comparable"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: Comparable"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     self.to_string_repr()
                 }
             }
             TypeSignature::Numeric(count) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: Numeric"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: Numeric"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     self.to_string_repr()
                 }
             }
             TypeSignature::String(count) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: String"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: String"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     self.to_string_repr()
                 }
@@ -697,28 +715,34 @@ impl TypeSignature {
                 if let Some(names) = parameter_names {
                     match array_sig {
                         ArrayFunctionSignature::Array { arguments, .. } => {
-                            vec![names
-                                .iter()
-                                .zip(arguments.iter())
-                                .map(|(name, arg_type)| format!("{name}: {arg_type}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")]
+                            vec![
+                                names
+                                    .iter()
+                                    .zip(arguments.iter())
+                                    .map(|(name, arg_type)| format!("{name}: {arg_type}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            ]
                         }
                         ArrayFunctionSignature::RecursiveArray => {
-                            vec![names
-                                .iter()
-                                .take(1)
-                                .map(|name| format!("{name}: recursive_array"))
-                                .collect::<Vec<_>>()
-                                .join(", ")]
+                            vec![
+                                names
+                                    .iter()
+                                    .take(1)
+                                    .map(|name| format!("{name}: recursive_array"))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            ]
                         }
                         ArrayFunctionSignature::MapArray => {
-                            vec![names
-                                .iter()
-                                .take(1)
-                                .map(|name| format!("{name}: map_array"))
-                                .collect::<Vec<_>>()
-                                .join(", ")]
+                            vec![
+                                names
+                                    .iter()
+                                    .take(1)
+                                    .map(|name| format!("{name}: map_array"))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            ]
                         }
                     }
                 } else {
@@ -1538,10 +1562,12 @@ mod tests {
         .with_parameter_names(vec!["count".to_string()]); // Only 1 name for 2 args
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not match signature arity"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not match signature arity")
+        );
     }
 
     #[test]
@@ -1553,10 +1579,12 @@ mod tests {
         .with_parameter_names(vec!["count".to_string(), "count".to_string()]);
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Duplicate parameter name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Duplicate parameter name")
+        );
     }
 
     #[test]
@@ -1565,10 +1593,12 @@ mod tests {
             .with_parameter_names(vec!["arg".to_string()]);
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("variable arity signature"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("variable arity signature")
+        );
     }
 
     #[test]

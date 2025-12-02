@@ -209,10 +209,18 @@ main() {
                     # same data as for tpch
                     data_tpch "1"
                     ;;
+                tpch_csv)
+                    # same data as for tpch
+                    data_tpch "1"
+                    ;;
                 tpch10)
                     data_tpch "10"
                     ;;
                 tpch_mem10)
+                    # same data as for tpch10
+                    data_tpch "10"
+                    ;;
+                tpch_csv10)
                     # same data as for tpch10
                     data_tpch "10"
                     ;;

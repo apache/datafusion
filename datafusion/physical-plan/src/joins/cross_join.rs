@@ -42,8 +42,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, DataFusionError, JoinType, Result,
-    ScalarValue,
+    assert_eq_or_internal_err, internal_err, JoinType, Result, ScalarValue,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -62,7 +61,7 @@ struct JoinLeftData {
     _reservation: MemoryReservation,
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 /// Cross Join Execution Plan
 ///
 /// This operator is used when there are no predicates between two tables and

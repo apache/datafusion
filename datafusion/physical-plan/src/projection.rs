@@ -785,10 +785,6 @@ pub fn update_join_on(
     hash_join_on: &[(PhysicalExprRef, PhysicalExprRef)],
     left_field_size: usize,
 ) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
-    // TODO: Clippy wants the "map" call removed, but doing so generates
-    //       a compilation error. Remove the clippy directive once this
-    //       issue is fixed.
-    #[allow(clippy::map_identity)]
     let (left_idx, right_idx): (Vec<_>, Vec<_>) = hash_join_on
         .iter()
         .map(|(left, right)| (left, right))

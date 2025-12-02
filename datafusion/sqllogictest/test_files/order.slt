@@ -419,6 +419,31 @@ select column1 + column2 from foo group by column1, column2 ORDER BY column2 des
 7
 3
 
+# Test ordering by aggregate on non-selected column (issue #18683)
+# Previously failed with "Schema error: No field named foo.column2"
+query I
+select column1 from foo group by column1 order by min(column2);
+----
+1
+3
+5
+
+# Test ordering by aggregate expression on non-selected columns
+query I
+select column1 from foo group by column1 order by min(column2) + max(column2);
+----
+1
+3
+5
+
+# Test ordering by multiple aggregates on non-selected columns
+query I
+select column1 from foo group by column1 order by min(column2), max(column2);
+----
+1
+3
+5
+
 # Test issue: https://github.com/apache/datafusion/issues/11549
 query I
 select column1 from foo order by log(column2);
@@ -1055,8 +1080,8 @@ SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
 ----
 16
 
-# Order by unprojected aggregate expressions is not supported
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression AggregateFunction
+# Order by unprojected aggregate expressions requires GROUP BY
+query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function
 SELECT column2 FROM foo ORDER BY SUM(column1)
 
 statement ok

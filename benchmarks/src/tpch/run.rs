@@ -99,6 +99,9 @@ pub struct RunOpt {
         long = "enable_piecewise_merge_join",
         default_value = "false"
     )]
+
+    /// False by default.
+    #[structopt(long = "enable_piecewise_merge_join", default_value = "false")]
     enable_piecewise_merge_join: BoolDefaultTrue,
 
     /// Mark the first column of each table as sorted in ascending order.
