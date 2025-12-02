@@ -40,7 +40,7 @@ def sort_clickbench_data(
         input_path: str,
         output_path: str,
         row_group_size: int = 1024 * 1024,  # 1M rows default
-        compression: str = 'snappy',
+        compression: str = 'zstd',
         verify: bool = True
 ):
     """Sort parquet file by EventTime column with optimized settings."""
