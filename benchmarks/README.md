@@ -342,7 +342,7 @@ FLAGS:
 The `mem_profile` program wraps benchmark execution to measure memory usage statistics, such as peak RSS. It runs each benchmark query in a separate subprocess, capturing the child process’s stdout to print structured output.
 
 Subcommands supported by mem_profile are the subset of those in `dfbench`.
-Currently supported benchmarks include: Clickbench, H2o, Imdb, SortTpch, Tpch
+Currently supported benchmarks include: Clickbench, H2o, Imdb, SortTpch, Tpch, TPCDS
 
 Before running benchmarks, `mem_profile` automatically compiles the benchmark binary (`dfbench`) using `cargo build`. Note that the build profile used for `dfbench` is not tied to the profile used for running `mem_profile` itself. We can explicitly specify the desired build profile using the `--bench-profile` option (e.g. release-nonlto). By prebuilding the binary and running each query in a separate process, we can ensure accurate memory statistics.
 
@@ -586,6 +586,27 @@ This benchmarks is derived from the [TPC-H][1] version
 [2]: https://github.com/databricks/tpch-dbgen.git,
 [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
 
+## TPCDS
+
+Run the tpcds benchmark.
+
+For data please clone `datafusion-benchmarks` repo which contains the predefined parquet data with SF1.
+
+```shell
+git clone https://github.com/apache/datafusion-benchmarks
+```
+
+Then run the benchmark with the following command:
+
+```shell
+DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/bench.sh run tpcds
+```
+
+Alternatively benchmark the specific query
+
+```shell
+DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/bench.sh run tpcds 30
+```
 ## External Aggregation
 
 Run the benchmark for aggregations with limited memory.
