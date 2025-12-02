@@ -99,6 +99,9 @@ clickbench_partitioned: ClickBench queries against partitioned (100 files) parqu
 clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
+# Sorted Data Benchmarks (ORDER BY Optimization)
+data_sorted_clickbench:     ClickBench queries on pre-sorted data WITH sort order info (tests sort elimination optimization)
+
 # H2O.ai Benchmarks (Group By, Join, Window)
 h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
 h2o_medium:                     h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
@@ -322,7 +325,7 @@ main() {
                 compile_profile)
                     data_tpch "1"
                     ;;
-                sorted_data)
+                data_sorted_clickbench)
                     data_sorted_clickbench
                     ;;
                 *)
@@ -508,11 +511,8 @@ main() {
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
                     ;;
-                sorted_data_sorted)
-                    run_sorted_data_sorted_only
-                    ;;
-                sorted_data_unsorted)
-                    run_sorted_data_unsorted_only
+                data_sorted_clickbench)
+                    run_data_sorted_clickbench
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -1267,8 +1267,8 @@ data_sorted_clickbench() {
 # Add these functions to your bench.sh script
 
 # Runs the sorted data benchmark (sorted only) with sort order information
-run_sorted_data_sorted_only() {
-    RESULTS_FILE="${RESULTS_DIR}/sorted_data_sorted_only.json"
+run_data_sorted_clickbench() {
+    RESULTS_FILE="${RESULTS_DIR}/data_sorted_clickbench.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sorted data benchmark (sorted only) with sort order optimization..."
 
