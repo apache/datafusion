@@ -747,7 +747,7 @@ async fn test_single_mode_aggregate_single_mode_aggregate_with_spill() -> Result
         Arc::clone(&scan_schema),
     )?);
 
-    let memory_pool = Arc::new(FairSpillPool::new(150000));
+    let memory_pool = Arc::new(FairSpillPool::new(100_000));
     let task_ctx = Arc::new(
         TaskContext::default()
             .with_session_config(SessionConfig::new().with_batch_size(248))
