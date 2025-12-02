@@ -258,7 +258,7 @@ impl TableSampleExtensionPlanner {
     fn build_execution_plan(
         &self,
         specific_node: &TableSamplePlanNode,
-        physical_input: Arc<dyn ExecutionPlan>,
+        physical_input: &Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SampleExec {
             input: physical_input.clone(),
@@ -267,7 +267,7 @@ impl TableSampleExtensionPlanner {
             with_replacement: specific_node.with_replacement,
             seed: specific_node.seed,
             metrics: Default::default(),
-            cache: SampleExec::compute_properties(&physical_input),
+            cache: SampleExec::compute_properties(physical_input),
         }))
     }
 }
@@ -289,7 +289,7 @@ impl ExtensionPlanner for TableSampleExtensionPlanner {
             assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
 
             let exec_plan =
-                self.build_execution_plan(specific_node, physical_inputs[0].clone())?;
+                self.build_execution_plan(specific_node, &physical_inputs[0].clone())?;
             Ok(Some(exec_plan))
         } else {
             Ok(None)
