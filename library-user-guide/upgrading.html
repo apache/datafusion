@@ -668,6 +668,93 @@ that introduced these changes for more examples for how this was handled for the
 </div>
 <p><strong>Handling projections in <code class="docutils literal notranslate"><span class="pre">FileSource</span></code>:</strong></p>
 </section>
+<section id="physicaloptimizerrule-optimize-deprecated-in-favor-of-optimize-plan">
+<h3><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule::optimize</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">optimize_plan</span></code><a class="headerlink" href="#physicaloptimizerrule-optimize-deprecated-in-favor-of-optimize-plan" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule</span></code> trait has been updated to provide optimizer rules with access to broader session context. A new method <code class="docutils literal notranslate"><span class="pre">optimize_plan</span></code> has been added that accepts an <code class="docutils literal notranslate"><span class="pre">OptimizerContext</span></code> parameter, and the existing <code class="docutils literal notranslate"><span class="pre">optimize</span></code> method has been deprecated.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who have implemented custom <code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule</span></code> implementations</p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<ol class="arabic simple">
+<li><p><strong>New <code class="docutils literal notranslate"><span class="pre">optimize_plan</span></code> method</strong>: This is the preferred method for implementing optimization rules. It provides access to the full <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code> through <code class="docutils literal notranslate"><span class="pre">OptimizerContext</span></code>, rather than just <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code>.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">optimize</span></code> method deprecated</strong>: The old <code class="docutils literal notranslate"><span class="pre">optimize</span></code> method that takes <code class="docutils literal notranslate"><span class="pre">&amp;ConfigOptions</span></code> is now deprecated and will be removed in DataFusion 58.0.0.</p></li>
+</ol>
+<p><strong>Migration guide:</strong></p>
+<p>If you have a custom <code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule</span></code> implementation, update it to implement <code class="docutils literal notranslate"><span class="pre">optimize_plan</span></code> instead of <code class="docutils literal notranslate"><span class="pre">optimize</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">physical_optimizer</span><span class="p">::</span><span class="n">PhysicalOptimizerRule</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_common</span><span class="p">::</span><span class="n">config</span><span class="p">::</span><span class="n">ConfigOptions</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_common</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_plan</span><span class="p">::</span><span class="n">ExecutionPlan</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+
+<span class="cp">#[derive(Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyOptimizerRule</span><span class="p">;</span>
+
+<span class="cp">#[allow(deprecated)]</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">PhysicalOptimizerRule</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyOptimizerRule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">optimize</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ConfigOptions</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Use config.optimizer, config.execution, etc.</span>
+<span class="w">        </span><span class="c1">// ... optimization logic ...</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="s">&quot;my_optimizer_rule&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">schema_check</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kc">true</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">physical_optimizer</span><span class="p">::{</span><span class="n">OptimizerContext</span><span class="p">,</span><span class="w"> </span><span class="n">PhysicalOptimizerRule</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_common</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_plan</span><span class="p">::</span><span class="n">ExecutionPlan</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+
+<span class="cp">#[derive(Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyOptimizerRule</span><span class="p">;</span>
+
+<span class="k">impl</span><span class="w"> </span><span class="n">PhysicalOptimizerRule</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyOptimizerRule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">optimize_plan</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">context</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">OptimizerContext</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Access ConfigOptions through session_config</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">_config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="n">session_config</span><span class="p">().</span><span class="n">options</span><span class="p">();</span>
+<span class="w">        </span><span class="c1">// Or access extensions through session_config</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">_extensions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="n">session_config</span><span class="p">().</span><span class="n">extensions</span><span class="p">();</span>
+<span class="w">        </span><span class="c1">// ... optimization logic ...</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="s">&quot;my_optimizer_rule&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">schema_check</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kc">true</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>What is <code class="docutils literal notranslate"><span class="pre">OptimizerContext</span></code>?</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">OptimizerContext</span></code> is a new struct that provides context during physical plan optimization, similar to how <code class="docutils literal notranslate"><span class="pre">TaskContext</span></code> provides context during execution. It wraps <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>, giving optimizer rules access to:</p>
+<ul class="simple">
+<li><p>Configuration options via <code class="docutils literal notranslate"><span class="pre">context.session_config().options()</span></code></p></li>
+<li><p>Session extensions via <code class="docutils literal notranslate"><span class="pre">context.session_config().extensions()</span></code></p></li>
+</ul>
+<p>This enables optimizer rules to access custom extensions registered with the session, which was not possible with the old <code class="docutils literal notranslate"><span class="pre">&amp;ConfigOptions</span></code> parameter.</p>
+</section>
 </section>
 <section id="datafusion-51-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code><a class="headerlink" href="#datafusion-51-0-0" title="Link to this heading">#</a></h2>
@@ -1914,6 +2001,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-cacheaccessor-trait">API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ffi-crate-updates">FFI crate updates</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#projection-handling-moved-from-filescanconfig-to-filesource">Projection handling moved from FileScanConfig to FileSource</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physicaloptimizerrule-optimize-deprecated-in-favor-of-optimize-plan"><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule::optimize</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">optimize_plan</span></code></a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-51-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code></a><ul class="nav section-nav flex-column">
