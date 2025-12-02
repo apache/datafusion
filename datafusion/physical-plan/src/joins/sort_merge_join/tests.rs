@@ -31,7 +31,7 @@ use arrow::array::{
     BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
     Int32Array, RecordBatch, UInt64Array,
 };
-use arrow::compute::{concat_batches, filter_record_batch, BatchCoalescer, SortOptions};
+use arrow::compute::{filter_record_batch, BatchCoalescer, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::JoinType::*;
