@@ -18,9 +18,7 @@
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{
-    assert_or_internal_err, plan_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{assert_or_internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use std::sync::Arc;

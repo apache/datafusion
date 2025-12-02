@@ -20,11 +20,11 @@
 //! but provide an error message rather than a panic, as the corresponding
 //! kernels in arrow-rs such as `as_boolean_array` do.
 
-use crate::{downcast_value, Result};
+use crate::{Result, downcast_value};
 use arrow::array::{
     BinaryViewArray, Decimal32Array, Decimal64Array, DurationMicrosecondArray,
     DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
-    Int16Array, Int8Array, LargeBinaryArray, LargeListViewArray, LargeStringArray,
+    Int8Array, Int16Array, LargeBinaryArray, LargeListViewArray, LargeStringArray,
     ListViewArray, StringViewArray, UInt16Array,
 };
 use arrow::{
@@ -37,8 +37,8 @@ use arrow::{
         MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
-        UInt8Array, UnionArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt32Array,
+        UInt64Array, UnionArray,
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };

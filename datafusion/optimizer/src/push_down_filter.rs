@@ -29,7 +29,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     assert_eq_or_internal_err, assert_or_internal_err, internal_err, plan_err,
-    qualified_name, Column, DFSchema, DataFusionError, Result,
+    qualified_name, Column, DFSchema, Result,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
