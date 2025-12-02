@@ -57,27 +57,23 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-        // Apply NOT expression simplification first
-        let not_expr_simplified = simplify_not_expr(&node, self.schema)?;
-        let node = not_expr_simplified.data;
-        let transformed = not_expr_simplified.transformed;
-
-        // Apply unwrap cast optimization
         #[cfg(test)]
         let original_type = node.data_type(self.schema).unwrap();
-        let unwrapped = unwrap_cast::unwrap_cast_in_comparison(node, self.schema)?;
+
+        // Apply NOT expression simplification first, then unwrap cast optimization
+        let rewritten =
+            simplify_not_expr(&node, self.schema)?.transform_data(|node| {
+                unwrap_cast::unwrap_cast_in_comparison(node, self.schema)
+            })?;
+
         #[cfg(test)]
         assert_eq!(
-            unwrapped.data.data_type(self.schema).unwrap(),
+            rewritten.data.data_type(self.schema).unwrap(),
             original_type,
             "Simplified expression should have the same data type as the original"
         );
-        // Combine transformation results
-        let final_transformed = transformed || unwrapped.transformed;
-        Ok(Transformed::new_transformed(
-            unwrapped.data,
-            final_transformed,
-        ))
+
+        Ok(rewritten)
     }
 }
 
