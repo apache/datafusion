@@ -94,6 +94,43 @@ pub(super) fn preimage_in_comparison_for_binary(
                 right: Box::new(upper),
             }),
         ),
+        Operator::IsDistinctFrom => or(
+            or(
+                Expr::BinaryExpr(BinaryExpr {
+                    left: expr.clone(),
+                    op: Operator::Lt,
+                    right: Box::new(lower.clone()),
+                }),
+                Expr::BinaryExpr(BinaryExpr {
+                    left: expr.clone(),
+                    op: Operator::GtEq,
+                    right: Box::new(upper),
+                }),
+            ),
+            or(
+                and(expr.clone().is_null(), lower.clone().is_not_null()),
+                and(expr.is_not_null(), lower.is_null()),
+            ),
+        ),
+        Operator::IsNotDistinctFrom => or(
+            Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(expr.clone().is_null()),
+                op: Operator::And,
+                right: Box::new(lower.clone().is_null()),
+            }),
+            and(
+                Expr::BinaryExpr(BinaryExpr {
+                    left: expr.clone(),
+                    op: Operator::GtEq,
+                    right: Box::new(lower.clone()),
+                }),
+                Expr::BinaryExpr(BinaryExpr {
+                    left: expr,
+                    op: Operator::Lt,
+                    right: Box::new(upper),
+                }),
+            ),
+        ),
         _ => return internal_err!("Expect comparison operators"),
     };
     Ok(Transformed::yes(rewritten_expr))
@@ -115,7 +152,9 @@ pub(super) fn is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary<
             | Operator::Gt
             | Operator::Lt
             | Operator::GtEq
-            | Operator::LtEq,
+            | Operator::LtEq
+            | Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom,
             Expr::Literal(lit_value, _),
         ) => (func, args, lit_value),
         _ => return false,

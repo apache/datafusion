@@ -22,6 +22,7 @@
 ############################
 # date_part(year, col) tests
 ############################
+
 statement ok
 create table t(
     c1_date32 DATE,
@@ -47,8 +48,57 @@ create table t(
      '2030-12-31T23:59:59.001234567'::timestamp)
 ;
 
+#
+# Simple optimizations
+#
+query D
+select c1_date32 from t where extract(year from c1_date32) = 2024;
+----
+2024-01-01
 
-# Explain eq
+query D
+select c1_date32 from t where extract(year from c1_date32) <> 2024;
+----
+1990-05-20
+2030-12-31 
+
+query P
+select c2_ts_sec from t where extract(year from c2_ts_sec) > 2024;
+----
+2030-12-31T23:59:59
+
+query P
+select c3_ts_mili from t where extract(year from c3_ts_mili) < 2024;
+----
+1990-05-20T00:00:10.987
+
+query P
+select c4_ts_micro from t where extract(year from c4_ts_micro) >= 2024;
+----
+2024-01-01T00:00:00.123456
+2030-12-31T23:59:59.001234
+
+query P
+select c5_ts_nano from t where extract(year from c5_ts_nano) <= 2024;
+----
+2024-01-01T00:00:00.123456789
+1990-05-20T00:00:10.987654321
+
+query D
+select c1_date32 from t where extract(year from c1_date32) is not distinct from 2024
+----
+2024-01-01
+
+query D
+select c1_date32 from t where extract(year from c1_date32) is distinct from 2024
+----
+1990-05-20
+2030-12-31
+
+#
+# Explain statements
+#
+
 query TT
 explain select c1_date32 from t where extract (year from c1_date32) = 2024
 ----
@@ -59,16 +109,77 @@ physical_plan
 01)FilterExec: c1_date32@0 >= 2024-01-01 AND c1_date32@0 < 2025-01-01
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-## eq
-query DPPPP
-select
-  (select c1_date32    from t where extract(year from c1_date32) = 2024),
-  (select c2_ts_sec    from t where extract(year from c2_ts_sec) = 2024),
-  (select c3_ts_mili   from t where extract(year from c3_ts_mili) = 2024),
-  (select c4_ts_micro  from t where extract(year from c4_ts_micro) = 2024),
-  (select c5_ts_nano   from t where extract(year from c5_ts_nano) = 2024);
+query TT
+explain select c1_date32 from t where extract (year from c1_date32) <> 2024
 ----
-2024-01-01 2024-01-01T00:00:00 2024-01-01T00:00:00.123 2024-01-01T00:00:00.123456 2024-01-01T00:00:00.123456789
+logical_plan
+01)Filter: t.c1_date32 < Date32("2024-01-01") OR t.c1_date32 >= Date32("2025-01-01")
+02)--TableScan: t projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 < 2024-01-01 OR c1_date32@0 >= 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c2_ts_sec from t where extract (year from c2_ts_sec) > 2024
+----
+logical_plan
+01)Filter: t.c2_ts_sec >= TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t projection=[c2_ts_sec]
+physical_plan
+01)FilterExec: c2_ts_sec@0 >= 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c3_ts_mili from t where extract (year from c3_ts_mili) < 2024
+----
+logical_plan
+01)Filter: t.c3_ts_mili < TimestampNanosecond(1704067200000000000, None)
+02)--TableScan: t projection=[c3_ts_mili]
+physical_plan
+01)FilterExec: c3_ts_mili@0 < 1704067200000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c4_ts_micro from t where extract (year from c4_ts_micro) >= 2024
+----
+logical_plan
+01)Filter: t.c4_ts_micro >= TimestampNanosecond(1704067200000000000, None)
+02)--TableScan: t projection=[c4_ts_micro]
+physical_plan
+01)FilterExec: c4_ts_micro@0 >= 1704067200000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c5_ts_nano from t where extract (year from c5_ts_nano) <= 2024
+----
+logical_plan
+01)Filter: t.c5_ts_nano < TimestampNanosecond(1735689600000000000, None)
+02)--TableScan: t projection=[c5_ts_nano]
+physical_plan
+01)FilterExec: c5_ts_nano@0 < 1735689600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# This one doesn't pass due to a ParseError
+#External error: task 20343 panicked with message "called `Result::unwrap()` on an `Err` value: ParseError { kind: InvalidLine(\"explain select c1_date32 from t where extract(year from c1_date32) is not distinct from 2024\"), loc: Location { file: \"test_files/udf_preimage.slt\", line: 162, upper: None } }"
+#
+#explain select c1_date32 from t where extract (year from c1_date32) is not distinct from 2024
+#----
+#logical_plan
+#01)Filter: t.c1_date32 >= Date32("2024-01-01") AND t.c1_date32 < Date32("2025-01-01")
+#02)--TableScan: t projection=[c1_date32]
+#physical_plan
+#01)FilterExec: c1_date32@0 >= 2024-01-01 AND c1_date32@0 < 2025-01-01
+#02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select c1_date32 from t where extract (year from c1_date32) is distinct from 2024
+----
+logical_plan
+01)Filter: t.c1_date32 < Date32("2024-01-01") OR t.c1_date32 >= Date32("2025-01-01") OR t.c1_date32 IS NULL
+02)--TableScan: t projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 < 2024-01-01 OR c1_date32@0 >= 2025-01-01 OR c1_date32@0 IS NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Explain eq not year
 query TT
@@ -80,91 +191,3 @@ logical_plan
 physical_plan
 01)FilterExec: date_part(MONTH, c1_date32@0) = 2024
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-
-# Explain not_eq
-query TT
-explain select c1_date32 from t where extract (year from c1_date32) <> 2024
-----
-logical_plan
-01)Filter: t.c1_date32 < Date32("2024-01-01") OR t.c1_date32 >= Date32("2025-01-01")
-02)--TableScan: t projection=[c1_date32]
-physical_plan
-01)FilterExec: c1_date32@0 < 2024-01-01 OR c1_date32@0 >= 2025-01-01
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-
-## not_eq
-query D
-select c1_date32 from t where extract(year from c1_date32) <> 2024;
-----
-1990-05-20
-2030-12-31 
-
-# Explain gt
-query TT
-explain select c2_ts_sec from t where extract (year from c2_ts_sec) > 2024
-----
-logical_plan
-01)Filter: t.c2_ts_sec >= TimestampNanosecond(1735689600000000000, None)
-02)--TableScan: t projection=[c2_ts_sec]
-physical_plan
-01)FilterExec: c2_ts_sec@0 >= 1735689600000000000
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-
-## gt
-query P
-select c2_ts_sec from t where extract(year from c2_ts_sec) > 2024;
-----
-2030-12-31T23:59:59
-
-# Explain lt
-query TT
-explain select c3_ts_mili from t where extract (year from c3_ts_mili) < 2024
-----
-logical_plan
-01)Filter: t.c3_ts_mili < TimestampNanosecond(1704067200000000000, None)
-02)--TableScan: t projection=[c3_ts_mili]
-physical_plan
-01)FilterExec: c3_ts_mili@0 < 1704067200000000000
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-
-## lt
-query P
-select c3_ts_mili from t where extract(year from c3_ts_mili) < 2024;
-----
-1990-05-20T00:00:10.987
-
-# Explain gt_eq
-query TT
-explain select c4_ts_micro from t where extract (year from c4_ts_micro) >= 2024
-----
-logical_plan
-01)Filter: t.c4_ts_micro >= TimestampNanosecond(1704067200000000000, None)
-02)--TableScan: t projection=[c4_ts_micro]
-physical_plan
-01)FilterExec: c4_ts_micro@0 >= 1704067200000000000
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-
-## gt_eq
-query P
-select c4_ts_micro from t where extract(year from c4_ts_micro) >= 2024;
-----
-2024-01-01T00:00:00.123456
-2030-12-31T23:59:59.001234
-
-# Explain lt_eq
-query TT
-explain select c5_ts_nano from t where extract (year from c5_ts_nano) <= 2024
-----
-logical_plan
-01)Filter: t.c5_ts_nano < TimestampNanosecond(1735689600000000000, None)
-02)--TableScan: t projection=[c5_ts_nano]
-physical_plan
-01)FilterExec: c5_ts_nano@0 < 1735689600000000000
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-
-## lt_eq
-query P
-select c5_ts_nano from t where extract(year from c5_ts_nano) <= 2024;
-----
-2024-01-01T00:00:00.123456789
-1990-05-20T00:00:10.987654321
