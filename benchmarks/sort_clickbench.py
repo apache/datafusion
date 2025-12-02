@@ -245,7 +245,7 @@ Examples:
 
 if __name__ == '__main__':
     if len(sys.argv) == 1:
-        print("Usage: python3 sort_clickbench_enhanced.py <input_file> <output_file>")
+        print("Usage: python3 sort_clickbench.py <input_file> <output_file>")
         print("Run with --help for more options")
         sys.exit(1)
 
