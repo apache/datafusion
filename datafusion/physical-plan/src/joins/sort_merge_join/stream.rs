@@ -867,6 +867,8 @@ impl Stream for SortMergeJoinStream {
                         && !self.joined_record_batches.joined_batches.is_empty()
                     {
                         let record_batch = self.filter_joined_batch()?;
+                        (&record_batch)
+                            .record_output(&self.join_metrics.baseline_metrics());
                         return Poll::Ready(Some(Ok(record_batch)));
                     }
 
@@ -900,6 +902,8 @@ impl Stream for SortMergeJoinStream {
                             .output
                             .next_completed_batch()
                             .expect("Failed to get last batch");
+                        (&record_batch)
+                            .record_output(&self.join_metrics.baseline_metrics());
                         Poll::Ready(Some(Ok(record_batch)))
                     } else {
                         Poll::Ready(None)
@@ -1018,6 +1022,7 @@ impl SortMergeJoinStream {
                     .output
                     .next_completed_batch()
                     .expect("Failed to get output batch");
+                (&record_batch).record_output(&self.join_metrics.baseline_metrics());
                 return Poll::Ready(Some(Ok(record_batch)));
             }
         }
