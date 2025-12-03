@@ -19,7 +19,7 @@ use crate::{
     config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
     runtime_env::RuntimeEnv,
 };
-use datafusion_common::{internal_datafusion_err, plan_datafusion_err, Result};
+use datafusion_common::{Result, internal_datafusion_err, plan_datafusion_err};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::collections::HashSet;
