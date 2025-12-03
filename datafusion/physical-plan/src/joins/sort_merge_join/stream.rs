@@ -1566,7 +1566,6 @@ impl SortMergeJoinStream {
                         .columns()
                         .iter()
                         .skip(right_columns_length)
-                        .take(left_columns_length)
                         .cloned()
                         .collect::<Vec<_>>();
 
