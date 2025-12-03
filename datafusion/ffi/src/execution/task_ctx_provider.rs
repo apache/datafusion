@@ -18,12 +18,12 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Weak};
 
-use abi_stable::std_types::{RResult, RString};
 use abi_stable::StableAbi;
-use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common::{ffi_datafusion_err, DataFusionError};
 use datafusion_execution::{TaskContext, TaskContextProvider};
 
 use crate::execution::task_ctx::FFI_TaskContext;
+use crate::util::FFIResult;
 use crate::{df_result, rresult};
 
 /// Struct for accessing the [`TaskContext`]. This method contains a weak
@@ -35,7 +35,7 @@ use crate::{df_result, rresult};
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_TaskContextProvider {
-    pub task_ctx: unsafe extern "C" fn(&Self) -> RResult<FFI_TaskContext, RString>,
+    pub task_ctx: unsafe extern "C" fn(&Self) -> FFIResult<FFI_TaskContext>,
 
     /// Used to create a clone on the task context accessor. This should
     /// only need to be called by the receiver of the plan.
@@ -70,12 +70,12 @@ impl FFI_TaskContextProvider {
 
 unsafe extern "C" fn task_ctx_fn_wrapper(
     ctx_provider: &FFI_TaskContextProvider,
-) -> RResult<FFI_TaskContext, RString> {
+) -> FFIResult<FFI_TaskContext> {
     rresult!(ctx_provider
         .inner()
         .map(FFI_TaskContext::from)
         .ok_or_else(|| {
-            exec_datafusion_err!(
+            ffi_datafusion_err!(
                 "TaskContextProvider went out of scope over FFI boundary."
             )
         }))
@@ -135,7 +135,7 @@ impl TryFrom<&FFI_TaskContextProvider> for Arc<TaskContext> {
         unsafe {
             if (ffi_ctx.library_marker_id)() == crate::get_library_marker_id() {
                 return ffi_ctx.inner().ok_or_else(|| {
-                    exec_datafusion_err!(
+                    ffi_datafusion_err!(
                         "TaskContextProvider went out of scope over FFI boundary."
                     )
                 });
@@ -148,10 +148,12 @@ impl TryFrom<&FFI_TaskContextProvider> for Arc<TaskContext> {
 
 #[cfg(test)]
 mod tests {
-    use crate::execution::FFI_TaskContextProvider;
+    use std::sync::Arc;
+
     use datafusion_common::{DataFusionError, Result};
     use datafusion_execution::{TaskContext, TaskContextProvider};
-    use std::sync::Arc;
+
+    use crate::execution::FFI_TaskContextProvider;
 
     #[derive(Default)]
     struct TestCtxProvider {

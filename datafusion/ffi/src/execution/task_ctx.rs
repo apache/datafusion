@@ -15,22 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc};
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    pmr::ROption,
-    std_types::{RHashMap, RString},
-    StableAbi,
-};
-use datafusion_execution::{config::SessionConfig, runtime_env::RuntimeEnv, TaskContext};
+use abi_stable::pmr::ROption;
+use abi_stable::std_types::{RHashMap, RString};
+use abi_stable::StableAbi;
+use datafusion_execution::config::SessionConfig;
+use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::TaskContext;
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
 
-use crate::{
-    session_config::FFI_SessionConfig, udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF,
-    udwf::FFI_WindowUDF,
-};
+use crate::session_config::FFI_SessionConfig;
+use crate::udaf::FFI_AggregateUDF;
+use crate::udf::FFI_ScalarUDF;
+use crate::udwf::FFI_WindowUDF;
 
 /// A stable struct for sharing [`TaskContext`] across FFI boundaries.
 #[repr(C)]
