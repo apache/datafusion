@@ -177,53 +177,35 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
 
             let scalar_functions = (ffi_ctx.scalar_functions)(&ffi_ctx)
                 .into_iter()
-                .filter_map(|kv_pair| {
-                    let udf = <Arc<dyn ScalarUDFImpl>>::try_from(&kv_pair.1);
+                .map(|kv_pair| {
+                    let udf = <Arc<dyn ScalarUDFImpl>>::from(&kv_pair.1);
 
-                    if let Err(err) = &udf {
-                        log::error!("Unable to create ScalarUDF in FFI: {err}")
-                    }
-
-                    udf.ok().map(|udf| {
-                        (
-                            kv_pair.0.into_string(),
-                            Arc::new(ScalarUDF::new_from_shared_impl(udf)),
-                        )
-                    })
+                    (
+                        kv_pair.0.into_string(),
+                        Arc::new(ScalarUDF::new_from_shared_impl(udf)),
+                    )
                 })
                 .collect();
             let aggregate_functions = (ffi_ctx.aggregate_functions)(&ffi_ctx)
                 .into_iter()
-                .filter_map(|kv_pair| {
-                    let udaf = <Arc<dyn AggregateUDFImpl>>::try_from(&kv_pair.1);
+                .map(|kv_pair| {
+                    let udaf = <Arc<dyn AggregateUDFImpl>>::from(&kv_pair.1);
 
-                    if let Err(err) = &udaf {
-                        log::error!("Unable to create AggregateUDF in FFI: {err}")
-                    }
-
-                    udaf.ok().map(|udaf| {
-                        (
-                            kv_pair.0.into_string(),
-                            Arc::new(AggregateUDF::new_from_shared_impl(udaf)),
-                        )
-                    })
+                    (
+                        kv_pair.0.into_string(),
+                        Arc::new(AggregateUDF::new_from_shared_impl(udaf)),
+                    )
                 })
                 .collect();
             let window_functions = (ffi_ctx.window_functions)(&ffi_ctx)
                 .into_iter()
-                .filter_map(|kv_pair| {
-                    let udwf = <Arc<dyn WindowUDFImpl>>::try_from(&kv_pair.1);
+                .map(|kv_pair| {
+                    let udwf = <Arc<dyn WindowUDFImpl>>::from(&kv_pair.1);
 
-                    if let Err(err) = &udwf {
-                        log::error!("Unable to create WindowUDF in FFI: {err}")
-                    }
-
-                    udwf.ok().map(|udwf| {
-                        (
-                            kv_pair.0.into_string(),
-                            Arc::new(WindowUDF::new_from_shared_impl(udwf)),
-                        )
-                    })
+                    (
+                        kv_pair.0.into_string(),
+                        Arc::new(WindowUDF::new_from_shared_impl(udwf)),
+                    )
                 })
                 .collect();
 
