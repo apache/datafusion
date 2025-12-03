@@ -42,8 +42,8 @@ name = "datafusion_expr_common"
 
 [dependencies]
 arrow = { workspace = true }
-indexmap = { workspace = true }
+arrow-buffer = { workspace = true, features = ["pool"] }
 datafusion-common = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 paste = { workspace = true }
-arrow-buffer = { workspace = true, features = ["pool"] }
