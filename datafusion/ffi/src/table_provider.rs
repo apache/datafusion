@@ -18,7 +18,7 @@
 use std::{any::Any, ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
+    std_types::{ROption, RResult, RVec},
     StableAbi,
 };
 use arrow::datatypes::SchemaRef;
@@ -53,6 +53,7 @@ use super::{
     execution_plan::FFI_ExecutionPlan, insert_op::FFI_InsertOp,
     session_config::FFI_SessionConfig,
 };
+use crate::util::FFIResult;
 use datafusion::error::Result;
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
@@ -118,7 +119,7 @@ pub struct FFI_TableProvider {
         projections: RVec<usize>,
         filters_serialized: RVec<u8>,
         limit: ROption<usize>,
-    ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
+    ) -> FfiFuture<FFIResult<FFI_ExecutionPlan>>,
 
     /// Return the type of table. See [`TableType`] for options.
     pub table_type: unsafe extern "C" fn(provider: &Self) -> FFI_TableType,
@@ -130,17 +131,15 @@ pub struct FFI_TableProvider {
         unsafe extern "C" fn(
             provider: &FFI_TableProvider,
             filters_serialized: RVec<u8>,
-        )
-            -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString>,
+        ) -> FFIResult<RVec<FFI_TableProviderFilterPushDown>>,
     >,
 
-    pub insert_into:
-        unsafe extern "C" fn(
-            provider: &Self,
-            session_config: &FFI_SessionConfig,
-            input: &FFI_ExecutionPlan,
-            insert_op: FFI_InsertOp,
-        ) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>>,
+    pub insert_into: unsafe extern "C" fn(
+        provider: &Self,
+        session_config: &FFI_SessionConfig,
+        input: &FFI_ExecutionPlan,
+        insert_op: FFI_InsertOp,
+    ) -> FfiFuture<FFIResult<FFI_ExecutionPlan>>,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -222,7 +221,7 @@ fn supports_filters_pushdown_internal(
 unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
-) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
+) -> FFIResult<RVec<FFI_TableProviderFilterPushDown>> {
     supports_filters_pushdown_internal(provider.inner(), &filters_serialized)
         .map_err(|e| e.to_string().into())
         .into()
@@ -234,7 +233,7 @@ unsafe extern "C" fn scan_fn_wrapper(
     projections: RVec<usize>,
     filters_serialized: RVec<u8>,
     limit: ROption<usize>,
-) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+) -> FfiFuture<FFIResult<FFI_ExecutionPlan>> {
     let runtime = provider.runtime().clone();
     let internal_provider = Arc::clone(provider.inner());
     let session_config = session_config.clone();
@@ -286,7 +285,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     session_config: &FFI_SessionConfig,
     input: &FFI_ExecutionPlan,
     insert_op: FFI_InsertOp,
-) -> FfiFuture<RResult<FFI_ExecutionPlan, RString>> {
+) -> FfiFuture<FFIResult<FFI_ExecutionPlan>> {
     let runtime = provider.runtime().clone();
     let internal_provider = Arc::clone(provider.inner());
     let session_config = session_config.clone();
@@ -320,8 +319,10 @@ unsafe extern "C" fn insert_into_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
+    debug_assert!(!provider.private_data.is_null());
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
     drop(private_data);
+    provider.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
