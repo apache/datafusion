@@ -175,7 +175,7 @@ impl From<FFI_TaskContext> for Arc<TaskContext> {
                     let udf = <Arc<dyn ScalarUDFImpl>>::try_from(&kv_pair.1);
 
                     if let Err(err) = &udf {
-                        log::error!("Unable to create WindowUDF in FFI: {err}")
+                        log::error!("Unable to create ScalarUDF in FFI: {err}")
                     }
 
                     udf.ok().map(|udf| {
