@@ -26,7 +26,6 @@ use crate::expressions::case::CaseBody;
 use crate::expressions::Literal;
 use arrow::array::{downcast_primitive, Array, ArrayRef, UInt32Array};
 use arrow::datatypes::DataType;
-use datafusion_common::DataFusionError;
 use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
 use indexmap::IndexMap;
 use std::fmt::Debug;
