@@ -38,17 +38,23 @@ use crate::udwf::FFI_WindowUDF;
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_TaskContext {
+    /// Return the session ID.
     pub session_id: unsafe extern "C" fn(&Self) -> RString,
 
+    /// Return the task ID.
     pub task_id: unsafe extern "C" fn(&Self) -> ROption<RString>,
 
+    /// Return the session configuration.
     pub session_config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
 
+    /// Returns a hashmap of names to scalar functions.
     pub scalar_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_ScalarUDF>,
 
+    /// Returns a hashmap of names to aggregate functions.
     pub aggregate_functions:
         unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_AggregateUDF>,
 
+    /// Returns a hashmap of names to window functions.
     pub window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
 
     /// Release the memory of the private data when it is no longer being used.

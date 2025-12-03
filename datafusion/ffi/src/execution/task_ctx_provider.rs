@@ -35,6 +35,10 @@ use crate::{df_result, rresult};
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_TaskContextProvider {
+    /// Retrieve the current [`TaskContext`] provided the provider has not
+    /// gone out of scope. This function will return an error if the weakly
+    /// held reference to the underlying [`TaskContextProvider`] is no longer
+    /// available.
     pub task_ctx: unsafe extern "C" fn(&Self) -> FFIResult<FFI_TaskContext>,
 
     /// Used to create a clone on the task context accessor. This should
