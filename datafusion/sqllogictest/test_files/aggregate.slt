@@ -3841,12 +3841,233 @@ SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2
 ----
 2.75
 
-# Test percentile_cont with array of percentiles
+#####################
+## percentile_cont tests with ARRAY percentile argument
+#####################
+
+query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause cannot be used together
+SELECT percentile_cont([0.5])
+WITHIN GROUP (ORDER BY c3)
+OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
+FROM aggregate_test_100
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+[3.0]
+
+query ?
+SELECT percentile_cont([0.0]) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+[1.0]
+
+query ?
+SELECT percentile_cont([1.0]) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+[5.0]
+
+query ?
+SELECT percentile_cont([0.25]) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+[2.0]
+
+query ?
+SELECT percentile_cont([0.75]) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+[4.0]
+
+# Multi-percentile list matches corresponding scalar tests on c2
+
+query ?
+SELECT percentile_cont([0.0, 0.25, 0.5, 0.75, 1.0]) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+[1.0, 2.0, 3.0, 4.0, 5.0]
+
+query B
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY c2)[1] = median(c2) FROM aggregate_test_100
+----
+true
+
+query ?
+SELECT percentile_cont([0.95]) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
+----
+[-101.25]
+
+query ?
+SELECT percentile_cont([0.05]) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
+----
+[118.099998]
+
+query T?
+SELECT c1, percentile_cont([0.5]) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a [-25.0]
+b [17.0]
+c [1.0]
+d [46.5]
+e [64.0]
+
+query T?
+SELECT c1, percentile_cont([0.5, 0.95]) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a [-25.0, 65.0]
+b [17.0, 68.0]
+c [1.0, 118.0]
+d [46.5, 123.299998]
+e [64.0, 112.0]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (NULL), (NULL), (NULL)) as t (v)
+----
+[2.0]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v)
+----
+[NULL]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1)) as t (v) WHERE v > 10
+----
+[NULL]
+
+query ?
+SELECT percentile_cont([0.0, 0.5, 1.0]) WITHIN GROUP (ORDER BY v) FROM (VALUES (42)) as t (v)
+----
+[42.0, 42.0, 42.0]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0), (3.0), (4.0)) as t (v)
+----
+[2.5]
+
+query ?
+SELECT percentile_cont([0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0), (2.0), (3.0), (4.0)) as t (v)
+----
+[1.75, 2.5, 3.25]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.0)) as t (v)
+----
+[15.0]
+
+query ?
+SELECT percentile_cont([0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY v) FROM (VALUES (10.0), (20.0)) as t (v)
+----
+[12.5, 15.0, 17.5]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+[2.5]
+
+query ?
+SELECT percentile_cont([0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4)) as t (v)
+----
+[1.75, 2.5, 3.25]
+
+query ?
+SELECT percentile_cont([0.0, 0.25, 0.5, 0.75, 1.0]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+[1.0, 2.0, 3.0, 4.0, 5.0]
+
+query ?
+SELECT percentile_cont([0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY v) FROM (VALUES (-10), (-5), (0), (5), (10)) as t (v)
+----
+[-5.0, 0.0, 5.0]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY c7) FROM aggregate_test_100
+----
+[134.5]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY c8) FROM aggregate_test_100
+----
+[30634.0]
+
+query ?
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY c11) FROM aggregate_test_100
+----
+[0.4906719]
+
+query B
+SELECT percentile_cont([0.5]) WITHIN GROUP (ORDER BY c3)[1] = percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
+----
+true
+
+query ?
+SELECT percentile_cont(c2, [0.5]) FROM aggregate_test_100
+----
+[3.0]
+
+query ?
+SELECT percentile_cont(c2, [0.0]) FROM aggregate_test_100
+----
+[1.0]
+
+query ?
+SELECT percentile_cont(c2, [1.0]) FROM aggregate_test_100
+----
+[5.0]
+
+query ?
+SELECT percentile_cont(c2, [0.25]) FROM aggregate_test_100
+----
+[2.0]
+
+query ?
+SELECT percentile_cont(c2, [0.75]) FROM aggregate_test_100
+----
+[4.0]
+
+query ?
+SELECT percentile_cont(c2, [0.0, 0.25, 0.5, 0.75, 1.0]) FROM aggregate_test_100
+----
+[1.0, 2.0, 3.0, 4.0, 5.0]
+
+query B
+SELECT percentile_cont(c2, [0.5])[1] = percentile_cont([0.5]) WITHIN GROUP (ORDER BY c2)[1] FROM aggregate_test_100
+----
+true
+
+query B
+SELECT percentile_cont(c3, [0.5])[1] = percentile_cont([0.5]) WITHIN GROUP (ORDER BY c3)[1] FROM aggregate_test_100
+----
+true
+
+query T?
+SELECT c1, percentile_cont(c3, [0.5]) FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a [-25.0]
+b [17.0]
+c [1.0]
+d [46.5]
+e [64.0]
+
+query TB
+SELECT c1, percentile_cont(c3, [0.95])[1] = percentile_cont([0.95]) WITHIN GROUP (ORDER BY c3)[1] FROM aggregate_test_100 GROUP BY c1 ORDER BY c1
+----
+a true
+b true
+c true
+d true
+e true
+
+query ?
+SELECT percentile_cont([0.75, 0.25]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+[4.0, 2.0]
+
+query ?
+SELECT percentile_cont([0.5, 0.5]) WITHIN GROUP (ORDER BY v) FROM (VALUES (1), (2), (3), (4), (5)) as t (v)
+----
+[3.0, 3.0]
+
 query ?
 SELECT percentile_cont([0.01, 0.05, 0.1, 0.5, 0.9]) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 [1.0, 1.0, 1.0, 3.0, 5.0]
-
 
 # array_agg_zero
 query ?

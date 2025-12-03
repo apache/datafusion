@@ -185,6 +185,11 @@ impl PercentileCont {
             percentiles
         };
 
+        let returns_list = matches!(
+            args.exprs[1].data_type(args.schema)?,
+            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+        );
+
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
                 if args.is_distinct {
@@ -192,12 +197,14 @@ impl PercentileCont {
                         data_type: $dt.clone(),
                         distinct_values: GenericDistinctBuffer::new($dt),
                         percentiles,
+                        returns_list,
                     }))
                 } else {
                     Ok(Box::new(PercentileContAccumulator::<$t> {
                         data_type: $dt.clone(),
                         all_values: vec![],
                         percentiles,
+                        returns_list,
                     }))
                 }
             };
@@ -289,10 +296,6 @@ impl AggregateUDFImpl for PercentileCont {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        print!(
-            "Calculating return type for PERCENTILE_CONT with arg types: {:?}\n",
-            arg_types
-        );
         let value_type = &arg_types[0];
 
         if !value_type.is_numeric() {
@@ -412,11 +415,17 @@ impl AggregateUDFImpl for PercentileCont {
             percentiles
         };
 
+        let returns_list = matches!(
+            args.exprs[1].data_type(args.schema)?,
+            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+        );
+
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
                 Ok(Box::new(PercentileContGroupsAccumulator::<$t>::new(
                     $dt,
                     percentiles,
+                    returns_list,
                 )))
             };
         }
@@ -654,14 +663,15 @@ struct PercentileContAccumulator<T: ArrowNumericType> {
     data_type: DataType,
     all_values: Vec<T::Native>,
     percentiles: Vec<f64>,
+    returns_list: bool,
 }
 
 impl<T: ArrowNumericType> Debug for PercentileContAccumulator<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PercentileContAccumulator({}, percentile={:?})",
-            self.data_type, self.percentiles
+            "PercentileContAccumulator({}, percentile={:?}, returns_list={})",
+            self.data_type, self.percentiles, self.returns_list
         )
     }
 }
@@ -718,18 +728,20 @@ impl<T: ArrowNumericType> Accumulator for PercentileContAccumulator<T> {
         let d = std::mem::take(&mut self.all_values);
         let values = calculate_percentiles::<T>(d, &self.percentiles);
 
-        // Convert Vec<Option<T::Native>> -> Vec<ScalarValue>
-        let mut scalars: Vec<ScalarValue> = Vec::with_capacity(values.len());
-        for v in &values {
-            scalars.push(ScalarValue::new_primitive::<T>(*v, &self.data_type)?);
-        }
-
-        if self.percentiles.len() > 1 {
-            return Ok(ScalarValue::List(ScalarValue::new_list(
-                &scalars,
-                &self.data_type,
-                true,
-            )));
+        if self.returns_list {
+            let primitive_array = PrimitiveArray::<T>::from_iter(values)
+                .with_data_type(self.data_type.clone());
+            let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![
+                0,
+                primitive_array.len() as i32,
+            ]));
+            let list_array = ListArray::new(
+                Arc::new(Field::new_list_field(self.data_type.clone(), true)),
+                offsets,
+                Arc::new(primitive_array),
+                None,
+            );
+            return Ok(ScalarValue::List(Arc::new(list_array)));
         }
         ScalarValue::new_primitive::<T>(values[0], &self.data_type)
     }
@@ -750,14 +762,16 @@ struct PercentileContGroupsAccumulator<T: ArrowNumericType + Send> {
     data_type: DataType,
     group_values: Vec<Vec<T::Native>>,
     percentiles: Vec<f64>,
+    returns_list: bool,
 }
 
 impl<T: ArrowNumericType + Send> PercentileContGroupsAccumulator<T> {
-    pub fn new(data_type: DataType, percentiles: Vec<f64>) -> Self {
+    pub fn new(data_type: DataType, percentiles: Vec<f64>, returns_list: bool) -> Self {
         Self {
             data_type,
             group_values: Vec::new(),
             percentiles,
+            returns_list,
         }
     }
 }
@@ -864,14 +878,27 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
         let emit_group_values = emit_to.take_needed(&mut self.group_values);
 
         // Calculate percentile for each group
-        let mut evaluate_result_builder =
-            PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
-        for values in emit_group_values {
-            let value = calculate_percentiles::<T>(values, &self.percentiles);
-            evaluate_result_builder.append_option(value[0]);
+        if self.returns_list {
+            let mut result_builder = arrow::array::ListBuilder::new(
+                PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone()),
+            );
+            for values in emit_group_values {
+                let value = calculate_percentiles::<T>(values, &self.percentiles);
+                for v in value {
+                    result_builder.values().append_option(v);
+                }
+                result_builder.append(true);
+            }
+            Ok(Arc::new(result_builder.finish()))
+        } else {
+            let mut evaluate_result_builder =
+                PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
+            for values in emit_group_values {
+                let value = calculate_percentiles::<T>(values, &self.percentiles);
+                evaluate_result_builder.append_option(value[0]);
+            }
+            Ok(Arc::new(evaluate_result_builder.finish()))
         }
-
-        Ok(Arc::new(evaluate_result_builder.finish()))
     }
 
     fn convert_to_state(
@@ -948,6 +975,7 @@ struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
     distinct_values: GenericDistinctBuffer<T>,
     data_type: DataType,
     percentiles: Vec<f64>,
+    returns_list: bool,
 }
 
 impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumulator<T> {
@@ -973,18 +1001,20 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
         let values: Vec<Option<<T as ArrowPrimitiveType>::Native>> =
             calculate_percentiles::<T>(d, &self.percentiles);
 
-        // Convert Vec<Option<T::Native>> -> Vec<ScalarValue>
-        let mut scalars: Vec<ScalarValue> = Vec::with_capacity(values.len());
-        for v in &values {
-            scalars.push(ScalarValue::new_primitive::<T>(*v, &self.data_type)?);
-        }
-
-        if self.percentiles.len() > 1 {
-            return Ok(ScalarValue::List(ScalarValue::new_list(
-                &scalars,
-                &self.data_type,
-                true,
-            )));
+        if self.returns_list {
+            let primitive_array = PrimitiveArray::<T>::from_iter(values)
+                .with_data_type(self.data_type.clone());
+            let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![
+                0,
+                primitive_array.len() as i32,
+            ]));
+            let list_array = ListArray::new(
+                Arc::new(Field::new_list_field(self.data_type.clone(), true)),
+                offsets,
+                Arc::new(primitive_array),
+                None,
+            );
+            return Ok(ScalarValue::List(Arc::new(list_array)));
         }
         ScalarValue::new_primitive::<T>(values[0], &self.data_type)
     }
