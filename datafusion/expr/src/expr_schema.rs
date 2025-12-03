@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{predicate_bounds, Between, Expr, Like};
+use super::{Between, Expr, Like, predicate_bounds};
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
     InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
@@ -25,14 +25,14 @@ use crate::type_coercion::functions::{
     data_types_with_scalar_udf, fields_with_aggregate_udf, fields_with_window_udf,
 };
 use crate::udf::ReturnFieldArgs;
-use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
+use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, ScalarValue, Spans, TableReference,
+    Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
+    not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -64,7 +64,7 @@ pub trait ExprSchemable {
         note = "Use `to_field().1.is_nullable` and `to_field().1.data_type()` directly instead"
     )]
     fn data_type_and_nullable(&self, schema: &dyn ExprSchema)
-        -> Result<(DataType, bool)>;
+    -> Result<(DataType, bool)>;
 }
 
 impl ExprSchemable for Expr {
@@ -208,11 +208,7 @@ impl ExprSchemable for Expr {
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).data_type().clone())
             }
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ref op,
-            }) => BinaryTypeCoercer::new(
+            Expr::BinaryExpr(BinaryExpr { left, right, op }) => BinaryTypeCoercer::new(
                 &left.get_type(schema)?,
                 op,
                 &right.get_type(schema)?,
@@ -388,11 +384,9 @@ impl ExprSchemable for Expr {
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ..
-            }) => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
+            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
+                Ok(left.nullable(input_schema)? || right.nullable(input_schema)?)
+            }
             Expr::Like(Like { expr, pattern, .. })
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
@@ -530,11 +524,7 @@ impl ExprSchemable for Expr {
             Expr::ScalarSubquery(subquery) => {
                 Ok(Arc::clone(&subquery.subquery.schema().fields()[0]))
             }
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                ref right,
-                ref op,
-            }) => {
+            Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
                 let (left_field, right_field) =
                     (left.to_field(schema)?.1, right.to_field(schema)?.1);
 
@@ -844,7 +834,7 @@ mod tests {
     use super::*;
     use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
-    use datafusion_common::{assert_or_internal_err, DFSchema, ScalarValue};
+    use datafusion_common::{DFSchema, ScalarValue, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
@@ -857,9 +847,10 @@ mod tests {
     fn expr_schema_nullability() {
         let expr = col("foo").eq(lit(1));
         assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
-        assert!(expr
-            .nullable(&MockExprSchema::new().with_nullable(true))
-            .unwrap());
+        assert!(
+            expr.nullable(&MockExprSchema::new().with_nullable(true))
+                .unwrap()
+        );
 
         test_is_expr_nullable!(is_null);
         test_is_expr_nullable!(is_not_null);
@@ -1038,9 +1029,10 @@ mod tests {
         assert!(!expr.nullable(&get_schema(false)).unwrap());
         assert!(expr.nullable(&get_schema(true)).unwrap());
         // Testing nullable() returns an error.
-        assert!(expr
-            .nullable(&get_schema(false).with_error_on_nullable(true))
-            .is_err());
+        assert!(
+            expr.nullable(&get_schema(false).with_error_on_nullable(true))
+                .is_err()
+        );
 
         let null = lit(ScalarValue::Int32(None));
         let expr = col("foo").in_list(vec![null, lit(1)], false);
