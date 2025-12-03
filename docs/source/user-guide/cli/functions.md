@@ -145,7 +145,7 @@ about the File Statistics Cache that is used by the [`ListingTable`] implementat
 For the statistics to be collected, the config `datafusion.execution.collect_statistics` must be
 enabled.
 
-You can inspect the metadata cache by querying the `metadata_cache` function. For example:
+You can inspect the statistics cache by querying the `statistics_cache` function. For example:
 
 ```sql
 > select * from statistics_cache();
