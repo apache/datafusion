@@ -425,6 +425,21 @@ directly on the <code class="docutils literal notranslate"><span class="pre">Fie
 <p>The <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature flag has been removed. This feature has been migrated to
 the <code class="docutils literal notranslate"><span class="pre">datafusion-python</span></code> repository since version <code class="docutils literal notranslate"><span class="pre">44.0.0</span></code>.</p>
 </section>
+<section id="adaptive-filter-representation-in-parquet-filter-pushdown">
+<h3>Adaptive filter representation in Parquet filter pushdown<a class="headerlink" href="#adaptive-filter-representation-in-parquet-filter-pushdown" title="Link to this heading">#</a></h3>
+<p>As of Arrow 57.1.0, DataFusion uses a new adaptive filter strategy when
+evaluating pushed down filters for Parquet files. This new strategy improves
+performance for certain types of queries where the results of filtering are
+more efficiently represented with a bitmask rather than a selection.
+See <a class="reference external" href="https://github.com/apache/arrow-rs/issues/5523">arrow-rs #5523</a> for more details.</p>
+<p>This change only applies to the built-in Parquet data source with filter-pushdown enabled (
+which is <a class="reference external" href="https://github.com/apache/datafusion/issues/3463">not yet the default behavior</a>).</p>
+<p>You can disable the new behavior by setting the
+<code class="docutils literal notranslate"><span class="pre">datafusion.execution.parquet.force_filter_selections</span></code> <a class="reference external" href="https://datafusion.apache.org/user-guide/configs.html">configuration setting</a> to true.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">set</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">parquet</span><span class="p">.</span><span class="n">force_filter_selections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="statistics-handling-moved-from-filesource-to-filescanconfig">
 <h3>Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code><a class="headerlink" href="#statistics-handling-moved-from-filesource-to-filescanconfig" title="Link to this heading">#</a></h3>
 <p>Statistics are now managed directly by <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> instead of being delegated to <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> implementations. This simplifies the <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> trait and provides more consistent statistics handling across all file formats.</p>
@@ -1995,6 +2010,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changes-to-dfschema-api">Changes to DFSchema API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#removal-of-pyarrow-feature">Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptive-filter-representation-in-parquet-filter-pushdown">Adaptive filter representation in Parquet filter pushdown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax">Planner now requires explicit opt-in for WITHIN GROUP syntax</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code></a></li>
