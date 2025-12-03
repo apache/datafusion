@@ -21,7 +21,6 @@ use crate::logical_plan::recursive::{
 };
 use datafusion::logical_expr::RecursiveQuery;
 use pbjson_types::Any as ProtoAny;
-use prost::Message;
 use substrait::proto::rel_common::{self, EmitKind};
 use substrait::proto::{ExtensionMultiRel, Rel, RelCommon};
 

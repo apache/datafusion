@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::common::substrait_err;
 use prost::Message;
 
 /// Type URL to identify RecursiveQuery in Substrait extensions
