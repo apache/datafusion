@@ -217,7 +217,7 @@ mod tests {
     };
 
     use datafusion_common::parsers::CompressionTypeVariant;
-    use datafusion_common::{Constraints, DFSchema, TableReference};
+    use datafusion_common::{DFSchema, TableReference};
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -231,22 +231,14 @@ mod tests {
         let context = SessionContext::new();
         let state = context.state();
         let name = TableReference::bare("foo");
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: csv_file.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::from([("format.has_header".into(), "true".into())]),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            csv_file.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(HashMap::from([("format.has_header".into(), "true".into())]))
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -272,22 +264,14 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         options.insert("format.has_header".into(), "true".into());
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: csv_file.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options,
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            csv_file.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -317,22 +301,14 @@ mod tests {
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         options.insert("format.has_header".into(), "true".into());
         options.insert("format.compression".into(), "gzip".into());
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: dir.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options,
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            dir.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -369,22 +345,14 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         options.insert("format.has_header".into(), "true".into());
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: dir.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options,
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            dir.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -413,22 +381,13 @@ mod tests {
         let state = context.state();
         let name = TableReference::bare("foo");
 
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: String::from(path.to_str().unwrap()),
-            file_type: "parquet".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::new(),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            String::from(path.to_str().unwrap()),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -453,22 +412,13 @@ mod tests {
         let state = context.state();
         let name = TableReference::bare("foo");
 
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: dir.path().to_str().unwrap().to_string(),
-            file_type: "parquet".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::new(),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            dir.path().to_str().unwrap().to_string(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -494,22 +444,13 @@ mod tests {
         let state = context.state();
         let name = TableReference::bare("foo");
 
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: dir.path().to_str().unwrap().to_string(),
-            file_type: "parquet".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::new(),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            dir.path().to_str().unwrap().to_string(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
