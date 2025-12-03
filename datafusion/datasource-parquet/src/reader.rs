@@ -289,7 +289,9 @@ impl AsyncFileReader for CachedParquetFileReader {
 
     fn get_metadata<'a>(
         &'a mut self,
-        #[expect(unused_variables)] options: Option<&'a ArrowReaderOptions>,
+        #[cfg_attr(not(feature = "parquet_encryption"), allow(clippy::allow_attributes))]
+        #[cfg_attr(not(feature = "parquet_encryption"), allow(unused_variables))]
+        options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let object_meta = self.partitioned_file.object_meta.clone();
         let metadata_cache = Arc::clone(&self.metadata_cache);
