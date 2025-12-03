@@ -26,8 +26,8 @@ use substrait::proto::ExtensionMultiRel;
 ///
 /// RecursiveQuery is encoded as ExtensionMultiRel with exactly two inputs:
 ///
-/// - inputs[0]: static_term
-/// - inputs[1]: recursive_term
+/// - `inputs[0]`: static_term
+/// - `inputs[1]`: recursive_term
 ///
 /// The detail field contains the encoded name and is_distinct metadata.
 pub async fn from_recursive_query_rel(
