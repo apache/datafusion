@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::util::FFIResult;
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
     df_result, rresult, rresult_return,
 };
 use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
+    std_types::{ROption, RVec},
     StableAbi,
 };
 use arrow::{
@@ -48,20 +49,20 @@ pub struct FFI_GroupsAccumulator {
         group_indices: RVec<usize>,
         opt_filter: ROption<WrappedArray>,
         total_num_groups: usize,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     // Evaluate and return a ScalarValues as protobuf bytes
     pub evaluate: unsafe extern "C" fn(
         accumulator: &mut Self,
         emit_to: FFI_EmitTo,
-    ) -> RResult<WrappedArray, RString>,
+    ) -> FFIResult<WrappedArray>,
 
     pub size: unsafe extern "C" fn(accumulator: &Self) -> usize,
 
     pub state: unsafe extern "C" fn(
         accumulator: &mut Self,
         emit_to: FFI_EmitTo,
-    ) -> RResult<RVec<WrappedArray>, RString>,
+    ) -> FFIResult<RVec<WrappedArray>>,
 
     pub merge_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
@@ -69,14 +70,13 @@ pub struct FFI_GroupsAccumulator {
         group_indices: RVec<usize>,
         opt_filter: ROption<WrappedArray>,
         total_num_groups: usize,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     pub convert_to_state: unsafe extern "C" fn(
         accumulator: &Self,
         values: RVec<WrappedArray>,
         opt_filter: ROption<WrappedArray>,
-    )
-        -> RResult<RVec<WrappedArray>, RString>,
+    ) -> FFIResult<RVec<WrappedArray>>,
 
     pub supports_convert_to_state: bool,
 
@@ -136,7 +136,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     group_indices: RVec<usize>,
     opt_filter: ROption<WrappedArray>,
     total_num_groups: usize,
-) -> RResult<(), RString> {
+) -> FFIResult<()> {
     let accumulator = accumulator.inner_mut();
     let values = rresult_return!(process_values(values));
     let group_indices: Vec<usize> = group_indices.into_iter().collect();
@@ -153,7 +153,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
 unsafe extern "C" fn evaluate_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
-) -> RResult<WrappedArray, RString> {
+) -> FFIResult<WrappedArray> {
     let accumulator = accumulator.inner_mut();
 
     let result = rresult_return!(accumulator.evaluate(emit_to.into()));
@@ -169,7 +169,7 @@ unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_GroupsAccumulator) -> usi
 unsafe extern "C" fn state_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
-) -> RResult<RVec<WrappedArray>, RString> {
+) -> FFIResult<RVec<WrappedArray>> {
     let accumulator = accumulator.inner_mut();
 
     let state = rresult_return!(accumulator.state(emit_to.into()));
@@ -185,7 +185,7 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     group_indices: RVec<usize>,
     opt_filter: ROption<WrappedArray>,
     total_num_groups: usize,
-) -> RResult<(), RString> {
+) -> FFIResult<()> {
     let accumulator = accumulator.inner_mut();
     let values = rresult_return!(process_values(values));
     let group_indices: Vec<usize> = group_indices.into_iter().collect();
@@ -203,7 +203,7 @@ unsafe extern "C" fn convert_to_state_fn_wrapper(
     accumulator: &FFI_GroupsAccumulator,
     values: RVec<WrappedArray>,
     opt_filter: ROption<WrappedArray>,
-) -> RResult<RVec<WrappedArray>, RString> {
+) -> FFIResult<RVec<WrappedArray>> {
     let accumulator = accumulator.inner();
     let values = rresult_return!(process_values(values));
     let opt_filter = rresult_return!(process_opt_filter(opt_filter));
@@ -221,6 +221,7 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator)
         let private_data =
             Box::from_raw(accumulator.private_data as *mut GroupsAccumulatorPrivateData);
         drop(private_data);
+        accumulator.private_data = null_mut();
     }
 }
 
