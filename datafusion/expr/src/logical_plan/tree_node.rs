@@ -345,11 +345,12 @@ impl TreeNode for LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
-            // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            LogicalPlan::DependentJoin(..) => todo!(),
+            LogicalPlan::DelimGet(..) => todo!(),
         })
     }
 }
@@ -422,9 +423,6 @@ impl LogicalPlan {
                 aggr_expr,
                 ..
             }) => (group_expr, aggr_expr).apply_ref_elements(f),
-            // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
-            // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
-            // 2. the second part is non-equijoin(filter).
             LogicalPlan::Join(Join { on, filter, .. }) => {
                 (on, filter).apply_ref_elements(f)
             }
@@ -461,7 +459,6 @@ impl LogicalPlan {
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             },
-            // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
             | LogicalPlan::Subquery(_)
@@ -474,6 +471,8 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
+            LogicalPlan::DependentJoin(..) => todo!(),
+            LogicalPlan::DelimGet(..) => todo!(),
         }
     }
 
@@ -551,10 +550,6 @@ impl LogicalPlan {
                     })
                 },
             ),
-
-            // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
-            // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
-            // 2. the second part is non-equijoin(filter).
             LogicalPlan::Join(Join {
                 left,
                 right,
@@ -640,7 +635,6 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
-            // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)
             | LogicalPlan::RecursiveQuery(_)
@@ -654,6 +648,8 @@ impl LogicalPlan {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            LogicalPlan::DependentJoin(..) => todo!(),
+            LogicalPlan::DelimGet(..) => todo!(),
         })
     }
 
