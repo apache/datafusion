@@ -224,9 +224,12 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
         use datafusion_common::exec_err;
 
-        // 1) Try self-describing wrapper first
+        if buf.is_empty() {
+            return Ok(Arc::new(ArrowFormatFactory::new()));
+        }
+
         if let Ok(wrapper) = FileFormatWrapper::try_decode(buf) {
-            return match wrapper.kind {
+            let result = match wrapper.kind {
                 FileFormatKind::Csv => {
                     let codec = CsvLogicalExtensionCodec {};
                     codec
@@ -252,15 +255,11 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
                         .map_err(|e| context!("Decoding Arrow file format", e))
                 }
             };
+            if result.is_ok() {
+                return result;
+            }
         }
 
-        // 2) Legacy fallback (raw bytes produced by specific codecs)
-        // - empty means Arrow
-        if buf.is_empty() {
-            return Ok(Arc::new(ArrowFormatFactory::new()));
-        }
-
-        // helper that accepts a decode fn and re-encodes to verify exact bytes
         fn try_decode_roundtrip(
             ctx: &SessionContext,
             buf: &[u8],
