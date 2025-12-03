@@ -44,8 +44,8 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp,
+    DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery,
+    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -55,9 +55,10 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, internal_datafusion_err,
-    plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
-    NullEquality, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions, exec_err,
+    get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
+    plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -185,7 +186,8 @@ impl LogicalPlanBuilder {
         if static_fields_len != recursive_fields_len {
             return plan_err!(
                 "Non-recursive term and recursive term must have the same number of columns ({} != {})",
-                static_fields_len, recursive_fields_len
+                static_fields_len,
+                recursive_fields_len
             );
         }
         // Ensure that the recursive term has the same field types as the static term
@@ -306,7 +308,11 @@ impl LogicalPlanBuilder {
                 let metadata = value.metadata(&schema)?;
                 if let Some(ref cm) = common_metadata {
                     if &metadata != cm {
-                        return plan_err!("Inconsistent metadata across values list at row {i} column {j}. Was {:?} but found {:?}", cm, metadata);
+                        return plan_err!(
+                            "Inconsistent metadata across values list at row {i} column {j}. Was {:?} but found {:?}",
+                            cm,
+                            metadata
+                        );
                     }
                 } else {
                     common_metadata = Some(metadata.clone());
@@ -320,7 +326,9 @@ impl LogicalPlanBuilder {
                     // get common type of each column values.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
-                        return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
+                        return plan_err!(
+                            "Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}"
+                        );
                     };
                     common_type = Some(new_type);
                 } else {
@@ -507,29 +515,27 @@ impl LogicalPlanBuilder {
             TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
 
         // Inline TableScan
-        if table_scan.filters.is_empty() {
-            if let Some(p) = table_scan.source.get_logical_plan() {
-                let sub_plan = p.into_owned();
+        if table_scan.filters.is_empty()
+            && let Some(p) = table_scan.source.get_logical_plan()
+        {
+            let sub_plan = p.into_owned();
 
-                if let Some(proj) = table_scan.projection {
-                    let projection_exprs = proj
-                        .into_iter()
-                        .map(|i| {
-                            Expr::Column(Column::from(
-                                sub_plan.schema().qualified_field(i),
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    return Self::new(sub_plan)
-                        .project(projection_exprs)?
-                        .alias(table_scan.table_name);
-                }
-
-                // Ensures that the reference to the inlined table remains the
-                // same, meaning we don't have to change any of the parent nodes
-                // that reference this table.
-                return Self::new(sub_plan).alias(table_scan.table_name);
+            if let Some(proj) = table_scan.projection {
+                let projection_exprs = proj
+                    .into_iter()
+                    .map(|i| {
+                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
+                    })
+                    .collect::<Vec<_>>();
+                return Self::new(sub_plan)
+                    .project(projection_exprs)?
+                    .alias(table_scan.table_name);
             }
+
+            // Ensures that the reference to the inlined table remains the
+            // same, meaning we don't have to change any of the parent nodes
+            // that reference this table.
+            return Self::new(sub_plan).alias(table_scan.table_name);
         }
 
         Ok(Self::new(LogicalPlan::TableScan(table_scan)))
@@ -765,7 +771,9 @@ impl LogicalPlanBuilder {
             .map(|col| col.flat_name())
             .collect::<String>();
 
-        plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
+        plan_err!(
+            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list"
+        )
     }
 
     /// Apply a sort by provided expressions with default direction
@@ -1920,15 +1928,14 @@ fn replace_columns(
     replace: &PlannedReplaceSelectItem,
 ) -> Result<Vec<Expr>> {
     for expr in exprs.iter_mut() {
-        if let Expr::Column(Column { name, .. }) = expr {
-            if let Some((_, new_expr)) = replace
+        if let Expr::Column(Column { name, .. }) = expr
+            && let Some((_, new_expr)) = replace
                 .items()
                 .iter()
                 .zip(replace.expressions().iter())
                 .find(|(item, _)| item.column_name.value == *name)
-            {
-                *expr = new_expr.clone().alias(name.clone())
-            }
+        {
+            *expr = new_expr.clone().alias(name.clone())
         }
     }
     Ok(exprs)
@@ -2822,11 +2829,13 @@ mod tests {
                 .into_iter()
                 .collect();
         let metadata2 = FieldMetadata::from(metadata2);
-        assert!(LogicalPlanBuilder::values(vec![
-            vec![lit_with_metadata(1, Some(metadata.clone()))],
-            vec![lit_with_metadata(2, Some(metadata2.clone()))],
-        ])
-        .is_err());
+        assert!(
+            LogicalPlanBuilder::values(vec![
+                vec![lit_with_metadata(1, Some(metadata.clone()))],
+                vec![lit_with_metadata(2, Some(metadata2.clone()))],
+            ])
+            .is_err()
+        );
 
         Ok(())
     }

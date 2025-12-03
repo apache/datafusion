@@ -18,17 +18,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::cache::CacheAccessor;
 use crate::cache::cache_manager::{
     FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
 };
 use crate::cache::lru_queue::LruQueue;
-use crate::cache::CacheAccessor;
 
 use datafusion_common::Statistics;
 
 use dashmap::DashMap;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 /// Default implementation of [`FileStatisticsCache`]
 ///
@@ -88,7 +88,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     }
 
     fn remove(&self, k: &Path) -> Option<Arc<Statistics>> {
-        self.statistics.remove(k).map(|x| x.1 .1)
+        self.statistics.remove(k).map(|x| x.1.1)
     }
 
     fn contains_key(&self, k: &Path) -> bool {
@@ -253,7 +253,7 @@ impl DefaultFilesMetadataCacheState {
     fn evict_entries(&mut self) {
         while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
-                let metadata: Arc<dyn FileMetadata> = removed.1 .1;
+                let metadata: Arc<dyn FileMetadata> = removed.1.1;
                 self.memory_used -= metadata.memory_size();
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
@@ -429,18 +429,18 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use crate::cache::CacheAccessor;
     use crate::cache::cache_manager::{
         FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
     };
     use crate::cache::cache_unit::{
         DefaultFileStatisticsCache, DefaultFilesMetadataCache, DefaultListFilesCache,
     };
-    use crate::cache::CacheAccessor;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
     use datafusion_common::Statistics;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     #[test]
     fn test_statistics_cache() {
