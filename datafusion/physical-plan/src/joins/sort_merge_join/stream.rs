@@ -400,7 +400,8 @@ impl JoinedRecordBatches {
 
     /// Clears batches without touching metadata (for early return when no filtering needed)
     fn clear_batches(&mut self, schema: &SchemaRef, batch_size: usize) {
-        self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size);
+        self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size)
+            .with_biggest_coalesce_batch_size(Option::from(batch_size / 2));
     }
 
     /// Asserts that internal metadata arrays are consistent with each other
@@ -538,7 +539,8 @@ impl JoinedRecordBatches {
     }
 
     fn clear(&mut self, schema: &SchemaRef, batch_size: usize) {
-        self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size);
+        self.joined_batches = BatchCoalescer::new(Arc::clone(schema), batch_size)
+            .with_biggest_coalesce_batch_size(Option::from(batch_size / 2));
         self.batch_ids.clear();
         self.filter_mask = BooleanBuilder::new();
         self.row_indices = UInt64Builder::new();
@@ -961,12 +963,14 @@ impl SortMergeJoinStream {
             on_buffered,
             filter,
             joined_record_batches: JoinedRecordBatches {
-                joined_batches: BatchCoalescer::new(Arc::clone(&schema), batch_size),
+                joined_batches: BatchCoalescer::new(Arc::clone(&schema), batch_size)
+                    .with_biggest_coalesce_batch_size(Option::from(batch_size / 2)),
                 filter_mask: BooleanBuilder::new(),
                 row_indices: UInt64Builder::new(),
                 batch_ids: vec![],
             },
-            output: BatchCoalescer::new(schema, batch_size),
+            output: BatchCoalescer::new(schema, batch_size)
+                .with_biggest_coalesce_batch_size(Option::from(batch_size / 2)),
             batch_size,
             join_type,
             join_metrics,
