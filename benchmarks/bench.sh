@@ -613,9 +613,19 @@ data_tpch() {
 
 # Points to TPCDS data generation instructions
 data_tpcds() {
+    TPCDS_DIR="${DATA_DIR}"
+
+    # Check if TPCDS data directory exists
+    if [ ! -d "${TPCDS_DIR}" ]; then
+        echo ""
+        echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
+        echo "  git clone https://github.com/apache/datafusion-benchmarks"
+        echo ""
+        return 1
+    fi
+
     echo ""
-    echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
-    echo "  git clone https://github.com/apache/datafusion-benchmarks"
+    echo "TPC-DS data already exists in ${TPCDS_DIR}"
     echo ""
 }
 
