@@ -143,9 +143,7 @@ pub async fn from_substrait_extended_expr(
         let expr = consumer
             .consume_expression(scalar_expr, &input_schema)
             .await?;
-        let (output_type, expected_nullability) =
-            expr.data_type_and_nullable(&input_schema)?;
-        let output_field = Field::new("", output_type, expected_nullability);
+        let output_field = expr.to_field(&input_schema)?.1;
         let mut names_idx = 0;
         let output_field = rename_field(
             &output_field,

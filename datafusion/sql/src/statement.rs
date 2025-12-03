@@ -1869,7 +1869,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .iter()
                 .any(|opt| opt.key == variable);
 
-            if !is_valid_variable {
+            // Check if it's a runtime variable
+            let is_runtime_variable = variable.starts_with("datafusion.runtime.");
+
+            if !is_valid_variable && !is_runtime_variable {
                 return plan_err!(
                     "'{variable}' is not a variable which can be viewed with 'SHOW'"
                 );
@@ -2163,7 +2166,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     } else {
                         value_indices[column_index] = Some(i);
                     }
-                    Ok(table_schema.field(column_index).clone())
+                    Ok(Arc::clone(table_schema.field(column_index)))
                 })
                 .collect::<Result<Vec<_>>>()?;
             (Fields::from(fields), value_indices)

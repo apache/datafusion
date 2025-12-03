@@ -710,13 +710,13 @@ select
 query TTT
 select arrow_typeof(column1), arrow_typeof(column2), arrow_typeof(column3) from arrays;
 ----
-List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
-List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
-List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
-List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
-List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
-List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
-List(nullable List(nullable Int64)) List(nullable Float64) List(nullable Utf8)
+List(List(Int64)) List(Float64) List(Utf8)
+List(List(Int64)) List(Float64) List(Utf8)
+List(List(Int64)) List(Float64) List(Utf8)
+List(List(Int64)) List(Float64) List(Utf8)
+List(List(Int64)) List(Float64) List(Utf8)
+List(List(Int64)) List(Float64) List(Utf8)
+List(List(Int64)) List(Float64) List(Utf8)
 
 # arrays table
 query ???
@@ -1182,7 +1182,7 @@ select make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)'))
 query T
 select arrow_typeof(make_array(make_array(1), arrow_cast(make_array(-1), 'LargeList(Int8)')));
 ----
-List(nullable LargeList(nullable Int64))
+List(LargeList(Int64))
 
 
 query ???
@@ -1978,11 +1978,11 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 ----
 [1, 2, 3, 4, 5] [h, e, l, l, o]
 
-# TODO: Enable once arrow_cast supports ListView types.
+# TODO make error message nicer: https://github.com/apache/datafusion/issues/19004
 # Expected output (once supported):
 # ----
 # [1, 2, 3, 4, 5] [h, e, l, l, o]
-query error DataFusion error: Execution error: Unsupported type 'ListView\(Int64\)'. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'. Error unknown token: ListView
+query error Failed to coerce arguments to satisfy a call to 'array_slice' function:
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'ListView(Int64)'), 0, 6),
        array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'ListView(Utf8)'), 0, 5);
 
@@ -2025,11 +2025,11 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2,
 ----
 [2, 3, 4, 5] [l, l, o]
 
-# TODO: Enable once arrow_cast supports LargeListView types.
+# TODO: Enable once array_slice supports LargeListView types.
 # Expected output (once supported):
 # ----
 # [2, 3, 4, 5] [l, l, o]
-query error DataFusion error: Execution error: Unsupported type 'LargeListView\(Int64\)'. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'. Error unknown token: LargeListView
+query error Failed to coerce arguments to satisfy a call to 'array_slice' function:
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeListView(Int64)'), 2, 6),
        array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeListView(Utf8)'), 3, 7);
 
@@ -3321,7 +3321,7 @@ select
     array_concat([arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')], [arrow_cast('3', 'Utf8View')]),
     arrow_typeof(array_concat([arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')], [arrow_cast('3', 'Utf8View')]));
 ----
-[1, 2, 3] List(nullable Utf8View)
+[1, 2, 3] List(Utf8View)
 
 # array_concat error
 query error DataFusion error: Error during planning: Execution error: Function 'array_concat' user-defined coercion failed with "Error during planning: array_concat does not support type Int64"
@@ -4614,7 +4614,7 @@ NULL [baz] baz
 query T
 SELECT arrow_typeof(make_array(arrow_cast('a', 'Utf8View'), 'b', 'c', 'd'));
 ----
-List(nullable Utf8View)
+List(Utf8View)
 
 # expect a,b,c,d. make_array forces all types to be of a common type (see above)
 query T
@@ -7708,8 +7708,8 @@ CREATE EXTERNAL TABLE fixed_size_list_array STORED AS PARQUET LOCATION '../core/
 query T
 select arrow_typeof(f0) from fixed_size_list_array;
 ----
-FixedSizeList(2 x nullable Int64)
-FixedSizeList(2 x nullable Int64)
+FixedSizeList(2 x Int64)
+FixedSizeList(2 x Int64)
 
 query ?
 select * from fixed_size_list_array;
@@ -7738,8 +7738,8 @@ select make_array(arrow_cast(f0, 'List(Int64)')) from fixed_size_list_array
 query T
 select arrow_typeof(make_array(arrow_cast(f0, 'List(Int64)'))) from fixed_size_list_array
 ----
-List(nullable List(nullable Int64))
-List(nullable List(nullable Int64))
+List(List(Int64))
+List(List(Int64))
 
 query ?
 select make_array(f0) from fixed_size_list_array
@@ -7750,8 +7750,8 @@ select make_array(f0) from fixed_size_list_array
 query T
 select arrow_typeof(make_array(f0)) from fixed_size_list_array
 ----
-List(nullable FixedSizeList(2 x nullable Int64))
-List(nullable FixedSizeList(2 x nullable Int64))
+List(FixedSizeList(2 x Int64))
+List(FixedSizeList(2 x Int64))
 
 query ?
 select array_concat(column1, [7]) from arrays_values_v2;
@@ -7798,7 +7798,7 @@ select flatten(arrow_cast(make_array([1], [2, 3], [null], make_array(4, null, 5)
        arrow_typeof(flatten(arrow_cast(make_array([1], [2, 3], [null], make_array(4, null, 5)), 'FixedSizeList(4, LargeList(Int64))'))),
        arrow_typeof(flatten(arrow_cast(make_array([[1.1], [2.2]], [[3.3], [4.4]]), 'List(LargeList(FixedSizeList(1, Float64)))')));
 ----
-[1, 2, 3, NULL, 4, NULL, 5] [[1.1], [2.2], [3.3], [4.4]] LargeList(nullable Int64) LargeList(nullable FixedSizeList(1 x nullable Float64))
+[1, 2, 3, NULL, 4, NULL, 5] [[1.1], [2.2], [3.3], [4.4]] LargeList(Int64) LargeList(FixedSizeList(1 x Float64))
 
 # flatten with column values
 query ????
@@ -8338,19 +8338,19 @@ select * from test_create_array_table;
 query T
 select arrow_typeof(a) from test_create_array_table;
 ----
-List(nullable Int32)
+List(Int32)
 
 query T
 select arrow_typeof(c) from test_create_array_table;
 ----
-List(nullable List(nullable Int32))
+List(List(Int32))
 
 # Test casting to array types
 # issue: https://github.com/apache/datafusion/issues/9440
 query ??T
 select [1,2,3]::int[], [['1']]::int[][], arrow_typeof([]::text[]);
 ----
-[1, 2, 3] [[1]] List(nullable Utf8View)
+[1, 2, 3] [[1]] List(Utf8View)
 
 # test empty arrays return length
 # issue: https://github.com/apache/datafusion/pull/12459
@@ -8370,8 +8370,8 @@ create table fixed_size_col_table (a int[3]) as values ([1,2,3]), ([4,5,6]);
 query T
 select arrow_typeof(a) from fixed_size_col_table;
 ----
-FixedSizeList(3 x nullable Int32)
-FixedSizeList(3 x nullable Int32)
+FixedSizeList(3 x Int32)
+FixedSizeList(3 x Int32)
 
 query ? rowsort
 SELECT DISTINCT a FROM fixed_size_col_table
@@ -8407,7 +8407,6 @@ select array_contains(a, b) from array_has order by 1 nulls last;
 true
 NULL
 
-# TODO: Enable once arrow_cast supports ListView types.
 # Expected output (once supported):
 # ----
 # [5, 4, 3, 2, 1]

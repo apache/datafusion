@@ -1181,10 +1181,12 @@ mod tests {
         let result = with_hashes(empty, &random_state, |_hashes| Ok(()));
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("requires at least one array"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires at least one array")
+        );
     }
 
     #[test]

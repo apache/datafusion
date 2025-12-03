@@ -100,7 +100,7 @@ pub struct SessionConfig {
     /// references to the same options.
     options: Arc<ConfigOptions>,
     /// Opaque extensions.
-    extensions: AnyMap,
+    extensions: Arc<Extensions>,
 }
 
 impl Default for SessionConfig {
@@ -108,11 +108,50 @@ impl Default for SessionConfig {
         Self {
             options: Arc::new(ConfigOptions::new()),
             // Assume no extensions by default.
-            extensions: HashMap::with_capacity_and_hasher(
-                0,
-                BuildHasherDefault::default(),
-            ),
+            extensions: Arc::new(Extensions::default()),
         }
+    }
+}
+
+/// A type map for storing extensions.
+///
+/// Extensions are indexed by their type `T`. If multiple values of the same type are provided, only the last one
+/// will be kept.
+///
+/// Extensions are opaque objects that are unknown to DataFusion itself but can be downcast by optimizer rules,
+/// execution plans, or other components that have access to the session config.
+/// They provide a flexible way to attach extra data or behavior to the session config.
+#[derive(Clone, Debug)]
+pub struct Extensions {
+    inner: AnyMap,
+}
+
+impl Default for Extensions {
+    fn default() -> Self {
+        Self {
+            inner: HashMap::with_capacity_and_hasher(0, BuildHasherDefault::default()),
+        }
+    }
+}
+
+impl Extensions {
+    pub fn insert<T>(&mut self, value: Arc<T>)
+    where
+        T: Send + Sync + 'static,
+    {
+        let id = TypeId::of::<T>();
+        self.inner.insert(id, value);
+    }
+
+    pub fn get<T>(&self) -> Option<Arc<T>>
+    where
+        T: Send + Sync + 'static,
+    {
+        let id = TypeId::of::<T>();
+        self.inner
+            .get(&id)
+            .cloned()
+            .map(|arc_any| Arc::downcast(arc_any).expect("TypeId unique"))
     }
 }
 
@@ -162,6 +201,20 @@ impl SessionConfig {
     /// ```
     pub fn options_mut(&mut self) -> &mut ConfigOptions {
         Arc::make_mut(&mut self.options)
+    }
+
+    /// Return a handle to the extensions.
+    ///
+    /// Can be used to read the current extensions.
+    pub fn extensions(&self) -> &Arc<Extensions> {
+        &self.extensions
+    }
+
+    /// Return a mutable handle to the extensions.
+    ///
+    /// Can be used to set extensions.
+    pub fn extensions_mut(&mut self) -> &mut Extensions {
+        Arc::make_mut(&mut self.extensions)
     }
 
     /// Set a configuration option
@@ -580,9 +633,7 @@ impl SessionConfig {
     where
         T: Send + Sync + 'static,
     {
-        let ext = ext as Arc<dyn Any + Send + Sync + 'static>;
-        let id = TypeId::of::<T>();
-        self.extensions.insert(id, ext);
+        self.extensions_mut().insert::<T>(ext);
     }
 
     /// Get extension, if any for the specified type `T` exists.
@@ -592,11 +643,7 @@ impl SessionConfig {
     where
         T: Send + Sync + 'static,
     {
-        let id = TypeId::of::<T>();
-        self.extensions
-            .get(&id)
-            .cloned()
-            .map(|ext| Arc::downcast(ext).expect("TypeId unique"))
+        self.extensions.get::<T>()
     }
 }
 
