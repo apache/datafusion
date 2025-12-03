@@ -170,7 +170,6 @@ your unit tests you should override this with
 `crate::mock_foreign_marker_id` to force your test to create the foreign
 variant of your struct.
 
-
 ## Task Context Provider
 
 Many of the FFI structs in this crate contain a `FFI_TaskContextProvider`. The
