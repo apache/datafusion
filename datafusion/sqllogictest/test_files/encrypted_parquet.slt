@@ -85,7 +85,7 @@ float_field float
 )
 STORED AS PARQUET LOCATION 'test_files/scratch/encrypted_parquet/'
 
-query RR
+query RR rowsort
 SELECT * FROM parquet_table
 ----
 -1 -1
