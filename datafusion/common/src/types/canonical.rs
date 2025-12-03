@@ -18,7 +18,6 @@
 use crate::error::_internal_err;
 use crate::types::{LogicalType, NativeType, TypeParameter, TypeSignature};
 use crate::Result;
-use crate::ScalarValue;
 use arrow::array::{Array, FixedSizeBinaryArray};
 use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
 use arrow_schema::extension::{ExtensionType, Opaque, Uuid};
@@ -163,6 +162,7 @@ impl LogicalType for UnresolvedExtensionType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ScalarValue;
 
     #[test]
     pub fn test_pretty_print_uuid() {

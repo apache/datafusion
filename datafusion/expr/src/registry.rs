@@ -235,7 +235,7 @@ pub trait ExtensionTypeRegistration: Debug + Send + Sync {
     ///
     /// The resulting [LogicalTypeRef] should only capture the *type information*, not any other
     /// metadata or nullability information that is part of the field.
-    fn create_logical_type(&self, field: Field) -> Result<LogicalTypeRef>;
+    fn create_logical_type(&self, field: &Field) -> Result<LogicalTypeRef>;
 }
 
 /// A cheaply cloneable pointer to an [ExtensionTypeRegistration].
@@ -245,11 +245,11 @@ pub type ExtensionTypeRegistrationRef = Arc<dyn ExtensionTypeRegistration>;
 pub trait ExtensionTypeRegistry: Debug + Send + Sync {
     /// Returns a reference to the logical type named `name`.
     ///
-    /// Returns an error if there is no
+    /// Returns an error if there is no extension type with that name.
     fn extension_type(&self, name: &str) -> Result<ExtensionTypeRegistrationRef>;
 
     /// Creates a [LogicalTypeRef] from the type information in the `field`.
-    fn create_logical_type_for_field(&self, field: Field) -> Result<LogicalTypeRef> {
+    fn create_logical_type_for_field(&self, field: &Field) -> Result<LogicalTypeRef> {
         match field.extension_type_name() {
             None => Ok(Arc::new(NativeType::from(field.data_type()))),
             Some(name) => {
