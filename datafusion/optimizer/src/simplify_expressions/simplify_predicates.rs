@@ -26,7 +26,7 @@
 //! encompasses the former, resulting in fewer checks during query execution.
 
 use datafusion_common::{Column, Result, ScalarValue};
-use datafusion_expr::{BinaryExpr, Cast, Expr, Operator};
+use datafusion_expr::{BinaryExpr, Expr, Operator};
 use std::collections::BTreeMap;
 
 /// Simplifies a list of predicates by removing redundancies.
@@ -194,7 +194,7 @@ fn find_most_restrictive_predicate(
     let mut best_value: Option<&ScalarValue> = None;
 
     for (idx, pred) in predicates.iter().enumerate() {
-        if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = pred {
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = pred {
             // Extract the literal value based on which side has it
             let scalar_value = match (right.as_literal(), left.as_literal()) {
                 (Some(scalar), _) => Some(scalar),
@@ -207,8 +207,12 @@ fn find_most_restrictive_predicate(
                     let comparison = scalar.try_cmp(current_best)?;
                     let is_better = if find_greater {
                         comparison == std::cmp::Ordering::Greater
+                            || (comparison == std::cmp::Ordering::Equal
+                                && op == &Operator::Gt)
                     } else {
                         comparison == std::cmp::Ordering::Less
+                            || (comparison == std::cmp::Ordering::Equal
+                                && op == &Operator::Lt)
                     };
 
                     if is_better {
@@ -239,8 +243,99 @@ fn find_most_restrictive_predicate(
 fn extract_column_from_expr(expr: &Expr) -> Option<Column> {
     match expr {
         Expr::Column(col) => Some(col.clone()),
-        // Handle cases where the column might be wrapped in a cast or other operation
-        Expr::Cast(Cast { expr, .. }) => extract_column_from_expr(expr),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::DataType;
+    use datafusion_expr::{cast, col, lit};
+
+    #[test]
+    fn test_simplify_predicates_with_cast() {
+        // Test that predicates on cast expressions are not grouped with predicates on the raw column
+        // a < 5 AND CAST(a AS varchar) < 'abc' AND a < 6
+        // Should simplify to:
+        // a < 5 AND CAST(a AS varchar) < 'abc'
+
+        let predicates = vec![
+            col("a").lt(lit(5i32)),
+            cast(col("a"), DataType::Utf8).lt(lit("abc")),
+            col("a").lt(lit(6i32)),
+        ];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        // Should have 2 predicates: a < 5 and CAST(a AS varchar) < 'abc'
+        assert_eq!(result.len(), 2);
+
+        // Check that the cast predicate is preserved
+        let has_cast_predicate = result.iter().any(|p| {
+            matches!(p, Expr::BinaryExpr(BinaryExpr { 
+                left, 
+                op: Operator::Lt, 
+                right 
+            }) if matches!(left.as_ref(), Expr::Cast(_)) && right == &Box::new(lit("abc")))
+        });
+        assert!(has_cast_predicate, "Cast predicate should be preserved");
+
+        // Check that we have the more restrictive column predicate (a < 5)
+        let has_column_predicate = result.iter().any(|p| {
+            matches!(p, Expr::BinaryExpr(BinaryExpr { 
+                left, 
+                op: Operator::Lt, 
+                right 
+            }) if left == &Box::new(col("a")) && right == &Box::new(lit(5i32)))
+        });
+        assert!(has_column_predicate, "Should have a < 5 predicate");
+    }
+
+    #[test]
+    fn test_extract_column_ignores_cast() {
+        // Test that extract_column_from_expr does not extract columns from cast expressions
+        let cast_expr = cast(col("a"), DataType::Utf8);
+        assert_eq!(extract_column_from_expr(&cast_expr), None);
+
+        // Test that it still extracts from direct column references
+        let col_expr = col("a");
+        assert_eq!(extract_column_from_expr(&col_expr), Some(Column::from("a")));
+    }
+
+    #[test]
+    fn test_simplify_predicates_direct_columns_only() {
+        // Test that only predicates on direct columns are simplified together
+        let predicates = vec![
+            col("a").lt(lit(5i32)),
+            col("a").lt(lit(3i32)),
+            col("b").gt(lit(10i32)),
+            col("b").gt(lit(20i32)),
+        ];
+
+        let result = simplify_predicates(predicates).unwrap();
+
+        // Should have 2 predicates: a < 3 and b > 20 (most restrictive for each column)
+        assert_eq!(result.len(), 2);
+
+        // Check for a < 3
+        let has_a_predicate = result.iter().any(|p| {
+            matches!(p, Expr::BinaryExpr(BinaryExpr { 
+                left, 
+                op: Operator::Lt, 
+                right 
+            }) if left == &Box::new(col("a")) && right == &Box::new(lit(3i32)))
+        });
+        assert!(has_a_predicate, "Should have a < 3 predicate");
+
+        // Check for b > 20
+        let has_b_predicate = result.iter().any(|p| {
+            matches!(p, Expr::BinaryExpr(BinaryExpr { 
+                left, 
+                op: Operator::Gt, 
+                right 
+            }) if left == &Box::new(col("b")) && right == &Box::new(lit(20i32)))
+        });
+        assert!(has_b_predicate, "Should have b > 20 predicate");
     }
 }

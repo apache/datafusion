@@ -179,8 +179,8 @@ select log(-1), log(0), sqrt(-1);
 | ascii(character)                               | Returns a numeric representation of the character (`character`). Example: `ascii('a') -> 97`                                                                                                                                             |
 | bit_length(text)                               | Returns the length of the string (`text`) in bits. Example: `bit_length('spider') -> 48`                                                                                                                                                 |
 | btrim(text, characters)                        | Removes all specified characters (`characters`) from both the beginning and the end of the string (`text`). Example: `btrim('aabchelloccb', 'abc') -> hello`                                                                             |
-| char_length(text)                              | Returns number of characters in the string (`text`). The same as `character_length` and `length`. Example: `character_length('lion') -> 4`                                                                                               |
-| character_length(text)                         | Returns number of characters in the string (`text`). The same as `char_length` and `length`. Example: `char_length('lion') -> 4`                                                                                                         |
+| char_length(text)                              | Returns number of characters in the string (`text`). The same as `character_length` and `length`. Example: `char_length('lion') -> 4`                                                                                                    |
+| character_length(text)                         | Returns number of characters in the string (`text`). The same as `char_length` and `length`. Example: `character_length('lion') -> 4`                                                                                                    |
 | concat(value1, [value2 [, ...]])               | Concatenates the text representations (`value1, [value2 [, ...]]`) of all the arguments. NULL arguments are ignored. Example: `concat('aaa', 'bbc', NULL, 321) -> aaabbc321`                                                             |
 | concat_ws(separator, value1, [value2 [, ...]]) | Concatenates the text representations (`value1, [value2 [, ...]]`) of all the arguments with the separator (`separator`). NULL arguments are ignored. `concat_ws('/', 'path', 'to', NULL, 'my', 'folder', 123) -> path/to/my/folder/123` |
 | chr(integer)                                   | Returns a character by its numeric representation (`integer`). Example: `chr(90) -> 8`                                                                                                                                                   |
@@ -288,6 +288,7 @@ select log(-1), log(0), sqrt(-1);
 | Syntax                                                                          | Description                                                                                                                                              |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | avg(expr)                                                                       | Сalculates the average value for `expr`.                                                                                                                 |
+| avg_distinct(expr)                                                              | Creates an expression to represent the avg(distinct) aggregate function                                                                                  |
 | approx_distinct(expr)                                                           | Calculates an approximate count of the number of distinct values for `expr`.                                                                             |
 | approx_median(expr)                                                             | Calculates an approximation of the median for `expr`.                                                                                                    |
 | approx_percentile_cont(expr, percentile [, centroids])                          | Calculates an approximation of the specified `percentile` for `expr`. Optional `centroids` parameter controls accuracy (default: 100).                   |
@@ -298,7 +299,7 @@ select log(-1), log(0), sqrt(-1);
 | bool_and(expr)                                                                  | Returns true if all non-null input values (`expr`) are true, otherwise false.                                                                            |
 | bool_or(expr)                                                                   | Returns true if any non-null input value (`expr`) is true, otherwise false.                                                                              |
 | count(expr)                                                                     | Returns the number of rows for `expr`.                                                                                                                   |
-| count_distinct                                                                  | Creates an expression to represent the count(distinct) aggregate function                                                                                |
+| count_distinct(expr)                                                            | Creates an expression to represent the count(distinct) aggregate function                                                                                |
 | cube(exprs)                                                                     | Creates a grouping set for all combination of `exprs`                                                                                                    |
 | grouping_set(exprs)                                                             | Create a grouping set.                                                                                                                                   |
 | max(expr)                                                                       | Finds the maximum value of `expr`.                                                                                                                       |
@@ -306,12 +307,13 @@ select log(-1), log(0), sqrt(-1);
 | min(expr)                                                                       | Finds the minimum value of `expr`.                                                                                                                       |
 | rollup(exprs)                                                                   | Creates a grouping set for rollup sets.                                                                                                                  |
 | sum(expr)                                                                       | Сalculates the sum of `expr`.                                                                                                                            |
+| sum_distinct(expr)                                                              | Creates an expression to represent the sum(distinct) aggregate function                                                                                  |
 
 ## Aggregate Function Builder
 
 You can also use the `ExprFunctionExt` trait to more easily build Aggregate arguments `Expr`.
 
-See `datafusion-examples/examples/expr_api.rs` for example usage.
+See `datafusion-examples/examples/query_planning/expr_api.rs` for example usage.
 
 | Syntax                                                                  | Equivalent to                       |
 | ----------------------------------------------------------------------- | ----------------------------------- |

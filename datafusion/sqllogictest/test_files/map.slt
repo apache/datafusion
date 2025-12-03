@@ -43,8 +43,8 @@ LOCATION '../core/tests/data/parquet_map.parquet';
 query TTT
 describe data;
 ----
-ints Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) NO
-strings Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) NO
+ints Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Int64), unsorted) NO
+strings Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Utf8), unsorted) NO
 timestamp Utf8View NO
 
 query ??T
@@ -113,9 +113,8 @@ logical_plan
 01)Filter: table_with_map.int_field > Int64(0)
 02)--TableScan: table_with_map projection=[int_field, map_field]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: int_field@0 > 0
-03)----DataSourceExec: partitions=1, partition_sizes=[0]
+01)FilterExec: int_field@0 > 0
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
 drop table table_with_map;
@@ -155,7 +154,7 @@ SELECT MAKE_MAP('POST', 41, 'HEAD', 53, 'PATCH', 30);
 ----
 {POST: 41, HEAD: 53, PATCH: 30}
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'ab' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'ab' to value of Int64 type
 SELECT MAKE_MAP('POST', 41, 'HEAD', 'ab', 'PATCH', 30);
 
 # Map keys can not be NULL
@@ -176,6 +175,16 @@ SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, 30]);
 {POST: 41, HEAD: 33, PATCH: 30}
 
 query ?
+SELECT MAP('type', 'test');
+----
+{type: test}
+
+query ?
+SELECT MAP('a', 2, 'b', 3);
+----
+{a: 2, b: 3}
+
+query ?
 SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
 ----
 {POST: 41, HEAD: 33, PATCH: NULL}
@@ -188,10 +197,10 @@ SELECT MAP([[1,2], [3,4]], ['a', 'b']);
 query error
 SELECT MAP()
 
-query error DataFusion error: Execution error: map function requires 2 arguments, got 1
+query error DataFusion error: Error during planning: make_map requires an even number of arguments
 SELECT MAP(['POST', 'HEAD'])
 
-query error DataFusion error: Execution error: Expected list, large_list or fixed_size_list, got Null
+query error DataFusion error: Execution error: map key cannot be null
 SELECT MAP(null, [41, 33, 30]);
 
 query error DataFusion error: Execution error: map requires key and value lists to have the same length
@@ -233,7 +242,7 @@ SELECT map(column5, column6) FROM duplicate_keys_table;
 
 # key is a nested type
 query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[1, 2\]
-SELECT MAP([[1,2], [1,2], [NULL]], [41, 33, null]);
+SELECT MAP([[1,2], [1,2]], [41, 33]);
 
 query error DataFusion error: Execution error: map key must be unique, duplicate key found: \[\{1:1\}\]
 SELECT MAP([Map {1:'1'}, Map {1:'1'}, Map {2:'2'}], [41, 33, null]);
@@ -281,8 +290,12 @@ SELECT map(column8, column9) FROM t;
 {[4]: b}
 {[1, 2]: c}
 
-query error
+query ?
 SELECT map(column6, column7) FROM t;
+----
+{[1, 2]: POST}
+{[3]: PUT}
+{[5]: NULL}
 
 query ?
 select Map {column6: column7} from t;
@@ -523,26 +536,46 @@ SELECT MAP { 'a': 1, 'b': 3 };
 ----
 {a: 1, b: 3}
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT MAP { 'a': 1, 2: 3 };
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
-# ----
-# a
+# accessing map with non-string key
+query T
+SELECT MAP { 1: 'a', 2: 'b', 3: 'c' }[1];
+----
+a
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
-# ----
-# 1
+# accessing map with string key
+query I
+SELECT MAP { 'a': 1, 'b': 2, 'c': 3 }['a'];
+----
+1
 
-# TODO(https://github.com/apache/datafusion/issues/11785): fix accessing map with non-string key
-# query ?
-# SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
-# ----
-# 33
+# accessing map with non-string key in case expression
+query I
+SELECT (CASE WHEN 1 > 0 THEN MAP {'x': 100} ELSE MAP {'y': 200} END)['x']; 
+----
+100
+
+# fix accessing map with nested key
+query I
+SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {1:'a', 2:'b'}];
+----
+1
+
+query I
+SELECT MAP { MAP {1:'a', 2:'b'}:1, MAP {1:'c', 2:'d'}:2 }[MAP {2:'b', 1:'a'}];
+----
+NULL
+
+# TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with empty map as key
+# TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with null map as key
+
+# accessing map with non-string key
+query I
+SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
+----
+33
 
 ## cardinality
 
@@ -658,7 +691,7 @@ SELECT map_entries(MAP { 'a': 1, 'b': 3 });
 ----
 [{key: a, value: 1}, {key: b, value: 3}]
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT map_entries(MAP { 'a': 1, 2: 3 });
 
 query ?
@@ -709,7 +742,7 @@ SELECT map_keys(MAP { 'a': 1, 'b': 3 });
 ----
 [a, b]
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT map_keys(MAP { 'a': 1, 2: 3 });
 
 query ?
@@ -756,7 +789,7 @@ NULL
 
 # Tests for map_values
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Int64 type
 SELECT map_values(MAP { 'a': 1, 2: 3 });
 
 query ?

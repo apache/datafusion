@@ -15,12 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, ArrowNativeTypeOp};
+use ahash::RandomState;
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray,
+};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{
     ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
 };
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::utils::SingleRowListArrayBuilder;
+use datafusion_common::utils::memory::estimate_memory_size;
+use datafusion_common::{
+    HashSet, Result, ScalarValue, exec_err, internal_datafusion_err,
+};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::sync::Arc;
@@ -95,6 +103,8 @@ pub struct DecimalAverager<T: DecimalType> {
     target_mul: T::Native,
     /// the output precision
     target_precision: u8,
+    /// the output scale
+    target_scale: i8,
 }
 
 impl<T: DecimalType> DecimalAverager<T> {
@@ -112,21 +122,24 @@ impl<T: DecimalType> DecimalAverager<T> {
     ) -> Result<Self> {
         let sum_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(sum_scale as u32))
-            .ok_or(DataFusionError::Internal(
-                "Failed to compute sum_mul in DecimalAverager".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!("Failed to compute sum_mul in DecimalAverager")
+            })?;
 
         let target_mul = T::Native::from_usize(10_usize)
             .map(|b| b.pow_wrapping(target_scale as u32))
-            .ok_or(DataFusionError::Internal(
-                "Failed to compute target_mul in DecimalAverager".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Failed to compute target_mul in DecimalAverager"
+                )
+            })?;
 
         if target_mul >= sum_mul {
             Ok(Self {
                 sum_mul,
                 target_mul,
                 target_precision,
+                target_scale,
             })
         } else {
             // can't convert the lit decimal to the returned data type
@@ -145,8 +158,11 @@ impl<T: DecimalType> DecimalAverager<T> {
         if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
             let new_value = value.div_wrapping(count);
 
-            let validate =
-                T::validate_decimal_precision(new_value, self.target_precision);
+            let validate = T::validate_decimal_precision(
+                new_value,
+                self.target_precision,
+                self.target_scale,
+            );
 
             if validate.is_ok() {
                 Ok(new_value)
@@ -157,5 +173,94 @@ impl<T: DecimalType> DecimalAverager<T> {
             // can't convert the lit decimal to the returned data type
             exec_err!("Arithmetic Overflow in AvgAccumulator")
         }
+    }
+}
+
+/// Generic way to collect distinct values for accumulators.
+///
+/// The intermediate state is represented as a List of scalar values updated by
+/// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
+/// in the final evaluation step so that we avoid expensive conversions and
+/// allocations during `update_batch`.
+pub struct GenericDistinctBuffer<T: ArrowPrimitiveType> {
+    pub values: HashSet<Hashable<T::Native>, RandomState>,
+    data_type: DataType,
+}
+
+impl<T: ArrowPrimitiveType> std::fmt::Debug for GenericDistinctBuffer<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "GenericDistinctBuffer({}, values={})",
+            self.data_type,
+            self.values.len()
+        )
+    }
+}
+
+impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
+    pub fn new(data_type: DataType) -> Self {
+        Self {
+            values: HashSet::default(),
+            data_type,
+        }
+    }
+
+    /// Mirrors [`Accumulator::state`].
+    pub fn state(&self) -> Result<Vec<ScalarValue>> {
+        let arr = Arc::new(
+            PrimitiveArray::<T>::from_iter_values(self.values.iter().map(|v| v.0))
+                // Ideally we'd just use T::DATA_TYPE but this misses things like
+                // decimal scale/precision and timestamp timezones, which need to
+                // match up with Accumulator::state_fields
+                .with_data_type(self.data_type.clone()),
+        );
+        Ok(vec![
+            SingleRowListArrayBuilder::new(arr).build_list_scalar(),
+        ])
+    }
+
+    /// Mirrors [`Accumulator::update_batch`].
+    pub fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        debug_assert_eq!(
+            values.len(),
+            1,
+            "DistinctValuesBuffer::update_batch expects only a single input array"
+        );
+
+        let arr = as_primitive_array::<T>(&values[0])?;
+        if arr.null_count() > 0 {
+            self.values.extend(arr.iter().flatten().map(Hashable));
+        } else {
+            self.values
+                .extend(arr.values().iter().cloned().map(Hashable));
+        }
+
+        Ok(())
+    }
+
+    /// Mirrors [`Accumulator::merge_batch`].
+    pub fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let array = as_list_array(&states[0])?;
+        for list in array.iter().flatten() {
+            self.update_batch(&[list])?;
+        }
+
+        Ok(())
+    }
+
+    /// Mirrors [`Accumulator::size`].
+    pub fn size(&self) -> usize {
+        let num_elements = self.values.len();
+        let fixed_size = size_of_val(self) + size_of_val(&self.values);
+        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
     }
 }

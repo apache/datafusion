@@ -29,9 +29,10 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::execution::options::ArrowReadOptions;
-use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
+use datafusion::optimizer::optimize_unions::OptimizeUnions;
 use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
@@ -47,6 +48,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
 use datafusion::datasource::file_format::{
     format_as_file_type, DefaultFileType, FileFormatFactory,
 };
+use datafusion::datasource::DefaultTableSource;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::count::count_udaf;
@@ -62,6 +64,7 @@ use datafusion::functions_window::expr_fn::{
     cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
 };
 use datafusion::functions_window::rank::rank_udwf;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -70,22 +73,23 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
     DataFusionError, Result, ScalarValue, TableReference,
 };
+use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Unnest, WildcardOptions,
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, NullTreatment,
+    ScalarFunction, Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
-    Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable, Literal,
-    LogicalPlan, Operator, PartitionEvaluator, ScalarUDF, Signature, TryCast, Volatility,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, WindowUDF,
-    WindowUDFImpl,
+    Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable,
+    LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator, PartitionEvaluator,
+    ScalarUDF, Signature, TryCast, Volatility, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
-    approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
-    nth_value,
+    approx_distinct, array_agg, avg, avg_distinct, bit_and, bit_or, bit_xor, bool_and,
+    bool_or, corr, nth_value,
 };
 use datafusion_functions_aggregate::string_agg::string_agg;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -152,8 +156,11 @@ async fn roundtrip_logical_plan() -> Result<()> {
     });
     let extension_codec = TopKExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&topk_plan, &extension_codec)?;
-    let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)?;
+    let logical_round_trip = logical_plan_from_bytes_with_extension_codec(
+        &bytes,
+        &ctx.task_ctx(),
+        &extension_codec,
+    )?;
     assert_eq!(format!("{topk_plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }
@@ -176,7 +183,7 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Extension> {
         not_impl_err!("No extension codec provided")
     }
@@ -190,11 +197,10 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
         buf: &[u8],
         table_ref: &TableReference,
         schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>> {
-        let msg = TestTableProto::decode(buf).map_err(|_| {
-            DataFusionError::Internal("Error decoding test table".to_string())
-        })?;
+        let msg = TestTableProto::decode(buf)
+            .map_err(|_| internal_datafusion_err!("Error decoding test table"))?;
         assert_eq!(msg.table_name, table_ref.to_string());
         let provider = TestTableProvider {
             url: msg.url,
@@ -218,9 +224,8 @@ impl LogicalExtensionCodec for TestTableProviderCodec {
             url: table.url.clone(),
             table_name: table_ref.to_string(),
         };
-        msg.encode(buf).map_err(|_| {
-            DataFusionError::Internal("Error encoding test table".to_string())
-        })
+        msg.encode(buf)
+            .map_err(|_| internal_datafusion_err!("Error encoding test table"))
     }
 }
 
@@ -241,7 +246,7 @@ async fn roundtrip_custom_tables() -> Result<()> {
     let scan = ctx.table("t").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes_with_extension_codec(&scan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{scan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }
@@ -267,7 +272,7 @@ async fn roundtrip_custom_memory_tables() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     Ok(())
@@ -294,7 +299,7 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
     let plan = ctx.state().create_logical_plan(query).await?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     // Use exact matching to verify everything. Make sure during round-trip,
     // information like constraints, column defaults, and other aspects of the plan are preserved.
     assert_eq!(plan, logical_round_trip);
@@ -329,7 +334,7 @@ async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -355,7 +360,7 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -381,7 +386,7 @@ async fn roundtrip_logical_plan_sort() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -413,7 +418,7 @@ async fn roundtrip_logical_plan_dml() -> Result<()> {
     for query in queries {
         let plan = ctx.sql(query).await?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
-        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
         assert_eq!(
             format!("{plan}"),
             format!("{logical_round_trip}"),
@@ -443,7 +448,7 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -483,7 +488,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let codec = ParquetLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     match logical_round_trip {
         LogicalPlan::Copy(copy_to) => {
@@ -515,7 +520,7 @@ async fn roundtrip_logical_plan_copy_to_arrow() -> Result<()> {
     let codec = ArrowLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
@@ -562,7 +567,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     let codec = CsvLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
     match logical_round_trip {
@@ -629,7 +634,7 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
     let codec = JsonLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
@@ -701,7 +706,7 @@ async fn roundtrip_logical_plan_copy_to_parquet() -> Result<()> {
     let codec = ParquetLogicalExtensionCodec {};
     let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
     let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     match logical_round_trip {
@@ -788,7 +793,7 @@ async fn roundtrip_logical_plan_distinct_on() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -814,7 +819,7 @@ async fn roundtrip_single_count_distinct() -> Result<()> {
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     Ok(())
@@ -827,7 +832,7 @@ async fn roundtrip_logical_plan_with_extension() -> Result<()> {
         .await?;
     let plan = ctx.table("t1").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
@@ -852,7 +857,7 @@ async fn roundtrip_logical_plan_unnest() -> Result<()> {
     let query = "SELECT unnest(b) FROM t1";
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
@@ -969,10 +974,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         functions_window::nth_value::last_value(lit(1)),
         functions_window::nth_value::nth_value(lit(1), 1),
         avg(lit(1.5)),
+        avg_distinct(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
         corr(lit(1.5), lit(2.2)),
         sum(lit(1)),
+        sum_distinct(lit(1)),
         max(lit(1)),
         median(lit(2)),
         min(lit(2)),
@@ -1038,7 +1045,7 @@ async fn roundtrip_expr_api() -> Result<()> {
     // ensure expressions created with the expr api can be round tripped
     let plan = table.select(expr_list)?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
     Ok(())
 }
@@ -1058,15 +1065,44 @@ async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
         .into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
     // DROP
     let plan = ctx.sql("DROP VIEW view_t1").await?.into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let plan = ctx
+        .sql("SELECT $1")
+        .await
+        .unwrap()
+        .into_optimized_plan()
+        .unwrap();
+    let prepared = LogicalPlanBuilder::new(plan)
+        .prepare(
+            "".to_string(),
+            vec![Field::new("", DataType::Int32, true)
+                .with_metadata(
+                    [("some_key".to_string(), "some_value".to_string())].into(),
+                )
+                .into()],
+        )
+        .unwrap()
+        .plan()
+        .clone();
+
+    let bytes = logical_plan_to_bytes(&prepared)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{prepared}"), format!("{logical_round_trip}"));
     Ok(())
 }
 
@@ -1159,11 +1195,11 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         &self,
         buf: &[u8],
         inputs: &[LogicalPlan],
-        ctx: &SessionContext,
+        ctx: &TaskContext,
     ) -> Result<Extension> {
         if let Some((input, _)) = inputs.split_first() {
             let proto = proto::TopKPlanProto::decode(buf).map_err(|e| {
-                DataFusionError::Internal(format!("failed to decode logical plan: {e:?}"))
+                internal_datafusion_err!("failed to decode logical plan: {e:?}")
             })?;
 
             if let Some(expr) = proto.expr.as_ref() {
@@ -1192,7 +1228,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
             };
 
             proto.encode(buf).map_err(|e| {
-                DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
+                internal_datafusion_err!("failed to encode logical plan: {e:?}")
             })?;
 
             Ok(())
@@ -1206,7 +1242,7 @@ impl LogicalExtensionCodec for TopKExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>> {
         internal_err!("unsupported plan type")
     }
@@ -1229,7 +1265,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Extension> {
         not_impl_err!("No extension codec provided")
     }
@@ -1243,7 +1279,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>> {
         internal_err!("unsupported plan type")
     }
@@ -1260,7 +1296,7 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         if name == "regex_udf" {
             let proto = MyRegexUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!("failed to decode regex_udf: {err}"))
+                internal_datafusion_err!("failed to decode regex_udf: {err}")
             })?;
 
             Ok(Arc::new(ScalarUDF::from(MyRegexUdf::new(proto.pattern))))
@@ -1275,18 +1311,16 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         let proto = MyRegexUdfNode {
             pattern: udf.pattern.clone(),
         };
-        proto.encode(buf).map_err(|err| {
-            DataFusionError::Internal(format!("failed to encode udf: {err}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
         if name == "aggregate_udf" {
             let proto = MyAggregateUdfNode::decode(buf).map_err(|err| {
-                DataFusionError::Internal(format!(
-                    "failed to decode aggregate_udf: {err}"
-                ))
+                internal_datafusion_err!("failed to decode aggregate_udf: {err}")
             })?;
 
             Ok(Arc::new(AggregateUDF::from(MyAggregateUDF::new(
@@ -1303,9 +1337,9 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         let proto = MyAggregateUdfNode {
             result: udf.result.clone(),
         };
-        proto.encode(buf).map_err(|err| {
-            DataFusionError::Internal(format!("failed to encode udf: {err}"))
-        })?;
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
         Ok(())
     }
 }
@@ -1589,7 +1623,7 @@ fn round_trip_scalar_values_and_data_types() {
         assert_eq!(
             dt, roundtrip,
             "DataType was not the same after round trip!\n\n\
-                        Input: {dt:?}\n\nRoundtrip: {roundtrip:?}"
+                        Input: {dt}\n\nRoundtrip: {roundtrip:?}"
         );
     }
 }
@@ -1949,6 +1983,10 @@ fn roundtrip_binary_op() {
     test(Operator::RegexNotMatch);
     test(Operator::RegexIMatch);
     test(Operator::RegexMatch);
+    test(Operator::LikeMatch);
+    test(Operator::ILikeMatch);
+    test(Operator::NotLikeMatch);
+    test(Operator::NotILikeMatch);
     test(Operator::BitwiseShiftRight);
     test(Operator::BitwiseShiftLeft);
     test(Operator::BitwiseAnd);
@@ -2191,7 +2229,11 @@ fn roundtrip_aggregate_udf() {
         Arc::new(vec![DataType::Float64, DataType::UInt32]),
     );
 
-    let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+    let ctx = SessionContext::new();
+    ctx.register_udaf(dummy_agg.clone());
+
+    // null_treatment absent
+    let test_expr1 = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
         Arc::new(dummy_agg.clone()),
         vec![lit(1.0_f64)],
         false,
@@ -2200,10 +2242,29 @@ fn roundtrip_aggregate_udf() {
         None,
     ));
 
-    let ctx = SessionContext::new();
-    ctx.register_udaf(dummy_agg);
+    // null_treatment respect nulls
+    let test_expr2 = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+        Arc::new(dummy_agg.clone()),
+        vec![lit(1.0_f64)],
+        true,
+        Some(Box::new(lit(true))),
+        vec![],
+        Some(NullTreatment::RespectNulls),
+    ));
 
-    roundtrip_expr_test(test_expr, ctx);
+    // null_treatment ignore nulls
+    let test_expr3 = Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+        Arc::new(dummy_agg),
+        vec![lit(1.0_f64)],
+        true,
+        Some(Box::new(lit(true))),
+        vec![],
+        Some(NullTreatment::IgnoreNulls),
+    ));
+
+    roundtrip_expr_test(test_expr1, ctx.clone());
+    roundtrip_expr_test(test_expr2, ctx.clone());
+    roundtrip_expr_test(test_expr3, ctx);
 }
 
 fn dummy_udf() -> ScalarUDF {
@@ -2247,7 +2308,7 @@ fn roundtrip_scalar_udf() {
             &self,
             _buf: &[u8],
             _inputs: &[LogicalPlan],
-            _ctx: &SessionContext,
+            _ctx: &TaskContext,
         ) -> Result<Extension> {
             not_impl_err!("LogicalExtensionCodec is not provided")
         }
@@ -2261,7 +2322,7 @@ fn roundtrip_scalar_udf() {
             _buf: &[u8],
             _table_ref: &TableReference,
             _schema: SchemaRef,
-            _ctx: &SessionContext,
+            _ctx: &TaskContext,
         ) -> Result<Arc<dyn TableProvider>> {
             not_impl_err!("LogicalExtensionCodec is not provided")
         }
@@ -2279,7 +2340,7 @@ fn roundtrip_scalar_udf() {
             if name == "dummy" {
                 Ok(Arc::new(dummy_udf()))
             } else {
-                Err(DataFusionError::Internal(format!("UDF {name} not found")))
+                Err(internal_datafusion_err!("UDF {name} not found"))
             }
         }
     }
@@ -2546,6 +2607,10 @@ fn roundtrip_window() {
                 )
             }
         }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
+        }
     }
 
     fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
@@ -2563,8 +2628,10 @@ fn roundtrip_window() {
     .window_frame(row_number_frame.clone())
     .build()
     .unwrap();
+    ctx.register_udwf(dummy_window_udf);
 
-    let text_expr7 = Expr::from(expr::WindowFunction::new(
+    // 7. test with average udaf
+    let test_expr7 = Expr::from(expr::WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         vec![col("col1")],
     ))
@@ -2572,7 +2639,53 @@ fn roundtrip_window() {
     .build()
     .unwrap();
 
-    ctx.register_udwf(dummy_window_udf);
+    // 8. test with respect nulls
+    let test_expr8 = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .null_treatment(NullTreatment::RespectNulls)
+    .build()
+    .unwrap();
+
+    // 9. test with ignore nulls
+    let test_expr9 = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .null_treatment(NullTreatment::IgnoreNulls)
+    .build()
+    .unwrap();
+
+    // 10. test with distinct is `true`
+    let test_expr10 = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .distinct()
+    .build()
+    .unwrap();
+
+    // 11. test with filter
+    let test_expr11 = Expr::from(expr::WindowFunction::new(
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        vec![],
+    ))
+    .partition_by(vec![col("col1")])
+    .order_by(vec![col("col2").sort(true, false)])
+    .window_frame(WindowFrame::new(Some(false)))
+    .filter(col("col1").eq(lit(1)))
+    .build()
+    .unwrap();
 
     roundtrip_expr_test(test_expr1, ctx.clone());
     roundtrip_expr_test(test_expr2, ctx.clone());
@@ -2580,7 +2693,11 @@ fn roundtrip_window() {
     roundtrip_expr_test(test_expr4, ctx.clone());
     roundtrip_expr_test(test_expr5, ctx.clone());
     roundtrip_expr_test(test_expr6, ctx.clone());
-    roundtrip_expr_test(text_expr7, ctx);
+    roundtrip_expr_test(test_expr7, ctx.clone());
+    roundtrip_expr_test(test_expr8, ctx.clone());
+    roundtrip_expr_test(test_expr9, ctx.clone());
+    roundtrip_expr_test(test_expr10, ctx.clone());
+    roundtrip_expr_test(test_expr11, ctx);
 }
 
 #[tokio::test]
@@ -2599,7 +2716,7 @@ async fn roundtrip_recursive_query() {
     let bytes = logical_plan_to_bytes(&plan).unwrap();
 
     let ctx = SessionContext::new();
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx()).unwrap();
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     let dataframe = ctx.execute_logical_plan(logical_round_trip).await.unwrap();
     let output_round_trip = dataframe.collect().await.unwrap();
@@ -2630,10 +2747,10 @@ async fn roundtrip_union_query() -> Result<()> {
         .await?;
     ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     // proto deserialization only supports 2-way union, hence this plan has nested unions
     // apply the flatten unions optimizer rule to be able to compare
-    let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
+    let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeUnions::new())]);
     let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;
     assert_eq!(
         format!("{}", plan.display_indent_schema()),
@@ -2667,7 +2784,45 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
         .clone();
 
     let bytes = logical_plan_to_bytes(&plan)?;
-    let new_plan = logical_plan_from_bytes(&bytes, &ctx)?;
+    let new_plan = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, new_plan);
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_custom_listing_tables_schema_table_scan_projection() -> Result<()> {
+    let ctx = SessionContext::new();
+    // Make sure during round-trip, constraint information is preserved
+    let file_format = JsonFormat::default();
+    let table_partition_cols = vec![("part".to_owned(), DataType::Int64)];
+    let data = "../core/tests/data/partitioned_table_json";
+    let listing_table_url = ListingTableUrl::parse(data)?;
+    let listing_options = ListingOptions::new(Arc::new(file_format))
+        .with_table_partition_cols(table_partition_cols);
+
+    let config = ListingTableConfig::new(listing_table_url)
+        .with_listing_options(listing_options)
+        .infer_schema(&ctx.state())
+        .await?;
+
+    let listing_table: Arc<dyn TableProvider> = Arc::new(ListingTable::try_new(config)?);
+
+    let projection = ["part", "value"]
+        .iter()
+        .map(|field_name| listing_table.schema().index_of(field_name))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let plan = LogicalPlanBuilder::scan(
+        "hive_style",
+        Arc::new(DefaultTableSource::new(listing_table)),
+        Some(projection),
+    )?
+    .limit(0, Some(1))?
+    .build()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let new_plan = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
     assert_eq!(plan, new_plan);
     Ok(())
 }
@@ -2680,7 +2835,7 @@ async fn roundtrip_arrow_scan() -> Result<()> {
         .await?
         .into_optimized_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
     Ok(())
 }
@@ -2719,7 +2874,7 @@ fn test_default_codec_encode_decode_all_formats() -> Result<()> {
         // Encode and decode
         let mut encoded = Vec::new();
         codec.try_encode_file_format(&mut encoded, factory.clone())?;
-        let decoded = codec.try_decode_file_format(&encoded, &ctx)?;
+        let decoded = codec.try_decode_file_format(&encoded, ctx.task_ctx().as_ref())?;
 
         // Verify type preservation
         assert_eq!(
@@ -2738,7 +2893,7 @@ fn test_default_codec_legacy_empty_buffer() -> Result<()> {
     let codec = DefaultLogicalExtensionCodec {};
 
     let empty_buf: &[u8] = &[];
-    let decoded = codec.try_decode_file_format(empty_buf, &ctx)?;
+    let decoded = codec.try_decode_file_format(empty_buf, ctx.task_ctx().as_ref())?;
 
     assert_eq!(
         decoded.get_ext(),
@@ -2751,7 +2906,7 @@ fn test_default_codec_legacy_empty_buffer() -> Result<()> {
     codec.try_encode_file_format(&mut re_encoded, decoded.clone())?;
 
     // Re-encoded Arrow format should decode back to Arrow
-    let re_decoded = codec.try_decode_file_format(&re_encoded, &ctx)?;
+    let re_decoded = codec.try_decode_file_format(&re_encoded, ctx.task_ctx().as_ref())?;
     assert_eq!(
         re_decoded.get_ext(),
         "arrow",
@@ -2773,7 +2928,7 @@ fn test_default_codec_legacy_raw_bytes_roundtrip() -> Result<()> {
     csv_codec.try_encode_file_format(&mut csv_raw, csv_factory.clone())?;
 
     // DefaultLogicalExtensionCodec should decode raw CSV bytes via roundtrip
-    let decoded_csv = codec.try_decode_file_format(&csv_raw, &ctx)?;
+    let decoded_csv = codec.try_decode_file_format(&csv_raw, ctx.task_ctx().as_ref())?;
     decoded_csv
         .as_ref()
         .as_any()
@@ -2787,7 +2942,7 @@ fn test_default_codec_legacy_raw_bytes_roundtrip() -> Result<()> {
     json_codec.try_encode_file_format(&mut json_raw, json_factory.clone())?;
 
     // DefaultLogicalExtensionCodec should decode raw JSON bytes via roundtrip
-    let decoded_json = codec.try_decode_file_format(&json_raw, &ctx)?;
+    let decoded_json = codec.try_decode_file_format(&json_raw, ctx.task_ctx().as_ref())?;
     decoded_json
         .as_ref()
         .as_any()
@@ -2801,7 +2956,7 @@ fn test_default_codec_legacy_raw_bytes_roundtrip() -> Result<()> {
     parquet_codec.try_encode_file_format(&mut parquet_raw, parquet_factory.clone())?;
 
     // DefaultLogicalExtensionCodec should decode raw Parquet bytes via roundtrip
-    let decoded_parquet = codec.try_decode_file_format(&parquet_raw, &ctx)?;
+    let decoded_parquet = codec.try_decode_file_format(&parquet_raw, ctx.task_ctx().as_ref())?;
     decoded_parquet
         .as_ref()
         .as_any()
@@ -2817,7 +2972,7 @@ fn test_default_codec_error_invalid_bytes() -> Result<()> {
     let codec = DefaultLogicalExtensionCodec {};
 
     let invalid_bytes = b"not a valid file format";
-    let result = codec.try_decode_file_format(invalid_bytes, &ctx);
+    let result = codec.try_decode_file_format(invalid_bytes, ctx.task_ctx().as_ref());
 
     assert!(result.is_err(), "Should error on invalid bytes");
     let err_msg = result.unwrap_err().to_string();
@@ -2825,6 +2980,51 @@ fn test_default_codec_error_invalid_bytes() -> Result<()> {
         err_msg.contains("Unsupported FileFormatFactory bytes"),
         "Error message should mention unsupported bytes, got: {}",
         err_msg
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_mixed_case_table_reference() -> Result<()> {
+    // Prepare "client" database
+    let client_ctx = SessionContext::new_with_config(
+        SessionConfig::new()
+            .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
+    );
+    client_ctx
+        .register_csv(
+            "\"TestData\"",
+            "tests/testdata/test.csv",
+            CsvReadOptions::default(),
+        )
+        .await?;
+
+    // Prepare "server" database
+    let server_ctx = SessionContext::new_with_config(
+        SessionConfig::new()
+            .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
+    );
+    server_ctx
+        .register_csv(
+            "\"TestData\"",
+            "tests/testdata/test.csv",
+            CsvReadOptions::default(),
+        )
+        .await?;
+
+    // Create a logical plan, serialize it (client), then deserialize it (server)
+    let dataframe = client_ctx
+        .sql("SELECT a FROM TestData WHERE TestData.a = 1")
+        .await?;
+
+    let client_logical_plan = dataframe.into_optimized_plan()?;
+    let plan_bytes = logical_plan_to_bytes(&client_logical_plan)?;
+    let server_logical_plan =
+        logical_plan_from_bytes(&plan_bytes, &server_ctx.task_ctx())?;
+
+    assert_eq!(
+        format!("{}", client_logical_plan.display_indent_schema()),
+        format!("{}", server_logical_plan.display_indent_schema())
     );
 
     Ok(())

@@ -20,7 +20,7 @@ use std::time::SystemTime;
 
 use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{ArrayRef, BinaryArray, Int32Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
@@ -91,141 +91,163 @@ fn col_lt_col_filter(schema1: Arc<Schema>, schema2: Arc<Schema>) -> JoinFilter {
 
 #[tokio::test]
 async fn test_inner_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Inner,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::Inner,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_inner_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Inner,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::Inner,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_left_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Left,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::Left,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_left_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Left,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::Left,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Right,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::Right,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Right,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::Right,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_full_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Full,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::Full,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_full_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::Full,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[NljHj, HjSmj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::Full,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[NljHj, HjSmj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_left_semi_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::LeftSemi,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::LeftSemi,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_left_semi_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::LeftSemi,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::LeftSemi,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_semi_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::RightSemi,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::RightSemi,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_semi_join_1k_filtered() {
     JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
+        make_staggered_batches_i32(1000, false),
+        make_staggered_batches_i32(1000, false),
         JoinType::RightSemi,
         Some(Box::new(col_lt_col_filter)),
     )
@@ -235,45 +257,51 @@ async fn test_right_semi_join_1k_filtered() {
 
 #[tokio::test]
 async fn test_left_anti_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::LeftAnti,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::LeftAnti,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_left_anti_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::LeftAnti,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::LeftAnti,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_anti_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::RightAnti,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::RightAnti,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_anti_join_1k_filtered() {
     JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
+        make_staggered_batches_i32(1000, false),
+        make_staggered_batches_i32(1000, false),
         JoinType::RightAnti,
         Some(Box::new(col_lt_col_filter)),
     )
@@ -283,51 +311,336 @@ async fn test_right_anti_join_1k_filtered() {
 
 #[tokio::test]
 async fn test_left_mark_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::LeftMark,
-        None,
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::LeftMark,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_left_mark_join_1k_filtered() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::LeftMark,
-        Some(Box::new(col_lt_col_filter)),
-    )
-    .run_test(&[HjSmj, NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::LeftMark,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 // todo: add JoinTestType::HjSmj after Right mark SortMergeJoin support
 #[tokio::test]
 async fn test_right_mark_join_1k() {
-    JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::RightMark,
-        None,
-    )
-    .run_test(&[NljHj], false)
-    .await
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::RightMark,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 #[tokio::test]
 async fn test_right_mark_join_1k_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_i32(1000, left_extra),
+            make_staggered_batches_i32(1000, right_extra),
+            JoinType::RightMark,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_inner_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::Inner,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_inner_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::Inner,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::Left,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::Left,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_right_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::Right,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_right_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::Right,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_full_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::Full,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_full_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::Full,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[NljHj, HjSmj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_semi_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::LeftSemi,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_semi_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::LeftSemi,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_right_semi_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::RightSemi,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_right_semi_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::RightSemi,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_anti_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::LeftAnti,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_anti_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::LeftAnti,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_right_anti_join_1k_binary() {
     JoinFuzzTestCase::new(
-        make_staggered_batches(1000),
-        make_staggered_batches(1000),
-        JoinType::RightMark,
+        make_staggered_batches_binary(1000, false),
+        make_staggered_batches_binary(1000, false),
+        JoinType::RightAnti,
+        None,
+    )
+    .run_test(&[HjSmj, NljHj], false)
+    .await
+}
+
+#[tokio::test]
+async fn test_right_anti_join_1k_binary_filtered() {
+    JoinFuzzTestCase::new(
+        make_staggered_batches_binary(1000, false),
+        make_staggered_batches_binary(1000, false),
+        JoinType::RightAnti,
         Some(Box::new(col_lt_col_filter)),
     )
-    .run_test(&[NljHj], false)
+    .run_test(&[HjSmj, NljHj], false)
     .await
+}
+
+#[tokio::test]
+async fn test_left_mark_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::LeftMark,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_left_mark_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::LeftMark,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+// todo: add JoinTestType::HjSmj after Right mark SortMergeJoin support
+#[tokio::test]
+async fn test_right_mark_join_1k_binary() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::RightMark,
+            None,
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
+}
+
+#[tokio::test]
+async fn test_right_mark_join_1k_binary_filtered() {
+    for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
+        JoinFuzzTestCase::new(
+            make_staggered_batches_binary(1000, left_extra),
+            make_staggered_batches_binary(1000, right_extra),
+            JoinType::RightMark,
+            Some(Box::new(col_lt_col_filter)),
+        )
+        .run_test(&[HjSmj, NljHj], false)
+        .await
+    }
 }
 
 type JoinFilterBuilder = Box<dyn Fn(Arc<Schema>, Arc<Schema>) -> JoinFilter>;
@@ -619,7 +932,6 @@ impl JoinFuzzTestCase {
                     hj_formatted_sorted.iter().for_each(|s| println!("{s}"));
                     println!("=============== NestedLoopJoinExec ==================");
                     nlj_formatted_sorted.iter().for_each(|s| println!("{s}"));
-
                     Self::save_partitioned_batches_as_parquet(
                         &nlj_collected,
                         out_dir_name,
@@ -791,7 +1103,7 @@ impl JoinFuzzTestCase {
 /// Return randomly sized record batches with:
 /// two sorted int32 columns 'a', 'b' ranged from 0..99 as join columns
 /// two random int32 columns 'x', 'y' as other columns
-fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
+fn make_staggered_batches_i32(len: usize, with_extra_column: bool) -> Vec<RecordBatch> {
     let mut rng = rand::rng();
     let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
     let mut input3: Vec<i32> = vec![0; len];
@@ -807,15 +1119,66 @@ fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
     let input3 = Int32Array::from_iter_values(input3);
     let input4 = Int32Array::from_iter_values(input4);
 
-    // split into several record batches
-    let batch = RecordBatch::try_from_iter(vec![
+    let mut columns = vec![
         ("a", Arc::new(input1) as ArrayRef),
         ("b", Arc::new(input2) as ArrayRef),
         ("x", Arc::new(input3) as ArrayRef),
-        ("y", Arc::new(input4) as ArrayRef),
-    ])
-    .unwrap();
+    ];
+
+    if with_extra_column {
+        columns.push(("y", Arc::new(input4) as ArrayRef));
+    }
+
+    // split into several record batches
+    let batch = RecordBatch::try_from_iter(columns).unwrap();
 
     // use a random number generator to pick a random sized output
+    stagger_batch_with_seed(batch, 42)
+}
+
+fn rand_bytes<R: Rng>(rng: &mut R, min: usize, max: usize) -> Vec<u8> {
+    let n = rng.random_range(min..=max);
+    let mut v = vec![0u8; n];
+    rng.fill(&mut v[..]);
+    v
+}
+
+/// Return randomly sized record batches with:
+/// two sorted binary columns 'a', 'b' (lexicographically) as join columns
+/// two random binary columns 'x', 'y' as other columns
+fn make_staggered_batches_binary(
+    len: usize,
+    with_extra_column: bool,
+) -> Vec<RecordBatch> {
+    let mut rng = rand::rng();
+
+    // produce (a,b) pairs then sort lexicographically so SMJ has naturally sorted keys
+    let mut input12: Vec<(Vec<u8>, Vec<u8>)> = (0..len)
+        .map(|_| (rand_bytes(&mut rng, 4, 16), rand_bytes(&mut rng, 4, 16)))
+        .collect();
+    input12.sort_unstable(); // lexicographic on Vec<u8>
+
+    // payload cols (also binary so the existing x < x filter is well-typed)
+    let input3: Vec<Vec<u8>> = (0..len).map(|_| rand_bytes(&mut rng, 4, 24)).collect();
+    let input4: Vec<Vec<u8>> = (0..len).map(|_| rand_bytes(&mut rng, 4, 24)).collect();
+
+    let a = BinaryArray::from_iter_values(input12.iter().map(|k| &k.0));
+    let b = BinaryArray::from_iter_values(input12.iter().map(|k| &k.1));
+    let x = BinaryArray::from_iter_values(input3.iter());
+    let y = BinaryArray::from_iter_values(input4.iter());
+
+    let mut columns = vec![
+        ("a", Arc::new(a) as ArrayRef),
+        ("b", Arc::new(b) as ArrayRef),
+        ("x", Arc::new(x) as ArrayRef),
+    ];
+
+    if with_extra_column {
+        columns.push(("y", Arc::new(y) as ArrayRef));
+    }
+
+    let batch = RecordBatch::try_from_iter(columns).unwrap();
+
+    // preserve your existing randomized partitioning
     stagger_batch_with_seed(batch, 42)
 }

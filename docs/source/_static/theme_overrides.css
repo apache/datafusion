@@ -29,7 +29,6 @@
   --pst-color-h2: var(--color-text-base);
   /* Use softer blue from bootstrap's default info color */
   --pst-color-info: 23, 162, 184;
-  --pst-header-height: 0px;
 }
 
 code {
@@ -40,12 +39,34 @@ code {
   text-align: center;
 }
 
-/* Ensure the logo is properly displayed */
+/* Limit both light and dark mode logos in the navbar */
+.logo__image {
+  height: 32px;
+  width: auto;     
+  max-height: 2.5rem;
+}
 
-.navbar-brand {
-  height: auto;
-  width: auto;
-  padding: 0 2em;
+/* Display appropriate logo for dark and light mode */
+.light-logo {
+  display: inline;
+}
+
+.dark-logo {
+  display: none;
+}
+
+html[data-theme="dark"] .light-logo {
+  display: none;
+}
+
+html[data-theme="dark"] .dark-logo {
+  display: inline;
+  background-color: transparent !important;
+}
+
+/* Align search bar & theme switch right */
+.navbar-header-items__end {
+  margin-left: auto;
 }
 
 /* This is the bootstrap CSS style for "table-striped". Since the theme does
@@ -83,4 +104,37 @@ Details: 8rem for search box etc*/
           this as on RTD they are loaded after this stylesheet */
         white-space: normal !important;
     }
+}
+
+/* Make wide tables scroll within the content area to avoid overlapping the
+   right sidebar. Prevents tables from bleeding underneath the sticky sidebar. */
+.bd-content table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+/* Make table container width fit content instead of spanning full width. */
+.pst-scrollable-table-container {
+  display: inline-block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Restore proper table display to maintain column alignment */
+.bd-content table thead,
+.bd-content table tbody { display: table-row-group; }
+
+.bd-content table tr { display: table-row; }
+
+.bd-content table th,
+.bd-content table td { 
+  display: table-cell; 
+  white-space: normal;
+}
+
+/* Maintain striped styling when table scrolls */
+.bd-content table tbody tr:nth-of-type(odd) {
+  background-color: rgba(0, 0, 0, 0.03);
 }

@@ -21,17 +21,20 @@ extern crate arrow;
 extern crate datafusion;
 
 mod data_utils;
+
 use crate::criterion::Criterion;
 use data_utils::create_table_provider;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use parking_lot::Mutex;
+use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
-    criterion::black_box(rt.block_on(df.collect()).unwrap());
+    black_box(rt.block_on(df.collect()).unwrap());
 }
 
 fn create_context(
@@ -152,6 +155,38 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+
+    c.bench_function(
+        "aggregate_query_group_by_wide_u64_and_string_without_aggregate_expressions",
+        |b| {
+            b.iter(|| {
+                query(
+                    ctx.clone(),
+                    &rt,
+                    // Due to the large number of distinct values in u64_wide,
+                    // this query test the actual grouping performance for more than 1 column
+                    "SELECT u64_wide, utf8 \
+                 FROM t GROUP BY u64_wide, utf8",
+                )
+            })
+        },
+    );
+
+    c.bench_function(
+        "aggregate_query_group_by_wide_u64_and_f32_without_aggregate_expressions",
+        |b| {
+            b.iter(|| {
+                query(
+                    ctx.clone(),
+                    &rt,
+                    // Due to the large number of distinct values in u64_wide,
+                    // this query test the actual grouping performance for more than 1 column
+                    "SELECT u64_wide, f32 \
+                 FROM t GROUP BY u64_wide, f32",
+                )
+            })
+        },
+    );
 
     c.bench_function("aggregate_query_approx_percentile_cont_on_u64", |b| {
         b.iter(|| {

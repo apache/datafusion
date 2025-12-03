@@ -21,7 +21,7 @@ description = "Logical plan and expression representation for DataFusion query e
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -38,23 +41,26 @@ workspace = true
 name = "datafusion_expr"
 
 [features]
+default = ["sql"]
 recursive_protection = ["dep:recursive"]
+sql = ["sqlparser"]
 
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-datafusion-common = { workspace = true }
+datafusion-common = { workspace = true, default-features = false }
 datafusion-doc = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 indexmap = { workspace = true }
-paste = "^1.0"
+itertools = { workspace = true }
+paste = { workspace = true }
 recursive = { workspace = true, optional = true }
 serde_json = { workspace = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 
 [dev-dependencies]
 ctor = { workspace = true }

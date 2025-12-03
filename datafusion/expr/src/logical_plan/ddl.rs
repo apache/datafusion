@@ -24,12 +24,15 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+#[cfg(not(feature = "sql"))]
+use crate::expr::Ident;
 use crate::expr::Sort;
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
 use datafusion_common::{
     Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
 };
+#[cfg(feature = "sql")]
 use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
@@ -129,7 +132,7 @@ impl DdlStatement {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self.0 {
                     DdlStatement::CreateExternalTable(CreateExternalTable {
-                        ref name,
+                        name,
                         constraints,
                         ..
                     }) => {
@@ -183,7 +186,10 @@ impl DdlStatement {
                         cascade,
                         ..
                     }) => {
-                        write!(f, "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}")
+                        write!(
+                            f,
+                            "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}"
+                        )
                     }
                     DdlStatement::CreateFunction(CreateFunction { name, .. }) => {
                         write!(f, "CreateFunction: name {name:?}")
@@ -213,6 +219,8 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// Option to replace table content if table already exists
+    pub or_replace: bool,
     /// Whether the table is a temporary table
     pub temporary: bool,
     /// SQL used to create the table, if available
@@ -292,7 +300,10 @@ impl PartialOrd for CreateExternalTable {
             unbounded: &other.unbounded,
             constraints: &other.constraints,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -348,6 +359,8 @@ impl PartialOrd for CreateCatalog {
             Some(Ordering::Equal) => self.if_not_exists.partial_cmp(&other.if_not_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -369,6 +382,8 @@ impl PartialOrd for CreateCatalogSchema {
             Some(Ordering::Equal) => self.if_not_exists.partial_cmp(&other.if_not_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -390,6 +405,8 @@ impl PartialOrd for DropTable {
             Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -411,6 +428,8 @@ impl PartialOrd for DropView {
             Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -437,17 +456,25 @@ impl PartialOrd for DropCatalogSchema {
             },
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
-/// Arguments passed to `CREATE FUNCTION`
+/// Arguments passed to the `CREATE FUNCTION` statement
 ///
-/// Note this meant to be the same as from sqlparser's [`sqlparser::ast::Statement::CreateFunction`]
+/// These statements are turned into executable functions using [`FunctionFactory`]
+///
+/// # Notes
+///
+/// This structure purposely mirrors the structure in sqlparser's
+/// [`sqlparser::ast::Statement::CreateFunction`], but does not use it directly
+/// to avoid a dependency on sqlparser in the core crate.
+///
+///
+/// [`FunctionFactory`]: https://docs.rs/datafusion/latest/datafusion/execution/context/trait.FunctionFactory.html
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CreateFunction {
-    // TODO: There is open question should we expose sqlparser types or redefine them here?
-    //       At the moment it make more sense to expose sqlparser types and leave
-    //       user to convert them as needed
     pub or_replace: bool,
     pub temporary: bool,
     pub name: String,
@@ -486,10 +513,16 @@ impl PartialOrd for CreateFunction {
             return_type: &other.return_type,
             params: &other.params,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
+/// Part of the `CREATE FUNCTION` statement
+///
+/// See [`CreateFunction`] for details
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct OperateFunctionArg {
     // TODO: figure out how to support mode
@@ -520,6 +553,9 @@ impl<'a> TreeNodeContainer<'a, Expr> for OperateFunctionArg {
     }
 }
 
+/// Part of the `CREATE FUNCTION` statement
+///
+/// See [`CreateFunction`] for details
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct CreateFunctionBody {
     /// LANGUAGE lang_name
@@ -566,6 +602,8 @@ impl PartialOrd for DropFunction {
             Some(Ordering::Equal) => self.if_exists.partial_cmp(&other.if_exists),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -608,7 +646,10 @@ impl PartialOrd for CreateIndex {
             unique: &other.unique,
             if_not_exists: &other.if_not_exists,
         };
-        comparable_self.partial_cmp(&comparable_other)
+        comparable_self
+            .partial_cmp(&comparable_other)
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 

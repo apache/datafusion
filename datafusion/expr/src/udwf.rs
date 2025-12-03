@@ -31,9 +31,9 @@ use arrow::datatypes::{DataType, FieldRef};
 use crate::expr::WindowFunction;
 use crate::udf_eq::UdfEq;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
+    Expr, PartitionEvaluator, Signature, function::WindowFunctionSimplification,
 };
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_doc::Documentation;
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_functions_window_common::expr::ExpressionArgs;
@@ -66,8 +66,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 ///
 /// [`PartitionEvaluator`]: crate::PartitionEvaluator
 /// [`create_udwf`]: crate::expr_fn::create_udwf
-/// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 #[derive(Debug, Clone, PartialOrd)]
 pub struct WindowUDF {
     inner: Arc<dyn WindowUDFImpl>,
@@ -237,18 +237,20 @@ where
 /// [`WindowUDF`] for other available options.
 ///
 ///
-/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
 /// # use std::sync::LazyLock;
 /// # use arrow::datatypes::{DataType, Field, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation, LimitEffect};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// # use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+/// # use datafusion_physical_expr_common::physical_expr;
+/// # use std::sync::Arc;
 ///
 /// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// struct SmoothIt {
@@ -295,6 +297,9 @@ where
 ///    fn documentation(&self) -> Option<&Documentation> {
 ///      Some(get_doc())
 ///    }
+///     fn limit_effect(&self, _args: &[Arc<dyn physical_expr::PhysicalExpr>]) -> LimitEffect {
+///         LimitEffect::Unknown
+///     }
 /// }
 ///
 /// // Create a new WindowUDF from the implementation
@@ -350,7 +355,7 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// optimizations manually for specific UDFs.
     ///
     /// Example:
-    /// [`advanced_udwf.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs>
+    /// `advanced_udwf.rs`: <https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs>
     ///
     /// # Returns
     /// [None] if simplify is not defined or,
@@ -358,6 +363,13 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Or, a closure with two arguments:
     /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
     /// * 'info': [crate::simplify::SimplifyInfo]
+    ///
+    /// # Notes
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         None
     }
@@ -414,6 +426,23 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// If not causal, returns the effect this function will have on the window
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
+    }
+}
+
+/// the effect this function will have on the limit pushdown
+pub enum LimitEffect {
+    /// Does not affect the limit (i.e. this is causal)
+    None,
+    /// Either undeclared, or dynamic (only evaluatable at run time)
+    Unknown,
+    /// Grow the limit by N rows
+    Relative(usize),
+    /// Limit needs to be at least N rows
+    Absolute(usize),
 }
 
 pub enum ReversedUDWF {
@@ -434,13 +463,14 @@ impl PartialEq for dyn WindowUDFImpl {
     }
 }
 
-// TODO (https://github.com/apache/datafusion/issues/17064) PartialOrd is not consistent with PartialEq for `dyn WindowUDFImpl` and it should be
 impl PartialOrd for dyn WindowUDFImpl {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name().partial_cmp(other.name()) {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
@@ -522,50 +552,25 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
-}
 
-// Window UDF doc sections for use in public documentation
-pub mod window_doc_sections {
-    use datafusion_doc::DocSection;
-
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_AGGREGATE,
-            DOC_SECTION_RANKING,
-            DOC_SECTION_ANALYTICAL,
-        ]
+    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        self.inner.limit_effect(args)
     }
-
-    pub const DOC_SECTION_AGGREGATE: DocSection = DocSection {
-        include: true,
-        label: "Aggregate Functions",
-        description: Some("All aggregate functions can be used as window functions."),
-    };
-
-    pub const DOC_SECTION_RANKING: DocSection = DocSection {
-        include: true,
-        label: "Ranking Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_ANALYTICAL: DocSection = DocSection {
-        include: true,
-        label: "Analytical Functions",
-        description: None,
-    };
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
+    use crate::{LimitEffect, PartitionEvaluator, WindowUDF, WindowUDFImpl};
     use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use std::any::Any;
     use std::cmp::Ordering;
     use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AWindowUDF {
@@ -603,6 +608,10 @@ mod test {
         }
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
 
@@ -642,6 +651,10 @@ mod test {
         }
         fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
 

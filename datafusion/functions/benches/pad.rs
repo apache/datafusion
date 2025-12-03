@@ -27,6 +27,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::{lpad, rpad};
 use rand::distr::{Distribution, Uniform};
 use rand::Rng;
+use std::hint::black_box;
 use std::sync::Arc;
 
 struct Filter<Dist> {
@@ -97,6 +98,7 @@ fn create_args<O: OffsetSizeTrait>(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn invoke_pad_with_args(
     args: Vec<ColumnarValue>,
     number_rows: usize,
@@ -131,29 +133,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args::<i32>(size, 32, false);
 
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, true).unwrap()))
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, true).unwrap()))
         });
 
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, true).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, true).unwrap()))
         });
 
         group.finish();
@@ -162,30 +152,18 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         let args = create_args::<i32>(size, 32, false);
         group.bench_function(BenchmarkId::new("utf8 type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, false).unwrap()))
         });
 
         let args = create_args::<i64>(size, 32, false);
         group.bench_function(BenchmarkId::new("largeutf8 type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, false).unwrap()))
         });
 
         // rpad for stringview type
         let args = create_args::<i32>(size, 32, true);
         group.bench_function(BenchmarkId::new("stringview type", size), |b| {
-            b.iter(|| {
-                criterion::black_box(
-                    invoke_pad_with_args(args.clone(), size, false).unwrap(),
-                )
-            })
+            b.iter(|| black_box(invoke_pad_with_args(args.clone(), size, false).unwrap()))
         });
 
         group.finish();

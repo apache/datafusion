@@ -28,7 +28,7 @@ use datafusion::physical_plan::aggregates::{
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{DataFusionError, JoinType, ScalarValue};
+use datafusion_common::{exec_datafusion_err, DataFusionError, JoinType, ScalarValue};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::operator::Operator::{Divide, Eq, Gt, Modulo};
@@ -40,13 +40,13 @@ use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::ensure_coop::EnsureCooperative;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coop::make_cooperative;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -434,7 +434,7 @@ async fn interleave_then_filter_all_yields(
     let mut infinite_children = vec![];
 
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    for thr in 1..32 {
+    for threshold in 1..32 {
         // One infinite exec:
         let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
@@ -444,7 +444,7 @@ async fn interleave_then_filter_all_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
         let filter_expr = binary(
             binary(
                 binary(
@@ -454,7 +454,7 @@ async fn interleave_then_filter_all_yields(
                     &inf.schema(),
                 )?,
                 Modulo,
-                lit(thr as i64),
+                lit(threshold as i64),
                 &inf.schema(),
             )?,
             Eq,
@@ -490,7 +490,7 @@ async fn interleave_then_aggregate_yields(
     let mut infinite_children = vec![];
 
     // Use 32 distinct thresholds (each >0 and <8 192) to force 32 infinite inputs
-    for thr in 1..32 {
+    for threshold in 1..32 {
         // One infinite exec:
         let mut inf = make_lazy_exec_with_range("value", 0..i64::MAX, pretend_infinite);
 
@@ -500,7 +500,7 @@ async fn interleave_then_aggregate_yields(
         let partitioning = Partitioning::Hash(exprs, 1);
         inf.try_set_partitioning(partitioning)?;
 
-        // Apply a FilterExec: “(value / 8192) % thr == 0”.
+        // Apply a FilterExec: “(value / 8192) % threshold == 0”.
         let filter_expr = binary(
             binary(
                 binary(
@@ -510,7 +510,7 @@ async fn interleave_then_aggregate_yields(
                     &inf.schema(),
                 )?,
                 Modulo,
-                lit(thr as i64),
+                lit(threshold as i64),
                 &inf.schema(),
             )?,
             Eq,
@@ -651,7 +651,7 @@ async fn join_agg_yields(
     // Project only one column (“value” from the left side) because we just want to sum that
     let input_schema = join.schema();
 
-    let proj_expr = vec![(
+    let proj_expr = vec![ProjectionExpr::new(
         Arc::new(Column::new_with_schema("value", &input_schema)?) as _,
         "value".to_string(),
     )];
@@ -783,7 +783,7 @@ async fn stream_yields(
                 Ok(Pending) => Yielded::ReadyOrPending,
                 Ok(Ready(Ok(_))) => Yielded::ReadyOrPending,
                 Ok(Ready(Err(e))) => Yielded::Err(e),
-                Err(_) => Yielded::Err(DataFusionError::Execution("join error".into())),
+                Err(_) => Yielded::Err(exec_datafusion_err!("join error")),
             }
         },
         _ = tokio::time::sleep(Duration::from_secs(10)) => {
@@ -810,8 +810,8 @@ async fn query_yields(
     task_ctx: Arc<TaskContext>,
 ) -> Result<(), Box<dyn Error>> {
     // Run plan through EnsureCooperative
-    let optimized =
-        EnsureCooperative::new().optimize(plan, task_ctx.session_config().options())?;
+    let optimizer_context = OptimizerContext::new(task_ctx.session_config().clone());
+    let optimized = EnsureCooperative::new().optimize_plan(plan, &optimizer_context)?;
 
     // Get the stream
     let stream = physical_plan::execute_stream(optimized, task_ctx)?;

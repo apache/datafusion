@@ -30,7 +30,7 @@ use crate::{
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
@@ -198,15 +198,16 @@ impl DisplayAs for SortPreservingMergeExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={fetch}")?;
+                };
+
                 for (i, e) in self.expr().iter().enumerate() {
                     e.fmt_sql(f)?;
                     if i != self.expr().len() - 1 {
                         write!(f, ", ")?;
                     }
                 }
-                if let Some(fetch) = self.fetch {
-                    writeln!(f, "limit={fetch}")?;
-                };
 
                 Ok(())
             }
@@ -280,11 +281,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start SortPreservingMergeExec::execute for partition: {partition}");
-        if 0 != partition {
-            return internal_err!(
-                "SortPreservingMergeExec invalid partition {partition}"
-            );
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "SortPreservingMergeExec invalid partition {partition}"
+        );
 
         let input_partitions = self.input.output_partitioning().partition_count();
         trace!(

@@ -1663,6 +1663,9 @@ impl serde::Serialize for CsvOptions {
         if !self.terminator.is_empty() {
             len += 1;
         }
+        if !self.truncated_rows.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1735,6 +1738,11 @@ impl serde::Serialize for CsvOptions {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&self.terminator).as_str())?;
         }
+        if !self.truncated_rows.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("truncatedRows", pbjson::private::base64::encode(&self.truncated_rows).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1773,6 +1781,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "newlines_in_values",
             "newlinesInValues",
             "terminator",
+            "truncated_rows",
+            "truncatedRows",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1794,6 +1804,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             DoubleQuote,
             NewlinesInValues,
             Terminator,
+            TruncatedRows,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1832,6 +1843,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
                             "terminator" => Ok(GeneratedField::Terminator),
+                            "truncatedRows" | "truncated_rows" => Ok(GeneratedField::TruncatedRows),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1868,6 +1880,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut double_quote__ = None;
                 let mut newlines_in_values__ = None;
                 let mut terminator__ = None;
+                let mut truncated_rows__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -1990,6 +2003,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::TruncatedRows => {
+                            if truncated_rows__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("truncatedRows"));
+                            }
+                            truncated_rows__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2010,6 +2031,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     double_quote: double_quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
                     terminator: terminator__.unwrap_or_default(),
+                    truncated_rows: truncated_rows__.unwrap_or_default(),
                 })
             }
         }
@@ -5535,6 +5557,9 @@ impl serde::Serialize for ParquetOptions {
         if self.reorder_filters {
             len += 1;
         }
+        if self.force_filter_selections {
+            len += 1;
+        }
         if self.data_pagesize_limit != 0 {
             len += 1;
         }
@@ -5610,6 +5635,9 @@ impl serde::Serialize for ParquetOptions {
         if self.coerce_int96_opt.is_some() {
             len += 1;
         }
+        if self.max_predicate_cache_size_opt.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ParquetOptions", len)?;
         if self.enable_page_index {
             struct_ser.serialize_field("enablePageIndex", &self.enable_page_index)?;
@@ -5625,6 +5653,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.reorder_filters {
             struct_ser.serialize_field("reorderFilters", &self.reorder_filters)?;
+        }
+        if self.force_filter_selections {
+            struct_ser.serialize_field("forceFilterSelections", &self.force_filter_selections)?;
         }
         if self.data_pagesize_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5763,6 +5794,15 @@ impl serde::Serialize for ParquetOptions {
                 }
             }
         }
+        if let Some(v) = self.max_predicate_cache_size_opt.as_ref() {
+            match v {
+                parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("maxPredicateCacheSize", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
         struct_ser.end()
     }
 }
@@ -5782,6 +5822,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "pushdownFilters",
             "reorder_filters",
             "reorderFilters",
+            "force_filter_selections",
+            "forceFilterSelections",
             "data_pagesize_limit",
             "dataPagesizeLimit",
             "write_batch_size",
@@ -5830,6 +5872,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "bloomFilterNdv",
             "coerce_int96",
             "coerceInt96",
+            "max_predicate_cache_size",
+            "maxPredicateCacheSize",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5839,6 +5883,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             SkipMetadata,
             PushdownFilters,
             ReorderFilters,
+            ForceFilterSelections,
             DataPagesizeLimit,
             WriteBatchSize,
             WriterVersion,
@@ -5864,6 +5909,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             BloomFilterFpp,
             BloomFilterNdv,
             CoerceInt96,
+            MaxPredicateCacheSize,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5890,6 +5936,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "skipMetadata" | "skip_metadata" => Ok(GeneratedField::SkipMetadata),
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
                             "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
+                            "forceFilterSelections" | "force_filter_selections" => Ok(GeneratedField::ForceFilterSelections),
                             "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
                             "writeBatchSize" | "write_batch_size" => Ok(GeneratedField::WriteBatchSize),
                             "writerVersion" | "writer_version" => Ok(GeneratedField::WriterVersion),
@@ -5915,6 +5962,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "bloomFilterFpp" | "bloom_filter_fpp" => Ok(GeneratedField::BloomFilterFpp),
                             "bloomFilterNdv" | "bloom_filter_ndv" => Ok(GeneratedField::BloomFilterNdv),
                             "coerceInt96" | "coerce_int96" => Ok(GeneratedField::CoerceInt96),
+                            "maxPredicateCacheSize" | "max_predicate_cache_size" => Ok(GeneratedField::MaxPredicateCacheSize),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5939,6 +5987,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut skip_metadata__ = None;
                 let mut pushdown_filters__ = None;
                 let mut reorder_filters__ = None;
+                let mut force_filter_selections__ = None;
                 let mut data_pagesize_limit__ = None;
                 let mut write_batch_size__ = None;
                 let mut writer_version__ = None;
@@ -5964,6 +6013,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_fpp_opt__ = None;
                 let mut bloom_filter_ndv_opt__ = None;
                 let mut coerce_int96_opt__ = None;
+                let mut max_predicate_cache_size_opt__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::EnablePageIndex => {
@@ -5995,6 +6045,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("reorderFilters"));
                             }
                             reorder_filters__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ForceFilterSelections => {
+                            if force_filter_selections__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("forceFilterSelections"));
+                            }
+                            force_filter_selections__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DataPagesizeLimit => {
                             if data_pagesize_limit__.is_some() {
@@ -6160,6 +6216,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             coerce_int96_opt__ = map_.next_value::<::std::option::Option<_>>()?.map(parquet_options::CoerceInt96Opt::CoerceInt96);
                         }
+                        GeneratedField::MaxPredicateCacheSize => {
+                            if max_predicate_cache_size_opt__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxPredicateCacheSize"));
+                            }
+                            max_predicate_cache_size_opt__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(x.0));
+                        }
                     }
                 }
                 Ok(ParquetOptions {
@@ -6168,6 +6230,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     skip_metadata: skip_metadata__.unwrap_or_default(),
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),
                     reorder_filters: reorder_filters__.unwrap_or_default(),
+                    force_filter_selections: force_filter_selections__.unwrap_or_default(),
                     data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),
                     write_batch_size: write_batch_size__.unwrap_or_default(),
                     writer_version: writer_version__.unwrap_or_default(),
@@ -6193,6 +6256,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_fpp_opt: bloom_filter_fpp_opt__,
                     bloom_filter_ndv_opt: bloom_filter_ndv_opt__,
                     coerce_int96_opt: coerce_int96_opt__,
+                    max_predicate_cache_size_opt: max_predicate_cache_size_opt__,
                 })
             }
         }

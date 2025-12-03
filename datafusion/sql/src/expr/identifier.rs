@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, Result, Span, TableReference,
+    assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err, Column, DFSchema, Result, Span, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
+use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
@@ -75,7 +76,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                     return Ok(Expr::OuterReferenceColumn(
-                        field.data_type().clone(),
+                        Arc::clone(field),
                         Column::from((qualifier, field)),
                     ));
                 }
@@ -98,9 +99,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        if ids.len() < 2 {
-            return internal_err!("Not a compound identifier: {ids:?}");
-        }
+        assert_or_internal_err!(ids.len() >= 2, "Not a compound identifier: {ids:?}");
 
         let ids_span = Span::union_iter(
             ids.iter()
@@ -116,9 +115,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "variable {var_names:?} has no type information"
-                    ))
+                    exec_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
             Ok(Expr::ScalarVariable(ty, var_names))
         } else {
@@ -182,7 +179,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
-                                        field.data_type().clone(),
+                                        Arc::clone(field),
                                         Column::from((qualifier, field)),
                                     ))
                                 }
@@ -294,7 +291,7 @@ fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
 ) -> Option<(
-    &'schema Field,
+    &'schema FieldRef,
     Option<&'schema TableReference>,
     &'ids [String],
 )> {

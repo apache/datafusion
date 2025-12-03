@@ -31,11 +31,18 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_functions_nested"
+
+[features]
+default = ["sql"]
+sql = ["datafusion-expr/sql"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -43,7 +50,8 @@ arrow-ord = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
-datafusion-expr = { workspace = true }
+datafusion-expr = { workspace = true, default-features = false }
+datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
@@ -51,7 +59,7 @@ datafusion-macros = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
-paste = "1.0.14"
+paste = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_tokio"] }
@@ -60,6 +68,18 @@ rand = { workspace = true }
 [[bench]]
 harness = false
 name = "array_expression"
+
+[[bench]]
+harness = false
+name = "array_has"
+
+[[bench]]
+harness = false
+name = "array_reverse"
+
+[[bench]]
+harness = false
+name = "array_slice"
 
 [[bench]]
 harness = false

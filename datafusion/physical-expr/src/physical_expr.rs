@@ -21,7 +21,7 @@ use crate::expressions::{self, Column};
 use crate::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_err, Result};
 use datafusion_common::{DFSchema, HashMap};
@@ -29,7 +29,6 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, SortExpr};
 
 use itertools::izip;
-
 // Exports:
 pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -119,12 +118,16 @@ pub fn physical_exprs_bag_equal(
 /// ]);
 ///
 /// let sort_exprs = vec![
-///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "id")), asc: true, nulls_first: false }
-///     ],
-///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "name")), asc: false, nulls_first: true }
-///     ]
+///     vec![SortExpr {
+///         expr: Expr::Column(Column::new(Some("t"), "id")),
+///         asc: true,
+///         nulls_first: false,
+///     }],
+///     vec![SortExpr {
+///         expr: Expr::Column(Column::new(Some("t"), "name")),
+///         asc: false,
+///         nulls_first: true,
+///     }],
 /// ];
 /// let result = create_ordering(&schema, &sort_exprs).unwrap();
 /// ```
@@ -159,6 +162,32 @@ pub fn create_ordering(
             }
         }
         all_sort_orders.extend(LexOrdering::new(sort_exprs));
+    }
+    Ok(all_sort_orders)
+}
+
+/// Creates a vector of [LexOrdering] from a vector of logical expression
+pub fn create_lex_ordering(
+    schema: &SchemaRef,
+    sort_order: &[Vec<SortExpr>],
+    execution_props: &ExecutionProps,
+) -> Result<Vec<LexOrdering>> {
+    // Try the fast path that only supports column references first
+    // This avoids creating a DFSchema
+    if let Ok(ordering) = create_ordering(schema, sort_order) {
+        return Ok(ordering);
+    }
+
+    let df_schema = DFSchema::try_from(Arc::clone(schema))?;
+
+    let mut all_sort_orders = vec![];
+
+    for exprs in sort_order.iter() {
+        all_sort_orders.extend(LexOrdering::new(create_physical_sort_exprs(
+            exprs,
+            &df_schema,
+            execution_props,
+        )?));
     }
     Ok(all_sort_orders)
 }
@@ -204,12 +233,19 @@ pub fn add_offset_to_physical_sort_exprs(
 mod tests {
     use super::*;
 
-    use crate::expressions::{Column, Literal};
+    use crate::expressions::{BinaryExpr, Column, Literal};
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
+    use datafusion_physical_expr_common::physical_expr::is_volatile;
 
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{DataType, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::ColumnarValue;
+    use datafusion_expr::Operator;
+    use std::any::Any;
+    use std::fmt;
 
     #[test]
     fn test_physical_exprs_contains() {
@@ -321,5 +357,121 @@ mod tests {
         assert!(!physical_exprs_equal(list4.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list3.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list4.as_slice(), list4.as_slice()));
+    }
+
+    #[test]
+    fn test_is_volatile_default_behavior() {
+        // Test that default PhysicalExpr implementations are not volatile
+        let literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+        let column = Arc::new(Column::new("test", 0)) as Arc<dyn PhysicalExpr>;
+
+        // Test is_volatile_node() - should return false by default
+        assert!(!literal.is_volatile_node());
+        assert!(!column.is_volatile_node());
+
+        // Test is_volatile() - should return false for non-volatile expressions
+        assert!(!is_volatile(&literal));
+        assert!(!is_volatile(&column));
+    }
+
+    /// Mock volatile PhysicalExpr for testing purposes
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct MockVolatileExpr {
+        volatile: bool,
+    }
+
+    impl MockVolatileExpr {
+        fn new(volatile: bool) -> Self {
+            Self { volatile }
+        }
+    }
+
+    impl fmt::Display for MockVolatileExpr {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "MockVolatile({})", self.volatile)
+        }
+    }
+
+    impl PhysicalExpr for MockVolatileExpr {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+            Ok(DataType::Boolean)
+        }
+
+        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
+                self.volatile,
+            ))))
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
+        }
+
+        fn is_volatile_node(&self) -> bool {
+            self.volatile
+        }
+
+        fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "mock_volatile({})", self.volatile)
+        }
+    }
+
+    #[test]
+    fn test_nested_expression_volatility() {
+        // Test that is_volatile() recursively detects volatility in expression trees
+
+        // Create a volatile mock expression
+        let volatile_expr =
+            Arc::new(MockVolatileExpr::new(true)) as Arc<dyn PhysicalExpr>;
+        assert!(volatile_expr.is_volatile_node());
+        assert!(is_volatile(&volatile_expr));
+
+        // Create a non-volatile mock expression
+        let stable_expr = Arc::new(MockVolatileExpr::new(false)) as Arc<dyn PhysicalExpr>;
+        assert!(!stable_expr.is_volatile_node());
+        assert!(!is_volatile(&stable_expr));
+
+        // Create a literal (non-volatile)
+        let literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+        assert!(!literal.is_volatile_node());
+        assert!(!is_volatile(&literal));
+
+        // Test composite expression: volatile_expr AND literal
+        // The BinaryExpr itself is not volatile, but contains a volatile child
+        let composite_expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&volatile_expr),
+            Operator::And,
+            Arc::clone(&literal),
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert!(!composite_expr.is_volatile_node()); // BinaryExpr itself is not volatile
+        assert!(is_volatile(&composite_expr)); // But it contains a volatile child
+
+        // Test composite expression with all non-volatile children
+        let stable_composite = Arc::new(BinaryExpr::new(
+            Arc::clone(&stable_expr),
+            Operator::And,
+            Arc::clone(&literal),
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert!(!stable_composite.is_volatile_node());
+        assert!(!is_volatile(&stable_composite)); // No volatile children
     }
 }

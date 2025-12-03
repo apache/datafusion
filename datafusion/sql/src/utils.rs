@@ -26,8 +26,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_err, internal_err, plan_err, Column, DFSchemaRef, DataFusionError, Diagnostic,
-    HashMap, Result, ScalarValue,
+    assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
+    Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
@@ -93,19 +93,32 @@ pub(crate) fn rebase_expr(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckColumnsMustReferenceAggregatePurpose {
+    Projection,
+    Having,
+    Qualify,
+    OrderBy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CheckColumnsSatisfyExprsPurpose {
-    ProjectionMustReferenceAggregate,
-    HavingMustReferenceAggregate,
+    Aggregate(CheckColumnsMustReferenceAggregatePurpose),
 }
 
 impl CheckColumnsSatisfyExprsPurpose {
     fn message_prefix(&self) -> &'static str {
         match self {
-            CheckColumnsSatisfyExprsPurpose::ProjectionMustReferenceAggregate => {
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Projection) => {
                 "Column in SELECT must be in GROUP BY or an aggregate function"
             }
-            CheckColumnsSatisfyExprsPurpose::HavingMustReferenceAggregate => {
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Having) => {
                 "Column in HAVING must be in GROUP BY or an aggregate function"
+            }
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Qualify) => {
+                "Column in QUALIFY must be in GROUP BY or an aggregate function"
+            }
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::OrderBy) => {
+                "Column in ORDER BY must be in GROUP BY or an aggregate function"
             }
         }
     }
@@ -162,7 +175,7 @@ fn check_column_satisfies_expr(
             purpose.diagnostic_message(expr),
             expr.spans().and_then(|spans| spans.first()),
         )
-        .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregare function like ANY_VALUE({expr})"), None);
+        .with_help(format!("Either add '{expr}' to GROUP BY clause, or use an aggregate function like ANY_VALUE({expr})"), None);
 
         return plan_err!(
             "{}: While expanding wildcard, column \"{}\" must appear in the GROUP BY clause or must be part of an aggregate function, currently only \"{}\" appears in the SELECT clause satisfies this requirement",
@@ -264,9 +277,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let result = all_partition_keys
         .iter()
         .min_by_key(|s| s.len())
-        .ok_or_else(|| {
-            DataFusionError::Execution("No window expressions found".to_owned())
-        })?;
+        .ok_or_else(|| exec_datafusion_err!("No window expressions found"))?;
     Ok(result)
 }
 
@@ -410,26 +421,25 @@ impl RecursiveUnnestRewriter<'_> {
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
         let placeholder_column = Column::from_name(placeholder_name.clone());
-
-        let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
+        let field = expr_in_unnest.to_field(self.input_schema)?.1;
+        let data_type = field.data_type();
 
         match data_type {
             DataType::Struct(inner_fields) => {
-                if !struct_allowed {
-                    return internal_err!("unnest on struct can only be applied at the root level of select expression");
-                }
+                assert_or_internal_err!(
+                    struct_allowed,
+                    "unnest on struct can only be applied at the root level of select expression"
+                );
                 push_projection_dedupl(
                     self.inner_projection_exprs,
                     expr_in_unnest.clone().alias(placeholder_name.clone()),
                 );
                 self.columns_unnestings
                     .insert(Column::from_name(placeholder_name.clone()), None);
-                Ok(
-                    get_struct_unnested_columns(&placeholder_name, &inner_fields)
-                        .into_iter()
-                        .map(Expr::Column)
-                        .collect(),
-                )
+                Ok(get_struct_unnested_columns(&placeholder_name, inner_fields)
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect())
             }
             DataType::List(_)
             | DataType::FixedSizeList(_, _)
@@ -470,8 +480,8 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///   is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref unnest_expr) = expr {
-            let (data_type, _) =
-                unnest_expr.expr.data_type_and_nullable(self.input_schema)?;
+            let field = unnest_expr.expr.to_field(self.input_schema)?.1;
+            let data_type = field.data_type();
             self.consecutive_unnest.push(Some(unnest_expr.clone()));
             // if expr inside unnest is a struct, do not consider
             // the next unnest as consecutive unnest (if any)
@@ -524,7 +534,6 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///                          / /
     ///                       column2
     /// ```
-    ///
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
@@ -548,7 +557,7 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
                 let most_inner = unnest_stack.first().unwrap();
                 let inner_expr = most_inner.expr.as_ref();
                 // unnest(unnest(struct_arr_col)) is not allow to be done recursively
-                // it needs to be splitted into multiple unnest logical plan
+                // it needs to be split into multiple unnest logical plan
                 // unnest(struct_arr)
                 //  unnest(struct_arr_col) as struct_arr
                 // instead of unnest(struct_arr_col, depth = 2)
@@ -692,7 +701,7 @@ mod tests {
                 ),
             })
             .collect();
-        let l_formatted: Vec<String> = l.iter().map(|i| i.to_string()).collect();
+        let l_formatted: Vec<String> = l.iter().map(|i| (*i).to_string()).collect();
         assert_eq!(l_formatted, r_formatted);
     }
 

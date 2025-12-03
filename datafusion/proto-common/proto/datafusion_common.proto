@@ -460,6 +460,7 @@ message CsvOptions {
   bytes double_quote = 15; // Indicates if quotes are doubled
   bytes newlines_in_values = 16; // Indicates if newlines are supported in values
   bytes terminator = 17; // Optional terminator character as a byte
+  bytes truncated_rows = 18; // Indicates if truncated rows are allowed
 }
 
 // Options controlling CSV format
@@ -518,6 +519,7 @@ message ParquetOptions {
   bool skip_metadata = 3; // default = true
   bool pushdown_filters = 5; // default = false
   bool reorder_filters = 6; // default = false
+  bool force_filter_selections = 34; // default = false
   uint64 data_pagesize_limit = 7; // default = 1024 * 1024
   uint64 write_batch_size = 8; // default = 1024
   string writer_version = 9; // default = "1.0"
@@ -579,6 +581,10 @@ message ParquetOptions {
 
   oneof coerce_int96_opt {
     string coerce_int96 = 32;
+  }
+
+  oneof max_predicate_cache_size_opt {
+    uint64 max_predicate_cache_size = 33;
   }
 }
 

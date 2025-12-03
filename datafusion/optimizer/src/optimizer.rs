@@ -41,12 +41,11 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_group_by_constant::EliminateGroupByConstant;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
-use crate::eliminate_nested_union::EliminateNestedUnion;
-use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::optimize_projections::OptimizeProjections;
+use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
@@ -134,10 +133,15 @@ impl OptimizerContext {
         let mut options = ConfigOptions::default();
         options.optimizer.filter_null_join_keys = true;
 
+        Self::new_with_config_options(Arc::new(options))
+    }
+
+    /// Create a optimizer config with provided [ConfigOptions].
+    pub fn new_with_config_options(options: Arc<ConfigOptions>) -> Self {
         Self {
             query_execution_start_time: Utc::now(),
             alias_generator: Arc::new(AliasGenerator::new()),
-            options: Arc::new(options),
+            options,
         }
     }
 
@@ -223,7 +227,7 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            Arc::new(EliminateNestedUnion::new()),
+            Arc::new(OptimizeUnions::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
@@ -236,8 +240,6 @@ impl Optimizer {
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
-            // Must be after PropagateEmptyRelation
-            Arc::new(EliminateOneUnion::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit

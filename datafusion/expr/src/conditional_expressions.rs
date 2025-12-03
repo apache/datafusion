@@ -17,11 +17,13 @@
 
 //! Conditional expressions
 use crate::expr::Case;
-use crate::{expr_schema::ExprSchemable, Expr};
+use crate::{Expr, expr_schema::ExprSchemable};
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, DFSchema, HashSet, Result};
+use datafusion_common::{DFSchema, HashSet, Result, plan_err};
+use itertools::Itertools as _;
 
 /// Helper struct for building [Expr::Case]
+#[derive(Debug, Clone)]
 pub struct CaseBuilder {
     expr: Option<Box<Expr>>,
     when_expr: Vec<Expr>,
@@ -81,9 +83,12 @@ impl CaseBuilder {
             // Cannot verify types until execution type
         } else {
             let unique_types: HashSet<&DataType> = then_types.iter().collect();
-            if unique_types.len() != 1 {
+            if unique_types.is_empty() {
+                return plan_err!("CASE expression 'then' values had no data types");
+            } else if unique_types.len() != 1 {
                 return plan_err!(
-                    "CASE expression 'then' values had multiple data types: {unique_types:?}"
+                    "CASE expression 'then' values had multiple data types: {}",
+                    unique_types.iter().join(", ")
                 );
             }
         }

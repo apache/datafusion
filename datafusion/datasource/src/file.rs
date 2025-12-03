@@ -26,9 +26,9 @@ use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use crate::schema_adapter::SchemaAdapterFactory;
-use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, Result, Statistics};
+use datafusion_common::{not_impl_err, Result};
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -58,21 +58,25 @@ pub trait FileSource: Send + Sync {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> Arc<dyn FileOpener>;
+    ) -> Result<Arc<dyn FileOpener>>;
     /// Any
     fn as_any(&self) -> &dyn Any;
+    /// Returns the table schema for this file source.
+    ///
+    /// This always returns the unprojected schema (the full schema of the data).
+    fn table_schema(&self) -> &crate::table_schema::TableSchema;
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
-    /// Initialize new instance with a new schema
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource>;
-    /// Initialize new instance with projection information
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
-    /// Initialize new instance with projected statistics
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
+    /// Returns the filter expression that will be applied during the file scan.
+    fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        None
+    }
+    /// Return the projection that will be applied to the output stream on top of the table schema.
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        None
+    }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
-    /// Return projected statistics
-    fn statistics(&self) -> Result<Statistics>;
     /// String representation of file source such as "csv", "json", "parquet"
     fn file_type(&self) -> &str;
     /// Format FileType specific information
@@ -123,6 +127,35 @@ pub trait FileSource: Send + Sync {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to push down a projection into a this FileSource.
+    ///
+    /// `FileSource` implementations that support projection pushdown should
+    /// override this method and return a new `FileSource` instance with the
+    /// projection incorporated.
+    ///
+    /// If a `FileSource` does accept a projection it is expected to handle
+    /// the projection in it's entirety, including partition columns.
+    /// For example, the `FileSource` may translate that projection into a
+    /// file format specific projection (e.g. Parquet can push down struct field access,
+    /// some other file formats like Vortex can push down computed expressions into un-decoded data)
+    /// and also need to handle partition column projection (generally done by replacing partition column
+    /// references with literal values derived from each files partition values).
+    ///
+    /// Not all FileSource's can handle complex expression pushdowns. For example,
+    /// a CSV file source may only support simple column selections. In such cases,
+    /// the `FileSource` can use [`SplitProjection`] and [`ProjectionOpener`]
+    /// to split the projection into a pushdownable part and a non-pushdownable part.
+    /// These helpers also handle partition column projection.
+    ///
+    /// [`SplitProjection`]: crate::projection::SplitProjection
+    /// [`ProjectionOpener`]: crate::projection::ProjectionOpener
+    fn try_pushdown_projection(
+        &self,
+        _projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        Ok(None)
     }
 
     /// Set optional schema adapter factory.

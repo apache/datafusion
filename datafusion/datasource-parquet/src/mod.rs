@@ -18,6 +18,7 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod access_plan;
 pub mod file_format;

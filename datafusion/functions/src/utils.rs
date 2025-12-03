@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
-
-use datafusion_common::{Result, ScalarValue};
+use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::compute::try_binary;
+use arrow::datatypes::{DataType, DecimalType};
+use arrow::error::ArrowError;
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
+use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
@@ -116,6 +118,103 @@ where
             result.map(ColumnarValue::Scalar)
         } else {
             result.map(ColumnarValue::Array)
+        }
+    }
+}
+
+/// Computes a binary math function for input arrays using a specified function.
+/// Generic types:
+/// - `L`: Left array primitive type
+/// - `R`: Right array primitive type
+/// - `O`: Output array primitive type
+/// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+pub fn calculate_binary_math<L, R, O, F>(
+    left: &dyn Array,
+    right: &ColumnarValue,
+    fun: F,
+) -> Result<Arc<PrimitiveArray<O>>>
+where
+    L: ArrowPrimitiveType,
+    R: ArrowPrimitiveType,
+    O: ArrowPrimitiveType,
+    F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
+    R::Native: TryFrom<ScalarValue>,
+{
+    let left = left.as_primitive::<L>();
+    let right = right.cast_to(&R::DATA_TYPE, None)?;
+    let result = match right {
+        ColumnarValue::Scalar(scalar) => {
+            if scalar.is_null() {
+                // Null scalar is castable to any numeric, creating a non-null expression.
+                // Provide null array explicitly to make result null
+                PrimitiveArray::<O>::new_null(1)
+            } else {
+                let right = R::Native::try_from(scalar.clone()).map_err(|_| {
+                    DataFusionError::NotImplemented(format!(
+                        "Cannot convert scalar value {} to {}",
+                        &scalar,
+                        R::DATA_TYPE
+                    ))
+                })?;
+                left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
+            }
+        }
+        ColumnarValue::Array(right) => {
+            let right = right.as_primitive::<R>();
+            try_binary::<_, _, _, O>(left, right, &fun)?
+        }
+    };
+    Ok(Arc::new(result) as _)
+}
+
+/// Computes a binary math function for input arrays using a specified function
+/// and apply rescaling to given precision and scale.
+/// Generic types:
+/// - `L`: Left array decimal type
+/// - `R`: Right array primitive type
+/// - `O`: Output array decimal type
+/// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+pub fn calculate_binary_decimal_math<L, R, O, F>(
+    left: &dyn Array,
+    right: &ColumnarValue,
+    fun: F,
+    precision: u8,
+    scale: i8,
+) -> Result<Arc<PrimitiveArray<O>>>
+where
+    L: DecimalType,
+    R: ArrowPrimitiveType,
+    O: DecimalType,
+    F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
+    R::Native: TryFrom<ScalarValue>,
+{
+    let result_array = calculate_binary_math::<L, R, O, F>(left, right, fun)?;
+    if scale < 0 {
+        not_impl_err!("Negative scale is not supported for power for decimal types")
+    } else {
+        Ok(Arc::new(
+            result_array
+                .as_ref()
+                .clone()
+                .with_precision_and_scale(precision, scale)?,
+        ))
+    }
+}
+
+/// Converts Decimal128 components (value and scale) to an unscaled i128
+pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        match i128::from(10).checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
         }
     }
 }
@@ -235,7 +334,6 @@ pub mod test {
     }
 
     use arrow::datatypes::DataType;
-    #[allow(unused_imports)]
     pub(crate) use test_function;
 
     use super::*;
@@ -250,5 +348,32 @@ pub mod test {
 
         let v = utf8_to_int_type(&DataType::LargeUtf8, "test").unwrap();
         assert_eq!(v, DataType::Int64);
+    }
+
+    #[test]
+    fn test_decimal128_to_i128() {
+        let cases = [
+            (123, 0, Some(123)),
+            (1230, 1, Some(123)),
+            (123000, 3, Some(123)),
+            (1, 0, Some(1)),
+            (123, -3, None),
+            (123, i8::MAX, None),
+            (i128::MAX, 0, Some(i128::MAX)),
+            (i128::MAX, 3, Some(i128::MAX / 1000)),
+        ];
+
+        for (value, scale, expected) in cases {
+            match decimal128_to_i128(value, scale) {
+                Ok(actual) => {
+                    assert_eq!(
+                        actual,
+                        expected.expect("Got value but expected none"),
+                        "{value} and {scale} vs {expected:?}"
+                    );
+                }
+                Err(_) => assert!(expected.is_none()),
+            }
+        }
     }
 }

@@ -52,13 +52,13 @@ As the writer of a library, you can use `Expr`s to represent computations that y
 
 ## Arrow Schema and DataFusion DFSchema
 
-Apache Arrow `Schema` provides a lightweight structure for defining data, and Apache Datafusion`DFSchema` extends it with extra information such as column qualifiers and functional dependencies. Column qualifiers are multi part path to the table e.g table, schema, catalog. Functional Dependency is the relationship between attributes(characteristics) of a table related to each other.
+Apache Arrow `Schema` provides a lightweight structure for defining data, and Apache Datafusion `DFSchema` extends it with extra information such as column qualifiers and functional dependencies. Column qualifiers are multi part path to the table e.g table, schema, catalog. Functional Dependency is the relationship between attributes(characteristics) of a table related to each other.
 
 ### Difference between Schema and DFSchema
 
 - Schema: A fundamental component of Apache Arrow, `Schema` defines a dataset's structure, specifying column names and their data types.
 
-  > Please see [Struct Schema](https://docs.rs/arrow-schema/54.2.1/arrow_schema/struct.Schema.html) for a detailed document of Arrow Schema.
+  > Please see [Struct Schema](https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html) for a detailed document of Arrow Schema.
 
 - DFSchema: Extending `Schema`, `DFSchema` incorporates qualifiers such as table names, enabling it to carry additional context when required. This is particularly valuable for managing queries across multiple tables.
   > Please see [Struct DFSchema](https://docs.rs/datafusion/latest/datafusion/common/struct.DFSchema.html) for a detailed document of DFSchema.
@@ -71,7 +71,7 @@ From DFSchema to Schema: Since the `Into` trait has been implemented for DFSchem
 
 ## Creating and Evaluating `Expr`s
 
-Please see [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs) for well commented code for creating, evaluating, simplifying, and analyzing `Expr`s.
+Please see [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs) for well commented code for creating, evaluating, simplifying, and analyzing `Expr`s.
 
 ## A Scalar UDF Example
 
@@ -121,11 +121,11 @@ If you'd like to learn more about `Expr`s, before we get into the details of cre
 
 ## Rewriting `Expr`s
 
-There are several examples of rewriting and working with `Exprs`:
+There are several examples of rewriting and working with `Expr`s:
 
-- [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs)
-- [analyzer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/analyzer_rule.rs)
-- [optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/optimizer_rule.rs)
+- [expr_api.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs)
+- [analyzer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/analyzer_rule.rs)
+- [optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/optimizer_rule.rs)
 
 Rewriting Expressions is the process of taking an `Expr` and transforming it into another `Expr`. This is useful for a number of reasons, including:
 
@@ -162,7 +162,7 @@ fn rewrite_add_one(expr: Expr) -> Result<Transformed<Expr>> {
 
 ### Creating an `OptimizerRule`
 
-In DataFusion, an `OptimizerRule` is a trait that supports rewriting`Expr`s that appear in various parts of the `LogicalPlan`. It follows DataFusion's general mantra of trait implementations to drive behavior.
+In DataFusion, an `OptimizerRule` is a trait that supports rewriting `Expr`s that appear in various parts of the `LogicalPlan`. It follows DataFusion's general mantra of trait implementations to drive behavior.
 
 We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The `OptimizerRule` trait has two methods:
 

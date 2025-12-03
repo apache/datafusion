@@ -23,7 +23,7 @@
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::DataFusionError;
 use datafusion_common::{sql_err, Diagnostic, Span};
-use sqlparser::ast::{ExprWithAlias, OrderByOptions};
+use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -58,7 +58,7 @@ fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
 /// Syntax:
 /// ```sql
 /// EXPLAIN <ANALYZE> <VERBOSE> [FORMAT format] statement
-///```
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplainStatement {
     /// `EXPLAIN ANALYZE ..`
@@ -188,7 +188,9 @@ pub(crate) type LexOrdering = Vec<OrderByExpr>;
 /// Syntax:
 ///
 /// ```text
-/// CREATE EXTERNAL TABLE
+/// CREATE
+/// [ OR REPLACE ]
+/// EXTERNAL TABLE
 /// [ IF NOT EXISTS ]
 /// <TABLE_NAME>[ (<column_definition>) ]
 /// STORED AS <file_type>
@@ -221,6 +223,8 @@ pub struct CreateExternalTable {
     pub order_exprs: Vec<LexOrdering>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// Option to replace table content if table already exists
+    pub or_replace: bool,
     /// Whether the table is a temporary table
     pub temporary: bool,
     /// Infinite streams?
@@ -239,7 +243,34 @@ impl fmt::Display for CreateExternalTable {
         }
         write!(f, "{} ", self.name)?;
         write!(f, "STORED AS {} ", self.file_type)?;
-        write!(f, "LOCATION {} ", self.location)
+        if !self.order_exprs.is_empty() {
+            write!(f, "WITH ORDER (")?;
+            let mut first = true;
+            for expr in self.order_exprs.iter().flatten() {
+                if !first {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{expr}")?;
+                first = false;
+            }
+            write!(f, ") ")?;
+        }
+        write!(f, "LOCATION {}", self.location)
+    }
+}
+
+/// DataFusion extension for `RESET`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResetStatement {
+    /// Reset a single configuration variable (stored as provided)
+    Variable(ObjectName),
+}
+
+impl fmt::Display for ResetStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ResetStatement::Variable(name) => write!(f, "RESET {name}"),
+        }
     }
 }
 
@@ -260,6 +291,8 @@ pub enum Statement {
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
     Explain(ExplainStatement),
+    /// Extension: `RESET`
+    Reset(ResetStatement),
 }
 
 impl fmt::Display for Statement {
@@ -269,6 +302,7 @@ impl fmt::Display for Statement {
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
+            Statement::Reset(stmt) => write!(f, "{stmt}"),
         }
     }
 }
@@ -304,8 +338,7 @@ const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 /// # use datafusion_sql::parser::DFParserBuilder;
 /// # use datafusion_common::Result;
 /// # fn test() -> Result<()> {
-/// let mut parser = DFParserBuilder::new("SELECT * FROM foo; SELECT 1 + 2")
-///   .build()?;
+/// let mut parser = DFParserBuilder::new("SELECT * FROM foo; SELECT 1 + 2").build()?;
 /// // parse the SQL into DFStatements
 /// let statements = parser.parse_statements()?;
 /// assert_eq!(statements.len(), 2);
@@ -320,13 +353,13 @@ const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 /// # use datafusion_sql::sqlparser::dialect::MySqlDialect;
 /// # use datafusion_sql::sqlparser::ast::Expr;
 /// # fn test() -> Result<()> {
-/// let dialect = MySqlDialect{}; // Parse using MySQL dialect
+/// let dialect = MySqlDialect {}; // Parse using MySQL dialect
 /// let mut parser = DFParserBuilder::new("1 + 2")
-///   .with_dialect(&dialect)
-///   .build()?;
+///     .with_dialect(&dialect)
+///     .build()?;
 /// // parse 1+2 into an sqlparser::ast::Expr
 /// let res = parser.parse_expr()?;
-/// assert!(matches!(res.expr, Expr::BinaryOp {..}));
+/// assert!(matches!(res.expr, Expr::BinaryOp { .. }));
 /// # Ok(())
 /// # }
 /// ```
@@ -441,7 +474,7 @@ impl<'a> DFParser<'a> {
                 break;
             }
             if expecting_statement_delimiter {
-                return self.expected("end of statement", self.parser.peek_token());
+                return self.expected("end of statement", &self.parser.peek_token());
             }
 
             let statement = self.parse_statement()?;
@@ -455,7 +488,7 @@ impl<'a> DFParser<'a> {
     fn expected<T>(
         &self,
         expected: &str,
-        found: TokenWithSpan,
+        found: &TokenWithSpan,
     ) -> Result<T, DataFusionError> {
         let sql_parser_span = found.span;
         let span = Span::try_from_sqlparser_span(sql_parser_span);
@@ -473,11 +506,11 @@ impl<'a> DFParser<'a> {
     fn expect_token(
         &mut self,
         expected: &str,
-        token: Token,
+        token: &Token,
     ) -> Result<(), DataFusionError> {
         let next_token = self.parser.peek_token_ref();
-        if next_token.token != token {
-            self.expected(expected, next_token.clone())
+        if next_token.token != *token {
+            self.expected(expected, next_token)
         } else {
             Ok(())
         }
@@ -505,6 +538,10 @@ impl<'a> DFParser<'a> {
                     Keyword::EXPLAIN => {
                         self.parser.next_token(); // EXPLAIN
                         self.parse_explain()
+                    }
+                    Keyword::RESET => {
+                        self.parser.next_token(); // RESET
+                        self.parse_reset()
                     }
                     _ => {
                         // use sqlparser-rs parser
@@ -538,7 +575,7 @@ impl<'a> DFParser<'a> {
     /// contains any trailing, unparsed tokens.
     pub fn parse_into_expr(&mut self) -> Result<ExprWithAlias, DataFusionError> {
         let expr = self.parse_expr()?;
-        self.expect_token("end of expression", Token::EOF)?;
+        self.expect_token("end of expression", &Token::EOF)?;
         Ok(expr)
     }
 
@@ -623,7 +660,7 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return self.expected("end of statement or ;", token)?;
+                    return self.expected("end of statement or ;", &token)?;
                 }
             }
         }
@@ -660,7 +697,7 @@ impl<'a> DFParser<'a> {
                         // Unquoted namespaced keys have to conform to the syntax
                         // "<WORD>[\.<WORD>]*". If we have a key that breaks this
                         // pattern, error out:
-                        return self.expected("key name", next_token);
+                        return self.expected("key name", &next_token);
                     }
                 }
                 Ok(parts.join("."))
@@ -668,7 +705,7 @@ impl<'a> DFParser<'a> {
             Token::SingleQuotedString(s) => Ok(s),
             Token::DoubleQuotedString(s) => Ok(s),
             Token::EscapedStringLiteral(s) => Ok(s),
-            _ => self.expected("key name", next_token),
+            _ => self.expected("key name", &next_token),
         }
     }
 
@@ -687,7 +724,7 @@ impl<'a> DFParser<'a> {
             Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
             Token::Number(n, l) => Ok(Value::Number(n, l)),
-            _ => self.expected("string or numeric value", next_token),
+            _ => self.expected("string or numeric value", &next_token),
         }
     }
 
@@ -707,6 +744,47 @@ impl<'a> DFParser<'a> {
         }))
     }
 
+    /// Parse a SQL `RESET`
+    pub fn parse_reset(&mut self) -> Result<Statement, DataFusionError> {
+        let mut parts: Vec<String> = Vec::new();
+        let mut expecting_segment = true;
+
+        loop {
+            let next_token = self.parser.peek_token();
+            match &next_token.token {
+                Token::Word(word) => {
+                    self.parser.next_token();
+                    parts.push(word.value.clone());
+                    expecting_segment = false;
+                }
+                Token::SingleQuotedString(s)
+                | Token::DoubleQuotedString(s)
+                | Token::EscapedStringLiteral(s) => {
+                    self.parser.next_token();
+                    parts.push(s.clone());
+                    expecting_segment = false;
+                }
+                Token::Period => {
+                    self.parser.next_token();
+                    if expecting_segment || parts.is_empty() {
+                        return self.expected("configuration parameter", &next_token);
+                    }
+                    expecting_segment = true;
+                }
+                Token::EOF | Token::SemiColon => break,
+                _ => return self.expected("configuration parameter", &next_token),
+            }
+        }
+
+        if parts.is_empty() || expecting_segment {
+            return self.expected("configuration parameter", &self.parser.peek_token());
+        }
+
+        let idents: Vec<Ident> = parts.into_iter().map(Ident::new).collect();
+        let variable = ObjectName::from(idents);
+        Ok(Statement::Reset(ResetStatement::Variable(variable)))
+    }
+
     pub fn parse_explain_format(&mut self) -> Result<Option<String>, DataFusionError> {
         if !self.parser.parse_keyword(Keyword::FORMAT) {
             return Ok(None);
@@ -717,18 +795,33 @@ impl<'a> DFParser<'a> {
             Token::Word(w) => Ok(w.value),
             Token::SingleQuotedString(w) => Ok(w),
             Token::DoubleQuotedString(w) => Ok(w),
-            _ => self.expected("an explain format such as TREE", next_token),
+            _ => self.expected("an explain format such as TREE", &next_token),
         }?;
         Ok(Some(format))
     }
 
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, DataFusionError> {
-        if self.parser.parse_keyword(Keyword::EXTERNAL) {
-            self.parse_create_external_table(false)
-        } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
-            self.parser.expect_keyword(Keyword::EXTERNAL)?;
-            self.parse_create_external_table(true)
+        // TODO: Change sql parser to take in `or_replace: bool` inside parse_create()
+        if self
+            .parser
+            .parse_keywords(&[Keyword::OR, Keyword::REPLACE, Keyword::EXTERNAL])
+        {
+            self.parse_create_external_table(false, true)
+        } else if self.parser.parse_keywords(&[
+            Keyword::OR,
+            Keyword::REPLACE,
+            Keyword::UNBOUNDED,
+            Keyword::EXTERNAL,
+        ]) {
+            self.parse_create_external_table(true, true)
+        } else if self.parser.parse_keyword(Keyword::EXTERNAL) {
+            self.parse_create_external_table(false, false)
+        } else if self
+            .parser
+            .parse_keywords(&[Keyword::UNBOUNDED, Keyword::EXTERNAL])
+        {
+            self.parse_create_external_table(true, false)
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
@@ -747,7 +840,7 @@ impl<'a> DFParser<'a> {
                 let identifier = self.parser.parse_identifier()?;
                 partitions.push(identifier.to_string());
             } else {
-                return self.expected("partition name", self.parser.peek_token());
+                return self.expected("partition name", &self.parser.peek_token());
             }
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
@@ -756,7 +849,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after partition definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }
@@ -827,7 +920,7 @@ impl<'a> DFParser<'a> {
             } else {
                 return self.expected(
                     "column name or constraint definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
             let comma = self.parser.consume_token(&Token::Comma);
@@ -837,7 +930,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after column definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }
@@ -857,7 +950,7 @@ impl<'a> DFParser<'a> {
                 } else {
                     return self.expected(
                         "constraint details after CONSTRAINT <name>",
-                        self.parser.peek_token(),
+                        &self.parser.peek_token(),
                     );
                 }
             } else if let Some(option) = self.parser.parse_optional_column_option()? {
@@ -876,15 +969,22 @@ impl<'a> DFParser<'a> {
     fn parse_create_external_table(
         &mut self,
         unbounded: bool,
+        or_replace: bool,
     ) -> Result<Statement, DataFusionError> {
         let temporary = self
             .parser
             .parse_one_of_keywords(&[Keyword::TEMP, Keyword::TEMPORARY])
             .is_some();
+
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
+
+        if if_not_exists && or_replace {
+            return parser_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'");
+        }
+
         let table_name = self.parser.parse_object_name(true)?;
         let (mut columns, constraints) = self.parse_columns()?;
 
@@ -975,7 +1075,7 @@ impl<'a> DFParser<'a> {
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
-                    return self.expected("end of statement or ;", token)?;
+                    return self.expected("end of statement or ;", &token)?;
                 }
             }
         }
@@ -1000,6 +1100,7 @@ impl<'a> DFParser<'a> {
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
             if_not_exists,
+            or_replace,
             temporary,
             unbounded,
             options: builder.options.unwrap_or(Vec::new()),
@@ -1013,7 +1114,7 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", token),
+            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", &token),
         }
     }
 
@@ -1036,7 +1137,7 @@ impl<'a> DFParser<'a> {
             } else if !comma {
                 return self.expected(
                     "',' or ')' after option definition",
-                    self.parser.peek_token(),
+                    &self.parser.peek_token(),
                 );
             }
         }
@@ -1049,7 +1150,9 @@ mod tests {
     use super::*;
     use datafusion_common::assert_contains;
     use sqlparser::ast::Expr::Identifier;
-    use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident, ValueWithSpan};
+    use sqlparser::ast::{
+        BinaryOperator, DataType, ExactNumberInfo, Expr, Ident, ValueWithSpan,
+    };
     use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::Span;
 
@@ -1108,6 +1211,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1125,6 +1229,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1143,6 +1248,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1161,6 +1267,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![(
@@ -1182,6 +1289,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1210,6 +1318,7 @@ mod tests {
                 table_partition_cols: vec![],
                 order_exprs: vec![],
                 if_not_exists: false,
+                or_replace: false,
                 temporary: false,
                 unbounded: false,
                 options: vec![(
@@ -1231,6 +1340,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1248,6 +1358,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1265,6 +1376,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1283,6 +1395,26 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: true,
+            or_replace: false,
+            temporary: false,
+            unbounded: false,
+            options: vec![],
+            constraints: vec![],
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: or replace
+        let sql =
+            "CREATE OR REPLACE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: name.clone(),
+            columns: vec![],
+            file_type: "PARQUET".to_string(),
+            location: "foo.parquet".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![],
+            if_not_exists: false,
+            or_replace: true,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1304,6 +1436,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string()],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1335,6 +1468,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![("k1".into(), Value::SingleQuotedString("v1".into()))],
@@ -1353,6 +1487,7 @@ mod tests {
             table_partition_cols: vec![],
             order_exprs: vec![],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![
@@ -1401,6 +1536,7 @@ mod tests {
                     with_fill: None,
                 }]],
                 if_not_exists: false,
+                or_replace: false,
                 temporary: false,
                 unbounded: false,
                 options: vec![],
@@ -1448,6 +1584,7 @@ mod tests {
                 },
             ]],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1488,6 +1625,7 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: false,
+            or_replace: false,
             temporary: false,
             unbounded: false,
             options: vec![],
@@ -1495,7 +1633,7 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // Most complete CREATE EXTERNAL TABLE statement possible
+        // Most complete CREATE EXTERNAL TABLE statement possible (using IF NOT EXISTS)
         let sql = "
             CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS t (c1 int, c2 float)
             STORED AS PARQUET
@@ -1511,7 +1649,7 @@ mod tests {
             name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
-                make_column_def("c2", DataType::Float(None)),
+                make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
             location: "foo.parquet".into(),
@@ -1537,6 +1675,75 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: true,
+            or_replace: false,
+            temporary: false,
+            unbounded: true,
+            options: vec![
+                (
+                    "format.compression".into(),
+                    Value::SingleQuotedString("zstd".into()),
+                ),
+                (
+                    "format.delimiter".into(),
+                    Value::SingleQuotedString("*".into()),
+                ),
+                (
+                    "ROW_GROUP_SIZE".into(),
+                    Value::SingleQuotedString("1024".into()),
+                ),
+                ("TRUNCATE".into(), Value::SingleQuotedString("NO".into())),
+                (
+                    "format.has_header".into(),
+                    Value::SingleQuotedString("true".into()),
+                ),
+            ],
+            constraints: vec![],
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // Most complete CREATE EXTERNAL TABLE statement possible (using OR REPLACE)
+        let sql = "
+            CREATE OR REPLACE UNBOUNDED EXTERNAL TABLE t (c1 int, c2 float)
+            STORED AS PARQUET
+            WITH ORDER (c1 - c2 ASC)
+            PARTITIONED BY (c1)
+            LOCATION 'foo.parquet'
+            OPTIONS ('format.compression' 'zstd',
+                     'format.delimiter' '*',
+                     'ROW_GROUP_SIZE' '1024',
+                     'TRUNCATE' 'NO',
+                     'format.has_header' 'true')";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: name.clone(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(None)),
+                make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
+            ],
+            file_type: "PARQUET".to_string(),
+            location: "foo.parquet".into(),
+            table_partition_cols: vec!["c1".into()],
+            order_exprs: vec![vec![OrderByExpr {
+                expr: Expr::BinaryOp {
+                    left: Box::new(Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                        span: Span::empty(),
+                    })),
+                    op: BinaryOperator::Minus,
+                    right: Box::new(Identifier(Ident {
+                        value: "c2".to_owned(),
+                        quote_style: None,
+                        span: Span::empty(),
+                    })),
+                },
+                options: OrderByOptions {
+                    asc: Some(true),
+                    nulls_first: None,
+                },
+                with_fill: None,
+            }]],
+            if_not_exists: false,
+            or_replace: true,
             temporary: false,
             unbounded: true,
             options: vec![

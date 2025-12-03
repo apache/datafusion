@@ -19,10 +19,11 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
@@ -33,15 +34,16 @@ pub mod file;
 pub mod file_compression_type;
 pub mod file_format;
 pub mod file_groups;
-pub mod file_meta;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
+pub mod projection;
 pub mod schema_adapter;
 pub mod sink;
 pub mod source;
 mod statistics;
+pub mod table_schema;
 
 #[cfg(test)]
 pub mod test_util;
@@ -55,10 +57,10 @@ use chrono::TimeZone;
 use datafusion_common::stats::Precision;
 use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
 use datafusion_common::{ScalarValue, Statistics};
-use file_meta::FileMeta;
 use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
 #[allow(deprecated)]
 pub use statistics::add_row_stats;
@@ -157,6 +159,24 @@ impl PartitionedFile {
         .with_range(start, end)
     }
 
+    /// Size of the file to be scanned (taking into account the range, if present).
+    pub fn effective_size(&self) -> u64 {
+        if let Some(range) = &self.range {
+            (range.end - range.start) as u64
+        } else {
+            self.object_meta.size
+        }
+    }
+
+    /// Effective range of the file to be scanned.
+    pub fn range(&self) -> (u64, u64) {
+        if let Some(range) = &self.range {
+            (range.start as u64, range.end as u64)
+        } else {
+            (0, self.object_meta.size)
+        }
+    }
+
     /// Provide a hint to the size of the file metadata. If a hint is provided
     /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
     /// Without an appropriate hint, two read may be required to fetch the metadata.
@@ -251,23 +271,23 @@ pub enum RangeCalculation {
 /// Calculates an appropriate byte range for reading from an object based on the
 /// provided metadata.
 ///
-/// This asynchronous function examines the `FileMeta` of an object in an object store
+/// This asynchronous function examines the [`PartitionedFile`] of an object in an object store
 /// and determines the range of bytes to be read. The range calculation may adjust
 /// the start and end points to align with meaningful data boundaries (like newlines).
 ///
-/// Returns a `Result` wrapping a `RangeCalculation`, which is either a calculated byte range or an indication to terminate early.
+/// Returns a `Result` wrapping a [`RangeCalculation`], which is either a calculated byte range or an indication to terminate early.
 ///
 /// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
 pub async fn calculate_range(
-    file_meta: &FileMeta,
+    file: &PartitionedFile,
     store: &Arc<dyn ObjectStore>,
     terminator: Option<u8>,
 ) -> Result<RangeCalculation> {
-    let location = file_meta.location();
-    let file_size = file_meta.object_meta.size;
+    let location = &file.object_meta.location;
+    let file_size = file.object_meta.size;
     let newline = terminator.unwrap_or(b'\n');
 
-    match file_meta.range {
+    match file.range {
         None => Ok(RangeCalculation::Range(None)),
         Some(FileRange { start, end }) => {
             let start: u64 = start.try_into().map_err(|_| {
@@ -310,7 +330,6 @@ pub async fn calculate_range(
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
 ///
 /// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
-///
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,

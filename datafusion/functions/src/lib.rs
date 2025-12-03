@@ -19,10 +19,13 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+// https://github.com/apache/datafusion/issues/18881
+#![deny(clippy::allow_attributes)]
 
 //! Function packages for [DataFusion].
 //!
@@ -189,6 +192,13 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         Ok(()) as Result<()>
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
 }
 
 #[cfg(test)]

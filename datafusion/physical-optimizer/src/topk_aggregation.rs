@@ -19,9 +19,8 @@
 
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 use arrow::datatypes::DataType;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
@@ -110,11 +109,12 @@ impl TopKAggregation {
                 }
             } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
                 // track renames due to successive projections
-                for (src_expr, proj_name) in proj.expr() {
-                    let Some(src_col) = src_expr.as_any().downcast_ref::<Column>() else {
+                for proj_expr in proj.expr() {
+                    let Some(src_col) = proj_expr.expr.as_any().downcast_ref::<Column>()
+                    else {
                         continue;
                     };
-                    if *proj_name == cur_col_name {
+                    if proj_expr.alias == cur_col_name {
                         cur_col_name = src_col.name().to_string();
                     }
                 }
@@ -144,11 +144,12 @@ impl Default for TopKAggregation {
 }
 
 impl PhysicalOptimizerRule for TopKAggregation {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.session_config().options();
         if config.optimizer.enable_topk_aggregation {
             plan.transform_down(|plan| {
                 Ok(if let Some(plan) = TopKAggregation::transform_sort(&plan) {

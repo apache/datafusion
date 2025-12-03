@@ -24,7 +24,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use crate::physical_expr::{fmt_sql, PhysicalExpr};
+use crate::physical_expr::{PhysicalExpr, fmt_sql};
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;
@@ -353,7 +353,7 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 /// 1. It is non-degenerate, meaning it contains at least one element.
 /// 2. It is duplicate-free, meaning it does not contain multiple entries for
 ///    the same column.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct LexOrdering {
     /// Vector of sort expressions representing the lexicographical ordering.
     exprs: Vec<PhysicalSortExpr>,
@@ -367,8 +367,20 @@ impl LexOrdering {
     /// Creates a new [`LexOrdering`] from the given vector of sort expressions.
     /// If the vector is empty, returns `None`.
     pub fn new(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> Option<Self> {
-        let (non_empty, ordering) = Self::construct(exprs);
-        non_empty.then_some(ordering)
+        let exprs = exprs.into_iter();
+        let mut candidate = Self {
+            // not valid yet; valid publicly-returned instance must be non-empty
+            exprs: Vec::new(),
+            set: HashSet::new(),
+        };
+        for expr in exprs {
+            candidate.push(expr);
+        }
+        if candidate.exprs.is_empty() {
+            None
+        } else {
+            Some(candidate)
+        }
     }
 
     /// Appends an element to the back of the `LexOrdering`.
@@ -414,27 +426,28 @@ impl LexOrdering {
         self.exprs.truncate(len);
         true
     }
-
-    /// Constructs a new `LexOrdering` from the given sort requirements w/o
-    /// enforcing non-degeneracy. This function is used internally and is not
-    /// meant (or safe) for external use.
-    fn construct(exprs: impl IntoIterator<Item = PhysicalSortExpr>) -> (bool, Self) {
-        let mut set = HashSet::new();
-        let exprs = exprs
-            .into_iter()
-            .filter_map(|s| set.insert(Arc::clone(&s.expr)).then_some(s))
-            .collect();
-        (!set.is_empty(), Self { exprs, set })
-    }
 }
 
+impl PartialEq for LexOrdering {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            exprs,
+            set: _, // derived from `exprs`
+        } = self;
+        // PartialEq must be consistent with PartialOrd
+        exprs == &other.exprs
+    }
+}
+impl Eq for LexOrdering {}
 impl PartialOrd for LexOrdering {
     /// There is a partial ordering among `LexOrdering` objects. For example, the
     /// ordering `[a ASC]` is coarser (less) than ordering `[a ASC, b ASC]`.
     /// If two orderings do not share a prefix, they are incomparable.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.iter()
-            .zip(other.iter())
+        // PartialEq must be consistent with PartialOrd
+        self.exprs
+            .iter()
+            .zip(other.exprs.iter())
             .all(|(lhs, rhs)| lhs == rhs)
             .then(|| self.len().cmp(&other.len()))
     }
@@ -445,9 +458,8 @@ impl<const N: usize> From<[PhysicalSortExpr; N]> for LexOrdering {
         // TODO: Replace this assertion with a condition on the generic parameter
         //       when Rust supports it.
         assert!(N > 0);
-        let (non_empty, ordering) = Self::construct(value);
-        debug_assert!(non_empty);
-        ordering
+        Self::new(value)
+            .expect("A LexOrdering from non-empty array must be non-degenerate")
     }
 }
 
@@ -604,10 +616,9 @@ impl From<LexOrdering> for LexRequirement {
 
 impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
-        // Can construct directly as `value` is non-degenerate:
-        let (non_empty, ordering) = Self::construct(value.into_iter().map(Into::into));
-        debug_assert!(non_empty);
-        ordering
+        // Can construct directly as `value` is non-degenerate
+        Self::new(value.into_iter().map(Into::into))
+            .expect("A LexOrdering from LexRequirement must be non-degenerate")
     }
 }
 

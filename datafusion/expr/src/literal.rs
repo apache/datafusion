@@ -17,15 +17,16 @@
 
 //! Literal module contains foundational types that are used to represent literals in DataFusion.
 
-use crate::expr::FieldMetadata;
 use crate::Expr;
-use datafusion_common::ScalarValue;
+use datafusion_common::{ScalarValue, metadata::FieldMetadata};
 
 /// Create a literal expression
+#[expect(clippy::needless_pass_by_value)]
 pub fn lit<T: Literal>(n: T) -> Expr {
     n.lit()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn lit_with_metadata<T: Literal>(n: T, metadata: Option<FieldMetadata>) -> Expr {
     let Some(metadata) = metadata else {
         return n.lit();
@@ -46,6 +47,7 @@ pub fn lit_with_metadata<T: Literal>(n: T, metadata: Option<FieldMetadata>) -> E
 }
 
 /// Create a literal timestamp expression
+#[expect(clippy::needless_pass_by_value)]
 pub fn lit_timestamp_nano<T: TimestampLiteral>(n: T) -> Expr {
     n.lit_timestamp_nano()
 }

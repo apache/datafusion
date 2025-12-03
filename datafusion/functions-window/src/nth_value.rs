@@ -23,55 +23,45 @@ use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
-use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
-    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
-    Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
+    TypeSignature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::Range;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-get_or_init_udwf!(
+define_udwf_and_expr!(
     First,
     first_value,
-    "returns the first value in the window frame",
+    [arg],
+    "Returns the first value in the window frame",
     NthValue::first
 );
-get_or_init_udwf!(
+define_udwf_and_expr!(
     Last,
     last_value,
-    "returns the last value in the window frame",
+    [arg],
+    "Returns the last value in the window frame",
     NthValue::last
 );
 get_or_init_udwf!(
     NthValue,
     nth_value,
-    "returns the nth value in the window frame",
+    "Returns the nth value in the window frame",
     NthValue::nth
 );
 
-/// Create an expression to represent the `first_value` window function
-///
-pub fn first_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
-    first_value_udwf().call(vec![arg])
-}
-
-/// Create an expression to represent the `last_value` window function
-///
-pub fn last_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
-    last_value_udwf().call(vec![arg])
-}
-
 /// Create an expression to represent the `nth_value` window function
-///
 pub fn nth_value(arg: datafusion_expr::Expr, n: i64) -> datafusion_expr::Expr {
     nth_value_udwf().call(vec![arg, n.lit()])
 }
@@ -125,6 +115,10 @@ impl NthValue {
     }
     pub fn nth() -> Self {
         Self::new(NthValueKind::Nth)
+    }
+
+    pub fn kind(&self) -> &NthValueKind {
+        &self.kind
     }
 }
 
@@ -288,7 +282,7 @@ impl WindowUDFImpl for NthValue {
                     exec_datafusion_err!(
                 "Expected a signed integer literal for the second argument of nth_value")
                 })?
-                .map(get_signed_integer)
+                .map(|v| get_signed_integer(&v))
             {
                 Some(Ok(n)) => {
                     if partition_evaluator_args.is_reversed() {
@@ -336,6 +330,10 @@ impl WindowUDFImpl for NthValue {
             NthValueKind::Last => Some(get_last_value_doc()),
             NthValueKind::Nth => Some(get_nth_value_doc()),
         }
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::None // NthValue is causal
     }
 }
 

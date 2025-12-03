@@ -23,7 +23,7 @@ use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use super::accumulate::NullState;
@@ -142,7 +142,6 @@ where
     /// The state is:
     /// - self.prim_fn for all non null, non filtered values
     /// - null otherwise
-    ///
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

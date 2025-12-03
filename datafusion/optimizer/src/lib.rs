@@ -19,10 +19,11 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! # DataFusion Optimizer
 //!
@@ -48,12 +49,17 @@ pub mod eliminate_filter;
 pub mod eliminate_group_by_constant;
 pub mod eliminate_join;
 pub mod eliminate_limit;
-pub mod eliminate_nested_union;
-pub mod eliminate_one_union;
+#[deprecated(since = "52.0.0", note = "Please use OptimizeUnions instead")]
+pub mod eliminate_nested_union {
+    use crate::optimize_unions::OptimizeUnions;
+    #[deprecated(since = "52.0.0", note = "Please use OptimizeUnions instead")]
+    pub type EliminateNestedUnion = OptimizeUnions;
+}
 pub mod eliminate_outer_join;
 pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
 pub mod optimize_projections;
+pub mod optimize_unions;
 pub mod optimizer;
 pub mod propagate_empty_relation;
 pub mod push_down_filter;

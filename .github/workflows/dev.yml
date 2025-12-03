@@ -16,7 +16,12 @@
 # under the License.
 
 name: Dev
-on: [push, pull_request]
+on:
+  push:
+    branches-ignore:
+      - 'gh-readonly-queue/**'
+  pull_request:
+  merge_group:
 
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
@@ -27,15 +32,19 @@ jobs:
     runs-on: ubuntu-latest
     name: Check License Header
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
-      - uses: korandoru/hawkeye@cdc68d9c8ace500aefcd8f4dd39b915cd06305dd  # v6.1.1
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+      - name: Install HawkEye
+      # This CI job is bound by installation time, use `--profile dev` to speed it up
+        run: cargo install hawkeye --version 6.2.0 --locked --profile dev
+      - name: Run license header check
+        run: ci/scripts/license_header.sh
 
   prettier:
     name: Use prettier to check formatting of documents
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f  # v6.1.0
         with:
           node-version: "20"
       - name: Prettier check
@@ -49,3 +58,18 @@ jobs:
             README.md \
             CONTRIBUTING.md
           git diff --exit-code
+
+  typos:
+    name: Spell Check with Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          persist-credentials: false
+      # Version fixed on purpose. It uses heuristics to detect typos, so upgrading 
+      # it may cause checks to fail more often.
+      # We can upgrade it manually once a while.
+      - name: Install typos-cli
+        run: cargo install typos-cli --locked --version 1.37.0
+      - name: Run typos check
+        run: ci/scripts/typos_check.sh

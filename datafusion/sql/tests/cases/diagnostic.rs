@@ -69,10 +69,12 @@ fn do_query(sql: &'static str) -> Diagnostic {
 /// ## Example
 ///
 /// ```rust
-/// let spans = get_spans("SELECT /*whole+left*/speed/*left*/ + /*right*/10/*right+whole*/ FROM cars");
-/// // whole is                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/// // left is                                  ^^^^^
-/// // right is                                                          ^^
+/// let spans = get_spans(
+///     "SELECT /*whole+left*/speed/*left*/ + /*right*/10/*right+whole*/ FROM cars",
+///     // whole is           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+///     // left is            ^^^^^
+///     // right is                                    ^^
+/// );
 /// dbg!(&spans["whole"]);
 /// dbg!(&spans["left"]);
 /// dbg!(&spans["right"]);
@@ -184,7 +186,7 @@ fn test_missing_non_aggregate_in_group_by() -> Result<()> {
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"'person.first_name' must appear in GROUP BY clause because it's not an aggregate expression");
     assert_eq!(diag.span, Some(spans["a"]));
-    assert_snapshot!(diag.helps[0].message, @"Either add 'person.first_name' to GROUP BY clause, or use an aggregare function like ANY_VALUE(person.first_name)");
+    assert_snapshot!(diag.helps[0].message, @"Either add 'person.first_name' to GROUP BY clause, or use an aggregate function like ANY_VALUE(person.first_name)");
     Ok(())
 }
 

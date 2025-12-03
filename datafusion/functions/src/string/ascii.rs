@@ -87,9 +87,7 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
-        Ok(Int32)
+        Ok(DataType::Int32)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -101,7 +99,7 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 }
 
-fn calculate_ascii<'a, V>(array: V) -> Result<ArrayRef, ArrowError>
+fn calculate_ascii<'a, V>(array: &V) -> Result<ArrayRef, ArrowError>
 where
     V: StringArrayType<'a, Item = &'a str>,
 {
@@ -126,15 +124,15 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         _ => internal_err!("Unsupported data type"),
     }
@@ -186,6 +184,8 @@ mod tests {
         test_ascii!(Some(String::from("a")), Ok(Some(97)));
         test_ascii!(Some(String::from("")), Ok(Some(0)));
         test_ascii!(Some(String::from("🚀")), Ok(Some(128640)));
+        test_ascii!(Some(String::from("\n")), Ok(Some(10)));
+        test_ascii!(Some(String::from("\t")), Ok(Some(9)));
         test_ascii!(None, Ok(None));
         Ok(())
     }

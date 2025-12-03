@@ -775,3 +775,308 @@ SELECT
     arrow_cast(1.23,'Decimal128(3,2)') /  arrow_cast(123, 'Int64') as divison_int
 ----
 0.01 0.01
+
+query TR
+with tt as (
+    select arrow_cast(133333333333333333333333333333333333333333333.34, 'Decimal256(50, 2)') as v1
+) select arrow_typeof(v1 + 1.5), v1 + 1.5 from tt;
+----
+Float64 133333333333333330000000000000000000000000000
+
+# Following tests only make sense if numbers are parsed as decimals
+# Remove when `parse_float_as_decimal` is true by default (#14612)
+statement ok
+set datafusion.sql_parser.parse_float_as_decimal = true;
+
+# smoke test for decimal parsing
+query RT
+select 100000000000000000000000000000000000::decimal(38,0), arrow_typeof(100000000000000000000000000000000000::decimal(38,0));
+----
+100000000000000000000000000000000000 Decimal128(38, 0)
+
+# log for small decimal32
+query R
+select log(arrow_cast(100, 'Decimal32(9, 0)'));
+----
+2
+
+query R
+select log(arrow_cast(100, 'Decimal32(9, 2)'));
+----
+2
+
+# log for small decimal64
+query R
+select log(arrow_cast(100, 'Decimal64(18, 0)'));
+----
+2
+
+query R
+select log(arrow_cast(100, 'Decimal64(18, 2)'));
+----
+2
+
+# log for small decimal128
+query R
+select log(arrow_cast(100, 'Decimal128(38, 0)'));
+----
+2
+
+query R
+select log(arrow_cast(100, 'Decimal128(38, 2)'));
+----
+2
+
+# log for small decimal256
+query R
+select log(arrow_cast(100, 'Decimal256(76, 0)'));
+----
+2
+
+query R
+select log(arrow_cast(100, 'Decimal256(76, 2)'));
+----
+2
+
+# log(10^21) for large decimal128
+query R
+select log(10, 1000000000000000000000::decimal(38,0));
+----
+21
+
+# log(10^35) for large decimal128
+# Must be 35 if parsed as decimal; 34 for floats
+query R
+select log(100000000000000000000000000000000000::decimal(38,0))
+----
+35
+
+# Decimal overflow for 10^38
+query error Arrow error: Invalid argument error: .* is too large to store in a Decimal128 of precision 38. Max is
+select log(100000000000000000000000000000000000000::decimal(38,0))
+
+# log(10^35) for decimal256 for a value able to fit i128
+query R
+select log(100000000000000000000000000000000000::decimal(76,0));
+----
+35
+
+# log(10^50) for decimal256 for a value larger than i128
+query error Arrow error: Not yet implemented: Log of Decimal256 larger than Decimal128 is not yet supported
+select log(100000000000000000000000000000000000000000000000000::decimal(76,0));
+
+# log(10^35) for decimal128 with explicit base
+query R
+select log(10, 100000000000000000000000000000000000::decimal(38,0));
+----
+35
+
+# log(10^35) for decimal256 with explicit base - only float as a base
+query R
+select log(10.0, 100000000000000000000000000000000000::decimal(76,0));
+----
+35
+
+# log(10^35) for decimal128 with explicit decimal base
+query R
+select log(10::decimal(38, 0), 100000000000000000000000000000000000::decimal(38,0));
+----
+35
+
+# log(10^35) for decimal128 with another base
+query R
+select log(2, 100000000000000000000000000000000000::decimal(38,0));
+----
+116
+
+# log(10^35) for decimal128 with another base
+# TODO: this should be 116.267483321058, error with native decimal log impl
+#       https://github.com/apache/datafusion/issues/18524
+query R
+select log(2.0, 100000000000000000000000000000000000::decimal(38,0));
+----
+116
+
+# null cases
+query R
+select log(null, 100);
+----
+NULL
+
+query R
+select log(null, 100000000000000000000000000000000000::decimal(38,0));
+----
+NULL
+
+query R
+select log(null);
+----
+NULL
+
+query R
+select log(2.0, null);
+----
+NULL
+
+# power with decimals
+
+query RT
+SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
+----
+16 Decimal128(38, 0)
+
+query RT
+SELECT power(10000000000::decimal(38, 0), 2), arrow_typeof(power(10000000000::decimal(38, 0), 2));
+----
+100000000000000000000 Decimal128(38, 0)
+
+query R
+SELECT power(2.5, 4)
+----
+39
+
+query R
+SELECT power(2.5, 1)
+----
+2.5
+
+query R
+SELECT power(2.5, 0)
+----
+1
+
+# TODO: check backward compatibility for a case with base in64 and exponent float64 since the power coercion is introduced
+
+# query error Unsupported data type Decimal128\(2, 1\) for power function
+# SELECT power(2.5, 4.0)
+
+query error Arrow error: .*in integer computation is out of bounds
+SELECT power(2, 100000000000)
+
+query error Arrow error: Arithmetic overflow: Unsupported exp value
+SELECT power(2::decimal(38, 0), -5)
+
+# Expected to have `16 Decimal128(38, 0)`
+# Due to type coericion, it becomes Float -> Float -> Float
+query RT
+SELECT power(2::decimal(38, 0), 4), arrow_typeof(power(2::decimal(38, 0), 4));
+----
+16 Decimal128(38, 0)
+
+# Arbitrary scale
+query RT
+SELECT power(2.5::decimal(38, 3), 4), arrow_typeof(power(2.5::decimal(38, 3), 4));
+----
+39.062 Decimal128(38, 3)
+
+query RT
+SELECT power(2.5, 4.0), arrow_typeof(power(2.5, 4.0));
+----
+39 Decimal128(2, 1)
+
+query error Compute error: Cannot use non-integer exp
+SELECT power(2.5, 4.2), arrow_typeof(power(2.5, 4.2));
+
+query error Compute error: Cannot use non-integer exp: NaN
+SELECT power(2::decimal(38, 0), arrow_cast('NaN','Float64'))
+
+query error Compute error: Cannot use non-integer exp: inf
+SELECT power(2::decimal(38, 0), arrow_cast('INF','Float64'))
+
+# Floating above u32::max
+query error Compute error: Cannot use non-integer exp
+SELECT power(2::decimal(38, 0), 5000000000.1)
+
+# Integer Above u32::max
+query error Arrow error: Arithmetic overflow: Unsupported exp value
+SELECT power(2::decimal(38, 0), 5000000000)
+
+query ?T
+SELECT power(arrow_cast(2, 'Decimal32(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal32(5, 0)'), 4));
+----
+16 Decimal32(5, 0)
+
+query ?T
+SELECT power(arrow_cast(2, 'Decimal64(5, 0)'), 4), arrow_typeof(power(arrow_cast(2, 'Decimal64(5, 0)'), 4));
+----
+16 Decimal64(5, 0)
+
+query RT
+SELECT power(2::decimal(76, 0), 4), arrow_typeof(power(2::decimal(76, 0), 4));
+----
+16 Decimal256(76, 0)
+
+query R
+SELECT power(2.0, null)
+----
+NULL
+
+# Array variants of power function
+query RR rowsort
+SELECT distinct c1*100000, power(c1*100000, 2) from decimal_simple;
+----
+1 1
+2 4
+3 9
+4 16
+5 25
+
+query RR rowsort
+SELECT distinct c1*100000, power(c1*100000, 2.0) from decimal_simple;
+----
+1 1
+2 4
+3 9
+4 16
+5 25
+
+# Set parse_float_as_decimal to false to test float parsing
+statement ok
+set datafusion.sql_parser.parse_float_as_decimal = false;
+
+# smoke test for decimal parsing
+query R
+select 100000000000000000000000000000000000::decimal(38,0)
+----
+99999999999999996863366107917975552
+
+# log(10^35) for decimal128 with explicit decimal base
+# Float parsing is rounding down
+query R
+select log(10, 100000000000000000000000000000000000::decimal(38,0));
+----
+34
+
+# log(10^35) for large decimal128 if parsed as float
+# Float parsing is rounding down
+query R
+select log(100000000000000000000000000000000000::decimal(38,0))
+----
+34
+
+# Result is decimal since argument is decimal regardless decimals-as-floats parsing
+query R
+SELECT power(10000000000::decimal(38, 0), 2);
+----
+100000000000000000000
+
+query RT
+SELECT power(10000000000::decimal(38, 0), 2),
+       arrow_typeof(power(10000000000::decimal(38, 0), 2));
+----
+100000000000000000000 Decimal128(38, 0)
+
+query R
+SELECT power(2.5, 4.0)
+----
+39.0625
+
+query R
+SELECT power(2.5, 4)
+----
+39.0625
+
+query I
+SELECT power(2, null)
+----
+NULL

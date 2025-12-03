@@ -26,18 +26,21 @@ use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::coalesce::LimitedBatchCoalescer;
+use crate::coalesce::PushBatchStatus::LimitReached;
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown, PushedDownPredicate,
 };
+use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
-    ProjectionExec,
+    ProjectionExec, ProjectionExpr,
 };
 use crate::{
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
+    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
     DisplayFormatType, ExecutionPlan,
 };
 
@@ -66,6 +69,7 @@ use futures::stream::{Stream, StreamExt};
 use log::trace;
 
 const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
+const FILTER_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
@@ -83,10 +87,15 @@ pub struct FilterExec {
     cache: PlanProperties,
     /// The projection indices of the columns in the output schema of join
     projection: Option<Vec<usize>>,
+    /// Target batch size for output batches
+    batch_size: usize,
+    /// Number of rows to fetch
+    fetch: Option<usize>,
 }
 
 impl FilterExec {
     /// Create a FilterExec on an input
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
         input: Arc<dyn ExecutionPlan>,
@@ -107,6 +116,8 @@ impl FilterExec {
                     default_selectivity,
                     cache,
                     projection: None,
+                    batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
+                    fetch: None,
                 })
             }
             other => {
@@ -154,6 +165,21 @@ impl FilterExec {
             default_selectivity: self.default_selectivity,
             cache,
             projection,
+            batch_size: self.batch_size,
+            fetch: self.fetch,
+        })
+    }
+
+    pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
+        Ok(Self {
+            predicate: Arc::clone(&self.predicate),
+            input: Arc::clone(&self.input),
+            metrics: self.metrics.clone(),
+            default_selectivity: self.default_selectivity,
+            cache: self.cache.clone(),
+            projection: self.projection.clone(),
+            batch_size,
+            fetch: self.fetch,
         })
     }
 
@@ -179,12 +205,12 @@ impl FilterExec {
 
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity (either default, or estimated) to input statistics.
     fn statistics_helper(
-        schema: SchemaRef,
+        schema: &SchemaRef,
         input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
     ) -> Result<Statistics> {
-        if !check_support(predicate, &schema) {
+        if !check_support(predicate, schema) {
             let selectivity = default_selectivity as f64 / 100.0;
             let mut stats = input_stats.to_inexact();
             stats.num_rows = stats.num_rows.with_estimated_selectivity(selectivity);
@@ -196,12 +222,10 @@ impl FilterExec {
 
         let num_rows = input_stats.num_rows;
         let total_byte_size = input_stats.total_byte_size;
-        let input_analysis_ctx = AnalysisContext::try_from_statistics(
-            &schema,
-            &input_stats.column_statistics,
-        )?;
+        let input_analysis_ctx =
+            AnalysisContext::try_from_statistics(schema, &input_stats.column_statistics)?;
 
-        let analysis_ctx = analyze(predicate, input_analysis_ctx, &schema)?;
+        let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
 
         // Estimate (inexact) selectivity of predicate
         let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
@@ -258,14 +282,15 @@ impl FilterExec {
     ) -> Result<PlanProperties> {
         // Combine the equal predicates with the input equivalence properties
         // to construct the equivalence properties:
+        let schema = input.schema();
         let stats = Self::statistics_helper(
-            input.schema(),
+            &schema,
             input.partition_statistics(None)?,
             predicate,
             default_selectivity,
         )?;
         let mut eq_properties = input.equivalence_properties().clone();
-        let (equal_pairs, _) = collect_columns_from_predicate(predicate);
+        let (equal_pairs, _) = collect_columns_from_predicate_inner(predicate);
         for (lhs, rhs) in equal_pairs {
             eq_properties.add_equal_conditions(Arc::clone(lhs), Arc::clone(rhs))?
         }
@@ -333,7 +358,14 @@ impl DisplayAs for FilterExec {
                 } else {
                     "".to_string()
                 };
-                write!(f, "FilterExec: {}{}", self.predicate, display_projections)
+                let fetch = self
+                    .fetch
+                    .map_or_else(|| "".to_string(), |f| format!(", fetch={f}"));
+                write!(
+                    f,
+                    "FilterExec: {}{}{}",
+                    self.predicate, display_projections, fetch
+                )
             }
             DisplayFormatType::TreeRender => {
                 write!(f, "predicate={}", fmt_sql(self.predicate.as_ref()))
@@ -375,7 +407,7 @@ impl ExecutionPlan for FilterExec {
                 e.with_default_selectivity(selectivity)
             })
             .and_then(|e| e.with_projection(self.projection().cloned()))
-            .map(|e| Arc::new(e) as _)
+            .map(|e| e.with_fetch(self.fetch).unwrap())
     }
 
     fn execute(
@@ -384,13 +416,18 @@ impl ExecutionPlan for FilterExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let metrics = FilterExecMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
             input: self.input.execute(partition, context)?,
-            baseline_metrics,
+            metrics,
             projection: self.projection.clone(),
+            batch_coalescer: LimitedBatchCoalescer::new(
+                self.schema(),
+                self.batch_size,
+                self.fetch,
+            ),
         }))
     }
 
@@ -406,8 +443,9 @@ impl ExecutionPlan for FilterExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
+        let schema = self.schema();
         let stats = Self::statistics_helper(
-            self.schema(),
+            &schema,
             input_stats,
             self.predicate(),
             self.default_selectivity,
@@ -457,6 +495,7 @@ impl ExecutionPlan for FilterExec {
                 .into_iter()
                 .map(PushedDownPredicate::supported)
                 .collect();
+
             return Ok(FilterDescription::new().with_child(ChildFilterDescription {
                 parent_filters: filter_supports,
                 self_filters: vec![],
@@ -516,11 +555,11 @@ impl ExecutionPlan for FilterExec {
                         .iter()
                         .map(|p| {
                             let field = filter_child_schema.field(*p).clone();
-                            (
-                                Arc::new(Column::new(field.name(), *p))
+                            ProjectionExpr {
+                                expr: Arc::new(Column::new(field.name(), *p))
                                     as Arc<dyn PhysicalExpr>,
-                                field.name().to_string(),
-                            )
+                                alias: field.name().to_string(),
+                            }
                         })
                         .collect::<Vec<_>>();
                     Some(Arc::new(ProjectionExec::try_new(proj_exprs, filter_input)?)
@@ -548,6 +587,8 @@ impl ExecutionPlan for FilterExec {
                     self.projection.as_ref(),
                 )?,
                 projection: None,
+                batch_size: self.batch_size,
+                fetch: self.fetch,
             };
             Some(Arc::new(new) as _)
         };
@@ -556,6 +597,19 @@ impl ExecutionPlan for FilterExec {
             filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
             updated_node,
         })
+    }
+
+    fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(Self {
+            predicate: Arc::clone(&self.predicate),
+            input: Arc::clone(&self.input),
+            metrics: self.metrics.clone(),
+            default_selectivity: self.default_selectivity,
+            cache: self.cache.clone(),
+            projection: self.projection.clone(),
+            batch_size: self.batch_size,
+            fetch,
+        }))
     }
 }
 
@@ -623,23 +677,62 @@ struct FilterExecStream {
     /// The input partition to filter.
     input: SendableRecordBatchStream,
     /// Runtime metrics recording
-    baseline_metrics: BaselineMetrics,
+    metrics: FilterExecMetrics,
     /// The projection indices of the columns in the input schema
     projection: Option<Vec<usize>>,
+    /// Batch coalescer to combine small batches
+    batch_coalescer: LimitedBatchCoalescer,
+}
+
+/// The metrics for `FilterExec`
+struct FilterExecMetrics {
+    /// Common metrics for most operators
+    baseline_metrics: BaselineMetrics,
+    /// Selectivity of the filter, calculated as output_rows / input_rows
+    selectivity: RatioMetrics,
+    // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
+    // or modifying metrics comments
+}
+
+impl FilterExecMetrics {
+    pub fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self {
+            baseline_metrics: BaselineMetrics::new(metrics, partition),
+            selectivity: MetricBuilder::new(metrics)
+                .with_type(MetricType::SUMMARY)
+                .ratio_metrics("selectivity", partition),
+        }
+    }
+}
+
+impl FilterExecStream {
+    fn flush_remaining_batches(
+        &mut self,
+    ) -> Poll<Option<std::result::Result<RecordBatch, DataFusionError>>> {
+        // Flush any remaining buffered batch
+        match self.batch_coalescer.finish() {
+            Ok(()) => {
+                Poll::Ready(self.batch_coalescer.next_completed_batch().map(|batch| {
+                    self.metrics.selectivity.add_part(batch.num_rows());
+                    Ok(batch)
+                }))
+            }
+            Err(e) => Poll::Ready(Some(Err(e))),
+        }
+    }
 }
 
 pub fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Result<RecordBatch> {
-    filter_and_project(batch, predicate, None, &batch.schema())
+    filter_and_project(batch, predicate, None)
 }
 
 fn filter_and_project(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
     projection: Option<&Vec<usize>>,
-    output_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     predicate
         .evaluate(batch)
@@ -649,14 +742,7 @@ fn filter_and_project(
                 // Apply filter array to record batch
                 (Ok(filter_array), None) => filter_record_batch(batch, filter_array)?,
                 (Ok(filter_array), Some(projection)) => {
-                    let projected_columns = projection
-                        .iter()
-                        .map(|i| Arc::clone(batch.column(*i)))
-                        .collect();
-                    let projected_batch = RecordBatch::try_new(
-                        Arc::clone(output_schema),
-                        projected_columns,
-                    )?;
+                    let projected_batch = batch.project(projection)?;
                     filter_record_batch(&projected_batch, filter_array)?
                 }
                 (Err(_), _) => {
@@ -676,22 +762,62 @@ impl Stream for FilterExecStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll;
+        let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
         loop {
             match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    let timer = self.baseline_metrics.elapsed_compute().timer();
-                    let filtered_batch = filter_and_project(
-                        &batch,
-                        &self.predicate,
-                        self.projection.as_ref(),
-                        &self.schema,
-                    )?;
+                    let timer = elapsed_compute.timer();
+                    let status = self.predicate.as_ref()
+                        .evaluate(&batch)
+                        .and_then(|v| v.into_array(batch.num_rows()))
+                        .and_then(|array| {
+                            Ok(match self.projection {
+                                Some(ref projection) => {
+                                    let projected_batch = batch.project(projection)?;
+                                    (array, projected_batch)
+                                },
+                                None => (array, batch)
+                            })
+                        }).and_then(|(array, batch)| {
+                            match as_boolean_array(&array) {
+                                Ok(filter_array) => {
+                                    self.metrics.selectivity.add_total(batch.num_rows());
+                                    // TODO: support push_batch_with_filter in LimitedBatchCoalescer
+                                    let batch = filter_record_batch(&batch, filter_array)?;
+                                    let state = self.batch_coalescer.push_batch(batch)?;
+                                    Ok(state)
+                                }
+                                Err(_) => {
+                                    internal_err!(
+                                        "Cannot create filter_array from non-boolean predicates"
+                                    )
+                                }
+                            }
+                        })?;
                     timer.done();
-                    // Skip entirely filtered batches
-                    if filtered_batch.num_rows() == 0 {
-                        continue;
+
+                    if let LimitReached = status {
+                        poll = self.flush_remaining_batches();
+                        break;
                     }
-                    poll = Poll::Ready(Some(Ok(filtered_batch)));
+
+                    if let Some(batch) = self.batch_coalescer.next_completed_batch() {
+                        self.metrics.selectivity.add_part(batch.num_rows());
+                        poll = Poll::Ready(Some(Ok(batch)));
+                        break;
+                    }
+                    continue;
+                }
+                None => {
+                    // Flush any remaining buffered batch
+                    match self.batch_coalescer.finish() {
+                        Ok(()) => {
+                            poll = self.flush_remaining_batches();
+                        }
+                        Err(e) => {
+                            poll = Poll::Ready(Some(Err(e)));
+                        }
+                    }
                     break;
                 }
                 value => {
@@ -700,7 +826,7 @@ impl Stream for FilterExecStream {
                 }
             }
         }
-        self.baseline_metrics.record_poll(poll)
+        self.metrics.baseline_metrics.record_poll(poll)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -708,7 +834,6 @@ impl Stream for FilterExecStream {
         self.input.size_hint()
     }
 }
-
 impl RecordBatchStream for FilterExecStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -716,7 +841,17 @@ impl RecordBatchStream for FilterExecStream {
 }
 
 /// Return the equals Column-Pairs and Non-equals Column-Pairs
+#[deprecated(
+    since = "51.0.0",
+    note = "This function will be internal in the future"
+)]
 pub fn collect_columns_from_predicate(
+    predicate: &'_ Arc<dyn PhysicalExpr>,
+) -> EqualAndNonEqual<'_> {
+    collect_columns_from_predicate_inner(predicate)
+}
+
+fn collect_columns_from_predicate_inner(
     predicate: &'_ Arc<dyn PhysicalExpr>,
 ) -> EqualAndNonEqual<'_> {
     let mut eq_predicate_columns = Vec::<PhysicalExprPairRef>::new();
@@ -787,7 +922,7 @@ mod tests {
             &schema,
         )?;
 
-        let (equal_pairs, ne_pairs) = collect_columns_from_predicate(&predicate);
+        let (equal_pairs, ne_pairs) = collect_columns_from_predicate_inner(&predicate);
         assert_eq!(2, equal_pairs.len());
         assert!(equal_pairs[0].0.eq(&col("c2", &schema)?));
         assert!(equal_pairs[0].1.eq(&lit(4u32)));

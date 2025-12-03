@@ -92,6 +92,11 @@ pub struct RunOpt {
     #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
 
+    /// If true then Piecewise Merge Join can be used, if false then it will opt for Nested Loop Join
+    /// False by default.
+    #[structopt(long = "enable_piecewise_merge_join", default_value = "false")]
+    enable_piecewise_merge_join: BoolDefaultTrue,
+
     /// Mark the first column of each table as sorted in ascending order.
     /// The tables should have been created with the `--sort` option for this to have any effect.
     #[structopt(short = "t", long = "sorted")]
@@ -112,6 +117,8 @@ impl RunOpt {
             .config()?
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
+        config.options_mut().optimizer.enable_piecewise_merge_join =
+            self.enable_piecewise_merge_join;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         // register tables
@@ -379,6 +386,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            enable_piecewise_merge_join: false,
             sorted: false,
         };
         opt.register_tables(&ctx).await?;
@@ -387,7 +395,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
-            let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", plan.display_indent());
             let plan2_formatted = format!("{}", plan2.display_indent());
             assert_eq!(plan_formatted, plan2_formatted);
@@ -416,6 +424,7 @@ mod tests {
             output_path: None,
             disable_statistics: false,
             prefer_hash_join: true,
+            enable_piecewise_merge_join: false,
             sorted: false,
         };
         opt.register_tables(&ctx).await?;
@@ -424,7 +433,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.create_physical_plan().await?;
             let bytes = physical_plan_to_bytes(plan.clone())?;
-            let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", displayable(plan.as_ref()).indent(false));
             let plan2_formatted =
                 format!("{}", displayable(plan2.as_ref()).indent(false));

@@ -697,3 +697,97 @@ fn test_map_coercion() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn test_decimal_cross_variant_comparison_coercion() -> Result<()> {
+    let test_cases = [
+        // (lhs, rhs, expected_result)
+        (
+            DataType::Decimal32(5, 2),
+            DataType::Decimal64(10, 3),
+            DataType::Decimal64(10, 3),
+        ),
+        (
+            DataType::Decimal32(7, 1),
+            DataType::Decimal128(15, 4),
+            DataType::Decimal128(15, 4),
+        ),
+        (
+            DataType::Decimal32(9, 0),
+            DataType::Decimal256(20, 5),
+            DataType::Decimal256(20, 5),
+        ),
+        (
+            DataType::Decimal64(12, 3),
+            DataType::Decimal128(18, 2),
+            DataType::Decimal128(19, 3),
+        ),
+        (
+            DataType::Decimal64(15, 4),
+            DataType::Decimal256(25, 6),
+            DataType::Decimal256(25, 6),
+        ),
+        (
+            DataType::Decimal128(20, 5),
+            DataType::Decimal256(30, 8),
+            DataType::Decimal256(30, 8),
+        ),
+        // Reverse order cases
+        (
+            DataType::Decimal64(10, 3),
+            DataType::Decimal32(5, 2),
+            DataType::Decimal64(10, 3),
+        ),
+        (
+            DataType::Decimal128(15, 4),
+            DataType::Decimal32(7, 1),
+            DataType::Decimal128(15, 4),
+        ),
+        (
+            DataType::Decimal256(20, 5),
+            DataType::Decimal32(9, 0),
+            DataType::Decimal256(20, 5),
+        ),
+        (
+            DataType::Decimal128(18, 2),
+            DataType::Decimal64(12, 3),
+            DataType::Decimal128(19, 3),
+        ),
+        (
+            DataType::Decimal256(25, 6),
+            DataType::Decimal64(15, 4),
+            DataType::Decimal256(25, 6),
+        ),
+        (
+            DataType::Decimal256(30, 8),
+            DataType::Decimal128(20, 5),
+            DataType::Decimal256(30, 8),
+        ),
+    ];
+
+    let comparison_op_types = [
+        Operator::NotEq,
+        Operator::Eq,
+        Operator::Gt,
+        Operator::GtEq,
+        Operator::Lt,
+        Operator::LtEq,
+    ];
+
+    for (lhs_type, rhs_type, expected_type) in test_cases {
+        for op in comparison_op_types {
+            let (lhs, rhs) =
+                BinaryTypeCoercer::new(&lhs_type, &op, &rhs_type).get_input_types()?;
+            assert_eq!(
+                expected_type, lhs,
+                "Coercion of type {lhs_type:?} with {rhs_type:?} resulted in unexpected type: {lhs:?}"
+            );
+            assert_eq!(
+                expected_type, rhs,
+                "Coercion of type {rhs_type:?} with {lhs_type:?} resulted in unexpected type: {rhs:?}"
+            );
+        }
+    }
+
+    Ok(())
+}

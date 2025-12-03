@@ -31,6 +31,7 @@ use datafusion::{
     physical_plan::{expressions::Column, PhysicalExpr},
     prelude::SessionContext,
 };
+use datafusion_common::ffi_datafusion_err;
 use datafusion_proto::{
     physical_plan::{
         from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,
@@ -145,10 +146,10 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .into_iter()
             .map(|input_expr_bytes| PhysicalExprNode::decode(input_expr_bytes.as_ref()))
             .collect::<std::result::Result<Vec<_>, prost::DecodeError>>()
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?
+            .map_err(|e| ffi_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
             .iter()
             .map(|expr_node| {
-                parse_physical_expr(expr_node, &default_ctx, &schema, &codec)
+                parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)
             })
             .collect::<Result<Vec<_>>>()?;
 

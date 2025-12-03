@@ -153,7 +153,7 @@ pub async fn exec_from_repl(
                                     }
                                 } else {
                                     eprintln!(
-                                        "'\\{}' is not a valid command",
+                                        "'\\{}' is not a valid command, you can use '\\?' to see all commands",
                                         &line[1..]
                                     );
                                 }
@@ -168,7 +168,7 @@ pub async fn exec_from_repl(
                         }
                     }
                 } else {
-                    eprintln!("'\\{}' is not a valid command", &line[1..]);
+                    eprintln!("'\\{}' is not a valid command, you can use '\\?' to see all commands", &line[1..]);
                 }
             }
             Ok(line) => {
@@ -582,6 +582,19 @@ mod tests {
     }
     #[tokio::test]
     async fn copy_to_external_object_store_test() -> Result<()> {
+        let aws_envs = vec![
+            "AWS_ENDPOINT",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ALLOW_HTTP",
+        ];
+        for aws_env in aws_envs {
+            if std::env::var(aws_env).is_err() {
+                eprint!("aws envs not set, skipping s3 test");
+                return Ok(());
+            }
+        }
+
         let locations = vec![
             "s3://bucket/path/file.parquet",
             "oss://bucket/path/file.parquet",

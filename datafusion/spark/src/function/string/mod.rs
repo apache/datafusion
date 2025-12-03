@@ -17,7 +17,11 @@
 
 pub mod ascii;
 pub mod char;
+pub mod concat;
+pub mod elt;
+pub mod format_string;
 pub mod ilike;
+pub mod length;
 pub mod like;
 pub mod luhn_check;
 
@@ -27,9 +31,13 @@ use std::sync::Arc;
 
 make_udf_function!(ascii::SparkAscii, ascii);
 make_udf_function!(char::CharFunc, char);
+make_udf_function!(concat::SparkConcat, concat);
 make_udf_function!(ilike::SparkILike, ilike);
+make_udf_function!(length::SparkLengthFunc, length);
+make_udf_function!(elt::SparkElt, elt);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
+make_udf_function!(format_string::FormatStringFunc, format_string);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -45,9 +53,24 @@ pub mod expr_fn {
         arg1
     ));
     export_functions!((
+        concat,
+        "Concatenates multiple input strings into a single string. Returns NULL if any input is NULL.",
+        args
+    ));
+    export_functions!((
+        elt,
+        "Returns the n-th input (1-indexed), e.g. returns 2nd input when n is 2. The function returns NULL if the index is 0 or exceeds the length of the array.",
+        select_col arg1 arg2 argn
+    ));
+    export_functions!((
         ilike,
         "Returns true if str matches pattern (case insensitive).",
         str pattern
+    ));
+    export_functions!((
+        length,
+        "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros.",
+        arg1
     ));
     export_functions!((
         like,
@@ -59,8 +82,23 @@ pub mod expr_fn {
         "Returns whether the input string of digits is valid according to the Luhn algorithm.",
         arg1
     ));
+    export_functions!((
+        format_string,
+        "Returns a formatted string from printf-style format strings.",
+        strfmt args
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![ascii(), char(), ilike(), like(), luhn_check()]
+    vec![
+        ascii(),
+        char(),
+        concat(),
+        elt(),
+        ilike(),
+        length(),
+        like(),
+        luhn_check(),
+        format_string(),
+    ]
 }

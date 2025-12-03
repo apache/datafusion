@@ -53,6 +53,7 @@ use datafusion::{
 };
 use datafusion_common::{assert_contains, exec_datafusion_err};
 use datafusion_common::{cast::as_primitive_array, exec_err};
+
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
     col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, Expr,
@@ -297,10 +298,12 @@ async fn deregister_udaf() -> Result<()> {
     ctx.register_udaf(my_avg);
 
     assert!(ctx.state().aggregate_functions().contains_key("my_avg"));
+    assert!(datafusion_execution::FunctionRegistry::udafs(&ctx).contains("my_avg"));
 
     ctx.deregister_udaf("my_avg");
 
     assert!(!ctx.state().aggregate_functions().contains_key("my_avg"));
+    assert!(!datafusion_execution::FunctionRegistry::udafs(&ctx).contains("my_avg"));
 
     Ok(())
 }
@@ -379,13 +382,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
 
-    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
-    +------------+
-    | dummy(t.i) |
-    +------------+
-    | 1.0        |
-    +------------+
-    "###);
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r"
+    +------------------+
+    | dummy_alias(t.i) |
+    +------------------+
+    | 1.0              |
+    +------------------+
+    ");
 
     Ok(())
 }
@@ -566,6 +569,7 @@ impl TimeSum {
         Self { sum: 0, test_state }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>, name: &str) {
         let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
         let input_type = vec![timestamp_type.clone()];
@@ -951,13 +955,7 @@ impl AggregateUDFImpl for MetadataBasedAggregateUdf {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let input_expr = acc_args
-            .exprs
-            .first()
-            .ok_or(exec_datafusion_err!("Expected one argument"))?;
-        let input_field = input_expr.return_field(acc_args.schema)?;
-
-        let double_output = input_field
+        let double_output = acc_args.expr_fields[0]
             .metadata()
             .get("modify_values")
             .map(|v| v == "double_output")

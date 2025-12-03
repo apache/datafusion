@@ -21,6 +21,7 @@ use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
+use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
@@ -219,28 +220,44 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
                     Arc::clone(&acc_args.exprs[2]), // percentile
                 ]
             },
-            ..acc_args
+            expr_fields: if acc_args.exprs.len() == 4 {
+                &[
+                    Arc::clone(&acc_args.expr_fields[0]), // value
+                    Arc::clone(&acc_args.expr_fields[2]), // percentile
+                    Arc::clone(&acc_args.expr_fields[3]), // centroids
+                ]
+            } else {
+                &[
+                    Arc::clone(&acc_args.expr_fields[0]), // value
+                    Arc::clone(&acc_args.expr_fields[2]), // percentile
+                ]
+            },
+            // Unchanged below; we list each field explicitly in case we ever add more
+            // fields to AccumulatorArgs making it easier to see if changes are also
+            // needed here.
+            return_field: acc_args.return_field,
+            schema: acc_args.schema,
+            ignore_nulls: acc_args.ignore_nulls,
+            order_bys: acc_args.order_bys,
+            is_reversed: acc_args.is_reversed,
+            name: acc_args.name,
+            is_distinct: acc_args.is_distinct,
         };
         let approx_percentile_cont_accumulator =
-            self.approx_percentile_cont.create_accumulator(sub_args)?;
+            self.approx_percentile_cont.create_accumulator(&sub_args)?;
         let accumulator = ApproxPercentileWithWeightAccumulator::new(
             approx_percentile_cont_accumulator,
         );
         Ok(Box::new(accumulator))
     }
 
-    #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.approx_percentile_cont.state_fields(args)
     }
 
-    fn supports_null_handling_clause(&self) -> bool {
-        false
-    }
-
-    fn is_ordered_set_aggregate(&self) -> bool {
+    fn supports_within_group_clause(&self) -> bool {
         true
     }
 
@@ -268,15 +285,37 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let means = &values[0];
-        let weights = &values[1];
+        let mut means = Arc::clone(&values[0]);
+        let mut weights = Arc::clone(&values[1]);
+        // If nulls are present in either array, need to filter those rows out in both arrays
+        match (means.null_count() > 0, weights.null_count() > 0) {
+            // Both have nulls
+            (true, true) => {
+                let predicate = and(&is_not_null(&means)?, &is_not_null(&weights)?)?;
+                means = filter(&means, &predicate)?;
+                weights = filter(&weights, &predicate)?;
+            }
+            // Only one has nulls
+            (false, true) => {
+                let predicate = &is_not_null(&weights)?;
+                means = filter(&means, predicate)?;
+                weights = filter(&weights, predicate)?;
+            }
+            (true, false) => {
+                let predicate = &is_not_null(&means)?;
+                means = filter(&means, predicate)?;
+                weights = filter(&weights, predicate)?;
+            }
+            // No nulls
+            (false, false) => {}
+        }
         debug_assert_eq!(
             means.len(),
             weights.len(),
             "invalid number of values in means and weights"
         );
-        let means_f64 = ApproxPercentileAccumulator::convert_to_float(means)?;
-        let weights_f64 = ApproxPercentileAccumulator::convert_to_float(weights)?;
+        let means_f64 = ApproxPercentileAccumulator::convert_to_float(&means)?;
+        let weights_f64 = ApproxPercentileAccumulator::convert_to_float(&weights)?;
         let mut digests: Vec<TDigest> = vec![];
         for (mean, weight) in means_f64.iter().zip(weights_f64.iter()) {
             digests.push(TDigest::new_with_centroid(

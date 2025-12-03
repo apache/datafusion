@@ -16,16 +16,19 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
+
 use datafusion_common::{
     assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
     TableReference,
 };
+use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
     cast, col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
     LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+    WindowFrame, WindowFunctionDefinition,
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
@@ -331,9 +334,7 @@ fn roundtrip_statement_with_dialect_1() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        // top projection sort gets derived into a subquery
-        // for MySQL, this subquery needs an alias
-        expected: @"SELECT `j1_min` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, min(`ta`.`j1_id`) FROM `j1` AS `ta` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+        expected: @"SELECT min(`ta`.`j1_id`) AS `j1_min` FROM `j1` AS `ta` ORDER BY `j1_min` ASC LIMIT 10",
     );
     Ok(())
 }
@@ -344,9 +345,7 @@ fn roundtrip_statement_with_dialect_2() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        // top projection sort still gets derived into a subquery in default dialect
-        // except for the default dialect, the subquery is left non-aliased
-        expected: @"SELECT j1_min FROM (SELECT min(ta.j1_id) AS j1_min, min(ta.j1_id) FROM j1 AS ta ORDER BY min(ta.j1_id) ASC NULLS LAST) LIMIT 10",
+        expected: @"SELECT min(ta.j1_id) AS j1_min FROM j1 AS ta ORDER BY j1_min ASC NULLS LAST LIMIT 10",
     );
     Ok(())
 }
@@ -357,7 +356,7 @@ fn roundtrip_statement_with_dialect_3() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        expected: @"SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` CROSS JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+        expected: @"SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`) FROM `j1` AS `ta` CROSS JOIN (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `tb` ORDER BY `j1_min` ASC LIMIT 10",
     );
     Ok(())
 }
@@ -1303,7 +1302,7 @@ fn test_pretty_roundtrip() -> Result<()> {
         let expr =
             sql_to_rel.sql_to_expr(sql_expr, &df_schema, &mut PlannerContext::new())?;
         let round_trip_sql = unparser.expr_to_sql(&expr)?.to_string();
-        assert_eq!(pretty.to_string(), round_trip_sql);
+        assert_eq!((*pretty).to_string(), round_trip_sql);
 
         // verify that the pretty string parses to the same underlying Expr
         let pretty_sql_expr = Parser::new(&GenericDialect {})
@@ -1906,7 +1905,7 @@ fn test_complex_order_by_with_grouping() -> Result<()> {
     }, {
         assert_snapshot!(
             sql,
-            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY (grouping(j1.j1_id) + grouping(j1.j1_string)) DESC NULLS FIRST, CASE WHEN ((grouping(j1.j1_id) + grouping(j1.j1_string)) = 0) THEN j1.j1_id END ASC NULLS LAST) LIMIT 100"#
+            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN ((grouping(j1.j1_id) + grouping(j1.j1_string)) = 0) THEN j1.j1_id END ASC NULLS LAST) LIMIT 100"#
         );
     });
 
@@ -1918,6 +1917,7 @@ fn test_aggregation_to_sql() {
     let sql = r#"SELECT id, first_name,
         SUM(id) AS total_sum,
         SUM(id) OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum,
+        SUM(id) FILTER (WHERE id > 50 AND first_name = 'John') OVER (PARTITION BY first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS filtered_sum,
         MAX(SUM(id)) OVER (PARTITION BY first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total,
         rank() OVER (PARTITION BY grouping(id) + grouping(age), CASE WHEN grouping(age) = 0 THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_1,
         rank() OVER (PARTITION BY grouping(age) + grouping(id), CASE WHEN (CAST(grouping(age) AS BIGINT) = 0) THEN id END ORDER BY sum(id) DESC) AS rank_within_parent_2
@@ -1926,7 +1926,7 @@ fn test_aggregation_to_sql() {
     let statement = generate_round_trip_statement(GenericDialect {}, sql);
     assert_snapshot!(
         statement,
-        @"SELECT person.id, person.first_name, sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum, max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total, rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1, rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2 FROM person GROUP BY person.id, person.first_name",
+        @"SELECT person.id, person.first_name, sum(person.id) AS total_sum, sum(person.id) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS moving_sum, sum(person.id) FILTER (WHERE ((person.id > 50) AND (person.first_name = 'John'))) OVER (PARTITION BY person.first_name ROWS BETWEEN 5 PRECEDING AND 2 FOLLOWING) AS filtered_sum, max(sum(person.id)) OVER (PARTITION BY person.first_name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_total, rank() OVER (PARTITION BY (grouping(person.id) + grouping(person.age)), CASE WHEN (grouping(person.age) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_1, rank() OVER (PARTITION BY (grouping(person.age) + grouping(person.id)), CASE WHEN (CAST(grouping(person.age) AS BIGINT) = 0) THEN person.id END ORDER BY sum(person.id) DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_within_parent_2 FROM person GROUP BY person.id, person.first_name",
     );
 }
 
@@ -2516,6 +2516,90 @@ fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
         sql,
         @r#"SELECT "t1"."v" FROM "test" AS "t1" WHERE EXISTS (SELECT 1 FROM "test" AS "t2" WHERE ("t1"."v" = "t2"."v"))"#
     );
+    Ok(())
+}
+
+#[test]
+fn test_unparse_window() -> Result<()> {
+    // SubqueryAlias: t
+    // Projection: t.k, t.v, rank() PARTITION BY [t.k] ORDER BY [t.v ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
+    //     Filter: rank() PARTITION BY [t.k] ORDER BY [t.v ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
+    //     WindowAggr: windowExpr=[[rank() PARTITION BY [t.k] ORDER BY [t.v ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+    //         TableScan: t projection=[k, v]
+
+    let schema = Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]);
+    let window_expr = Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(rank_udwf()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: vec![col("k")],
+            order_by: vec![col("v").sort(true, true)],
+            window_frame: WindowFrame::new(None),
+            null_treatment: None,
+            distinct: false,
+            filter: None,
+        },
+    }));
+    let table = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
+    let plan = LogicalPlanBuilder::window_plan(table, vec![window_expr.clone()])?;
+
+    let name = plan.schema().fields().last().unwrap().name().clone();
+    let plan = LogicalPlanBuilder::from(plan)
+        .filter(col(name.clone()).eq(lit(1i64)))?
+        .project(vec![col("k"), col("v"), col(name)])?
+        .build()?;
+
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "test"."k", "test"."v", "rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "test"."k" AS "k", "test"."v" AS "v", rank() OVER (PARTITION BY "test"."k" ORDER BY "test"."v" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS "rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM "test") AS "test" WHERE ("rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" = 1)"#
+    );
+
+    let unparser = Unparser::new(&UnparserMySqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"#
+    );
+
+    let unparser = Unparser::new(&SqliteDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"#
+    );
+
+    let unparser = Unparser::new(&DefaultDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT test.k, test.v, rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM test QUALIFY (rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) = 1)"#
+    );
+
+    // without table qualifier
+    let table = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
+    let table = LogicalPlanBuilder::from(table)
+        .project(vec![col("k").alias("k"), col("v").alias("v")])?
+        .build()?;
+    let plan = LogicalPlanBuilder::window_plan(table, vec![window_expr])?;
+
+    let name = plan.schema().fields().last().unwrap().name().clone();
+    let plan = LogicalPlanBuilder::from(plan)
+        .filter(col(name.clone()).eq(lit(1i64)))?
+        .project(vec![col("k"), col("v"), col(name)])?
+        .build()?;
+
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "k", "v", "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "k" AS "k", "v" AS "v", rank() OVER (PARTITION BY "k" ORDER BY "v" ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS "rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" FROM (SELECT "test"."k" AS "k", "test"."v" AS "v" FROM "test") AS "derived_projection") AS "__qualify_subquery" WHERE ("rank() PARTITION BY [k] ORDER BY [v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" = 1)"#
+    );
+
     Ok(())
 }
 

@@ -39,10 +39,10 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// # struct Dummy { }
     ///
     /// # impl Dummy {
-    ///   // canonical boiler plate
-    ///   fn as_any(&self) -> &dyn Any {
-    ///      self
-    ///   }
+    /// // canonical boiler plate
+    /// fn as_any(&self) -> &dyn Any {
+    ///     self
+    /// }
     /// # }
     /// ```
     fn as_any(&self) -> &dyn Any;
@@ -131,18 +131,18 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// // User defined node that derives Hash
     /// #[derive(Hash, Debug, PartialEq, Eq)]
     /// struct MyNode {
-    ///   val: u64
+    ///     val: u64,
     /// }
     ///
     /// // impl UserDefinedLogicalNode {
     /// // ...
     /// # impl MyNode {
-    ///   // Boiler plate to call the derived Hash impl
-    ///   fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
+    /// // Boiler plate to call the derived Hash impl
+    /// fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
     ///     use std::hash::Hash;
     ///     let mut s = state;
     ///     self.hash(&mut s);
-    ///   }
+    /// }
     /// // }
     /// # }
     /// ```
@@ -150,7 +150,7 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// directly because it must remain object safe.
     fn dyn_hash(&self, state: &mut dyn Hasher);
 
-    /// Compare `other`, respecting requirements from [std::cmp::Eq].
+    /// Compare `other`, respecting requirements from [Eq].
     ///
     /// Note: consider using [`UserDefinedLogicalNodeCore`] instead of
     /// [`UserDefinedLogicalNode`] directly.
@@ -169,25 +169,28 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// // User defined node that derives Eq
     /// #[derive(Hash, Debug, PartialEq, Eq)]
     /// struct MyNode {
-    ///   val: u64
+    ///     val: u64,
     /// }
     ///
     /// // impl UserDefinedLogicalNode {
     /// // ...
     /// # impl MyNode {
-    ///   // Boiler plate to call the derived Eq impl
-    ///   fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
+    /// // Boiler plate to call the derived Eq impl
+    /// fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
     ///     match other.as_any().downcast_ref::<Self>() {
-    ///       Some(o) => self == o,
-    ///       None => false,
+    ///         Some(o) => self == o,
+    ///         None => false,
     ///     }
-    ///   }
+    /// }
     /// // }
     /// # }
     /// ```
     /// Note: [`UserDefinedLogicalNode`] is not constrained by [`Eq`]
     /// directly because it must remain object safe.
     fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool;
+
+    /// Compare `other`, respecting requirements from [PartialOrd].
+    /// Must return `Some(Equal)` if and only if `self.dyn_eq(other)`.
     fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering>;
 
     /// Returns `true` if a limit can be safely pushed down through this
@@ -312,7 +315,7 @@ pub trait UserDefinedLogicalNodeCore:
 }
 
 /// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode`
-/// to avoid boiler plate for implementing `as_any`, `Hash` and `PartialEq`
+/// to avoid boiler plate for implementing `as_any`, `Hash`, `PartialEq` and `PartialOrd`.
 impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
     fn as_any(&self) -> &dyn Any {
         self

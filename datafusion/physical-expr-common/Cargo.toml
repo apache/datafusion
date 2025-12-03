@@ -21,7 +21,7 @@ description = "Common functionality of physical expression for DataFusion query 
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -40,7 +43,7 @@ name = "datafusion_physical_expr_common"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true }
 itertools = { workspace = true }

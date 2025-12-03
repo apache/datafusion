@@ -534,7 +534,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
-            let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", plan.display_indent());
             let plan2_formatted = format!("{}", plan2.display_indent());
             assert_eq!(plan_formatted, plan2_formatted);
@@ -570,7 +570,7 @@ mod tests {
             let plan = ctx.sql(&query).await?;
             let plan = plan.create_physical_plan().await?;
             let bytes = physical_plan_to_bytes(plan.clone())?;
-            let plan2 = physical_plan_from_bytes(&bytes, &ctx)?;
+            let plan2 = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
             let plan_formatted = format!("{}", displayable(plan.as_ref()).indent(false));
             let plan2_formatted =
                 format!("{}", displayable(plan2.as_ref()).indent(false));

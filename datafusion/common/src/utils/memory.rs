@@ -17,7 +17,8 @@
 
 //! This module provides a function to estimate the memory size of a HashTable prior to allocation
 
-use crate::{DataFusionError, Result};
+use crate::Result;
+use crate::error::_exec_datafusion_err;
 use std::mem::size_of;
 
 /// Estimates the memory size required for a hash table prior to allocation.
@@ -36,7 +37,7 @@ use std::mem::size_of;
 ///     buckets.
 ///   - One byte overhead for each bucket.
 ///   - The fixed size overhead of the collection.
-/// - If the estimation overflows, we return a [`DataFusionError`]
+/// - If the estimation overflows, we return a [`crate::error::DataFusionError`]
 ///
 /// # Examples
 /// ---
@@ -55,8 +56,8 @@ use std::mem::size_of;
 /// impl<T> MyStruct<T> {
 ///     fn size(&self) -> Result<usize> {
 ///         let num_elements = self.values.len();
-///         let fixed_size = std::mem::size_of_val(self) +
-///           std::mem::size_of_val(&self.values);
+///         let fixed_size =
+///             std::mem::size_of_val(self) + std::mem::size_of_val(&self.values);
 ///
 ///         estimate_memory_size::<T>(num_elements, fixed_size)
 ///     }
@@ -72,8 +73,8 @@ use std::mem::size_of;
 /// let num_rows = 100;
 /// let fixed_size = std::mem::size_of::<HashMap<u64, u64>>();
 /// let estimated_hashtable_size =
-///   estimate_memory_size::<(u64, u64)>(num_rows,fixed_size)
-///     .expect("Size estimation failed");
+///     estimate_memory_size::<(u64, u64)>(num_rows, fixed_size)
+///         .expect("Size estimation failed");
 /// ```
 pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result<usize> {
     // For the majority of cases hashbrown overestimates the bucket quantity
@@ -94,9 +95,7 @@ pub fn estimate_memory_size<T>(num_elements: usize, fixed_size: usize) -> Result
                 .checked_add(fixed_size)
         })
         .ok_or_else(|| {
-            DataFusionError::Execution(
-                "usize overflow while estimating the number of buckets".to_string(),
-            )
+            _exec_datafusion_err!("usize overflow while estimating the number of buckets")
         })
 }
 

@@ -24,6 +24,7 @@
 [![Build Status][actions-badge]][actions-url]
 ![Commit Activity][commit-activity-badge]
 [![Open Issues][open-issues-badge]][open-issues-url]
+[![Pending PRs][pending-pr-badge]][pending-pr-url]
 [![Discord chat][discord-badge]][discord-url]
 [![Linkedin][linkedin-badge]][linkedin-url]
 ![Crates.io MSRV][msrv-badge]
@@ -39,6 +40,8 @@
 [commit-activity-badge]: https://img.shields.io/github/commit-activity/m/apache/datafusion
 [open-issues-badge]: https://img.shields.io/github/issues-raw/apache/datafusion
 [open-issues-url]: https://github.com/apache/datafusion/issues
+[pending-pr-badge]: https://img.shields.io/github/issues-search/apache/datafusion?query=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+status%3Asuccess&label=Pending%20PRs&logo=github
+[pending-pr-url]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+status%3Asuccess+sort%3Aupdated-desc
 [linkedin-badge]: https://img.shields.io/badge/Follow-Linkedin-blue
 [linkedin-url]: https://www.linkedin.com/company/apache-datafusion/
 [msrv-badge]: https://img.shields.io/crates/msrv/datafusion?label=Min%20Rust%20Version
@@ -64,7 +67,7 @@ See [use cases] for examples. The following related subprojects target end users
   DataFusion.
 
 "Out of the box,"
-DataFusion offers [SQL] and [`Dataframe`] APIs, excellent [performance],
+DataFusion offers [SQL](https://datafusion.apache.org/user-guide/sql/index.html) and [Dataframe](https://datafusion.apache.org/user-guide/dataframe.html) APIs, excellent [performance],
 built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
 a great community.
 
@@ -118,6 +121,7 @@ Default features:
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `parquet`: support for reading the [Apache Parquet] format
+- `sql`: Support for sql parsing / planning
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
@@ -128,7 +132,6 @@ Optional features:
 - `avro`: support for reading the [Apache Avro] format
 - `backtrace`: include backtrace information in error messages
 - `parquet_encryption`: support for using [Parquet Modular Encryption]
-- `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
 
 [apache avro]: https://avro.apache.org/
@@ -141,7 +144,7 @@ Public methods in Apache DataFusion evolve over time: while we try to maintain a
 stable API, we also improve the API over time. As a result, we typically
 deprecate methods before removing them, according to the [deprecation guidelines].
 
-[deprecation guidelines]: https://datafusion.apache.org/library-user-guide/api-health.html
+[deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html
 
 ## Dependencies and `Cargo.lock`
 

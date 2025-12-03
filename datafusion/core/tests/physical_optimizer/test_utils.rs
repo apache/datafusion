@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::fmt::Formatter;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow::array::Int32Array;
 use arrow::compute::SortOptions;
@@ -29,12 +29,12 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{ColumnStatistics, JoinType, NullEquality, Result, Statistics};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
@@ -46,7 +46,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
 use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -56,7 +56,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -73,8 +73,7 @@ use datafusion_physical_plan::{
 pub fn parquet_exec(schema: SchemaRef) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema,
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .build();
@@ -89,8 +88,7 @@ pub(crate) fn parquet_exec_with_sort(
 ) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema,
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
@@ -127,52 +125,60 @@ pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
 
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema(),
-        Arc::new(ParquetSource::new(Default::default())),
+        Arc::new(ParquetSource::new(schema())),
     )
     .with_file(PartitionedFile::new("x".to_string(), file_size))
     .with_statistics(statistics)
     .build();
 
-    assert_eq!(
-        config.file_source.statistics().unwrap().num_rows,
-        Precision::Inexact(10000)
-    );
+    assert_eq!(config.statistics().num_rows, Precision::Inexact(10000));
     DataSourceExec::from_data_source(config)
 }
 
 pub fn schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, true),
-        Field::new("b", DataType::Int64, true),
-        Field::new("c", DataType::Int64, true),
-        Field::new("d", DataType::Int32, true),
-        Field::new("e", DataType::Boolean, true),
-    ]))
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+            Field::new("d", DataType::Int32, true),
+            Field::new("e", DataType::Boolean, true),
+        ]))
+    });
+    Arc::clone(&SCHEMA)
 }
 
 pub fn create_test_schema() -> Result<SchemaRef> {
-    let nullable_column = Field::new("nullable_col", DataType::Int32, true);
-    let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
-    let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let nullable_column = Field::new("nullable_col", DataType::Int32, true);
+        let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
+        Arc::new(Schema::new(vec![nullable_column, non_nullable_column]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
 pub fn create_test_schema2() -> Result<SchemaRef> {
-    let col_a = Field::new("col_a", DataType::Int32, true);
-    let col_b = Field::new("col_b", DataType::Int32, true);
-    let schema = Arc::new(Schema::new(vec![col_a, col_b]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let col_a = Field::new("col_a", DataType::Int32, true);
+        let col_b = Field::new("col_b", DataType::Int32, true);
+        Arc::new(Schema::new(vec![col_a, col_b]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
 // Generate a schema which consists of 5 columns (a, b, c, d, e)
 pub fn create_test_schema3() -> Result<SchemaRef> {
-    let a = Field::new("a", DataType::Int32, true);
-    let b = Field::new("b", DataType::Int32, false);
-    let c = Field::new("c", DataType::Int32, true);
-    let d = Field::new("d", DataType::Int32, false);
-    let e = Field::new("e", DataType::Int32, false);
-    let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, false);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, false);
+        let e = Field::new("e", DataType::Int32, false);
+        Arc::new(Schema::new(vec![a, b, c, d, e]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
@@ -236,7 +242,7 @@ pub fn hash_join_exec(
         join_type,
         None,
         PartitionMode::Partitioned,
-        NullEquality::NullEqualsNull,
+        NullEquality::NullEqualsNothing,
     )?))
 }
 
@@ -263,9 +269,10 @@ pub fn bounded_window_exec_with_partition(
         partition_by,
         &sort_exprs,
         Arc::new(WindowFrame::new(Some(false))),
-        schema.as_ref(),
+        schema,
         false,
         false,
+        None,
     )
     .unwrap();
 
@@ -303,7 +310,7 @@ pub fn sort_preserving_merge_exec_with_fetch(
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(UnionExec::new(input))
+    UnionExec::try_new(input).unwrap()
 }
 
 pub fn local_limit_exec(
@@ -381,7 +388,11 @@ pub fn projection_exec(
     expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    Ok(Arc::new(ProjectionExec::try_new(expr, input)?))
+    let proj_exprs: Vec<ProjectionExpr> = expr
+        .into_iter()
+        .map(|(expr, alias)| ProjectionExpr { expr, alias })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
 }
 
 /// A test [`ExecutionPlan`] whose requirements can be configured.
@@ -624,10 +635,11 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
 }
 
 pub fn get_optimized_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
-    let config = ConfigOptions::new();
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
 
-    let optimized =
-        LimitedDistinctAggregation::new().optimize(Arc::clone(plan), &config)?;
+    let optimized = LimitedDistinctAggregation::new()
+        .optimize_plan(Arc::clone(plan), &optimizer_context)?;
 
     let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
 

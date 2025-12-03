@@ -20,7 +20,6 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
-use datafusion_common::error::DataFusionError;
 use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -39,7 +38,7 @@ Returns the corresponding date.
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
     syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
     sql_example = r#"```sql
-> select to_date('2023-01-31'); 
+> select to_date('2023-01-31');
 +-------------------------------+
 | to_date(Utf8("2023-01-31")) |
 +-------------------------------+
@@ -53,7 +52,7 @@ Note: `to_date` returns Date32, which represents its values as the number of day
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     standard_argument(name = "expression", prefix = "String"),
     argument(
@@ -150,7 +149,7 @@ impl ScalarUDFImpl for ToDateFunc {
             }
             Utf8View | LargeUtf8 | Utf8 => self.to_date(&args),
             other => {
-                exec_err!("Unsupported data type {:?} for function to_date", other)
+                exec_err!("Unsupported data type {} for function to_date", other)
             }
         }
     }

@@ -638,12 +638,13 @@ impl TreeNodeRecursion {
 /// # fn make_new_expr(i: i64) -> i64 { 2 }
 /// let expr = orig_expr();
 /// let ret = Transformed::no(expr.clone())
-///   .transform_data(|expr| {
-///    // closure returns a result and potentially transforms the node
-///    // in this example, it does transform the node
-///    let new_expr = make_new_expr(expr);
-///    Ok(Transformed::yes(new_expr))
-///  }).unwrap();
+///     .transform_data(|expr| {
+///         // closure returns a result and potentially transforms the node
+///         // in this example, it does transform the node
+///         let new_expr = make_new_expr(expr);
+///         Ok(Transformed::yes(new_expr))
+///     })
+///     .unwrap();
 /// // transformed flag is the union of the original ans closure's  transformed flag
 /// assert!(ret.transformed);
 /// ```
@@ -678,6 +679,11 @@ impl<T> Transformed<T> {
     /// Wrapper for transformed data with [`TreeNodeRecursion::Continue`] statement.
     pub fn yes(data: T) -> Self {
         Self::new(data, true, TreeNodeRecursion::Continue)
+    }
+
+    /// Wrapper for transformed data with [`TreeNodeRecursion::Stop`] statement.
+    pub fn complete(data: T) -> Self {
+        Self::new(data, true, TreeNodeRecursion::Stop)
     }
 
     /// Wrapper for unchanged data with [`TreeNodeRecursion::Continue`] statement.
@@ -950,12 +956,12 @@ impl<'a, T: 'a, C0: TreeNodeContainer<'a, T>, C1: TreeNodeContainer<'a, T>>
 }
 
 impl<
-        'a,
-        T: 'a,
-        C0: TreeNodeContainer<'a, T>,
-        C1: TreeNodeContainer<'a, T>,
-        C2: TreeNodeContainer<'a, T>,
-    > TreeNodeContainer<'a, T> for (C0, C1, C2)
+    'a,
+    T: 'a,
+    C0: TreeNodeContainer<'a, T>,
+    C1: TreeNodeContainer<'a, T>,
+    C2: TreeNodeContainer<'a, T>,
+> TreeNodeContainer<'a, T> for (C0, C1, C2)
 {
     fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &'a self,
@@ -981,6 +987,48 @@ impl<
             .transform_sibling(|(new_c0, new_c1, c2)| {
                 c2.map_elements(&mut f)?
                     .map_data(|new_c2| Ok((new_c0, new_c1, new_c2)))
+            })
+    }
+}
+
+impl<
+    'a,
+    T: 'a,
+    C0: TreeNodeContainer<'a, T>,
+    C1: TreeNodeContainer<'a, T>,
+    C2: TreeNodeContainer<'a, T>,
+    C3: TreeNodeContainer<'a, T>,
+> TreeNodeContainer<'a, T> for (C0, C1, C2, C3)
+{
+    fn apply_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.0
+            .apply_elements(&mut f)?
+            .visit_sibling(|| self.1.apply_elements(&mut f))?
+            .visit_sibling(|| self.2.apply_elements(&mut f))?
+            .visit_sibling(|| self.3.apply_elements(&mut f))
+    }
+
+    fn map_elements<F: FnMut(T) -> Result<Transformed<T>>>(
+        self,
+        mut f: F,
+    ) -> Result<Transformed<Self>> {
+        self.0
+            .map_elements(&mut f)?
+            .map_data(|new_c0| Ok((new_c0, self.1, self.2, self.3)))?
+            .transform_sibling(|(new_c0, c1, c2, c3)| {
+                c1.map_elements(&mut f)?
+                    .map_data(|new_c1| Ok((new_c0, new_c1, c2, c3)))
+            })?
+            .transform_sibling(|(new_c0, new_c1, c2, c3)| {
+                c2.map_elements(&mut f)?
+                    .map_data(|new_c2| Ok((new_c0, new_c1, new_c2, c3)))
+            })?
+            .transform_sibling(|(new_c0, new_c1, new_c2, c3)| {
+                c3.map_elements(&mut f)?
+                    .map_data(|new_c3| Ok((new_c0, new_c1, new_c2, new_c3)))
             })
     }
 }
@@ -1042,12 +1090,12 @@ impl<'a, T: 'a, C0: TreeNodeContainer<'a, T>, C1: TreeNodeContainer<'a, T>>
 }
 
 impl<
-        'a,
-        T: 'a,
-        C0: TreeNodeContainer<'a, T>,
-        C1: TreeNodeContainer<'a, T>,
-        C2: TreeNodeContainer<'a, T>,
-    > TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2)
+    'a,
+    T: 'a,
+    C0: TreeNodeContainer<'a, T>,
+    C1: TreeNodeContainer<'a, T>,
+    C2: TreeNodeContainer<'a, T>,
+> TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2)
 {
     fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
         &self,
@@ -1057,6 +1105,27 @@ impl<
             .apply_elements(&mut f)?
             .visit_sibling(|| self.1.apply_elements(&mut f))?
             .visit_sibling(|| self.2.apply_elements(&mut f))
+    }
+}
+
+impl<
+    'a,
+    T: 'a,
+    C0: TreeNodeContainer<'a, T>,
+    C1: TreeNodeContainer<'a, T>,
+    C2: TreeNodeContainer<'a, T>,
+    C3: TreeNodeContainer<'a, T>,
+> TreeNodeRefContainer<'a, T> for (&'a C0, &'a C1, &'a C2, &'a C3)
+{
+    fn apply_ref_elements<F: FnMut(&'a T) -> Result<TreeNodeRecursion>>(
+        &self,
+        mut f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.0
+            .apply_elements(&mut f)?
+            .visit_sibling(|| self.1.apply_elements(&mut f))?
+            .visit_sibling(|| self.2.apply_elements(&mut f))?
+            .visit_sibling(|| self.3.apply_elements(&mut f))
     }
 }
 
@@ -1267,11 +1336,11 @@ pub(crate) mod tests {
     use std::collections::HashMap;
     use std::fmt::Display;
 
+    use crate::Result;
     use crate::tree_node::{
         Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRewriter,
         TreeNodeVisitor,
     };
-    use crate::Result;
 
     #[derive(Debug, Eq, Hash, PartialEq, Clone)]
     pub struct TestTreeNode<T> {

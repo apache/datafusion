@@ -19,7 +19,7 @@ use arrow::datatypes::Schema;
 use datafusion::catalog::CatalogProvider;
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::listing::{
-    ListingTable, ListingTableConfig, ListingTableUrl,
+    ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::memory::*;
@@ -45,6 +45,20 @@ fn memory_catalog_dereg_nonempty_schema() {
         "dropping empty schema without cascade should error"
     );
     assert!(cat.deregister_schema("foo", true).unwrap().is_some());
+}
+
+#[test]
+fn memory_catalog_dereg_nonempty_schema_with_table_removal() {
+    let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
+
+    let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
+    let test_table =
+        Arc::new(EmptyTable::new(Arc::new(Schema::empty()))) as Arc<dyn TableProvider>;
+    schema.register_table("t".into(), test_table).unwrap();
+
+    cat.register_schema("foo", schema.clone()).unwrap();
+    schema.deregister_table("t").unwrap();
+    assert!(cat.deregister_schema("foo", false).unwrap().is_some());
 }
 
 #[test]

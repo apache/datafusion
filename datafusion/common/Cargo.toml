@@ -21,7 +21,7 @@ description = "Common functionality for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -45,14 +48,14 @@ parquet_encryption = [
     "parquet/encryption",
     "dep:hex",
 ]
-pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
 parquet = ["dep:parquet"]
+sql = ["sqlparser"]
 
 [dependencies]
 ahash = { workspace = true }
-apache-avro = { version = "0.17", default-features = false, features = [
+apache-avro = { workspace = true, features = [
     "bzip",
     "snappy",
     "xz",
@@ -60,20 +63,18 @@ apache-avro = { version = "0.17", default-features = false, features = [
 ], optional = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
-base64 = "0.22.1"
 chrono = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 hex = { workspace = true, optional = true }
 indexmap = { workspace = true }
-libc = "0.2.175"
+libc = "0.2.177"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
-paste = "1.0.15"
-pyo3 = { version = "0.25", optional = true }
+paste = { workspace = true }
 recursive = { workspace = true, optional = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 tokio = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
@@ -83,3 +84,4 @@ web-time = "1.1.0"
 chrono = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
+sqlparser = { workspace = true }

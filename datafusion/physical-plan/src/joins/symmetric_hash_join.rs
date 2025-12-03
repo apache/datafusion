@@ -34,7 +34,6 @@ use std::vec;
 
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
-use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
@@ -43,9 +42,9 @@ use crate::joins::stream_join_utils::{
 };
 use crate::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, symmetric_join_output_partitioning, BatchSplitter,
-    BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn, JoinOnRef,
-    NoopBatchTransformer, StatefulStreamResult,
+    check_join_is_valid, equal_rows_arr, symmetric_join_output_partitioning, update_hash,
+    BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
+    JoinOnRef, NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
@@ -68,7 +67,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
-    internal_err, plan_err, HashSet, JoinSide, JoinType, NullEquality, Result,
+    assert_eq_or_internal_err, plan_err, HashSet, JoinSide, JoinType, NullEquality,
+    Result,
 };
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -79,6 +79,7 @@ use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use ahash::RandomState;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{ready, Stream, StreamExt};
 use parking_lot::Mutex;
 
@@ -206,7 +207,7 @@ impl SymmetricHashJoinExec {
     /// - It is not possible to join the left and right sides on keys `on`, or
     /// - It fails to construct `SortedFilterExpr`s, or
     /// - It fails to create the [ExprIntervalGraph].
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -481,12 +482,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
-        if left_partitions != right_partitions {
-            return internal_err!(
-                "Invalid SymmetricHashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+        assert_eq_or_internal_err!(
+            left_partitions,
+            right_partitions,
+            "Invalid SymmetricHashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
                  consider using RepartitionExec"
-            );
-        }
+        );
         // If `filter_state` and `filter` are both present, then calculate sorted
         // filter expressions for both sides, and build an expression graph.
         let (left_sorted_filter_expr, right_sorted_filter_expr, graph) = match (
@@ -797,7 +798,6 @@ fn need_to_produce_result_in_final(build_side: JoinSide, join_type: JoinType) ->
 /// # Returns
 ///
 /// A tuple of two arrays of primitive types representing the build and probe indices.
-///
 fn calculate_indices_by_join_type<L: ArrowPrimitiveType, R: ArrowPrimitiveType>(
     build_side: JoinSide,
     prune_length: usize,
@@ -957,7 +957,7 @@ pub(crate) fn build_side_determined_results(
 ///
 /// A [Result] containing an optional record batch if the join type is not one of `LeftAnti`, `RightAnti`, `LeftSemi` or `RightSemi`.
 /// If the join type is one of the above four, the function will return [None].
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn join_with_probe_batch(
     build_hash_joiner: &mut OneSideHashJoiner,
     probe_hash_joiner: &mut OneSideHashJoiner,
@@ -1019,6 +1019,7 @@ pub(crate) fn join_with_probe_batch(
             | JoinType::LeftSemi
             | JoinType::LeftMark
             | JoinType::RightSemi
+            | JoinType::RightMark
     ) {
         Ok(None)
     } else {
@@ -1054,7 +1055,7 @@ pub(crate) fn join_with_probe_batch(
 ///
 /// A [Result] containing a tuple with two equal length arrays, representing indices of rows from build and probe side,
 /// matched by join key columns.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn lookup_join_hashmap(
     build_hashmap: &PruningJoinHashMap,
     build_batch: &RecordBatch,
@@ -1066,14 +1067,8 @@ fn lookup_join_hashmap(
     hashes_buffer: &mut Vec<u64>,
     deleted_offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    let keys_values = probe_on
-        .iter()
-        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
-    let build_join_values = build_on
-        .iter()
-        .map(|c| c.evaluate(build_batch)?.into_array(build_batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
+    let keys_values = evaluate_expressions_to_arrays(probe_on, probe_batch)?;
+    let build_join_values = evaluate_expressions_to_arrays(build_on, build_batch)?;
 
     hashes_buffer.clear();
     hashes_buffer.resize(probe_batch.num_rows(), 0);
@@ -1246,7 +1241,7 @@ impl OneSideHashJoiner {
             filter_intervals.push((expr.node_index(), expr.interval().clone()))
         }
         // Update the physical expression graph using the join filter intervals:
-        graph.update_ranges(&mut filter_intervals, Interval::CERTAINLY_TRUE)?;
+        graph.update_ranges(&mut filter_intervals, Interval::TRUE)?;
         // Extract the new join filter interval for the build side:
         let calculated_build_side_interval = filter_intervals.remove(0).1;
         // If the intervals have not changed, return early without pruning:
@@ -1377,7 +1372,6 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                     }
                 }
                 Some((batch, _)) => {
-                    self.metrics.output_batches.add(1);
                     return self
                         .metrics
                         .baseline_metrics
@@ -1405,7 +1399,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
                 }
                 self.set_state(SHJStreamState::PullLeft);
-                Poll::Ready(self.process_batch_from_right(batch))
+                Poll::Ready(self.process_batch_from_right(&batch))
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
@@ -1434,7 +1428,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
                 }
                 self.set_state(SHJStreamState::PullRight);
-                Poll::Ready(self.process_batch_from_left(batch))
+                Poll::Ready(self.process_batch_from_left(&batch))
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
@@ -1463,7 +1457,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                 if batch.num_rows() == 0 {
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
                 }
-                Poll::Ready(self.process_batch_after_right_end(batch))
+                Poll::Ready(self.process_batch_after_right_end(&batch))
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
@@ -1494,7 +1488,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
                 if batch.num_rows() == 0 {
                     return Poll::Ready(Ok(StatefulStreamResult::Continue));
                 }
-                Poll::Ready(self.process_batch_after_left_end(batch))
+                Poll::Ready(self.process_batch_after_left_end(&batch))
             }
             Some(Err(e)) => Poll::Ready(Err(e)),
             None => {
@@ -1524,7 +1518,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
 
     fn process_batch_from_right(
         &mut self,
-        batch: RecordBatch,
+        batch: &RecordBatch,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.perform_join_for_given_side(batch, JoinSide::Right)
             .map(|maybe_batch| {
@@ -1538,7 +1532,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
 
     fn process_batch_from_left(
         &mut self,
-        batch: RecordBatch,
+        batch: &RecordBatch,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.perform_join_for_given_side(batch, JoinSide::Left)
             .map(|maybe_batch| {
@@ -1552,14 +1546,14 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
 
     fn process_batch_after_left_end(
         &mut self,
-        right_batch: RecordBatch,
+        right_batch: &RecordBatch,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.process_batch_from_right(right_batch)
     }
 
     fn process_batch_after_right_end(
         &mut self,
-        left_batch: RecordBatch,
+        left_batch: &RecordBatch,
     ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.process_batch_from_left(left_batch)
     }
@@ -1638,7 +1632,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
     /// 5. Combines the results and returns a combined batch or `None` if no batch was produced.
     fn perform_join_for_given_side(
         &mut self,
-        probe_batch: RecordBatch,
+        probe_batch: &RecordBatch,
         probe_side: JoinSide,
     ) -> Result<Option<RecordBatch>> {
         let (
@@ -1668,7 +1662,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
         probe_side_metrics.input_batches.add(1);
         probe_side_metrics.input_rows.add(probe_batch.num_rows());
         // Update the internal state of the hash joiner for the build side:
-        probe_hash_joiner.update_internal_state(&probe_batch, &self.random_state)?;
+        probe_hash_joiner.update_internal_state(probe_batch, &self.random_state)?;
         // Join the two sides:
         let equal_result = join_with_probe_batch(
             build_hash_joiner,
@@ -1676,7 +1670,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             &self.schema,
             self.join_type,
             self.filter.as_ref(),
-            &probe_batch,
+            probe_batch,
             &self.column_indices,
             &self.random_state,
             self.null_equality,
@@ -1697,7 +1691,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
             calculate_filter_expr_intervals(
                 &build_hash_joiner.input_buffer,
                 build_side_sorted_filter_expr,
-                &probe_batch,
+                probe_batch,
                 probe_side_sorted_filter_expr,
             )?;
             let prune_length = build_hash_joiner
@@ -1865,6 +1859,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -1953,6 +1948,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2021,6 +2017,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2074,6 +2071,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2102,6 +2100,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2486,6 +2485,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2572,6 +2572,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,
@@ -2650,6 +2651,7 @@ mod tests {
             JoinType::LeftAnti,
             JoinType::LeftMark,
             JoinType::RightAnti,
+            JoinType::RightMark,
             JoinType::Full
         )]
         join_type: JoinType,

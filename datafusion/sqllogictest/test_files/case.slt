@@ -467,6 +467,7 @@ FROM t;
 ----
 [{foo: blarg}]
 
+# mix of then and else
 query II
 SELECT v, CASE WHEN v != 0 THEN 10/v ELSE 42 END FROM (VALUES (0), (1), (2)) t(v)
 ----
@@ -474,11 +475,231 @@ SELECT v, CASE WHEN v != 0 THEN 10/v ELSE 42 END FROM (VALUES (0), (1), (2)) t(v
 1 10
 2 5
 
+# when expressions is always false, then branch should never be evaluated
 query II
 SELECT v, CASE WHEN v < 0 THEN 10/0 ELSE 1 END FROM (VALUES (1), (2)) t(v)
 ----
 1 1
 2 1
 
+# when expressions is always true, else branch should never be evaluated
+query II
+SELECT v, CASE WHEN v > 0 THEN 1 ELSE 10/0 END FROM (VALUES (1), (2)) t(v)
+----
+1 1
+2 1
+
+
+# lazy evaluation of multiple when branches, else branch should never be evaluated
+query II
+SELECT v, CASE WHEN v == 1 THEN -1 WHEN v == 2 THEN -2 WHEN v == 3 THEN -3  ELSE 10/0 END FROM (VALUES (1), (2), (3)) t(v)
+----
+1 -1
+2 -2
+3 -3
+
+# covers the InfallibleExprOrNull evaluation strategy
+query II
+SELECT v, CASE WHEN v THEN 1 END FROM (VALUES (1), (2), (3), (NULL)) t(v)
+----
+1 1
+2 1
+3 1
+NULL NULL
+
 statement ok
 drop table t
+
+query I
+SELECT case when true then 1 / 1 else 1 / 0 end;
+----
+1
+
+query I
+SELECT case when false then 1 / 0 else 1 / 1 end;
+----
+1
+
+# Else branch evaluation with case expression, 1 when branch, null input
+query I
+SELECT CASE a WHEN 'a' THEN 0 ELSE 1 END FROM (VALUES (NULL)) t(a)
+----
+1
+
+# Else branch evaluation with case expression, 2 when branches, null input
+query I
+SELECT CASE a WHEN 'a' THEN 0 WHEN 'b' THEN 1 ELSE 2 END FROM (VALUES (NULL)) t(a)
+----
+2
+
+# Else branch evaluation without case expression, 1 when branch, null input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 ELSE 1 END FROM (VALUES (NULL)) t(a)
+----
+1
+
+# Else branch evaluation without case expression, 2 when branches, null input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 WHEN a = 'b' THEN 1 ELSE 2 END FROM (VALUES (NULL)) t(a)
+----
+2
+
+# Else branch evaluation with case expression, 1 when branch, non-null input
+query I
+SELECT CASE a WHEN 'a' THEN 0 ELSE 1 END FROM (VALUES ('z')) t(a)
+----
+1
+
+# Else branch evaluation with case expression, 2 when branches, non-null input
+query I
+SELECT CASE a WHEN 'a' THEN 0 WHEN 'b' THEN 1 ELSE 2 END FROM (VALUES ('z')) t(a)
+----
+2
+
+# Else branch evaluation without case expression, 1 when branch, non-null input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 ELSE 1 END FROM (VALUES ('z')) t(a)
+----
+1
+
+# Else branch evaluation without case expression, 2 when branches, non-null input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 WHEN a = 'b' THEN 1 ELSE 2 END FROM (VALUES ('z')) t(a)
+----
+2
+
+# Else branch evaluation with case expression, 1 when branch, mixed input
+query I
+SELECT CASE a WHEN 'a' THEN 0 ELSE 1 END FROM (VALUES (NULL), ('z')) t(a)
+----
+1
+1
+
+# Else branch evaluation with case expression, 2 when branches, mixed input
+query I
+SELECT CASE a WHEN 'a' THEN 0 WHEN 'b' THEN 1 ELSE 2 END FROM (VALUES (NULL), ('z')) t(a)
+----
+2
+2
+
+# Else branch evaluation without case expression, 1 when branch, mixed input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 ELSE 1 END FROM (VALUES (NULL), ('z')) t(a)
+----
+1
+1
+
+# Else branch evaluation without case expression, 2 when branches, mixed input
+query I
+SELECT CASE WHEN a = 'a' THEN 0 WHEN a = 'b' THEN 1 ELSE 2 END FROM (VALUES (NULL), ('z')) t(a)
+----
+2
+2
+
+# The `WHEN 1/0` is not effectively reachable in this query and should never be executed
+query T
+SELECT CASE a WHEN 1 THEN 'a' WHEN 2 THEN 'b' WHEN 1 / 0 THEN 'c' ELSE 'd' END FROM (VALUES (1), (2)) t(a)
+----
+a
+b
+
+# The `WHEN 1/0` is not effectively reachable in this query and should never be executed
+query T
+SELECT CASE WHEN a = 1 THEN 'a' WHEN a = 2 THEN 'b' WHEN a = 1 / 0 THEN 'c' ELSE 'd' END FROM (VALUES (1), (2)) t(a)
+----
+a
+b
+
+# The `WHEN 1/0` is not effectively reachable in this query and should never be executed
+query T
+SELECT CASE WHEN a = 0 THEN 'a' WHEN 1 / a = 1 THEN 'b' ELSE 'c' END FROM (VALUES (0), (1), (2)) t(a)
+----
+a
+b
+c
+
+# EvalMethod::WithExpression using subset of all selected columns in case expression
+query III
+SELECT CASE a1 WHEN 1 THEN a1 WHEN 2 THEN a2 WHEN 3 THEN b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+2 20 200
+30 30 300
+
+# EvalMethod::NoExpression using subset of all selected columns in case expression
+query III
+SELECT CASE WHEN a1 = 1 THEN a2 WHEN a2 = 2 THEN a1 WHEN 3 THEN b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+2 20 200
+30 30 300
+
+# EvalMethod::ExpressionOrExpression using subset of all selected columns in case expression
+query III
+SELECT CASE WHEN a1 = 1 THEN a2 ELSE b END, b, c
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1 10 100
+20 20 200
+30 30 300
+
+# EvalMethod::WithExpression using all selected columns in case expression
+query I
+SELECT CASE a1 WHEN 1 THEN a1 WHEN 2 THEN a2 WHEN 3 THEN NULL END
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1
+2
+NULL
+
+# EvalMethod::NoExpression using all selected columns in case expression
+query I
+SELECT CASE WHEN a1 = 1 THEN a2 WHEN a2 = 2 THEN a1 WHEN 3 THEN NULL END
+FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1
+2
+NULL
+
+# EvalMethod::ExpressionOrExpression using all selected columns in case expression
+query I
+SELECT CASE WHEN a1 = 1 THEN a2 ELSE NULL END
+FROM (SELECT a as a1, a as a2 FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c));
+----
+1
+NULL
+NULL
+
+# Nested case with projection
+query III
+SELECT CASE WHEN a = -1 THEN b WHEN a = -2 THEN -b END, b, c
+FROM (
+  SELECT b, c, CASE WHEN a1 = 1 THEN -a2 WHEN a1 = 2 THEN -a1 END as a
+  FROM (SELECT a as a1, a as a2, b, c FROM (VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)) t(a, b, c))
+);
+----
+10 10 100
+-20 20 200
+NULL 30 300
+
+# Case-with-expression that was incorrectly classified as not-nullable, but evaluates to null
+query I
+SELECT CASE 0 WHEN 0 THEN NULL WHEN SUM(1) + COUNT(*) THEN 10 ELSE 20 END
+----
+NULL
+
+query TT
+EXPLAIN SELECT CASE WHEN CASE WHEN a IS NOT NULL THEN a ELSE 1 END IS NOT NULL THEN a ELSE 1 END FROM (
+    VALUES (10), (20), (30)
+  ) t(a);
+----
+logical_plan
+01)Projection: t.a AS CASE WHEN CASE WHEN t.a IS NOT NULL THEN t.a ELSE Int64(1) END IS NOT NULL THEN t.a ELSE Int64(1) END
+02)--SubqueryAlias: t
+03)----Projection: column1 AS a
+04)------Values: (Int64(10)), (Int64(20)), (Int64(30))
+physical_plan
+01)ProjectionExec: expr=[column1@0 as CASE WHEN CASE WHEN t.a IS NOT NULL THEN t.a ELSE Int64(1) END IS NOT NULL THEN t.a ELSE Int64(1) END]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]

@@ -48,7 +48,7 @@ fn main() -> CargoResult<()> {
         root_cargo_toml.display()
     );
     let workspace = cargo::core::Workspace::new(&root_cargo_toml, &gctx)?;
-    let (_, resolve) = cargo::ops::resolve_ws(&workspace)?;
+    let (_, resolve) = cargo::ops::resolve_ws(&workspace, false)?;
 
     let mut package_deps = HashMap::new();
     for package_id in resolve

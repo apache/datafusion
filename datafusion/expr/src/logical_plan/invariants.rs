@@ -16,16 +16,15 @@
 // under the License.
 
 use datafusion_common::{
-    internal_err, plan_err,
+    DFSchemaRef, Result, assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    DFSchemaRef, Result,
 };
 
 use crate::{
+    Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
     expr::{Exists, InSubquery},
     expr_rewriter::strip_outer_reference,
     utils::{collect_subquery_cols, split_conjunction},
-    Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
 };
 
 use super::Extension;
@@ -102,7 +101,7 @@ fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
     plan.schema().check_names()
 }
 
-/// Returns an error if the plan is not sematically valid.
+/// Returns an error if the plan is not semantically valid.
 fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
     assert_subqueries_are_valid(plan)?;
 
@@ -114,15 +113,13 @@ fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
 pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Result<()> {
     let compatible = plan.schema().logically_equivalent_names_and_types(schema);
 
-    if !compatible {
-        internal_err!(
-            "Failed due to a difference in schemas: original schema: {:?}, new schema: {:?}",
-            schema,
-            plan.schema()
-        )
-    } else {
-        Ok(())
-    }
+    assert_or_internal_err!(
+        compatible,
+        "Failed due to a difference in schemas: original schema: {:?}, new schema: {:?}",
+        schema,
+        plan.schema()
+    );
+    Ok(())
 }
 
 /// Asserts that the subqueries are structured properly with valid node placement.
@@ -200,9 +197,12 @@ pub fn check_subquery_expr(
                 }
             }?;
             match outer_plan {
-                LogicalPlan::Projection(_)
-                | LogicalPlan::Filter(_) => Ok(()),
-                LogicalPlan::Aggregate(Aggregate { group_expr, aggr_expr, .. }) => {
+                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => Ok(()),
+                LogicalPlan::Aggregate(Aggregate {
+                    group_expr,
+                    aggr_expr,
+                    ..
+                }) => {
                     if group_expr.contains(expr) && !aggr_expr.contains(expr) {
                         // TODO revisit this validation logic
                         plan_err!(
@@ -214,7 +214,7 @@ pub fn check_subquery_expr(
                 }
                 _ => plan_err!(
                     "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes"
-                )
+                ),
             }?;
         }
         check_correlations_in_subquery(inner_plan)

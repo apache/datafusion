@@ -30,7 +30,7 @@ use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    exec_err, internal_err, plan_err, utils::take_function_args, Result,
+    assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args, Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -289,13 +289,7 @@ impl ScalarUDFImpl for ArrayDistinct {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            List(field) => Ok(DataType::new_list(field.data_type().clone(), true)),
-            LargeList(field) => {
-                Ok(DataType::new_large_list(field.data_type().clone(), true))
-            }
-            arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(
@@ -332,7 +326,7 @@ fn array_distinct_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum SetOp {
     Union,
     Intersect,
@@ -361,9 +355,11 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
         return general_array_distinct::<OffsetSize>(l, &field);
     }
 
-    if l.value_type() != r.value_type() {
-        return internal_err!("{set_op:?} is not implemented for '{l:?}' and '{r:?}'");
-    }
+    assert_eq_or_internal_err!(
+        l.value_type(),
+        r.value_type(),
+        "{set_op:?} is not implemented for '{l:?}' and '{r:?}'"
+    );
 
     let mut offsets = vec![OffsetSize::usize_as(0)];
     let mut new_arrays = vec![];
@@ -504,13 +500,11 @@ fn general_set_op(
     }
 }
 
-/// Array_union SQL function
 fn array_union_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_union", args)?;
     general_set_op(array1, array2, SetOp::Union)
 }
 
-/// array_intersect SQL function
 fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_intersect", args)?;
     general_set_op(array1, array2, SetOp::Intersect)
@@ -562,4 +556,55 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         // Keep the list nulls
         array.nulls().cloned(),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::{
+        array::{Int32Array, ListArray},
+        buffer::OffsetBuffer,
+        datatypes::{DataType, Field},
+    };
+    use datafusion_common::{config::ConfigOptions, DataFusionError};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+
+    use crate::set_ops::array_distinct_udf;
+
+    #[test]
+    fn test_array_distinct_inner_nullability_result_type_match_return_type(
+    ) -> Result<(), DataFusionError> {
+        let udf = array_distinct_udf();
+
+        for inner_nullable in [true, false] {
+            let inner_field = Field::new_list_field(DataType::Int32, inner_nullable);
+            let input_field =
+                Field::new_list("input", Arc::new(inner_field.clone()), true);
+
+            // [[1, 1, 2]]
+            let input_array = ListArray::new(
+                inner_field.into(),
+                OffsetBuffer::new(vec![0, 3].into()),
+                Arc::new(Int32Array::new(vec![1, 1, 2].into(), None)),
+                None,
+            );
+
+            let input_array = ColumnarValue::Array(Arc::new(input_array));
+
+            let result = udf.invoke_with_args(ScalarFunctionArgs {
+                args: vec![input_array],
+                arg_fields: vec![input_field.clone().into()],
+                number_rows: 1,
+                return_field: input_field.clone().into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })?;
+
+            assert_eq!(
+                result.data_type(),
+                udf.return_type(&[input_field.data_type().clone()])?
+            );
+        }
+        Ok(())
+    }
 }

@@ -16,18 +16,17 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
 use datafusion_physical_plan::{expressions, ExecutionPlan};
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default, Debug)]
@@ -43,10 +42,10 @@ impl AggregateStatistics {
 impl PhysicalOptimizerRule for AggregateStatistics {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     #[allow(clippy::only_used_in_recursion)] // See https://github.com/rust-lang/rust-clippy/issues/14566
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
@@ -67,8 +66,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 if let Some((optimizable_statistic, name)) =
                     take_optimizable_value_from_statistics(&statistics_args, expr)
                 {
-                    projections
-                        .push((expressions::lit(optimizable_statistic), name.to_owned()));
+                    projections.push(ProjectionExpr {
+                        expr: expressions::lit(optimizable_statistic),
+                        alias: name.to_owned(),
+                    });
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
                     break;
@@ -84,13 +85,15 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 )?))
             } else {
                 plan.map_children(|child| {
-                    self.optimize(child, config).map(Transformed::yes)
+                    self.optimize_plan(child, context).map(Transformed::yes)
                 })
                 .data()
             }
         } else {
-            plan.map_children(|child| self.optimize(child, config).map(Transformed::yes))
-                .data()
+            plan.map_children(|child| {
+                self.optimize_plan(child, context).map(Transformed::yes)
+            })
+            .data()
         }
     }
 

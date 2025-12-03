@@ -17,16 +17,18 @@
 
 //! A memory-conscious aggregation implementation that limits group buckets to a fixed number
 
+use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::topk::priority_map::PriorityMap;
 use crate::aggregates::{
     aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
     PhysicalGroupBy,
 };
+use crate::metrics::BaselineMetrics;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
-use datafusion_common::DataFusionError;
+use datafusion_common::internal_datafusion_err;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -42,6 +44,8 @@ pub struct GroupedTopKAggregateStream {
     started: bool,
     schema: SchemaRef,
     input: SendableRecordBatchStream,
+    baseline_metrics: BaselineMetrics,
+    group_by_metrics: GroupByMetrics,
     aggregate_arguments: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     group_by: PhysicalGroupBy,
     priority_map: PriorityMap,
@@ -50,18 +54,20 @@ pub struct GroupedTopKAggregateStream {
 impl GroupedTopKAggregateStream {
     pub fn new(
         aggr: &AggregateExec,
-        context: Arc<TaskContext>,
+        context: &Arc<TaskContext>,
         partition: usize,
         limit: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = aggr.group_by.clone();
-        let input = aggr.input.execute(partition, Arc::clone(&context))?;
+        let input = aggr.input.execute(partition, Arc::clone(context))?;
+        let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
+        let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
         let aggregate_arguments =
             aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
         let (val_field, desc) = aggr
             .get_minmax_desc()
-            .ok_or_else(|| DataFusionError::Internal("Min/max required".to_string()))?;
+            .ok_or_else(|| internal_datafusion_err!("Min/max required"))?;
 
         let (expr, _) = &aggr.group_expr().expr()[0];
         let kt = expr.data_type(&aggr.input().schema())?;
@@ -75,6 +81,8 @@ impl GroupedTopKAggregateStream {
             row_count: 0,
             schema: agg_schema,
             input,
+            baseline_metrics,
+            group_by_metrics,
             aggregate_arguments,
             group_by,
             priority_map,
@@ -89,9 +97,12 @@ impl RecordBatchStream for GroupedTopKAggregateStream {
 }
 
 impl GroupedTopKAggregateStream {
-    fn intern(&mut self, ids: ArrayRef, vals: ArrayRef) -> Result<()> {
+    fn intern(&mut self, ids: &ArrayRef, vals: &ArrayRef) -> Result<()> {
+        let _timer = self.group_by_metrics.time_calculating_group_ids.timer();
+
         let len = ids.len();
-        self.priority_map.set_batch(ids, Arc::clone(&vals));
+        self.priority_map
+            .set_batch(Arc::clone(ids), Arc::clone(vals));
 
         let has_nulls = vals.null_count() > 0;
         for row_idx in 0..len {
@@ -111,7 +122,10 @@ impl Stream for GroupedTopKAggregateStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let emitting_time = self.group_by_metrics.emitting_time.clone();
         while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
+            let _timer = elapsed_compute.timer();
             match res {
                 // got a batch, convert to rows and append to our TreeMap
                 Some(Ok(batch)) => {
@@ -140,16 +154,21 @@ impl Stream for GroupedTopKAggregateStream {
                         "Exactly 1 group value required"
                     );
                     let group_by_values = Arc::clone(&group_by_values[0][0]);
-                    let input_values = evaluate_many(
-                        &self.aggregate_arguments,
-                        batches.first().unwrap(),
-                    )?;
+                    let input_values = {
+                        let _timer = (!self.aggregate_arguments.is_empty()).then(|| {
+                            self.group_by_metrics.aggregate_arguments_time.timer()
+                        });
+                        evaluate_many(
+                            &self.aggregate_arguments,
+                            batches.first().unwrap(),
+                        )?
+                    };
                     assert_eq!(input_values.len(), 1, "Exactly 1 input required");
                     assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
                     let input_values = Arc::clone(&input_values[0][0]);
 
                     // iterate over each column of group_by values
-                    (*self).intern(group_by_values, input_values)?;
+                    (*self).intern(&group_by_values, &input_values)?;
                 }
                 // inner is done, emit all rows and switch to producing output
                 None => {
@@ -157,8 +176,11 @@ impl Stream for GroupedTopKAggregateStream {
                         trace!("partition {} emit None", self.partition);
                         return Poll::Ready(None);
                     }
-                    let cols = self.priority_map.emit()?;
-                    let batch = RecordBatch::try_new(Arc::clone(&self.schema), cols)?;
+                    let batch = {
+                        let _timer = emitting_time.timer();
+                        let cols = self.priority_map.emit()?;
+                        RecordBatch::try_new(Arc::clone(&self.schema), cols)?
+                    };
                     trace!(
                         "partition {} emit batch with {} rows",
                         self.partition,

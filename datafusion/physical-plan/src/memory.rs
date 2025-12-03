@@ -32,7 +32,7 @@ use crate::{
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, assert_or_internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -153,6 +153,8 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 pub struct LazyMemoryExec {
     /// Schema representing the data
     schema: SchemaRef,
+    /// Optional projection for which columns to load
+    projection: Option<Vec<usize>>,
     /// Functions to generate batches for each partition
     batch_generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
@@ -199,23 +201,40 @@ impl LazyMemoryExec {
 
         Ok(Self {
             schema,
+            projection: None,
             batch_generators: generators,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
-    pub fn try_set_partitioning(&mut self, partitioning: Partitioning) -> Result<()> {
-        if partitioning.partition_count() != self.batch_generators.len() {
-            internal_err!(
-                "Partition count must match generator count: {} != {}",
-                partitioning.partition_count(),
-                self.batch_generators.len()
-            )
-        } else {
-            self.cache.partitioning = partitioning;
-            Ok(())
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        match projection.as_ref() {
+            Some(columns) => {
+                let projected = Arc::new(self.schema.project(columns).unwrap());
+                self.cache = self.cache.with_eq_properties(EquivalenceProperties::new(
+                    Arc::clone(&projected),
+                ));
+                self.schema = projected;
+                self.projection = projection;
+                self
+            }
+            _ => self,
         }
+    }
+
+    pub fn try_set_partitioning(&mut self, partitioning: Partitioning) -> Result<()> {
+        let partition_count = partitioning.partition_count();
+        let generator_count = self.batch_generators.len();
+        assert_eq_or_internal_err!(
+            partition_count,
+            generator_count,
+            "Partition count must match generator count: {} != {}",
+            partition_count,
+            generator_count
+        );
+        self.cache.partitioning = partitioning;
+        Ok(())
     }
 
     pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
@@ -296,11 +315,11 @@ impl ExecutionPlan for LazyMemoryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.is_empty() {
-            Ok(self)
-        } else {
-            internal_err!("Children cannot be replaced in LazyMemoryExec")
-        }
+        assert_or_internal_err!(
+            children.is_empty(),
+            "Children cannot be replaced in LazyMemoryExec"
+        );
+        Ok(self)
     }
 
     fn execute(
@@ -308,18 +327,18 @@ impl ExecutionPlan for LazyMemoryExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition >= self.batch_generators.len() {
-            return internal_err!(
-                "Invalid partition {} for LazyMemoryExec with {} partitions",
-                partition,
-                self.batch_generators.len()
-            );
-        }
+        assert_or_internal_err!(
+            partition < self.batch_generators.len(),
+            "Invalid partition {} for LazyMemoryExec with {} partitions",
+            partition,
+            self.batch_generators.len()
+        );
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         let stream = LazyMemoryStream {
             schema: Arc::clone(&self.schema),
+            projection: self.projection.clone(),
             generator: Arc::clone(&self.batch_generators[partition]),
             baseline_metrics,
         };
@@ -338,6 +357,8 @@ impl ExecutionPlan for LazyMemoryExec {
 /// Stream that generates record batches on demand
 pub struct LazyMemoryStream {
     schema: SchemaRef,
+    /// Optional projection for which columns to load
+    projection: Option<Vec<usize>>,
     /// Generator to produce batches
     ///
     /// Note: Idiomatically, DataFusion uses plan-time parallelism - each stream
@@ -361,7 +382,14 @@ impl Stream for LazyMemoryStream {
         let batch = self.generator.write().generate_next_batch();
 
         let poll = match batch {
-            Ok(Some(batch)) => Poll::Ready(Some(Ok(batch))),
+            Ok(Some(batch)) => {
+                // return just the columns requested
+                let batch = match self.projection.as_ref() {
+                    Some(columns) => batch.project(columns)?,
+                    None => batch,
+                };
+                Poll::Ready(Some(Ok(batch)))
+            }
             Ok(None) => Poll::Ready(None),
             Err(e) => Poll::Ready(Some(Err(e))),
         };

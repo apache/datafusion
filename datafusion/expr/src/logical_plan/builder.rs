@@ -18,6 +18,7 @@
 //! This module provides a builder for creating LogicalPlans
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
@@ -43,19 +44,21 @@ use crate::utils::{
     group_window_expr_by_sort_keys,
 };
 use crate::{
-    and, binary_expr, lit, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp,
+    DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery,
+    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    exec_err, get_target_functional_dependencies, not_impl_err, plan_datafusion_err,
-    plan_err, Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, NullEquality,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
+    TableReference, ToDFSchema, UnnestOptions, exec_err,
+    get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
+    plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -177,19 +180,14 @@ impl LogicalPlanBuilder {
         recursive_term: LogicalPlan,
         is_distinct: bool,
     ) -> Result<Self> {
-        // TODO: we need to do a bunch of validation here. Maybe more.
-        if is_distinct {
-            return not_impl_err!(
-                "Recursive queries with a distinct 'UNION' (in which the previous iteration's results will be de-duplicated) is not supported"
-            );
-        }
         // Ensure that the static term and the recursive term have the same number of fields
         let static_fields_len = self.plan.schema().fields().len();
         let recursive_fields_len = recursive_term.schema().fields().len();
         if static_fields_len != recursive_fields_len {
             return plan_err!(
                 "Non-recursive term and recursive term must have the same number of columns ({} != {})",
-                static_fields_len, recursive_fields_len
+                static_fields_len,
+                recursive_fields_len
             );
         }
         // Ensure that the recursive term has the same field types as the static term
@@ -281,15 +279,14 @@ impl LogicalPlanBuilder {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
 
-                if !data_type.equals_datatype(field_type) {
-                    if can_cast_types(&data_type, field_type) {
-                    } else {
-                        return exec_err!(
-                            "type mismatch and can't cast to got {} and {}",
-                            data_type,
-                            field_type
-                        );
-                    }
+                if !data_type.equals_datatype(field_type)
+                    && !can_cast_types(&data_type, field_type)
+                {
+                    return exec_err!(
+                        "type mismatch and can't cast to got {} and {}",
+                        data_type,
+                        field_type
+                    );
                 }
             }
             fields.push(field_type.to_owned(), field_nullable);
@@ -305,8 +302,21 @@ impl LogicalPlanBuilder {
 
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
+            let mut common_metadata: Option<FieldMetadata> = None;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
+                let metadata = value.metadata(&schema)?;
+                if let Some(ref cm) = common_metadata {
+                    if &metadata != cm {
+                        return plan_err!(
+                            "Inconsistent metadata across values list at row {i} column {j}. Was {:?} but found {:?}",
+                            cm,
+                            metadata
+                        );
+                    }
+                } else {
+                    common_metadata = Some(metadata.clone());
+                }
                 let data_type = value.get_type(&schema)?;
                 if data_type == DataType::Null {
                     continue;
@@ -316,7 +326,9 @@ impl LogicalPlanBuilder {
                     // get common type of each column values.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
-                        return plan_err!("Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}");
+                        return plan_err!(
+                            "Inconsistent data type across values list at row {i} column {j}. Was {prev_type} but found {data_type}"
+                        );
                     };
                     common_type = Some(new_type);
                 } else {
@@ -325,7 +337,11 @@ impl LogicalPlanBuilder {
             }
             // assuming common_type was not set, and no error, therefore the type should be NULL
             // since the code loop skips NULL
-            fields.push(common_type.unwrap_or(DataType::Null), true);
+            fields.push_with_metadata(
+                common_type.unwrap_or(DataType::Null),
+                true,
+                common_metadata,
+            );
         }
 
         Self::infer_inner(values, fields, &schema)
@@ -436,14 +452,13 @@ impl LogicalPlanBuilder {
     /// # ])) as _;
     /// # let table_source = Arc::new(LogicalTableSource::new(employee_schema));
     /// // VALUES (1), (2)
-    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
-    ///   .build()?;
+    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
     /// // INSERT INTO MyTable VALUES (1), (2)
     /// let insert_plan = LogicalPlanBuilder::insert_into(
-    ///   input,
-    ///   "MyTable",
-    ///   table_source,
-    ///   InsertOp::Append,
+    ///     input,
+    ///     "MyTable",
+    ///     table_source,
+    ///     InsertOp::Append,
     /// )?;
     /// # Ok(())
     /// # }
@@ -500,29 +515,27 @@ impl LogicalPlanBuilder {
             TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
 
         // Inline TableScan
-        if table_scan.filters.is_empty() {
-            if let Some(p) = table_scan.source.get_logical_plan() {
-                let sub_plan = p.into_owned();
+        if table_scan.filters.is_empty()
+            && let Some(p) = table_scan.source.get_logical_plan()
+        {
+            let sub_plan = p.into_owned();
 
-                if let Some(proj) = table_scan.projection {
-                    let projection_exprs = proj
-                        .into_iter()
-                        .map(|i| {
-                            Expr::Column(Column::from(
-                                sub_plan.schema().qualified_field(i),
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    return Self::new(sub_plan)
-                        .project(projection_exprs)?
-                        .alias(table_scan.table_name);
-                }
-
-                // Ensures that the reference to the inlined table remains the
-                // same, meaning we don't have to change any of the parent nodes
-                // that reference this table.
-                return Self::new(sub_plan).alias(table_scan.table_name);
+            if let Some(proj) = table_scan.projection {
+                let projection_exprs = proj
+                    .into_iter()
+                    .map(|i| {
+                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
+                    })
+                    .collect::<Vec<_>>();
+                return Self::new(sub_plan)
+                    .project(projection_exprs)?
+                    .alias(table_scan.table_name);
             }
+
+            // Ensures that the reference to the inlined table remains the
+            // same, meaning we don't have to change any of the parent nodes
+            // that reference this table.
+            return Self::new(sub_plan).alias(table_scan.table_name);
         }
 
         Ok(Self::new(LogicalPlan::TableScan(table_scan)))
@@ -609,11 +622,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
-    pub fn prepare(self, name: String, data_types: Vec<DataType>) -> Result<Self> {
+    pub fn prepare(self, name: String, fields: Vec<FieldRef>) -> Result<Self> {
         Ok(Self::new(LogicalPlan::Statement(Statement::Prepare(
             Prepare {
                 name,
-                data_types,
+                fields,
                 input: self.plan,
             },
         ))))
@@ -758,7 +771,9 @@ impl LogicalPlanBuilder {
             .map(|col| col.flat_name())
             .collect::<String>();
 
-        plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
+        plan_err!(
+            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list"
+        )
     }
 
     /// Apply a sort by provided expressions with default direction
@@ -939,8 +954,8 @@ impl LogicalPlanBuilder {
     /// // Form the expression `(left.a != right.a)` AND `(left.b != right.b)`
     /// let exprs = vec![
     ///     col("left.a").eq(col("right.a")),
-    ///     col("left.b").not_eq(col("right.b"))
-    ///  ];
+    ///     col("left.b").not_eq(col("right.b")),
+    /// ];
     ///
     /// // Perform the equivalent of `left INNER JOIN right ON (a != a2 AND b != b2)`
     /// // finding all pairs of rows from `left` and `right` where
@@ -1175,7 +1190,7 @@ impl LogicalPlanBuilder {
         if join_on.is_empty() {
             let join = Self::from(self.plan).cross_join(right)?;
             join.filter(filters.ok_or_else(|| {
-                DataFusionError::Internal("filters should not be None here".to_string())
+                internal_datafusion_err!("filters should not be None here")
             })?)
         } else {
             let join = Join::try_new(
@@ -1506,10 +1521,23 @@ impl ValuesFields {
     }
 
     pub fn push(&mut self, data_type: DataType, nullable: bool) {
+        self.push_with_metadata(data_type, nullable, None);
+    }
+
+    pub fn push_with_metadata(
+        &mut self,
+        data_type: DataType,
+        nullable: bool,
+        metadata: Option<FieldMetadata>,
+    ) {
         // Naming follows the convention described here:
         // https://www.postgresql.org/docs/current/queries-values.html
         let name = format!("column{}", self.inner.len() + 1);
-        self.inner.push(Field::new(name, data_type, nullable));
+        let mut field = Field::new(name, data_type, nullable);
+        if let Some(metadata) = metadata {
+            field.set_metadata(metadata.to_hashmap());
+        }
+        self.inner.push(field);
     }
 
     pub fn into_fields(self) -> Fields {
@@ -1517,37 +1545,49 @@ impl ValuesFields {
     }
 }
 
-// `name_map` tracks a mapping between a field name and the number of appearances of that field.
-//
-// Some field names might already come to this function with the count (number of times it appeared)
-// as a sufix e.g. id:1, so there's still a chance of name collisions, for example,
-// if these three fields passed to this function: "col:1", "col" and "col", the function
-// would rename them to -> col:1, col, col:1 causing a posteriror error when building the DFSchema.
-// that's why we need the `seen` set, so the fields are always unique.
-//
-pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
-    let mut name_map = HashMap::new();
-    let mut seen: HashSet<String> = HashSet::new();
+/// Returns aliases to make field names unique.
+///
+/// Returns a vector of optional aliases, one per input field. `None` means keep the original name,
+/// `Some(alias)` means rename to the alias to ensure uniqueness.
+///
+/// Used when creating [`SubqueryAlias`] or similar operations that strip table qualifiers but need
+/// to maintain unique column names.
+///
+/// # Example
+/// Input fields: `[a, a, b, b, a, a:1]` ([`DFSchema`] valid when duplicate fields have different qualifiers)
+/// Returns: `[None, Some("a:1"), None, Some("b:1"), Some("a:2"), Some("a:1:1")]`
+pub fn unique_field_aliases(fields: &Fields) -> Vec<Option<String>> {
+    // Some field names might already come to this function with the count (number of times it appeared)
+    // as a suffix e.g. id:1, so there's still a chance of name collisions, for example,
+    // if these three fields passed to this function: "col:1", "col" and "col", the function
+    // would rename them to -> col:1, col, col:1 causing a posterior error when building the DFSchema.
+    // That's why we need the `seen` set, so the fields are always unique.
+
+    // Tracks a mapping between a field name and the number of appearances of that field.
+    let mut name_map = HashMap::<&str, usize>::new();
+    // Tracks all the fields and aliases that were previously seen.
+    let mut seen = HashSet::<Cow<String>>::new();
 
     fields
-        .into_iter()
+        .iter()
         .map(|field| {
-            let base_name = field.name();
-            let count = name_map.entry(base_name.clone()).or_insert(0);
-            let mut new_name = base_name.clone();
+            let original_name = field.name();
+            let mut name = Cow::Borrowed(original_name);
 
-            // Loop until we find a name that hasn't been used
-            while seen.contains(&new_name) {
+            let count = name_map.entry(original_name).or_insert(0);
+
+            // Loop until we find a name that hasn't been used.
+            while seen.contains(&name) {
                 *count += 1;
-                new_name = format!("{base_name}:{count}");
+                name = Cow::Owned(format!("{original_name}:{count}"));
             }
 
-            seen.insert(new_name.clone());
+            seen.insert(name.clone());
 
-            let mut modified_field =
-                Field::new(&new_name, field.data_type().clone(), field.is_nullable());
-            modified_field.set_metadata(field.metadata().clone());
-            modified_field
+            match name {
+                Cow::Borrowed(_) => None,
+                Cow::Owned(alias) => Some(alias),
+            }
         })
         .collect()
 }
@@ -1658,7 +1698,10 @@ pub fn build_join_schema(
     );
 
     let (schema1, schema2) = match join_type {
-        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
+        JoinType::Right
+        | JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::RightMark => (left, right),
         _ => (right, left),
     };
 
@@ -1885,15 +1928,14 @@ fn replace_columns(
     replace: &PlannedReplaceSelectItem,
 ) -> Result<Vec<Expr>> {
     for expr in exprs.iter_mut() {
-        if let Expr::Column(Column { name, .. }) = expr {
-            if let Some((_, new_expr)) = replace
+        if let Expr::Column(Column { name, .. }) = expr
+            && let Some((_, new_expr)) = replace
                 .items()
                 .iter()
                 .zip(replace.expressions().iter())
                 .find(|(item, _)| item.column_name.value == *name)
-            {
-                *expr = new_expr.clone().alias(name.clone())
-            }
+        {
+            *expr = new_expr.clone().alias(name.clone())
         }
     }
     Ok(exprs)
@@ -1957,6 +1999,7 @@ pub fn table_scan_with_filter_and_fetch(
 }
 
 pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+    // TODO should we take SchemaRef and avoid cloning?
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource {
         table_schema,
@@ -1968,6 +2011,7 @@ pub fn table_source_with_constraints(
     table_schema: &Schema,
     constraints: Constraints,
 ) -> Arc<dyn TableSource> {
+    // TODO should we take SchemaRef and avoid cloning?
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource {
         table_schema,
@@ -2140,12 +2184,17 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
+    use crate::lit_with_metadata;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
     use crate::test::function_stub::sum;
-    use datafusion_common::{Constraint, RecursionUnnestOption, SchemaError};
+    use datafusion_common::{
+        Constraint, DataFusionError, RecursionUnnestOption, SchemaError,
+    };
     use insta::assert_snapshot;
 
     #[test]
@@ -2482,12 +2531,12 @@ mod tests {
             return plan_err!("Plan should have returned an DataFusionError::Internal");
         };
 
-        let desc = desc
+        let desc = (*desc
             .split(DataFusionError::BACK_TRACE_SEP)
             .collect::<Vec<&str>>()
             .first()
-            .unwrap_or(&"")
-            .to_string();
+            .unwrap_or(&""))
+        .to_string();
 
         assert_snapshot!(desc, @"trying to unnest on invalid data type UInt32");
 
@@ -2676,34 +2725,6 @@ mod tests {
     }
 
     #[test]
-    fn test_change_redundant_column() -> Result<()> {
-        let t1_field_1 = Field::new("a", DataType::Int32, false);
-        let t2_field_1 = Field::new("a", DataType::Int32, false);
-        let t2_field_3 = Field::new("a", DataType::Int32, false);
-        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
-        let t1_field_2 = Field::new("b", DataType::Int32, false);
-        let t2_field_2 = Field::new("b", DataType::Int32, false);
-
-        let field_vec = vec![
-            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
-        ];
-        let remove_redundant = change_redundant_column(&Fields::from(field_vec));
-
-        assert_eq!(
-            remove_redundant,
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("a:1", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("b:1", DataType::Int32, false),
-                Field::new("a:2", DataType::Int32, false),
-                Field::new("a:1:1", DataType::Int32, false),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn plan_builder_from_logical_plan() -> Result<()> {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
@@ -2786,5 +2807,71 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_values_metadata() -> Result<()> {
+        let metadata: HashMap<String, String> =
+            [("ARROW:extension:metadata".to_string(), "test".to_string())]
+                .into_iter()
+                .collect();
+        let metadata = FieldMetadata::from(metadata);
+        let values = LogicalPlanBuilder::values(vec![
+            vec![lit_with_metadata(1, Some(metadata.clone()))],
+            vec![lit_with_metadata(2, Some(metadata.clone()))],
+        ])?
+        .build()?;
+        assert_eq!(*values.schema().field(0).metadata(), metadata.to_hashmap());
+
+        // Do not allow VALUES with different metadata mixed together
+        let metadata2: HashMap<String, String> =
+            [("ARROW:extension:metadata".to_string(), "test2".to_string())]
+                .into_iter()
+                .collect();
+        let metadata2 = FieldMetadata::from(metadata2);
+        assert!(
+            LogicalPlanBuilder::values(vec![
+                vec![lit_with_metadata(1, Some(metadata.clone()))],
+                vec![lit_with_metadata(2, Some(metadata2.clone()))],
+            ])
+            .is_err()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unique_field_aliases() {
+        let t1_field_1 = Field::new("a", DataType::Int32, false);
+        let t2_field_1 = Field::new("a", DataType::Int32, false);
+        let t2_field_3 = Field::new("a", DataType::Int32, false);
+        let t2_field_4 = Field::new("a:1", DataType::Int32, false);
+        let t1_field_2 = Field::new("b", DataType::Int32, false);
+        let t2_field_2 = Field::new("b", DataType::Int32, false);
+
+        let fields = vec![
+            t1_field_1, t2_field_1, t1_field_2, t2_field_2, t2_field_3, t2_field_4,
+        ];
+        let fields = Fields::from(fields);
+
+        let remove_redundant = unique_field_aliases(&fields);
+
+        // Input [a, a, b, b, a, a:1] becomes [None, a:1, None, b:1, a:2, a:1:1]
+        // First occurrence of each field name keeps original name (None), duplicates get
+        // incremental suffixes (:1, :2, etc.).
+        // Crucially in this case the 2nd occurrence of `a` gets rewritten to `a:1` which later
+        // conflicts with the last column which is _actually_ called `a:1` so we need to rename it
+        // as well to `a:1:1`.
+        assert_eq!(
+            remove_redundant,
+            vec![
+                None,
+                Some("a:1".to_string()),
+                None,
+                Some("b:1".to_string()),
+                Some("a:2".to_string()),
+                Some("a:1:1".to_string()),
+            ]
+        );
     }
 }

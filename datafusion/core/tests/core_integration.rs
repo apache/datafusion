@@ -21,6 +21,9 @@ mod sql;
 /// Run all tests that are found in the `dataframe` directory
 mod dataframe;
 
+/// Run all tests that are found in the `datasource` directory
+mod datasource;
+
 /// Run all tests that are found in the `macro_hygiene` directory
 mod macro_hygiene;
 
@@ -53,6 +56,9 @@ mod serde;
 
 /// Run all tests that are found in the `catalog` directory
 mod catalog;
+
+/// Run all tests that are found in the `catalog_listing` directory
+mod catalog_listing;
 
 /// Run all tests that are found in the `tracing` directory
 mod tracing;

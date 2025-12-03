@@ -235,14 +235,13 @@ logical_plan
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 02)--CoalesceBatchesExec: target_batch_size=8192
-03)----RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-05)--------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-06)----------UnionExec
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
-09)------------ProjectionExec: expr=[name@0 || _new as name]
-10)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=3
+04)------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+05)--------UnionExec
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----------ProjectionExec: expr=[name@0 || _new as name]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # nested_union_all
 query T rowsort
@@ -308,20 +307,20 @@ logical_plan
 physical_plan
 01)UnionExec
 02)--CoalesceBatchesExec: target_batch_size=2
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, CAST(t2.id AS Int32)@2), (name@1, name@1)]
+03)----HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], NullsEqual: true
 04)------CoalescePartitionsExec
-05)--------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-06)----------CoalesceBatchesExec: target_batch_size=2
-07)------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-08)--------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
-11)------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-12)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)----------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+09)--------CoalesceBatchesExec: target_batch_size=2
+10)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+11)------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+12)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 14)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
 15)----CoalesceBatchesExec: target_batch_size=2
-16)------HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1]
+16)------HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1], NullsEqual: true
 17)--------CoalescePartitionsExec
 18)----------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
 19)------------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
@@ -378,7 +377,7 @@ logical_plan
 physical_plan
 01)UnionExec
 02)--CoalesceBatchesExec: target_batch_size=2
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(name@0, name@0)]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(name@0, name@0)], NullsEqual: true
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=2
@@ -389,7 +388,7 @@ physical_plan
 11)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 12)--------DataSourceExec: partitions=1, partition_sizes=[1]
 13)--CoalesceBatchesExec: target_batch_size=2
-14)----HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(name@0, name@0)]
+14)----HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(name@0, name@0)], NullsEqual: true
 15)------CoalescePartitionsExec
 16)--------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 17)----------CoalesceBatchesExec: target_batch_size=2
@@ -514,16 +513,15 @@ physical_plan
 09)----------------CoalesceBatchesExec: target_batch_size=2
 10)------------------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
 11)--------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
-12)----------------------CoalesceBatchesExec: target_batch_size=2
-13)------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
-14)--------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-15)----------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
-16)----ProjectionExec: expr=[1 as cnt]
-17)------PlaceholderRowExec
-18)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
-19)------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { name: "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-20)--------ProjectionExec: expr=[1 as c1]
-21)----------PlaceholderRowExec
+12)----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
+13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
+15)----ProjectionExec: expr=[1 as cnt]
+16)------PlaceholderRowExec
+17)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
+18)------BoundedWindowAggExec: wdw=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+19)--------ProjectionExec: expr=[1 as c1]
+20)----------PlaceholderRowExec
 
 
 ########
@@ -603,8 +601,7 @@ physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 02)--UnionExec
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], file_type=csv, has_header=true
-04)----ProjectionExec: expr=[c1a@0 as c1]
-05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a], output_ordering=[c1a@0 ASC NULLS LAST], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a@0 as c1], file_type=csv, has_header=true
 
 statement ok
 drop table t1
@@ -835,14 +832,12 @@ logical_plan
 physical_plan
 01)CoalescePartitionsExec
 02)--UnionExec
-03)----CoalesceBatchesExec: target_batch_size=2
-04)------FilterExec: c1@0 = a
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true
-07)----CoalesceBatchesExec: target_batch_size=2
-08)------FilterExec: c1@0 = a
-09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true
+03)----FilterExec: c1@0 = a
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true
+06)----FilterExec: c1@0 = a
+07)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true
 
 # Clean up after the test
 statement ok
@@ -953,3 +948,40 @@ drop table u1;
 
 statement count 0
 drop table u2;
+
+# repro for https://github.com/apache/datafusion/issues/18327
+# should not error
+query TITT
+  WITH typ(oid, typnamespace, typname, typtype) AS (
+                      SELECT * FROM (VALUES (1, 10, 't1', 'b'))
+            UNION ALL SELECT * FROM (VALUES (2, NULL, 't2', 'b'))
+            UNION ALL SELECT * FROM (VALUES (3, 12, 't3', NULL))
+       )
+       , ns(oid, nspname) AS (VALUES (1, 'ns1'), (2, 'ns2'))
+    SELECT ns.nspname, typ.oid, typ.typname, typ.typtype
+      FROM typ JOIN ns ON (ns.oid = typ.typnamespace)
+     WHERE typ.typtype IN ('b','r','m','e','d')
+     ORDER BY CASE WHEN typ.typtype IN ('b','e','p') THEN 0
+                   WHEN typ.typtype = 'r' THEN 1
+              END
+----
+
+# Add another row with a non-NULL value `m` which is retained by the
+# filter but not matching any WHEN branch m?
+query TITT
+  WITH typ(oid, typnamespace, typname, typtype) AS (
+                      SELECT * FROM (VALUES (1, 10, 't1', 'b'))
+            UNION ALL SELECT * FROM (VALUES (2, NULL, 't2', 'b'))
+            UNION ALL SELECT * FROM (VALUES (3, 12, 't3', NULL))
+            UNION ALL SELECT * FROM (VALUES (4, 40, 't3', 'm'))
+       ), ns(oid, nspname) AS (
+         VALUES (1, 'ns1'), (2, 'ns2'), (40, 'ns3')
+       )
+    SELECT ns.nspname, typ.oid, typ.typname, typ.typtype
+      FROM typ JOIN ns ON (ns.oid = typ.typnamespace)
+     WHERE typ.typtype IN ('b','r','m','e','d')
+     ORDER BY CASE WHEN typ.typtype IN ('b','e','p') THEN 0
+                   WHEN typ.typtype = 'r' THEN 1
+              END
+----
+ns3 4 t3 m

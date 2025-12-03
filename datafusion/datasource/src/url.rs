@@ -233,34 +233,42 @@ impl ListingTableUrl {
         Some(stripped.split_terminator(DELIMITER))
     }
 
-    /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
-    pub async fn list_all_files<'a>(
+    /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`,
+    /// optionally filtering by a path prefix
+    pub async fn list_prefixed_files<'a>(
         &'a self,
         ctx: &'a dyn Session,
         store: &'a dyn ObjectStore,
+        prefix: Option<Path>,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         let exec_options = &ctx.config_options().execution;
         let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
-        // If the prefix is a file, use a head request, otherwise list
-        let list = match self.is_collection() {
-            true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
-                None => store.list(Some(&self.prefix)),
-                Some(cache) => {
-                    if let Some(res) = cache.get(&self.prefix) {
-                        debug!("Hit list all files cache");
-                        futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
-                            .boxed()
-                    } else {
-                        let list_res = store.list(Some(&self.prefix));
-                        let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
-                        cache.put(&self.prefix, Arc::new(vec.clone()));
-                        futures::stream::iter(vec.into_iter().map(Ok)).boxed()
-                    }
-                }
-            },
-            false => futures::stream::once(store.head(&self.prefix)).boxed(),
+
+        let prefix = if let Some(prefix) = prefix {
+            let mut p = self.prefix.parts().collect::<Vec<_>>();
+            p.extend(prefix.parts());
+            Path::from_iter(p.into_iter())
+        } else {
+            self.prefix.clone()
         };
+
+        let list: BoxStream<'a, Result<ObjectMeta>> = if self.is_collection() {
+            list_with_cache(ctx, store, &prefix).await?
+        } else {
+            match store.head(&prefix).await {
+                Ok(meta) => futures::stream::once(async { Ok(meta) })
+                    .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                    .boxed(),
+                // If the head command fails, it is likely that object doesn't exist.
+                // Retry as though it were a prefix (aka a collection)
+                Err(object_store::Error::NotFound { .. }) => {
+                    list_with_cache(ctx, store, &prefix).await?
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+
         Ok(list
             .try_filter(move |meta| {
                 let path = &meta.location;
@@ -268,8 +276,18 @@ impl ListingTableUrl {
                 let glob_match = self.contains(path, ignore_subdirectory);
                 futures::future::ready(extension_match && glob_match)
             })
-            .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
             .boxed())
+    }
+
+    /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
+    pub async fn list_all_files<'a>(
+        &'a self,
+        ctx: &'a dyn Session,
+        store: &'a dyn ObjectStore,
+        file_extension: &'a str,
+    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+        self.list_prefixed_files(ctx, store, None, file_extension)
+            .await
     }
 
     /// Returns this [`ListingTableUrl`] as a string
@@ -303,6 +321,33 @@ impl ListingTableUrl {
         let glob =
             Pattern::new(glob).map_err(|e| DataFusionError::External(Box::new(e)))?;
         Self::try_new(self.url, Some(glob))
+    }
+}
+
+async fn list_with_cache<'b>(
+    ctx: &'b dyn Session,
+    store: &'b dyn ObjectStore,
+    prefix: &Path,
+) -> Result<BoxStream<'b, Result<ObjectMeta>>> {
+    match ctx.runtime_env().cache_manager.get_list_files_cache() {
+        None => Ok(store
+            .list(Some(prefix))
+            .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
+            .boxed()),
+        Some(cache) => {
+            let vec = if let Some(res) = cache.get(prefix) {
+                debug!("Hit list all files cache");
+                res.as_ref().clone()
+            } else {
+                let vec = store
+                    .list(Some(prefix))
+                    .try_collect::<Vec<ObjectMeta>>()
+                    .await?;
+                cache.put(prefix, Arc::new(vec.clone()));
+                vec
+            };
+            Ok(futures::stream::iter(vec.into_iter().map(Ok)).boxed())
+        }
     }
 }
 
@@ -361,7 +406,6 @@ const GLOB_START_CHARS: [char; 3] = ['?', '*', '['];
 ///
 /// Path delimiters are determined using [`std::path::is_separator`] which
 /// permits `/` as a path delimiter even on Windows platforms.
-///
 #[cfg(not(target_arch = "wasm32"))]
 fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
     let mut last_separator = 0;
@@ -384,6 +428,24 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use datafusion_common::config::TableOptions;
+    use datafusion_common::DFSchema;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_execution::TaskContext;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_plan::ExecutionPlan;
+    use object_store::{
+        GetOptions, GetResult, ListResult, MultipartUpload, PutMultipartOptions,
+        PutPayload,
+    };
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::ops::Range;
     use tempfile::tempdir;
 
     #[test]
@@ -596,5 +658,315 @@ mod tests {
             Some("ext"),
             "file path ends with .ext - extension is ext",
         );
+    }
+
+    #[tokio::test]
+    async fn test_list_files() -> Result<()> {
+        let store = MockObjectStore {
+            in_mem: object_store::memory::InMemory::new(),
+            forbidden_paths: vec!["forbidden/e.parquet".into()],
+        };
+
+        // Create some files:
+        create_file(&store, "a.parquet").await;
+        create_file(&store, "/t/b.parquet").await;
+        create_file(&store, "/t/c.csv").await;
+        create_file(&store, "/t/d.csv").await;
+
+        // This file returns a permission error.
+        create_file(&store, "/forbidden/e.parquet").await;
+
+        assert_eq!(
+            list_all_files("/", &store, "parquet").await?,
+            vec!["a.parquet"],
+        );
+
+        // test with and without trailing slash
+        assert_eq!(
+            list_all_files("/t/", &store, "parquet").await?,
+            vec!["t/b.parquet"],
+        );
+        assert_eq!(
+            list_all_files("/t", &store, "parquet").await?,
+            vec!["t/b.parquet"],
+        );
+
+        // test with and without trailing slash
+        assert_eq!(
+            list_all_files("/t", &store, "csv").await?,
+            vec!["t/c.csv", "t/d.csv"],
+        );
+        assert_eq!(
+            list_all_files("/t/", &store, "csv").await?,
+            vec!["t/c.csv", "t/d.csv"],
+        );
+
+        // Test a non existing prefix
+        assert_eq!(
+            list_all_files("/NonExisting", &store, "csv").await?,
+            vec![] as Vec<String>
+        );
+        assert_eq!(
+            list_all_files("/NonExisting/", &store, "csv").await?,
+            vec![] as Vec<String>
+        );
+
+        // Including forbidden.parquet generates an error.
+        let Err(DataFusionError::ObjectStore(err)) =
+            list_all_files("/forbidden/e.parquet", &store, "parquet").await
+        else {
+            panic!("Expected ObjectStore error");
+        };
+
+        let object_store::Error::PermissionDenied { .. } = &*err else {
+            panic!("Expected PermissionDenied error");
+        };
+
+        // Test prefix filtering with partition-style paths
+        create_file(&store, "/data/a=1/file1.parquet").await;
+        create_file(&store, "/data/a=1/b=100/file2.parquet").await;
+        create_file(&store, "/data/a=2/b=200/file3.parquet").await;
+        create_file(&store, "/data/a=2/b=200/file4.csv").await;
+
+        assert_eq!(
+            list_prefixed_files("/data/", &store, Some(Path::from("a=1")), "parquet")
+                .await?,
+            vec!["data/a=1/b=100/file2.parquet", "data/a=1/file1.parquet"],
+        );
+
+        assert_eq!(
+            list_prefixed_files(
+                "/data/",
+                &store,
+                Some(Path::from("a=1/b=100")),
+                "parquet"
+            )
+            .await?,
+            vec!["data/a=1/b=100/file2.parquet"],
+        );
+
+        assert_eq!(
+            list_prefixed_files("/data/", &store, Some(Path::from("a=2")), "parquet")
+                .await?,
+            vec!["data/a=2/b=200/file3.parquet"],
+        );
+
+        Ok(())
+    }
+
+    /// Creates a file with "hello world" content at the specified path
+    async fn create_file(object_store: &dyn ObjectStore, path: &str) {
+        object_store
+            .put(&Path::from(path), PutPayload::from_static(b"hello world"))
+            .await
+            .expect("failed to create test file");
+    }
+
+    /// Runs "list_prefixed_files"  with no prefix to list all files and returns their paths
+    ///
+    /// Panic's on error
+    async fn list_all_files(
+        url: &str,
+        store: &dyn ObjectStore,
+        file_extension: &str,
+    ) -> Result<Vec<String>> {
+        try_list_prefixed_files(url, store, None, file_extension).await
+    }
+
+    /// Runs "list_prefixed_files" and returns their paths
+    ///
+    /// Panic's on error
+    async fn list_prefixed_files(
+        url: &str,
+        store: &dyn ObjectStore,
+        prefix: Option<Path>,
+        file_extension: &str,
+    ) -> Result<Vec<String>> {
+        try_list_prefixed_files(url, store, prefix, file_extension).await
+    }
+
+    /// Runs "list_prefixed_files" and returns their paths
+    async fn try_list_prefixed_files(
+        url: &str,
+        store: &dyn ObjectStore,
+        prefix: Option<Path>,
+        file_extension: &str,
+    ) -> Result<Vec<String>> {
+        let session = MockSession::new();
+        let url = ListingTableUrl::parse(url)?;
+        let files = url
+            .list_prefixed_files(&session, store, prefix, file_extension)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|meta| meta.location.as_ref().to_string())
+            .collect();
+        Ok(files)
+    }
+
+    #[derive(Debug)]
+    struct MockObjectStore {
+        in_mem: object_store::memory::InMemory,
+        forbidden_paths: Vec<Path>,
+    }
+
+    impl std::fmt::Display for MockObjectStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.in_mem.fmt(f)
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for MockObjectStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.in_mem.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.in_mem.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.in_mem.get_opts(location, options).await
+        }
+
+        async fn get_ranges(
+            &self,
+            location: &Path,
+            ranges: &[Range<u64>],
+        ) -> object_store::Result<Vec<Bytes>> {
+            self.in_mem.get_ranges(location, ranges).await
+        }
+
+        async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
+            if self.forbidden_paths.contains(location) {
+                Err(object_store::Error::PermissionDenied {
+                    path: location.to_string(),
+                    source: "forbidden".into(),
+                })
+            } else {
+                self.in_mem.head(location).await
+            }
+        }
+
+        async fn delete(&self, location: &Path) -> object_store::Result<()> {
+            self.in_mem.delete(location).await
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.in_mem.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.in_mem.list_with_delimiter(prefix).await
+        }
+
+        async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+            self.in_mem.copy(from, to).await
+        }
+
+        async fn copy_if_not_exists(
+            &self,
+            from: &Path,
+            to: &Path,
+        ) -> object_store::Result<()> {
+            self.in_mem.copy_if_not_exists(from, to).await
+        }
+    }
+
+    struct MockSession {
+        config: SessionConfig,
+        runtime_env: Arc<RuntimeEnv>,
+    }
+
+    impl MockSession {
+        fn new() -> Self {
+            Self {
+                config: SessionConfig::new(),
+                runtime_env: Arc::new(RuntimeEnv::default()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Session for MockSession {
+        fn session_id(&self) -> &str {
+            unimplemented!()
+        }
+
+        fn config(&self) -> &SessionConfig {
+            &self.config
+        }
+
+        async fn create_physical_plan(
+            &self,
+            _logical_plan: &LogicalPlan,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn create_physical_expr(
+            &self,
+            _expr: Expr,
+            _df_schema: &DFSchema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            unimplemented!()
+        }
+
+        fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+            unimplemented!()
+        }
+
+        fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+            unimplemented!()
+        }
+
+        fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+            &self.runtime_env
+        }
+
+        fn execution_props(&self) -> &ExecutionProps {
+            unimplemented!()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+
+        fn table_options(&self) -> &TableOptions {
+            unimplemented!()
+        }
+
+        fn table_options_mut(&mut self) -> &mut TableOptions {
+            unimplemented!()
+        }
+
+        fn task_ctx(&self) -> Arc<TaskContext> {
+            unimplemented!()
+        }
     }
 }

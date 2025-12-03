@@ -21,9 +21,11 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute;
 use arrow::datatypes::{DataType, Date32Type};
+use arrow::error::ArrowError;
 use datafusion_common::cast::{
     as_date32_array, as_int16_array, as_int32_array, as_int8_array,
 };
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -86,36 +88,43 @@ impl ScalarUDFImpl for SparkDateAdd {
 }
 
 fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [date_arg, days_arg] = args else {
-        return internal_err!(
-            "Spark `date_add` function requires 2 arguments, got {}",
-            args.len()
-        );
-    };
+    let [date_arg, days_arg] = take_function_args("date_add", args)?;
     let date_array = as_date32_array(date_arg)?;
     let result = match days_arg.data_type() {
         DataType::Int8 => {
             let days_array = as_int8_array(days_arg)?;
-            compute::binary::<_, _, _, Date32Type>(
+            compute::try_binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| date + days as i32,
+                |date, days| {
+                    date.checked_add(days as i32).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_add".to_string())
+                    })
+                },
             )?
         }
         DataType::Int16 => {
             let days_array = as_int16_array(days_arg)?;
-            compute::binary::<_, _, _, Date32Type>(
+            compute::try_binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| date + days as i32,
+                |date, days| {
+                    date.checked_add(days as i32).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_add".to_string())
+                    })
+                },
             )?
         }
         DataType::Int32 => {
             let days_array = as_int32_array(days_arg)?;
-            compute::binary::<_, _, _, Date32Type>(
+            compute::try_binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| date + days,
+                |date, days| {
+                    date.checked_add(days).ok_or_else(|| {
+                        ArrowError::ArithmeticOverflow("date_add".to_string())
+                    })
+                },
             )?
         }
         _ => {

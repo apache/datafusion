@@ -41,7 +41,9 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, JoinType, Result, ScalarValue};
+use datafusion_common::{
+    assert_eq_or_internal_err, internal_err, JoinType, Result, ScalarValue,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
@@ -59,7 +61,7 @@ struct JoinLeftData {
     _reservation: MemoryReservation,
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 /// Cross Join Execution Plan
 ///
 /// This operator is used when there are no predicates between two tables and
@@ -175,6 +177,12 @@ impl CrossJoinExec {
     /// Returns a new `ExecutionPlan` that computes the same join as this one,
     /// with the left and right inputs swapped using the  specified
     /// `partition_mode`.
+    ///
+    /// # Notes:
+    ///
+    /// This function should be called BEFORE inserting any repartitioning
+    /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
+    /// for more details.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let new_join =
             CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
@@ -294,12 +302,12 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if self.left.output_partitioning().partition_count() != 1 {
-            return internal_err!(
-                "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
+        assert_eq_or_internal_err!(
+            self.left.output_partitioning().partition_count(),
+            1,
+            "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
                  consider using CoalescePartitionsExec or the EnforceDistribution rule"
-            );
-        }
+        );
 
         let stream = self.right.execute(partition, Arc::clone(&context))?;
 
@@ -621,7 +629,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Joins the the indexed row of left data with the current probe batch.
+    /// Joins the indexed row of left data with the current probe batch.
     /// If all the results are produced, the state is set to fetch new probe batch.
     fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let right_batch = self.state.try_as_record_batch()?;
@@ -644,7 +652,6 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                         self.left_index += 1;
                     }
 
-                    self.join_metrics.output_batches.add(1);
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }
@@ -889,7 +896,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec"
+            "Resources exhausted: Additional allocation failed for CrossJoinExec with top memory consumers (across reservations) as:\n  CrossJoinExec"
         );
 
         Ok(())

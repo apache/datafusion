@@ -17,7 +17,7 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use std::cmp::min;
+use std::cmp::{min, Ordering};
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
@@ -27,8 +27,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::joins::SharedBitmapBuilder;
-use crate::metrics::{self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
-use crate::projection::ProjectionExec;
+use crate::metrics::{
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricType,
+};
+use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
@@ -37,23 +39,36 @@ pub use super::join_filter::JoinFilter;
 pub use super::join_hash_map::JoinHashMapType;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
-use arrow::array::BooleanArray;
+use ahash::RandomState;
 use arrow::array::{
     builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
     BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
     UInt32Array, UInt32Builder, UInt64Array,
 };
+use arrow::array::{
+    ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, StringArray,
+    StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt8Array,
+};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute;
+use arrow::compute::kernels::cmp::eq;
+use arrow::compute::{self, and, take, FilterBuilder};
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
+use arrow_ord::cmp::not_distinct;
+use arrow_schema::{ArrowError, DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    plan_err, DataFusionError, JoinSide, JoinType, Result, SharedResult,
+    not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, NullEquality, Result,
+    SharedResult,
 };
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
@@ -61,6 +76,8 @@ use datafusion_physical_expr::{
     PhysicalExprRef,
 };
 
+use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -207,7 +224,6 @@ pub struct ColumnIndex {
 
 /// Returns the output field given the input field. Outer joins may
 /// insert nulls even if the input was not null
-///
 fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> Field {
     let force_nullable = match join_type {
         JoinType::Inner => false,
@@ -277,7 +293,7 @@ pub fn build_join_schema(
         JoinType::LeftSemi | JoinType::LeftAnti => left_fields().unzip(),
         JoinType::LeftMark => {
             let right_field = once((
-                Field::new("mark", arrow::datatypes::DataType::Boolean, false),
+                Field::new("mark", DataType::Boolean, false),
                 ColumnIndex {
                     index: 0,
                     side: JoinSide::None,
@@ -288,7 +304,7 @@ pub fn build_join_schema(
         JoinType::RightSemi | JoinType::RightAnti => right_fields().unzip(),
         JoinType::RightMark => {
             let left_field = once((
-                Field::new("mark", arrow_schema::DataType::Boolean, false),
+                Field::new("mark", DataType::Boolean, false),
                 ColumnIndex {
                     index: 0,
                     side: JoinSide::None,
@@ -299,7 +315,10 @@ pub fn build_join_schema(
     };
 
     let (schema1, schema2) = match join_type {
-        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => (left, right),
+        JoinType::Right
+        | JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::RightMark => (left, right),
         _ => (right, left),
     };
 
@@ -395,11 +414,11 @@ struct PartialJoinStatistics {
 pub(crate) fn estimate_join_statistics(
     left_stats: Statistics,
     right_stats: Statistics,
-    on: JoinOn,
+    on: &JoinOn,
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
-    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
+    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
         None => (Precision::Absent, Statistics::unknown_column(schema)),
@@ -548,25 +567,26 @@ fn estimate_inner_join_cardinality(
         return Some(estimation);
     };
 
+    let Statistics {
+        num_rows: left_num_rows,
+        column_statistics: left_column_statistics,
+        ..
+    } = left_stats;
+    let Statistics {
+        num_rows: right_num_rows,
+        column_statistics: right_column_statistics,
+        ..
+    } = right_stats;
+
     // The algorithm here is partly based on the non-histogram selectivity estimation
     // from Spark's Catalyst optimizer.
     let mut join_selectivity = Precision::Absent;
-    for (left_stat, right_stat) in left_stats
-        .column_statistics
+    for (left_stat, right_stat) in left_column_statistics
         .iter()
-        .zip(right_stats.column_statistics.iter())
+        .zip(right_column_statistics.iter())
     {
-        // Break if any of statistics bounds are undefined
-        if left_stat.min_value.get_value().is_none()
-            || left_stat.max_value.get_value().is_none()
-            || right_stat.min_value.get_value().is_none()
-            || right_stat.max_value.get_value().is_none()
-        {
-            return None;
-        }
-
-        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat);
-        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat);
+        let left_max_distinct = max_distinct_count(&left_num_rows, left_stat);
+        let right_max_distinct = max_distinct_count(&right_num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -651,7 +671,8 @@ fn estimate_disjoint_inputs(
 /// Estimate the number of maximum distinct values that can be present in the
 /// given column from its statistics. If distinct_count is available, uses it
 /// directly. Otherwise, if the column is numeric and has min/max values, it
-/// estimates the maximum distinct count from those.
+/// estimates the maximum distinct count from those. Otherwise, the num_rows
+/// is used.
 fn max_distinct_count(
     num_rows: &Precision<usize>,
     stats: &ColumnStatistics,
@@ -810,9 +831,10 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
 pub(crate) fn get_final_indices_from_shared_bitmap(
     shared_bitmap: &SharedBitmapBuilder,
     join_type: JoinType,
+    piecewise: bool,
 ) -> (UInt64Array, UInt32Array) {
     let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type)
+    get_final_indices_from_bit_map(&bitmap, join_type, piecewise)
 }
 
 /// In the end of join execution, need to use bit map of the matched
@@ -827,16 +849,22 @@ pub(crate) fn get_final_indices_from_shared_bitmap(
 pub(crate) fn get_final_indices_from_bit_map(
     left_bit_map: &BooleanBufferBuilder,
     join_type: JoinType,
+    // We add a flag for whether this is being passed from the `PiecewiseMergeJoin`
+    // because the bitmap can be for left + right `JoinType`s
+    piecewise: bool,
 ) -> (UInt64Array, UInt32Array) {
     let left_size = left_bit_map.len();
-    if join_type == JoinType::LeftMark {
+    if join_type == JoinType::LeftMark || (join_type == JoinType::RightMark && piecewise)
+    {
         let left_indices = (0..left_size as u64).collect::<UInt64Array>();
         let right_indices = (0..left_size)
             .map(|idx| left_bit_map.get_bit(idx).then_some(0))
             .collect::<UInt32Array>();
         return (left_indices, right_indices);
     }
-    let left_indices = if join_type == JoinType::LeftSemi {
+    let left_indices = if join_type == JoinType::LeftSemi
+        || (join_type == JoinType::RightSemi && piecewise)
+    {
         (0..left_size)
             .filter_map(|idx| (left_bit_map.get_bit(idx)).then_some(idx as u64))
             .collect::<UInt64Array>()
@@ -963,7 +991,7 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(build_indices.null_count(), build_indices.len());
                 new_null_array(array.data_type(), build_indices.len())
             } else {
-                compute::take(array.as_ref(), build_indices, None)?
+                take(array.as_ref(), build_indices, None)?
             }
         } else {
             let array = probe_batch.column(column_index.index);
@@ -971,7 +999,7 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(probe_indices.null_count(), probe_indices.len());
                 new_null_array(array.data_type(), probe_indices.len())
             } else {
-                compute::take(array.as_ref(), probe_indices, None)?
+                take(array.as_ref(), probe_indices, None)?
             }
         };
 
@@ -1113,8 +1141,8 @@ pub(crate) fn append_right_indices(
 ) -> Result<(UInt64Array, UInt32Array)> {
     if preserve_order_for_right {
         Ok(append_probe_indices_in_order(
-            left_indices,
-            right_indices,
+            &left_indices,
+            &right_indices,
             adjust_range,
         ))
     } else {
@@ -1258,8 +1286,8 @@ fn build_range_bitmap<T: ArrowPrimitiveType>(
 /// - A `PrimitiveArray` of `UInt64Type` with the newly constructed build indices.
 /// - A `PrimitiveArray` of `UInt32Type` with the newly constructed probe indices.
 fn append_probe_indices_in_order(
-    build_indices: PrimitiveArray<UInt64Type>,
-    probe_indices: PrimitiveArray<UInt32Type>,
+    build_indices: &PrimitiveArray<UInt64Type>,
+    probe_indices: &PrimitiveArray<UInt32Type>,
     range: Range<usize>,
 ) -> (PrimitiveArray<UInt64Type>, PrimitiveArray<UInt32Type>) {
     // Builders for new indices:
@@ -1312,8 +1340,10 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) input_batches: metrics::Count,
     /// Number of rows consumed by probe-side this operator
     pub(crate) input_rows: metrics::Count,
-    /// Number of batches produced by this operator
-    pub(crate) output_batches: metrics::Count,
+    /// Fraction of probe rows that found more than one match
+    pub(crate) probe_hit_rate: metrics::RatioMetrics,
+    /// Average number of build matches per matched probe row
+    pub(crate) avg_fanout: metrics::RatioMetrics,
 }
 
 // This Drop implementation updates the elapsed compute part of the metrics.
@@ -1357,8 +1387,13 @@ impl BuildProbeJoinMetrics {
 
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
 
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
+        let probe_hit_rate = MetricBuilder::new(metrics)
+            .with_type(MetricType::SUMMARY)
+            .ratio_metrics("probe_hit_rate", partition);
+
+        let avg_fanout = MetricBuilder::new(metrics)
+            .with_type(MetricType::SUMMARY)
+            .ratio_metrics("avg_fanout", partition);
 
         Self {
             build_time,
@@ -1368,8 +1403,9 @@ impl BuildProbeJoinMetrics {
             join_time,
             input_batches,
             input_rows,
-            output_batches,
             baseline,
+            probe_hit_rate,
+            avg_fanout,
         }
     }
 }
@@ -1582,20 +1618,27 @@ pub fn reorder_output_after_swap(
 fn swap_reverting_projection(
     left_schema: &Schema,
     right_schema: &Schema,
-) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
-    let right_cols = right_schema.fields().iter().enumerate().map(|(i, f)| {
-        (
-            Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
-            f.name().to_owned(),
-        )
-    });
+) -> Vec<ProjectionExpr> {
+    let right_cols =
+        right_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| ProjectionExpr {
+                expr: Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>,
+                alias: f.name().to_owned(),
+            });
     let right_len = right_cols.len();
-    let left_cols = left_schema.fields().iter().enumerate().map(|(i, f)| {
-        (
-            Arc::new(Column::new(f.name(), right_len + i)) as Arc<dyn PhysicalExpr>,
-            f.name().to_owned(),
-        )
-    });
+    let left_cols =
+        left_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| ProjectionExpr {
+                expr: Arc::new(Column::new(f.name(), right_len + i))
+                    as Arc<dyn PhysicalExpr>,
+                alias: f.name().to_owned(),
+            });
 
     left_cols.chain(right_cols).collect()
 }
@@ -1613,8 +1656,9 @@ pub fn swap_join_projection(
         JoinType::LeftAnti
         | JoinType::LeftSemi
         | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
-
+        | JoinType::RightSemi
+        | JoinType::LeftMark
+        | JoinType::RightMark => projection.cloned(),
         _ => projection.map(|p| {
             p.iter()
                 .map(|i| {
@@ -1631,6 +1675,202 @@ pub fn swap_join_projection(
                 .collect()
         }),
     }
+}
+
+/// Updates `hash_map` with new entries from `batch` evaluated against the expressions `on`
+/// using `offset` as a start value for `batch` row indices.
+///
+/// `fifo_hashmap` sets the order of iteration over `batch` rows while updating hashmap,
+/// which allows to keep either first (if set to true) or last (if set to false) row index
+/// as a chain head for rows with equal hash values.
+#[expect(clippy::too_many_arguments)]
+pub fn update_hash(
+    on: &[PhysicalExprRef],
+    batch: &RecordBatch,
+    hash_map: &mut dyn JoinHashMapType,
+    offset: usize,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    deleted_offset: usize,
+    fifo_hashmap: bool,
+) -> Result<()> {
+    // evaluate the keys
+    let keys_values = evaluate_expressions_to_arrays(on, batch)?;
+
+    // calculate the hash values
+    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+
+    // For usual JoinHashmap, the implementation is void.
+    hash_map.extend_zero(batch.num_rows());
+
+    // Updating JoinHashMap from hash values iterator
+    let hash_values_iter = hash_values
+        .iter()
+        .enumerate()
+        .map(|(i, val)| (i + offset, val));
+
+    if fifo_hashmap {
+        hash_map.update_from_iter(Box::new(hash_values_iter.rev()), deleted_offset);
+    } else {
+        hash_map.update_from_iter(Box::new(hash_values_iter), deleted_offset);
+    }
+
+    Ok(())
+}
+
+pub(super) fn equal_rows_arr(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Result<(UInt64Array, UInt32Array)> {
+    let mut iter = left_arrays.iter().zip(right_arrays.iter());
+
+    let Some((first_left, first_right)) = iter.next() else {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    };
+
+    let arr_left = take(first_left.as_ref(), indices_left, None)?;
+    let arr_right = take(first_right.as_ref(), indices_right, None)?;
+
+    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
+
+    // Use map and try_fold to iterate over the remaining pairs of arrays.
+    // In each iteration, take is used on the pair of arrays and their equality is determined.
+    // The results are then folded (combined) using the and function to get a final equality result.
+    equal = iter
+        .map(|(left, right)| {
+            let arr_left = take(left.as_ref(), indices_left, None)?;
+            let arr_right = take(right.as_ref(), indices_right, None)?;
+            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)
+        })
+        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
+
+    let filter_builder = FilterBuilder::new(&equal).optimize().build();
+
+    let left_filtered = filter_builder.filter(indices_left)?;
+    let right_filtered = filter_builder.filter(indices_right)?;
+
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
+}
+
+// version of eq_dyn supporting equality on null arrays
+fn eq_dyn_null(
+    left: &dyn Array,
+    right: &dyn Array,
+    null_equality: NullEquality,
+) -> Result<BooleanArray, ArrowError> {
+    // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
+    // implementation
+    // <https://github.com/apache/datafusion/issues/10749>
+    if left.data_type().is_nested() {
+        let op = match null_equality {
+            NullEquality::NullEqualsNothing => Operator::Eq,
+            NullEquality::NullEqualsNull => Operator::IsNotDistinctFrom,
+        };
+        return Ok(compare_op_for_nested(op, &left, &right)?);
+    }
+    match null_equality {
+        NullEquality::NullEqualsNothing => eq(&left, &right),
+        NullEquality::NullEqualsNull => not_distinct(&left, &right),
+    }
+}
+
+/// Get comparison result of two rows of join arrays
+pub fn compare_join_arrays(
+    left_arrays: &[ArrayRef],
+    left: usize,
+    right_arrays: &[ArrayRef],
+    right: usize,
+    sort_options: &[SortOptions],
+    null_equality: NullEquality,
+) -> Result<Ordering> {
+    let mut res = Ordering::Equal;
+    for ((left_array, right_array), sort_options) in
+        left_arrays.iter().zip(right_arrays).zip(sort_options)
+    {
+        macro_rules! compare_value {
+            ($T:ty) => {{
+                let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
+                let right_array = right_array.as_any().downcast_ref::<$T>().unwrap();
+                match (left_array.is_null(left), right_array.is_null(right)) {
+                    (false, false) => {
+                        let left_value = &left_array.value(left);
+                        let right_value = &right_array.value(right);
+                        res = left_value.partial_cmp(right_value).unwrap();
+                        if sort_options.descending {
+                            res = res.reverse();
+                        }
+                    }
+                    (true, false) => {
+                        res = if sort_options.nulls_first {
+                            Ordering::Less
+                        } else {
+                            Ordering::Greater
+                        };
+                    }
+                    (false, true) => {
+                        res = if sort_options.nulls_first {
+                            Ordering::Greater
+                        } else {
+                            Ordering::Less
+                        };
+                    }
+                    _ => {
+                        res = match null_equality {
+                            NullEquality::NullEqualsNothing => Ordering::Less,
+                            NullEquality::NullEqualsNull => Ordering::Equal,
+                        };
+                    }
+                }
+            }};
+        }
+
+        match left_array.data_type() {
+            DataType::Null => {}
+            DataType::Boolean => compare_value!(BooleanArray),
+            DataType::Int8 => compare_value!(Int8Array),
+            DataType::Int16 => compare_value!(Int16Array),
+            DataType::Int32 => compare_value!(Int32Array),
+            DataType::Int64 => compare_value!(Int64Array),
+            DataType::UInt8 => compare_value!(UInt8Array),
+            DataType::UInt16 => compare_value!(UInt16Array),
+            DataType::UInt32 => compare_value!(UInt32Array),
+            DataType::UInt64 => compare_value!(UInt64Array),
+            DataType::Float32 => compare_value!(Float32Array),
+            DataType::Float64 => compare_value!(Float64Array),
+            DataType::Binary => compare_value!(BinaryArray),
+            DataType::BinaryView => compare_value!(BinaryViewArray),
+            DataType::FixedSizeBinary(_) => compare_value!(FixedSizeBinaryArray),
+            DataType::LargeBinary => compare_value!(LargeBinaryArray),
+            DataType::Utf8 => compare_value!(StringArray),
+            DataType::Utf8View => compare_value!(StringViewArray),
+            DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Decimal128(..) => compare_value!(Decimal128Array),
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => compare_value!(TimestampSecondArray),
+                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
+            },
+            DataType::Date32 => compare_value!(Date32Array),
+            DataType::Date64 => compare_value!(Date64Array),
+            dt => {
+                return not_impl_err!(
+                    "Unsupported data type in sort merge join comparator: {}",
+                    dt
+                );
+            }
+        }
+        if !res.is_eq() {
+            break;
+        }
+    }
+    Ok(res)
 }
 
 #[cfg(test)]
@@ -1894,10 +2134,16 @@ mod tests {
                 (20, Inexact(1), Inexact(40), Absent, Absent),
                 Some(Inexact(10)),
             ),
-            // When we have distinct count.
+            // Distinct count matches the range
             (
                 (10, Inexact(1), Inexact(10), Inexact(10), Absent),
                 (10, Inexact(1), Inexact(10), Inexact(10), Absent),
+                Some(Inexact(10)),
+            ),
+            // Distinct count takes precedence over the range
+            (
+                (10, Inexact(1), Inexact(3), Inexact(10), Absent),
+                (10, Inexact(1), Inexact(3), Inexact(10), Absent),
                 Some(Inexact(10)),
             ),
             // distinct(left) > distinct(right)
@@ -1943,32 +2189,33 @@ mod tests {
             // Edge cases
             // ==========
             //
-            // No column level stats.
+            // No column level stats, fall back to row count.
             (
                 (10, Absent, Absent, Absent, Absent),
                 (10, Absent, Absent, Absent, Absent),
-                None,
+                Some(Inexact(10)),
             ),
-            // No min or max (or both).
+            // No min or max (or both), but distinct available.
             (
                 (10, Absent, Absent, Inexact(3), Absent),
                 (10, Absent, Absent, Inexact(3), Absent),
-                None,
+                Some(Inexact(33)),
             ),
             (
                 (10, Inexact(2), Absent, Inexact(3), Absent),
                 (10, Absent, Inexact(5), Inexact(3), Absent),
-                None,
+                Some(Inexact(33)),
             ),
             (
                 (10, Absent, Inexact(3), Inexact(3), Absent),
                 (10, Inexact(1), Absent, Inexact(3), Absent),
-                None,
+                Some(Inexact(33)),
             ),
+            // No min or max, fall back to row count
             (
                 (10, Absent, Inexact(3), Absent, Absent),
                 (10, Inexact(1), Absent, Absent, Absent),
-                None,
+                Some(Inexact(10)),
             ),
             // Non overlapping min/max (when exact=False).
             (
@@ -2563,17 +2810,17 @@ mod tests {
 
         assert_eq!(proj.len(), 3);
 
-        let (col, name) = &proj[0];
-        assert_eq!(name, "a");
-        assert_col_expr(col, "a", 1);
+        let proj_expr = &proj[0];
+        assert_eq!(proj_expr.alias, "a");
+        assert_col_expr(&proj_expr.expr, "a", 1);
 
-        let (col, name) = &proj[1];
-        assert_eq!(name, "b");
-        assert_col_expr(col, "b", 2);
+        let proj_expr = &proj[1];
+        assert_eq!(proj_expr.alias, "b");
+        assert_col_expr(&proj_expr.expr, "b", 2);
 
-        let (col, name) = &proj[2];
-        assert_eq!(name, "c");
-        assert_col_expr(col, "c", 0);
+        let proj_expr = &proj[2];
+        assert_eq!(proj_expr.alias, "c");
+        assert_col_expr(&proj_expr.expr, "c", 0);
     }
 
     fn assert_col_expr(expr: &Arc<dyn PhysicalExpr>, name: &str, index: usize) {

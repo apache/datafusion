@@ -115,8 +115,9 @@ fn bench_spill_io(c: &mut Criterion) {
                 // - Wait for the consumer to finish processing
                 |spill_file| {
                     rt.block_on(async {
-                        let stream =
-                            spill_manager.read_spill_as_stream(spill_file).unwrap();
+                        let stream = spill_manager
+                            .read_spill_as_stream(spill_file, None)
+                            .unwrap();
                         let _ = collect(stream).await.unwrap();
                     })
                 },
@@ -305,7 +306,7 @@ fn create_q20_like_batches(
     (schema, batches)
 }
 
-/// Genereate `num_batches` wide RecordBatches resembling sort-tpch Q10 for benchmarking.
+/// Generate `num_batches` wide RecordBatches resembling sort-tpch Q10 for benchmarking.
 /// This includes multiple numeric, date, and Utf8View columns (15 total).
 pub fn create_wide_batches(
     num_batches: usize,
@@ -489,6 +490,7 @@ fn bench_spill_compression(c: &mut Criterion) {
     group.finish();
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn benchmark_spill_batches_for_all_codec(
     group: &mut BenchmarkGroup<'_, WallTime>,
     batch_label: &str,
@@ -519,8 +521,9 @@ fn benchmark_spill_batches_for_all_codec(
                             )
                             .unwrap()
                             .unwrap();
-                        let stream =
-                            spill_manager.read_spill_as_stream(spill_file).unwrap();
+                        let stream = spill_manager
+                            .read_spill_as_stream(spill_file, None)
+                            .unwrap();
                         let _ = collect(stream).await.unwrap();
                     })
                 },
@@ -553,7 +556,9 @@ fn benchmark_spill_batches_for_all_codec(
         let rt = Runtime::new().unwrap();
         let start = Instant::now();
         rt.block_on(async {
-            let stream = spill_manager.read_spill_as_stream(spill_file).unwrap();
+            let stream = spill_manager
+                .read_spill_as_stream(spill_file, None)
+                .unwrap();
             let _ = collect(stream).await.unwrap();
         });
         let read_time = start.elapsed();

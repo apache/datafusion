@@ -17,13 +17,14 @@
 
 extern crate criterion;
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Date32Array, StringArray};
 use arrow::datatypes::{DataType, Field};
 use chrono::prelude::*;
 use chrono::TimeDelta;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
@@ -79,17 +80,17 @@ const DATETIME_PATTERNS: [&str; 8] = [
 ];
 
 fn pick_date_pattern(rng: &mut ThreadRng) -> String {
-    DATE_PATTERNS
+    (*DATE_PATTERNS
         .choose(rng)
-        .expect("Empty list of date patterns")
-        .to_string()
+        .expect("Empty list of date patterns"))
+    .to_string()
 }
 
 fn pick_date_time_pattern(rng: &mut ThreadRng) -> String {
-    DATETIME_PATTERNS
+    (*DATETIME_PATTERNS
         .choose(rng)
-        .expect("Empty list of date time patterns")
-        .to_string()
+        .expect("Empty list of date time patterns"))
+    .to_string()
 }
 
 fn pick_date_and_date_time_mixed_pattern(rng: &mut ThreadRng) -> String {

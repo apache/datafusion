@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use insta::assert_snapshot;
 use std::sync::Arc;
 use std::{
     any::Any,
@@ -28,6 +29,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};
 use datafusion_common::{JoinSide, NullEquality};
 use datafusion_common::{Result, Statistics};
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::col;
@@ -36,6 +38,7 @@ use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_optimizer::OptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
@@ -225,8 +228,10 @@ async fn test_join_with_swap() {
         .unwrap(),
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize_plan(join, &optimizer_context)
         .unwrap();
 
     let swapping_projection = optimized_join
@@ -235,12 +240,12 @@ async fn test_join_with_swap() {
         .expect("A proj is required to swap columns back to their original order");
 
     assert_eq!(swapping_projection.expr().len(), 2);
-    let (col, name) = &swapping_projection.expr()[0];
-    assert_eq!(name, "big_col");
-    assert_col_expr(col, "big_col", 1);
-    let (col, name) = &swapping_projection.expr()[1];
-    assert_eq!(name, "small_col");
-    assert_col_expr(col, "small_col", 0);
+    let proj_expr = &swapping_projection.expr()[0];
+    assert_eq!(proj_expr.alias, "big_col");
+    assert_col_expr(&proj_expr.expr, "big_col", 1);
+    let proj_expr = &swapping_projection.expr()[1];
+    assert_eq!(proj_expr.alias, "small_col");
+    assert_col_expr(&proj_expr.expr, "small_col", 0);
 
     let swapped_join = swapping_projection
         .input()
@@ -287,8 +292,10 @@ async fn test_left_join_no_swap() {
         .unwrap(),
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize_plan(join, &optimizer_context)
         .unwrap();
 
     let swapped_join = optimized_join
@@ -337,8 +344,10 @@ async fn test_join_with_swap_semi() {
 
         let original_schema = join.schema();
 
+        let session_config = SessionConfig::new();
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .optimize_plan(Arc::new(join), &optimizer_context)
             .unwrap();
 
         let swapped_join = optimized_join
@@ -369,23 +378,80 @@ async fn test_join_with_swap_semi() {
     }
 }
 
+#[tokio::test]
+async fn test_join_with_swap_mark() {
+    let join_types = [JoinType::LeftMark, JoinType::RightMark];
+    for join_type in join_types {
+        let (big, small) = create_big_and_small();
+
+        let join = HashJoinExec::try_new(
+            Arc::clone(&big),
+            Arc::clone(&small),
+            vec![(
+                Arc::new(Column::new_with_schema("big_col", &big.schema()).unwrap()),
+                Arc::new(Column::new_with_schema("small_col", &small.schema()).unwrap()),
+            )],
+            None,
+            &join_type,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+
+        let original_schema = join.schema();
+
+        let session_config = SessionConfig::new();
+        let optimizer_context = OptimizerContext::new(session_config.clone());
+        let optimized_join = JoinSelection::new()
+            .optimize_plan(Arc::new(join), &optimizer_context)
+            .unwrap();
+
+        let swapped_join = optimized_join
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect(
+                "A proj is not required to swap columns back to their original order",
+            );
+
+        assert_eq!(swapped_join.schema().fields().len(), 2);
+        assert_eq!(
+            swapped_join
+                .left()
+                .partition_statistics(None)
+                .unwrap()
+                .total_byte_size,
+            Precision::Inexact(8192)
+        );
+        assert_eq!(
+            swapped_join
+                .right()
+                .partition_statistics(None)
+                .unwrap()
+                .total_byte_size,
+            Precision::Inexact(2097152)
+        );
+        assert_eq!(original_schema, swapped_join.schema());
+    }
+}
+
 /// Compare the input plan with the plan after running the probe order optimizer.
 macro_rules! assert_optimized {
-    ($EXPECTED_LINES: expr, $PLAN: expr) => {
-        let expected_lines = $EXPECTED_LINES.iter().map(|s| *s).collect::<Vec<&str>>();
+    ($PLAN: expr, @$EXPECTED_LINES: literal $(,)?) => {
 
         let plan = Arc::new($PLAN);
+        let session_config = SessionConfig::new();
+        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized = JoinSelection::new()
-            .optimize(plan.clone(), &ConfigOptions::new())
+            .optimize_plan(plan.clone(), &optimizer_context)
             .unwrap();
 
         let plan_string = displayable(optimized.as_ref()).indent(true).to_string();
-        let actual_lines = plan_string.split("\n").collect::<Vec<&str>>();
+        let actual = plan_string.trim();
 
-        assert_eq!(
-            &expected_lines, &actual_lines,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected_lines, actual_lines
+        assert_snapshot!(
+            actual,
+            @$EXPECTED_LINES
         );
     };
 }
@@ -434,17 +500,18 @@ async fn test_nested_join_swap() {
     // The first hash join's left is 'small' table (with 1000 rows), and the second hash join's
     // left is the F(small IJ big) which has an estimated cardinality of 2000 rows (vs medium which
     // has an exact cardinality of 10_000 rows).
-    let expected = [
-            "ProjectionExec: expr=[medium_col@2 as medium_col, big_col@0 as big_col, small_col@1 as small_col]",
-            "  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]",
-            "    ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]",
-            "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]",
-            "        StatisticsExec: col_count=1, row_count=Inexact(1000)",
-            "        StatisticsExec: col_count=1, row_count=Inexact(100000)",
-            "    StatisticsExec: col_count=1, row_count=Inexact(10000)",
-            "",
-        ];
-    assert_optimized!(expected, join);
+    assert_optimized!(
+        join,
+        @r"
+    ProjectionExec: expr=[medium_col@2 as medium_col, big_col@0 as big_col, small_col@1 as small_col]
+      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]
+        ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]
+            StatisticsExec: col_count=1, row_count=Inexact(1000)
+            StatisticsExec: col_count=1, row_count=Inexact(100000)
+        StatisticsExec: col_count=1, row_count=Inexact(10000)
+    "
+    );
 }
 
 #[tokio::test]
@@ -467,8 +534,10 @@ async fn test_join_no_swap() {
         .unwrap(),
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize_plan(join, &optimizer_context)
         .unwrap();
 
     let swapped_join = optimized_join
@@ -516,8 +585,10 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
         .unwrap(),
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize_plan(join, &optimizer_context)
         .unwrap();
 
     let swapping_projection = optimized_join
@@ -526,12 +597,12 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
         .expect("A proj is required to swap columns back to their original order");
 
     assert_eq!(swapping_projection.expr().len(), 2);
-    let (col, name) = &swapping_projection.expr()[0];
-    assert_eq!(name, "big_col");
-    assert_col_expr(col, "big_col", 1);
-    let (col, name) = &swapping_projection.expr()[1];
-    assert_eq!(name, "small_col");
-    assert_col_expr(col, "small_col", 0);
+    let proj_expr = &swapping_projection.expr()[0];
+    assert_eq!(proj_expr.alias, "big_col");
+    assert_col_expr(&proj_expr.expr, "big_col", 1);
+    let proj_expr = &swapping_projection.expr()[1];
+    assert_eq!(proj_expr.alias, "small_col");
+    assert_col_expr(&proj_expr.expr, "small_col", 0);
 
     let swapped_join = swapping_projection
         .input()
@@ -576,7 +647,8 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     case::left_semi(JoinType::LeftSemi),
     case::left_anti(JoinType::LeftAnti),
     case::right_semi(JoinType::RightSemi),
-    case::right_anti(JoinType::RightAnti)
+    case::right_anti(JoinType::RightAnti),
+    case::right_mark(JoinType::RightMark)
 )]
 #[tokio::test]
 async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
@@ -593,11 +665,10 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
         .unwrap(),
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
-        .optimize(
-            Arc::<NestedLoopJoinExec>::clone(&join),
-            &ConfigOptions::new(),
-        )
+        .optimize_plan(Arc::<NestedLoopJoinExec>::clone(&join), &optimizer_context)
         .unwrap();
 
     let swapped_join = optimized_join
@@ -854,8 +925,10 @@ fn check_join_partition_mode(
         .unwrap(),
     );
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .optimize_plan(join, &optimizer_context)
         .unwrap();
 
     if !is_swapped {
@@ -1499,8 +1572,10 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         NullEquality::NullEqualsNothing,
     )?) as _;
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let optimized_join_plan =
-        JoinSelection::new().optimize(Arc::clone(&join), &ConfigOptions::new())?;
+        JoinSelection::new().optimize_plan(Arc::clone(&join), &optimizer_context)?;
 
     // If swap did happen
     let projection_added = optimized_join_plan.as_any().is::<ProjectionExec>();

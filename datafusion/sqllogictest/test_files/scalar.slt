@@ -309,6 +309,14 @@ select ceil(a), ceil(b), ceil(c) from small_floats;
 1 0 0
 1 0 1
 
+# ceil with scale parameter(Scale not supported)
+query error DataFusion error: This feature is not implemented: CEIL with scale is not supported
+select ceil(100.1234, 1)
+
+# ceil with datetime parameter (not supported)
+query error DataFusion error: This feature is not implemented: CEIL with datetime is not supported
+select ceil(100.1234 to year)
+
 ## degrees
 
 # degrees scalar function
@@ -448,6 +456,14 @@ select floor(a), floor(b), floor(c) from signed_integers;
 2 -1000 123
 4 NULL NULL
 
+# floor with scale parameter(Scale not supported)
+query error DataFusion error: This feature is not implemented: FLOOR with scale is not supported
+select floor(a, 1)
+
+# floor with datetime parameter ( not supported)
+query error DataFusion error: This feature is not implemented: FLOOR with datetime is not supported
+select floor(a to year)
+
 ## ln
 
 # ln scalar function
@@ -523,7 +539,7 @@ query RRR rowsort
 select log(a, 64) a, log(b), log(10, b) from unsigned_integers;
 ----
 3 NULL NULL
-3.7855785 4 4
+3.785578521429 4 4
 6 3 3
 Infinity 2 2
 
@@ -1759,7 +1775,7 @@ CREATE TABLE test(
 (-14, -14, -14.5, -14.5),
 (NULL, NULL, NULL, NULL);
 
-query IRRRIR rowsort
+query IIRRIR rowsort
 SELECT power(i32, exp_i) as power_i32,
        power(i64, exp_f) as power_i64,
        pow(f32, exp_i) as power_f32,

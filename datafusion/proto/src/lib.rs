@@ -19,10 +19,11 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Serialize / Deserialize DataFusion Plans to bytes
 //!
@@ -34,8 +35,8 @@
 //!
 //! [`LogicalPlan`]: datafusion_expr::LogicalPlan
 //! [`Expr`]: datafusion_expr::Expr
-//! [`ExecutionPlan`]: datafusion::physical_plan::ExecutionPlan
-//! [`PhysicalExpr`]: datafusion::physical_expr::PhysicalExpr
+//! [`ExecutionPlan`]: datafusion_physical_plan::ExecutionPlan
+//! [`PhysicalExpr`]: datafusion_physical_expr::PhysicalExpr
 //!
 //! Internally, this crate is implemented by converting the plans to [protocol
 //! buffers] using [prost].
@@ -64,15 +65,15 @@
 //! # use datafusion_expr::{col, lit, Expr};
 //! # use datafusion_proto::bytes::Serializeable;
 //! # fn main() -> Result<()>{
-//!  // Create a new `Expr` a < 32
-//!  let expr = col("a").lt(lit(5i32));
+//! // Create a new `Expr` a < 32
+//! let expr = col("a").lt(lit(5i32));
 //!
-//!  // Convert it to bytes (for sending over the network, etc.)
-//!  let bytes = expr.to_bytes()?;
+//! // Convert it to bytes (for sending over the network, etc.)
+//! let bytes = expr.to_bytes()?;
 //!
-//!  // Decode bytes from somewhere (over network, etc.) back to Expr
-//!  let decoded_expr = Expr::from_bytes(&bytes)?;
-//!  assert_eq!(expr, decoded_expr);
+//! // Decode bytes from somewhere (over network, etc.) back to Expr
+//! let decoded_expr = Expr::from_bytes(&bytes)?;
+//! assert_eq!(expr, decoded_expr);
 //! # Ok(())
 //! # }
 //! ```
@@ -93,7 +94,7 @@
 //!  let bytes = logical_plan_to_bytes(&plan)?;
 //!
 //!  // Decode bytes from somewhere (over network, etc.) back to LogicalPlan
-//!  let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+//!  let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
 //!  assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
 //! # Ok(())
 //! # }
@@ -115,7 +116,7 @@
 //!  let bytes = physical_plan_to_bytes(physical_plan.clone())?;
 //!
 //!  // Decode bytes from somewhere (over network, etc.) back to ExecutionPlan
-//!  let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
+//!  let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
 //!  assert_eq!(format!("{:?}", physical_plan), format!("{:?}", physical_round_trip));
 //! # Ok(())
 //! # }

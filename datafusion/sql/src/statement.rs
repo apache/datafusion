@@ -22,14 +22,14 @@ use std::sync::Arc;
 
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
-    LexOrdering, Statement as DFStatement,
+    LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
 };
 use crate::utils::normalize_ident;
 
-use arrow::datatypes::{DataType, Fields};
+use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -49,10 +49,10 @@ use datafusion_expr::{
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
     EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
-    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
-    SortExpr, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
-    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    Volatility, WriteOp,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
+    ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
+    TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp,
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, IndexColumn, IndexType, NullsDistinctOption, OrderByExpr,
@@ -211,6 +211,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 format,
                 statement,
             }) => self.explain_to_plan(verbose, analyze, format, *statement),
+            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement),
         }
     }
 
@@ -242,6 +243,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 table_name,
                 ..
             } => self.describe_table_to_plan(table_name),
+            Statement::Explain {
+                describe_alias: DescribeAlias::Describe | DescribeAlias::Desc, // only parse 'DESCRIBE statement' or 'DESC statement' and not 'EXPLAIN statement'
+                statement,
+                ..
+            } => match *statement {
+                Statement::Query(query) => self.describe_query_to_plan(*query),
+                _ => {
+                    not_impl_err!("Describing statements other than SELECT not supported")
+                }
+            },
             Statement::Explain {
                 verbose,
                 statement,
@@ -302,6 +313,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 storage_serialization_policy,
                 inherits,
                 table_options: CreateTableOptions::None,
+                dynamic,
+                version,
+                target_lag,
+                warehouse,
+                refresh_mode,
+                initialize,
+                require_user,
             }) => {
                 if temporary {
                     return not_impl_err!("Temporary tables not supported")?;
@@ -428,7 +446,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if inherits.is_some() {
                     return not_impl_err!("Table inheritance not supported")?;
                 }
-
+                if dynamic {
+                    return not_impl_err!("Dynamic tables not supported")?;
+                }
+                if version.is_some() {
+                    return not_impl_err!("Version not supported")?;
+                }
+                if target_lag.is_some() {
+                    return not_impl_err!("Target lag not supported")?;
+                }
+                if warehouse.is_some() {
+                    return not_impl_err!("Warehouse not supported")?;
+                }
+                if refresh_mode.is_some() {
+                    return not_impl_err!("Refresh mode not supported")?;
+                }
+                if initialize.is_some() {
+                    return not_impl_err!("Initialize not supported")?;
+                }
+                if require_user {
+                    return not_impl_err!("Require user not supported")?;
+                }
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
                 let inline_constraints = calc_inline_constraints_from_columns(&columns);
@@ -519,7 +557,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                 }
             }
-
             Statement::CreateView {
                 or_replace,
                 materialized,
@@ -535,6 +572,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 to,
                 params,
                 or_alter,
+                secure,
+                name_before_not_exists,
             } => {
                 if materialized {
                     return not_impl_err!("Materialized views not supported")?;
@@ -572,6 +611,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     to,
                     params,
                     or_alter,
+                    secure,
+                    name_before_not_exists,
                 };
                 let sql = stmt.to_string();
                 let Statement::CreateView {
@@ -700,14 +741,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
             } => {
                 // Convert parser data types to DataFusion data types
-                let mut data_types: Vec<DataType> = data_types
+                let mut fields: Vec<FieldRef> = data_types
                     .into_iter()
-                    .map(|t| self.convert_data_type(&t))
+                    .map(|t| self.convert_data_type_to_field(&t))
                     .collect::<Result<_>>()?;
 
                 // Create planner context with parameters
-                let mut planner_context = PlannerContext::new()
-                    .with_prepare_param_data_types(data_types.clone());
+                let mut planner_context =
+                    PlannerContext::new().with_prepare_param_data_types(fields.clone());
 
                 // Build logical plan for inner statement of the prepare statement
                 let plan = self.sql_statement_to_plan_with_context_impl(
@@ -715,21 +756,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &mut planner_context,
                 )?;
 
-                if data_types.is_empty() {
-                    let map_types = plan.get_parameter_types()?;
+                if fields.is_empty() {
+                    let map_types = plan.get_parameter_fields()?;
                     let param_types: Vec<_> = (1..=map_types.len())
                         .filter_map(|i| {
                             let key = format!("${i}");
                             map_types.get(&key).and_then(|opt| opt.clone())
                         })
                         .collect();
-                    data_types.extend(param_types.iter().cloned());
+                    fields.extend(param_types.iter().cloned());
                     planner_context.with_prepare_param_data_types(param_types);
                 }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
                     name: ident_to_string(&name),
-                    data_types,
+                    fields,
                     input: Arc::new(plan),
                 })))
             }
@@ -976,24 +1017,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 selection,
                 returning,
                 or,
+                limit,
             } => {
-                let froms =
+                let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
-                        UpdateTableFromKind::BeforeSet(froms) => froms,
-                        UpdateTableFromKind::AfterSet(froms) => froms,
+                        UpdateTableFromKind::BeforeSet(from_clauses) => from_clauses,
+                        UpdateTableFromKind::AfterSet(from_clauses) => from_clauses,
                     });
                 // TODO: support multiple tables in UPDATE SET FROM
-                if froms.as_ref().is_some_and(|f| f.len() > 1) {
+                if from_clauses.as_ref().is_some_and(|f| f.len() > 1) {
                     plan_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
                 }
-                let update_from = froms.and_then(|mut f| f.pop());
+                let update_from = from_clauses.and_then(|mut f| f.pop());
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }
                 if or.is_some() {
                     plan_err!("ON conflict not supported")?;
                 }
-                self.update_to_plan(table, assignments, update_from, selection)
+                if limit.is_some() {
+                    return not_impl_err!("Update-limit clause not supported")?;
+                }
+                self.update_to_plan(table, &assignments, update_from, selection)
             }
 
             Statement::Delete(Delete {
@@ -1026,7 +1071,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 let table_name = self.get_delete_target(from)?;
-                self.delete_to_plan(table_name, selection)
+                self.delete_to_plan(&table_name, selection)
             }
 
             Statement::StartTransaction {
@@ -1056,7 +1101,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if has_end_keyword {
                     return not_impl_err!("Transaction with END keyword not supported");
                 }
-                self.validate_transaction_kind(transaction)?;
+                self.validate_transaction_kind(transaction.as_ref())?;
                 let isolation_level: ast::TransactionIsolationLevel = modes
                     .iter()
                     .filter_map(|m: &TransactionMode| match m {
@@ -1145,7 +1190,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 ..
             }) => {
                 let return_type = match return_type {
-                    Some(t) => Some(self.convert_data_type(&t)?),
+                    Some(t) => Some(self.convert_data_type_to_field(&t)?),
                     None => None,
                 };
                 let mut planner_context = PlannerContext::new();
@@ -1156,7 +1201,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         let function_args = function_args
                             .into_iter()
                             .map(|arg| {
-                                let data_type = self.convert_data_type(&arg.data_type)?;
+                                let data_type =
+                                    self.convert_data_type_to_field(&arg.data_type)?;
 
                                 let default_expr = match arg.default_expr {
                                     Some(expr) => Some(self.sql_to_expr(
@@ -1169,7 +1215,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Ok(OperateFunctionArg {
                                     name: arg.name,
                                     default_expr,
-                                    data_type,
+                                    data_type: data_type.data_type().clone(),
                                 })
                             })
                             .collect::<Result<Vec<OperateFunctionArg>>>();
@@ -1177,6 +1223,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     None => None,
                 };
+                // Validate default arguments
+                let first_default = match args.as_ref() {
+                    Some(arg) => arg.iter().position(|t| t.default_expr.is_some()),
+                    None => None,
+                };
+                let last_non_default = match args.as_ref() {
+                    Some(arg) => arg
+                        .iter()
+                        .rev()
+                        .position(|t| t.default_expr.is_none())
+                        .map(|reverse_pos| arg.len() - reverse_pos - 1),
+                    None => None,
+                };
+                if let (Some(pos_default), Some(pos_non_default)) =
+                    (first_default, last_non_default)
+                {
+                    if pos_non_default > pos_default {
+                        return plan_err!(
+                            "Non-default arguments cannot follow default arguments."
+                        );
+                    }
+                }
                 // At the moment functions can't be qualified `schema.name`
                 let name = match &name.0[..] {
                     [] => exec_err!("Function should have name")?,
@@ -1187,8 +1255,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // Convert resulting expression to data fusion expression
                 //
                 let arg_types = args.as_ref().map(|arg| {
-                    arg.iter().map(|t| t.data_type.clone()).collect::<Vec<_>>()
+                    arg.iter()
+                        .map(|t| {
+                            let name = match t.name.clone() {
+                                Some(name) => name.value,
+                                None => "".to_string(),
+                            };
+                            Arc::new(Field::new(name, t.data_type.clone(), true))
+                        })
+                        .collect::<Vec<_>>()
                 });
+                // Validate parameter style
+                if let Some(ref fields) = arg_types {
+                    let count_positional =
+                        fields.iter().filter(|f| f.name() == "").count();
+                    if !(count_positional == 0 || count_positional == fields.len()) {
+                        return plan_err!("All function arguments must use either named or positional style.");
+                    }
+                }
                 let mut planner_context = PlannerContext::new()
                     .with_prepare_param_data_types(arg_types.unwrap_or_default());
 
@@ -1230,7 +1314,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     or_replace,
                     temporary,
                     name,
-                    return_type,
+                    return_type: return_type.map(|f| f.data_type().clone()),
                     args,
                     params,
                     schema: DFSchemaRef::new(DFSchema::empty()),
@@ -1362,6 +1446,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }))
     }
 
+    fn describe_query_to_plan(&self, query: Query) -> Result<LogicalPlan> {
+        let plan = self.query_to_plan(query, &mut PlannerContext::new())?;
+
+        let schema = Arc::new(plan.schema().as_arrow().clone());
+
+        let output_schema = DFSchema::try_from(LogicalPlan::describe_schema()).unwrap();
+
+        Ok(LogicalPlan::DescribeTable(DescribeTable {
+            schema,
+            output_schema: Arc::new(output_schema),
+        }))
+    }
+
     fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
         // Determine if source is table or query and handle accordingly
         let copy_source = statement.source;
@@ -1445,25 +1542,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .map(|order_by_expr| {
                             let ordered_expr = &order_by_expr.expr;
                             let ordered_expr = ordered_expr.to_owned();
-                            let ordered_expr = self
-                                .sql_expr_to_logical_expr(
-                                    ordered_expr,
-                                    schema,
-                                    planner_context,
-                                )
-                                .unwrap();
+                            let ordered_expr = self.sql_expr_to_logical_expr(
+                                ordered_expr,
+                                schema,
+                                planner_context,
+                            )?;
                             let asc = order_by_expr.options.asc.unwrap_or(true);
                             let nulls_first =
                                 order_by_expr.options.nulls_first.unwrap_or_else(|| {
                                     self.options.default_null_ordering.nulls_first(asc)
                                 });
 
-                            SortExpr::new(ordered_expr, asc, nulls_first)
+                            Ok(SortExpr::new(ordered_expr, asc, nulls_first))
                         })
-                        .collect::<Vec<SortExpr>>();
-                    result
+                        .collect::<Result<Vec<SortExpr>>>()?;
+                    Ok(result)
                 })
-                .collect::<Vec<Vec<SortExpr>>>();
+                .collect::<Result<Vec<Vec<SortExpr>>>>()?;
 
             return Ok(results);
         }
@@ -1506,6 +1601,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             unbounded,
             options,
             constraints,
+            or_replace,
         } = statement;
 
         // Merge inline constraints and existing constraints
@@ -1554,6 +1650,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 file_type,
                 table_partition_cols,
                 if_not_exists,
+                or_replace,
                 temporary,
                 definition,
                 order_exprs: ordered_exprs,
@@ -1713,10 +1810,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
 
             // default to configuration value
+            // verbose mode only supports indent format
             let options = self.context_provider.options();
-            let format = format.as_ref().unwrap_or(&options.explain.format);
-
-            let format: ExplainFormat = format.parse()?;
+            let format = if verbose {
+                ExplainFormat::Indent
+            } else if let Some(format) = format {
+                ExplainFormat::from_str(&format)?
+            } else {
+                options.explain.format.clone()
+            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
@@ -1767,7 +1869,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .iter()
                 .any(|opt| opt.key == variable);
 
-            if !is_valid_variable {
+            // Check if it's a runtime variable
+            let is_runtime_variable = variable.starts_with("datafusion.runtime.");
+
+            if !is_valid_variable && !is_runtime_variable {
                 return plan_err!(
                     "'{variable}' is not a variable which can be viewed with 'SHOW'"
                 );
@@ -1801,6 +1906,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let variable = object_name_to_string(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
+                // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
                 if variable_lower == "timezone" || variable_lower == "time.zone" {
                     variable_lower = "datafusion.execution.time_zone".to_string();
                 }
@@ -1836,9 +1942,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
+    fn reset_statement_to_plan(&self, statement: ResetStatement) -> Result<LogicalPlan> {
+        match statement {
+            ResetStatement::Variable(variable) => {
+                let variable = object_name_to_string(&variable);
+                let mut variable_lower = variable.to_lowercase();
+
+                // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
+                if variable_lower == "timezone" || variable_lower == "time.zone" {
+                    variable_lower = "datafusion.execution.time_zone".to_string();
+                }
+
+                Ok(LogicalPlan::Statement(PlanStatement::ResetVariable(
+                    ResetVariable {
+                        variable: variable_lower,
+                    },
+                )))
+            }
+        }
+    }
+
     fn delete_to_plan(
         &self,
-        table_name: ObjectName,
+        table_name: &ObjectName,
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
@@ -1882,7 +2008,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn update_to_plan(
         &self,
         table: TableWithJoins,
-        assignments: Vec<Assignment>,
+        assignments: &[Assignment],
         from: Option<TableWithJoins>,
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
@@ -1959,10 +2085,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         )?;
                         // Update placeholder's datatype to the type of the target column
                         if let Expr::Placeholder(placeholder) = &mut expr {
-                            placeholder.data_type = placeholder
-                                .data_type
+                            placeholder.field = placeholder
+                                .field
                                 .take()
-                                .or_else(|| Some(field.data_type().clone()));
+                                .or_else(|| Some(Arc::clone(field)));
                         }
                         // Cast to target column type, if necessary
                         expr.cast_to(field.data_type(), source.schema())?
@@ -2026,9 +2152,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut value_indices = vec![None; table_schema.fields().len()];
             let fields = columns
                 .into_iter()
-                .map(|c| self.ident_normalizer.normalize(c))
                 .enumerate()
                 .map(|(i, c)| {
+                    let c = self.ident_normalizer.normalize(c);
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
@@ -2040,7 +2166,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     } else {
                         value_indices[column_index] = Some(i);
                     }
-                    Ok(table_schema.field(column_index).clone())
+                    Ok(Arc::clone(table_schema.field(column_index)))
                 })
                 .collect::<Result<Vec<_>>>()?;
             (Fields::from(fields), value_indices)
@@ -2066,8 +2192,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 idx + 1
                             )
                         })?;
-                        let dt = field.data_type().clone();
-                        let _ = prepare_param_data_types.insert(name, dt);
+                        let _ = prepare_param_data_types.insert(name, Arc::clone(field));
                     }
                 }
             }
@@ -2289,7 +2414,7 @@ ON p.function_name = r.routine_name
 
     fn validate_transaction_kind(
         &self,
-        kind: Option<BeginTransactionKind>,
+        kind: Option<&BeginTransactionKind>,
     ) -> Result<()> {
         match kind {
             // BEGIN

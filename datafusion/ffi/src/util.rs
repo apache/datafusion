@@ -16,11 +16,18 @@
 // under the License.
 
 use crate::arrow_wrappers::WrappedSchema;
-use abi_stable::std_types::RVec;
+use abi_stable::std_types::{RResult, RString, RVec};
 use arrow::datatypes::Field;
 use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
 use std::sync::Arc;
+
+/// Convenience type for results passed through the FFI boundary. Since the
+/// `DataFusionError` enum is complex and little value is gained from creating
+/// a FFI safe variant of it, we convert errors to strings when passing results
+/// back. These are converted back and forth using the `df_result`, `rresult`,
+/// and `rresult_return` macros.
+pub type FFIResult<T> = RResult<T, RString>;
 
 /// This macro is a helpful conversion utility to convert from an abi_stable::RResult to a
 /// DataFusion result.
@@ -29,14 +36,14 @@ macro_rules! df_result {
     ( $x:expr ) => {
         match $x {
             abi_stable::std_types::RResult::ROk(v) => Ok(v),
-            abi_stable::std_types::RResult::RErr(e) => {
-                Err(datafusion::error::DataFusionError::Execution(e.to_string()))
+            abi_stable::std_types::RResult::RErr(err) => {
+                datafusion_common::ffi_err!("{err}")
             }
         }
     };
 }
 
-/// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
+/// This macro is a helpful conversion utility to convert from a DataFusion Result to an abi_stable::RResult
 #[macro_export]
 macro_rules! rresult {
     ( $x:expr ) => {
@@ -49,7 +56,7 @@ macro_rules! rresult {
     };
 }
 
-/// This macro is a helpful conversion utility to conver from a DataFusion Result to an abi_stable::RResult
+/// This macro is a helpful conversion utility to convert from a DataFusion Result to an abi_stable::RResult
 /// and to also call return when it is an error. Since you cannot use `?` on an RResult, this is designed
 /// to mimic the pattern.
 #[macro_export]
@@ -118,10 +125,11 @@ pub fn rvec_wrapped_to_vec_datatype(
 
 #[cfg(test)]
 mod tests {
+    use crate::util::FFIResult;
     use abi_stable::std_types::{RResult, RString};
     use datafusion::error::DataFusionError;
 
-    fn wrap_result(result: Result<String, DataFusionError>) -> RResult<String, RString> {
+    fn wrap_result(result: Result<String, DataFusionError>) -> FFIResult<String> {
         RResult::ROk(rresult_return!(result))
     }
 
@@ -130,9 +138,9 @@ mod tests {
         const VALID_VALUE: &str = "valid_value";
         const ERROR_VALUE: &str = "error_value";
 
-        let ok_r_result: RResult<RString, RString> =
+        let ok_r_result: FFIResult<RString> =
             RResult::ROk(VALID_VALUE.to_string().into());
-        let err_r_result: RResult<RString, RString> =
+        let err_r_result: FFIResult<RString> =
             RResult::RErr(ERROR_VALUE.to_string().into());
 
         let returned_ok_result = df_result!(ok_r_result);
@@ -142,21 +150,21 @@ mod tests {
         let returned_err_result = df_result!(err_r_result);
         assert!(returned_err_result.is_err());
         assert!(
-            returned_err_result.unwrap_err().to_string()
-                == format!("Execution error: {ERROR_VALUE}")
+            returned_err_result.unwrap_err().strip_backtrace()
+                == format!("FFI error: {ERROR_VALUE}")
         );
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
         let err_result: Result<String, DataFusionError> =
-            Err(DataFusionError::Execution(ERROR_VALUE.to_string()));
+            datafusion_common::ffi_err!("{ERROR_VALUE}");
 
         let returned_ok_r_result = wrap_result(ok_result);
         assert!(returned_ok_r_result == RResult::ROk(VALID_VALUE.into()));
 
         let returned_err_r_result = wrap_result(err_result);
-        assert!(
-            returned_err_r_result
-                == RResult::RErr(format!("Execution error: {ERROR_VALUE}").into())
-        );
+        assert!(returned_err_r_result.is_err());
+        assert!(returned_err_r_result
+            .unwrap_err()
+            .starts_with(format!("FFI error: {ERROR_VALUE}").as_str()));
     }
 }

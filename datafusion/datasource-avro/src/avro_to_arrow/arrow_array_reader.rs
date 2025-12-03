@@ -19,6 +19,7 @@
 
 use apache_avro::schema::RecordSchema;
 use apache_avro::{
+    error::Details as AvroErrorDetails,
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
     Error as AvroError, Reader as AvroReader,
@@ -45,7 +46,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::arrow_err;
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::error::Result;
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -131,9 +132,8 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 }
             }
             AvroSchema::Array(schema) => {
-                let sub_parent_field_name = format!("{parent_field_name}.element");
                 Self::child_schema_lookup(
-                    &sub_parent_field_name,
+                    parent_field_name,
                     &schema.items,
                     schema_lookup,
                 )?;
@@ -152,7 +152,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             .map(|value| match value {
                 Ok(Value::Record(v)) => Ok(v),
                 Err(e) => Err(ArrowError::ParseError(format!(
-                    "Failed to parse avro value: {e:?}"
+                    "Failed to parse avro value: {e}"
                 ))),
                 other => Err(ArrowError::ParseError(format!(
                     "Row needs to be of type object, got: {other:?}"
@@ -280,7 +280,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 self.list_array_string_array_builder::<UInt64Type>(&dtype, col_name, rows)
             }
             ref e => Err(SchemaError(format!(
-                "Data type is currently not supported for dictionaries in list : {e:?}"
+                "Data type is currently not supported for dictionaries in list : {e}"
             ))),
         }
     }
@@ -307,7 +307,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             e => {
                 return Err(SchemaError(format!(
-                    "Nested list data builder type is not supported: {e:?}"
+                    "Nested list data builder type is not supported: {e}"
                 )))
             }
         };
@@ -372,7 +372,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     }
                     e => {
                         return Err(SchemaError(format!(
-                            "Nested list data builder type is not supported: {e:?}"
+                            "Nested list data builder type is not supported: {e}"
                         )))
                     }
                 }
@@ -595,10 +595,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     })
                     .collect();
 
-                let sub_parent_field_name =
-                    format!("{}.{}", parent_field_name, list_field.name());
-                let arrays =
-                    self.build_struct_array(&rows, &sub_parent_field_name, fields)?;
+                let arrays = self.build_struct_array(&rows, parent_field_name, fields)?;
                 let data_type = DataType::Struct(fields.clone());
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
@@ -609,7 +606,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             datatype => {
                 return Err(SchemaError(format!(
-                    "Nested list of {datatype:?} not supported"
+                    "Nested list of {datatype} not supported"
                 )));
             }
         };
@@ -830,7 +827,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     }
                     _ => {
                         return Err(SchemaError(format!(
-                            "type {:?} not supported",
+                            "type {} not supported",
                             field.data_type()
                         )))
                     }
@@ -929,13 +926,13 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
     match v {
         Value::String(s) => Ok(Some(s.clone())),
         Value::Bytes(bytes) => String::from_utf8(bytes.to_vec())
-            .map_err(AvroError::ConvertToUtf8)
+            .map_err(|e| AvroError::new(AvroErrorDetails::ConvertToUtf8(e)))
             .map(Some),
         Value::Enum(_, s) => Ok(Some(s.clone())),
         Value::Null => Ok(None),
-        other => Err(AvroError::GetString(other.into())),
+        other => Err(AvroError::new(AvroErrorDetails::GetString(other.clone()))),
     }
-    .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))
+    .map_err(|e| SchemaError(format!("expected resolvable string : {e}")))
 }
 
 fn resolve_u8(v: &Value) -> Option<u8> {
@@ -1037,7 +1034,7 @@ where
 mod test {
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
     use arrow::array::Array;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Fields};
     use arrow::datatypes::{Field, TimeUnit};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::cast::{
@@ -1718,5 +1715,93 @@ mod test {
         assert_eq!(8, sum_num_rows);
         assert_eq!(2, num_batches);
         assert_eq!(28, sum_id);
+    }
+
+    #[test]
+    fn test_list_of_structs_with_custom_field_name() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+        {
+          "type": "record",
+          "name": "root",
+          "fields": [
+            {
+              "name": "items",
+              "type": {
+                "type": "array",
+                "items": {
+                  "type": "record",
+                  "name": "item_record",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "type": "long"
+                    },
+                    {
+                      "name": "name",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }"#,
+        )
+        .unwrap();
+
+        let r1 = apache_avro::to_value(serde_json::json!({
+            "items": [
+                {
+                    "id": 1,
+                    "name": "first"
+                },
+                {
+                    "id": 2,
+                    "name": "second"
+                }
+            ]
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(r1).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        // Create an Arrow schema where the list field is NOT named "element"
+        let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
+            "items",
+            DataType::List(Arc::new(Field::new(
+                "item", // This is NOT "element"
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("name", DataType::Utf8, false),
+                ])),
+                false,
+            ))),
+            false,
+        )]));
+
+        let mut reader = ReaderBuilder::new()
+            .with_schema(arrow_schema)
+            .with_batch_size(10)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        // This used to fail because schema_lookup would have "items.element.id" and "items.element.name"
+        // but build_struct_array will try to look up "items.item.id" and "items.item.name",
+        // Now it it is simply "items.id" and "items.name"
+        let batch = reader.next().unwrap().unwrap();
+
+        let expected = [
+            "+-----------------------------------------------+",
+            "| items                                         |",
+            "+-----------------------------------------------+",
+            "| [{id: 1, name: first}, {id: 2, name: second}] |",
+            "+-----------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &[batch]);
     }
 }

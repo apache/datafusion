@@ -41,7 +41,15 @@ use datafusion_macros::user_doc;
     argument(
         name = "decimal_places",
         description = "Optional. The number of decimal places to round to. Defaults to 0."
-    )
+    ),
+    sql_example = r#"```sql
+> SELECT round(3.14159);
++--------------+
+| round(3.14159)|
++--------------+
+| 3.0          |
++--------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RoundFunc {
@@ -116,7 +124,7 @@ impl ScalarUDFImpl for RoundFunc {
 }
 
 /// Round SQL function
-pub fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn round(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
         return exec_err!(
             "round function requires one or two arguments, got {}",
@@ -305,6 +313,6 @@ mod test {
         let result = round(&args);
 
         assert!(result.is_err());
-        assert!(matches!(result, Err(DataFusionError::Execution { .. })));
+        assert!(matches!(result, Err(DataFusionError::Execution(_))));
     }
 }

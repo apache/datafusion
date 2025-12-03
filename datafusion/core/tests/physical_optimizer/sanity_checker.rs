@@ -20,20 +20,21 @@ use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
     bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
-    repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
+    projection_exec, repartition_exec, sort_exec, sort_expr, sort_expr_options,
+    sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{JoinType, Result};
-use datafusion_physical_expr::expressions::col;
+use datafusion_common::{JoinType, Result, ScalarValue};
+use datafusion_execution::config::SessionConfig;
+use datafusion_physical_expr::expressions::{col, Literal};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{displayable, ExecutionPlan};
 
@@ -392,9 +393,12 @@ fn create_test_schema2() -> SchemaRef {
 /// Check if sanity checker should accept or reject plans.
 fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
     let sanity_checker = SanityCheckPlan::new();
-    let opts = ConfigOptions::default();
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     assert_eq!(
-        sanity_checker.optimize(plan.clone(), &opts).is_ok(),
+        sanity_checker
+            .optimize_plan(plan.clone(), &optimizer_context)
+            .is_ok(),
         is_sane
     );
 }
@@ -420,7 +424,7 @@ async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
     assert_snapshot!(
         actual,
         @r#"
-    BoundedWindowAggExec: wdw=[count: Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
       SortExec: expr=[c9@0 ASC NULLS LAST], preserve_partitioning=[false]
         DataSourceExec: partitions=1, partition_sizes=[0]
     "#
@@ -448,7 +452,7 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
     assert_snapshot!(
         actual,
         @r#"
-    BoundedWindowAggExec: wdw=[count: Field { name: "count", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
       DataSourceExec: partitions=1, partition_sizes=[0]
     "#
     );
@@ -555,10 +559,10 @@ async fn test_sort_merge_join_satisfied() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
-      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
     "
@@ -605,7 +609,7 @@ async fn test_sort_merge_join_order_missing() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
@@ -653,15 +657,89 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
     "
     );
     // Distribution requirement for the `SortMergeJoin` is not satisfied for right child (has round-robin partitioning). We expect to receive error during sanity check.
     assert_sanity_check(&smj, false);
+    Ok(())
+}
+
+/// A particular edge case.
+///
+/// See <https://github.com/apache/datafusion/issues/17372>.
+#[tokio::test]
+async fn test_union_with_sorts_and_constants() -> Result<()> {
+    let schema_in = create_test_schema2();
+
+    let proj_exprs_1 = vec![
+        (
+            Arc::new(Literal::new(ScalarValue::Utf8(Some("foo".to_owned())))) as _,
+            "const_1".to_owned(),
+        ),
+        (
+            Arc::new(Literal::new(ScalarValue::Utf8(Some("foo".to_owned())))) as _,
+            "const_2".to_owned(),
+        ),
+        (col("a", &schema_in).unwrap(), "a".to_owned()),
+    ];
+    let proj_exprs_2 = vec![
+        (
+            Arc::new(Literal::new(ScalarValue::Utf8(Some("foo".to_owned())))) as _,
+            "const_1".to_owned(),
+        ),
+        (
+            Arc::new(Literal::new(ScalarValue::Utf8(Some("bar".to_owned())))) as _,
+            "const_2".to_owned(),
+        ),
+        (col("a", &schema_in).unwrap(), "a".to_owned()),
+    ];
+
+    let source_1 = memory_exec(&schema_in);
+    let source_1 = projection_exec(proj_exprs_1.clone(), source_1).unwrap();
+    let schema_sources = source_1.schema();
+    let ordering_sources: LexOrdering =
+        [sort_expr("a", &schema_sources).nulls_last()].into();
+    let source_1 = sort_exec(ordering_sources.clone(), source_1);
+
+    let source_2 = memory_exec(&schema_in);
+    let source_2 = projection_exec(proj_exprs_2, source_2).unwrap();
+    let source_2 = sort_exec(ordering_sources.clone(), source_2);
+
+    let plan = union_exec(vec![source_1, source_2]);
+
+    let schema_out = plan.schema();
+    let ordering_out: LexOrdering = [
+        sort_expr("const_1", &schema_out).nulls_last(),
+        sort_expr("const_2", &schema_out).nulls_last(),
+        sort_expr("a", &schema_out).nulls_last(),
+    ]
+    .into();
+
+    let plan = sort_preserving_merge_exec(ordering_out, plan);
+
+    let plan_str = displayable(plan.as_ref()).indent(true).to_string();
+    let plan_str = plan_str.trim();
+    assert_snapshot!(
+        plan_str,
+        @r"
+    SortPreservingMergeExec: [const_1@0 ASC NULLS LAST, const_2@1 ASC NULLS LAST, a@2 ASC NULLS LAST]
+      UnionExec
+        SortExec: expr=[a@2 ASC NULLS LAST], preserve_partitioning=[false]
+          ProjectionExec: expr=[foo as const_1, foo as const_2, a@0 as a]
+            DataSourceExec: partitions=1, partition_sizes=[0]
+        SortExec: expr=[a@2 ASC NULLS LAST], preserve_partitioning=[false]
+          ProjectionExec: expr=[foo as const_1, bar as const_2, a@0 as a]
+            DataSourceExec: partitions=1, partition_sizes=[0]
+    "
+    );
+
+    assert_sanity_check(&plan, true);
+
     Ok(())
 }

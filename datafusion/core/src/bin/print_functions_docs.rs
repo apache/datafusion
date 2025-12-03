@@ -108,6 +108,7 @@ fn save_doc_code_text(documentation: &Documentation, name: &str) {
     file.write_all(attr_text.as_bytes()).unwrap();
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn print_docs(
     providers: Vec<Box<dyn DocProvider>>,
     doc_sections: Vec<DocSection>,
@@ -260,7 +261,7 @@ fn print_docs(
     }
 }
 
-/// Trait for accessing name / aliases / documentation for differnet functions
+/// Trait for accessing name / aliases / documentation for different functions
 trait DocProvider {
     fn get_name(&self) -> String;
     fn get_aliases(&self) -> Vec<String>;

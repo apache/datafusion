@@ -38,7 +38,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use datafusion_physical_expr::utils::{collect_columns, reassign_predicate_columns};
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
 
@@ -281,7 +281,7 @@ impl<T> FilterPushdownPropagation<T> {
     }
 
     /// Bind an updated node to the [`FilterPushdownPropagation`].
-    /// Use this when the current node wants to update iself in the tree or replace itself with a new node (e.g. one of it's children).
+    /// Use this when the current node wants to update itself in the tree or replace itself with a new node (e.g. one of it's children).
     /// You do not need to call this if one of the children of the current node may have updated itself, that is handled by the optimizer.
     pub fn with_updated_node(mut self, updated_node: T) -> Self {
         self.updated_node = Some(updated_node);
@@ -343,7 +343,7 @@ impl ChildFilterDescription {
                 // All columns exist in child - we can push down
                 // Need to reassign column indices to match child schema
                 let reassigned_filter =
-                    reassign_predicate_columns(Arc::clone(filter), &child_schema, false)?;
+                    reassign_expr_columns(Arc::clone(filter), &child_schema)?;
                 child_parent_filters
                     .push(PushedDownPredicate::supported(reassigned_filter));
             } else {
@@ -412,6 +412,7 @@ impl FilterDescription {
     /// This method automatically determines filter routing based on column analysis:
     /// - If all columns referenced by a filter exist in a child's schema, it can be pushed down
     /// - Otherwise, it cannot be pushed down to that child
+    #[expect(clippy::needless_pass_by_value)]
     pub fn from_children(
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         children: &[&Arc<dyn crate::ExecutionPlan>],

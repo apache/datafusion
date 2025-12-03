@@ -23,14 +23,15 @@ use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
-    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
-    Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
+    TypeSignature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
@@ -95,7 +96,7 @@ pub fn lead(
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-enum WindowShiftKind {
+pub enum WindowShiftKind {
     Lag,
     Lead,
 }
@@ -136,7 +137,13 @@ impl WindowShift {
                     TypeSignature::Any(3),
                 ],
                 Volatility::Immutable,
-            ),
+            )
+            .with_parameter_names(vec![
+                "expr".to_string(),
+                "offset".to_string(),
+                "default".to_string(),
+            ])
+            .expect("valid parameter names for lead/lag"),
             kind,
         }
     }
@@ -147,6 +154,10 @@ impl WindowShift {
 
     pub fn lead() -> Self {
         Self::new(WindowShiftKind::Lead)
+    }
+
+    pub fn kind(&self) -> &WindowShiftKind {
+        &self.kind
     }
 }
 
@@ -253,7 +264,7 @@ impl WindowUDFImpl for WindowShift {
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let shift_offset =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
-                .map(get_signed_integer)
+                .map(|v| get_signed_integer(&v))
                 .map_or(Ok(None), |v| v.map(Some))
                 .map(|n| self.kind.shift_offset(n))
                 .map(|offset| {
@@ -299,6 +310,26 @@ impl WindowUDFImpl for WindowShift {
             WindowShiftKind::Lead => Some(get_lead_doc()),
         }
     }
+
+    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        if self.kind == WindowShiftKind::Lag {
+            return LimitEffect::None;
+        }
+        match args {
+            [_, expr, ..] => {
+                let Some(lit) = expr.as_any().downcast_ref::<expressions::Literal>()
+                else {
+                    return LimitEffect::Unknown;
+                };
+                let ScalarValue::Int64(Some(amount)) = lit.value() else {
+                    return LimitEffect::Unknown; // we should only get int64 from the parser
+                };
+                LimitEffect::Relative((*amount).max(0) as usize)
+            }
+            [_] => LimitEffect::Relative(1), // default value
+            _ => LimitEffect::Unknown,       // invalid arguments
+        }
+    }
 }
 
 /// When `lead`/`lag` is evaluated on a `NULL` expression we attempt to
@@ -330,10 +361,8 @@ fn parse_expr(
 
     let default_value = get_scalar_value_from_args(input_exprs, 2)?;
     default_value.map_or(Ok(expr), |value| {
-        ScalarValue::try_from(&value.data_type()).map(|v| {
-            Arc::new(datafusion_physical_expr::expressions::Literal::new(v))
-                as Arc<dyn PhysicalExpr>
-        })
+        ScalarValue::try_from(&value.data_type())
+            .map(|v| Arc::new(expressions::Literal::new(v)) as Arc<dyn PhysicalExpr>)
     })
 }
 
@@ -611,7 +640,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         // OR
         // - ignore nulls mode and current value is null and is within window bounds
         // .unwrap() is safe here as there is a none check in front
-        #[allow(clippy::unnecessary_unwrap)]
+        #[expect(clippy::unnecessary_unwrap)]
         if !(idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap()))) {
             ScalarValue::try_from_array(array, idx.unwrap())
         } else {

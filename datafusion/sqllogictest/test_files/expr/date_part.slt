@@ -1005,10 +1005,10 @@ SELECT extract(day from arrow_cast(864000, 'Duration(Second)'))
 ----
 10
 
-query error DataFusion error: Arrow error: Compute error: Month does not support: Duration\(Second\)
+query error DataFusion error: Arrow error: Compute error: Month does not support: Duration\(s\)
 SELECT extract(month from arrow_cast(864000, 'Duration(Second)'))
 
-query error DataFusion error: Arrow error: Compute error: Year does not support: Duration\(Second\)
+query error DataFusion error: Arrow error: Compute error: Year does not support: Duration\(s\)
 SELECT extract(year from arrow_cast(864000, 'Duration(Second)'))
 
 query I

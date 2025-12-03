@@ -110,8 +110,7 @@ impl ScalarUDFImpl for ArrayEmpty {
     }
 }
 
-/// Array_empty SQL function
-pub fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_empty", args)?;
     match array.data_type() {
         List(_) => general_array_empty::<i32>(array),

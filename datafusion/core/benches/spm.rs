@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
@@ -25,7 +26,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{collect, ExecutionPlan};
 
 use criterion::async_executor::FuturesExecutor;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_datasource::memory::MemorySourceConfig;
 
 fn generate_spm_for_round_robin_tie_breaker(
@@ -66,7 +67,7 @@ fn generate_spm_for_round_robin_tie_breaker(
     };
 
     let rbs = (0..batch_count).map(|_| rb.clone()).collect::<Vec<_>>();
-    let partitiones = vec![rbs.clone(); partition_count];
+    let partitions = vec![rbs.clone(); partition_count];
 
     let schema = rb.schema();
     let sort = [
@@ -81,7 +82,7 @@ fn generate_spm_for_round_robin_tie_breaker(
     ]
     .into();
 
-    let exec = MemorySourceConfig::try_new_exec(&partitiones, schema, None).unwrap();
+    let exec = MemorySourceConfig::try_new_exec(&partitions, schema, None).unwrap();
     SortPreservingMergeExec::new(sort, exec)
         .with_round_robin_repartition(enable_round_robin_repartition)
 }

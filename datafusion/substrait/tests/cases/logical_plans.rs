@@ -145,6 +145,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn null_literal_before_and_after_joins() -> Result<()> {
+        // Confirms that literals used before and after a join but for different columns
+        // are correctly handled.
+
+        // File generated with substrait-java's Isthmus:
+        // ./isthmus-cli/build/graal/isthmus --create "create table A (a int); create table B (a int, c int); create table C (a int, d int)" "select t.*, C.d, CAST(NULL AS VARCHAR) as e from (select a, CAST(NULL AS VARCHAR) as c from A UNION ALL select a, c from B) t LEFT JOIN C ON t.a = C.a"
+        let proto_plan =
+            read_json("tests/testdata/test_plans/disambiguate_literals_with_same_name.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let mut settings = insta::Settings::clone_current();
+        settings.add_filter(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            "[UUID]",
+        );
+        settings.bind(|| {
+            assert_snapshot!(
+                plan,
+                @r#"
+            Projection: left.A, left.[UUID] AS C, right.D, Utf8(NULL) AS [UUID] AS E
+              Left Join: left.A = right.A
+                SubqueryAlias: left
+                  Union
+                    Projection: A.A, Utf8(NULL) AS [UUID]
+                      TableScan: A
+                    Projection: B.A, CAST(B.C AS Utf8)
+                      TableScan: B
+                SubqueryAlias: right
+                  TableScan: C
+            "#
+            );
+        });
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn non_nullable_lists() -> Result<()> {
         // DataFusion's Substrait consumer treats all lists as nullable, even if the Substrait plan specifies them as non-nullable.
         // That's because implementing the non-nullability consistently is non-trivial.

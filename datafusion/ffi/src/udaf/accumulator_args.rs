@@ -30,6 +30,7 @@ use datafusion::{
     physical_expr::{PhysicalExpr, PhysicalSortExpr},
     prelude::SessionContext,
 };
+use datafusion_common::ffi_datafusion_err;
 use datafusion_proto::{
     physical_plan::{
         from_proto::{parse_physical_exprs, parse_physical_sort_exprs},
@@ -96,6 +97,7 @@ impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
 pub struct ForeignAccumulatorArgs {
     pub return_field: FieldRef,
     pub schema: Schema,
+    pub expr_fields: Vec<FieldRef>,
     pub ignore_nulls: bool,
     pub order_bys: Vec<PhysicalSortExpr>,
     pub is_reversed: bool,
@@ -108,28 +110,38 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_AccumulatorArgs) -> Result<Self, Self::Error> {
-        let proto_def =
-            PhysicalAggregateExprNode::decode(value.physical_expr_def.as_ref())
-                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+        let proto_def = PhysicalAggregateExprNode::decode(
+            value.physical_expr_def.as_ref(),
+        )
+        .map_err(|e| {
+            ffi_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {e}")
+        })?;
 
         let return_field = Arc::new((&value.return_field.0).try_into()?);
         let schema = Schema::try_from(&value.schema.0)?;
 
         let default_ctx = SessionContext::new();
+        let task_ctx = default_ctx.task_ctx();
         let codex = DefaultPhysicalExtensionCodec {};
 
         let order_bys = parse_physical_sort_exprs(
             &proto_def.ordering_req,
-            &default_ctx,
+            &task_ctx,
             &schema,
             &codex,
         )?;
 
-        let exprs = parse_physical_exprs(&proto_def.expr, &default_ctx, &schema, &codex)?;
+        let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
+
+        let expr_fields = exprs
+            .iter()
+            .map(|e| e.return_field(&schema))
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             return_field,
             schema,
+            expr_fields,
             ignore_nulls: proto_def.ignore_nulls,
             order_bys,
             is_reversed: value.is_reversed,
@@ -145,6 +157,7 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
         Self {
             return_field: Arc::clone(&value.return_field),
             schema: &value.schema,
+            expr_fields: &value.expr_fields,
             ignore_nulls: value.ignore_nulls,
             order_bys: &value.order_bys,
             is_reversed: value.is_reversed,
@@ -170,6 +183,7 @@ mod tests {
         let orig_args = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema: &schema,
+            expr_fields: &[Field::new("a", DataType::Int32, true).into()],
             ignore_nulls: false,
             order_bys: &[PhysicalSortExpr::new_default(col("a", &schema)?)],
             is_reversed: false,

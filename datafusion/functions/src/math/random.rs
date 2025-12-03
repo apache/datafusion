@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Float64;
 use rand::{rng, Rng};
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_or_internal_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -32,7 +32,15 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = r#"Returns a random float value in the range [0, 1).
 The random seed is unique to each row."#,
-    syntax_example = "random()"
+    syntax_example = "random()",
+    sql_example = r#"```sql
+> SELECT random();
++------------------+
+| random()         |
++------------------+
+| 0.7389238902938  |
++------------------+
+```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RandomFunc {
@@ -71,9 +79,11 @@ impl ScalarUDFImpl for RandomFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if !args.args.is_empty() {
-            return internal_err!("{} function does not accept arguments", self.name());
-        }
+        assert_or_internal_err!(
+            args.args.is_empty(),
+            "{} function does not accept arguments",
+            self.name()
+        );
         let mut rng = rng();
         let mut values = vec![0.0; args.number_rows];
         // Equivalent to set each element with rng.random_range(0.0..1.0), but more efficient

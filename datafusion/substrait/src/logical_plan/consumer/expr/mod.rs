@@ -93,7 +93,7 @@ pub async fn from_substrait_rex(
                 consumer.consume_dynamic_parameter(expr, input_schema).await
             }
         },
-        None => substrait_err!("Expression must set rex_type: {:?}", expression),
+        None => substrait_err!("Expression must set rex_type: {expression:?}"),
     }
 }
 
@@ -143,9 +143,7 @@ pub async fn from_substrait_extended_expr(
         let expr = consumer
             .consume_expression(scalar_expr, &input_schema)
             .await?;
-        let (output_type, expected_nullability) =
-            expr.data_type_and_nullable(&input_schema)?;
-        let output_field = Field::new("", output_type, expected_nullability);
+        let output_field = expr.to_field(&input_schema)?.1;
         let mut names_idx = 0;
         let output_field = rename_field(
             &output_field,
@@ -221,7 +219,7 @@ mod tests {
         // Just registering a single function (index 0) so that the plan
         // does not throw a "function not found" error.
         let mut extensions = Extensions::default();
-        extensions.register_function("count".to_string());
+        extensions.register_function("count");
         consumer.extensions = &extensions;
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
@@ -248,7 +246,7 @@ mod tests {
         let mut consumer = test_consumer();
 
         let mut extensions = Extensions::default();
-        extensions.register_function("count".to_string());
+        extensions.register_function("count");
         consumer.extensions = &extensions;
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {

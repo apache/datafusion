@@ -40,13 +40,23 @@
 /// Exported functions accept:
 /// - `Vec<Expr>` argument (single argument followed by a comma)
 /// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
+/// - Functions that require config (marked with `@config` prefix)
 #[macro_export]
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
         $(
             // switch to single-function cases below
-            export_functions!(single $FUNC, $DOC, $($arg)*);
+            $crate::export_functions!(single $FUNC, $DOC, $($arg)*);
         )*
+    };
+
+    // function that requires config (marked with @config)
+    (single $FUNC:ident, $DOC:expr, @config) => {
+        #[doc = $DOC]
+        pub fn $FUNC() -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call(vec![])
+        }
     };
 
     // single vector argument (a single argument followed by a comma)
@@ -67,13 +77,13 @@ macro_rules! export_functions {
 }
 
 /// Creates a singleton `ScalarUDF` of the `$UDF` function and a function
-/// named `$NAME` which returns that singleton.
+/// named `$NAME` which returns that singleton. Optionally use a custom constructor
+/// `$CTOR` which defaults to `$UDF::new()` if not specified.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
 #[macro_export]
 macro_rules! make_udf_function {
-    ($UDF:ty, $NAME:ident) => {
-        #[allow(rustdoc::redundant_explicit_links)]
+    ($UDF:ty, $NAME:ident, $CTOR:expr) => {
         #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             // Singleton instance of the function
@@ -81,10 +91,28 @@ macro_rules! make_udf_function {
                 std::sync::Arc<datafusion_expr::ScalarUDF>,
             > = std::sync::LazyLock::new(|| {
                 std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
-                    <$UDF>::new(),
+                    ($CTOR)(),
                 ))
             });
             std::sync::Arc::clone(&INSTANCE)
+        }
+    };
+    ($UDF:ty, $NAME:ident) => {
+        make_udf_function!($UDF, $NAME, <$UDF>::new);
+    };
+}
+
+/// Creates a singleton `ScalarUDF` of the `$UDF` function and a function
+/// named `$NAME` which returns that singleton. The function takes a
+/// configuration argument of type `$CONFIG_TYPE` to create the UDF.
+#[macro_export]
+macro_rules! make_udf_function_with_config {
+    ($UDF:ty, $NAME:ident) => {
+        #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
+        pub fn $NAME(config: &datafusion_common::config::ConfigOptions) -> std::sync::Arc<datafusion_expr::ScalarUDF> {
+            std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
+                <$UDF>::new_with_config(&config),
+            ))
         }
     };
 }
@@ -122,7 +150,7 @@ macro_rules! make_stub_package {
 macro_rules! downcast_named_arg {
     ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            internal_datafusion_err!(
+            datafusion_common::internal_datafusion_err!(
                 "could not cast {} to {}",
                 $NAME,
                 std::any::type_name::<$ARRAY_TYPE>()
@@ -139,7 +167,7 @@ macro_rules! downcast_named_arg {
 #[macro_export]
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        downcast_named_arg!($ARG, "", $ARRAY_TYPE)
+        $crate::downcast_named_arg!($ARG, "", $ARRAY_TYPE)
     }};
 }
 
@@ -155,7 +183,7 @@ macro_rules! downcast_arg {
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_unary_udf {
     ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
-        make_udf_function!($NAME::$UDF, $NAME);
+        $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;
@@ -269,7 +297,7 @@ macro_rules! make_math_unary_udf {
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_binary_udf {
     ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
-        make_udf_function!($NAME::$UDF, $NAME);
+        $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;

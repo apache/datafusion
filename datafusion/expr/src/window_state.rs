@@ -23,14 +23,13 @@ use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 use arrow::{
     array::ArrayRef,
-    compute::{concat, concat_batches, SortOptions},
+    compute::{SortOptions, concat, concat_batches},
     datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    internal_err,
+    Result, ScalarValue, internal_datafusion_err, internal_err,
     utils::{compare_rows, get_row_at_idx, search_in_slice},
-    DataFusionError, Result, ScalarValue,
 };
 
 /// Holds the state of evaluating a window function
@@ -90,7 +89,12 @@ impl WindowAggState {
         partition_batch_state: &PartitionBatchState,
     ) -> Result<()> {
         self.last_calculated_index += out_col.len();
-        self.out_col = concat(&[&self.out_col, &out_col])?;
+        // no need to use concat if the current `out_col` is empty
+        if self.out_col.is_empty() {
+            self.out_col = Arc::clone(out_col);
+        } else {
+            self.out_col = concat(&[&self.out_col, &out_col])?;
+        }
         self.n_row_result_missing =
             partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
         self.is_end = partition_batch_state.is_end;
@@ -165,7 +169,7 @@ impl WindowFrameContext {
             // comparison of rows.
             WindowFrameContext::Range {
                 window_frame,
-                ref mut state,
+                state,
             } => state.calculate_range(
                 window_frame,
                 last_range,
@@ -178,7 +182,7 @@ impl WindowFrameContext {
             // or position of NULLs do not impact inequality.
             WindowFrameContext::Groups {
                 window_frame,
-                ref mut state,
+                state,
             } => state.calculate_range(window_frame, range_columns, length, idx),
         }
     }
@@ -200,14 +204,14 @@ impl WindowFrameContext {
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                 return internal_err!(
                     "Frame start cannot be UNBOUNDED FOLLOWING '{window_frame:?}'"
-                )
+                );
             }
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
                 std::cmp::min(idx + n as usize, length)
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return internal_err!("Rows should be UInt64")
+                return internal_err!("Rows should be UInt64");
             }
         };
         let end = match window_frame.end_bound {
@@ -215,7 +219,7 @@ impl WindowFrameContext {
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                 return internal_err!(
                     "Frame end cannot be UNBOUNDED PRECEDING '{window_frame:?}'"
-                )
+                );
             }
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
                 if idx >= n as usize {
@@ -232,7 +236,7 @@ impl WindowFrameContext {
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                return internal_err!("Rows should be UInt64")
+                return internal_err!("Rows should be UInt64");
             }
         };
         Ok(Range { start, end })
@@ -259,6 +263,15 @@ impl PartitionBatchState {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             record_batch: RecordBatch::new_empty(schema),
+            most_recent_row: None,
+            is_end: false,
+            n_out_row: 0,
+        }
+    }
+
+    pub fn new_with_batch(batch: RecordBatch) -> Self {
+        Self {
+            record_batch: batch,
             most_recent_row: None,
             is_end: false,
             n_out_row: 0,
@@ -388,8 +401,8 @@ impl WindowFrameStateRange {
                 .sort_options
                 .first()
                 .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Sort options unexpectedly absent in a window frame".to_string(),
+                    internal_datafusion_err!(
+                        "Sort options unexpectedly absent in a window frame"
                     )
                 })?
                 .descending;

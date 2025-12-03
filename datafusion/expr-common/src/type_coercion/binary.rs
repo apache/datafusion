@@ -22,16 +22,18 @@ use std::sync::Arc;
 
 use crate::operator::Operator;
 
-use arrow::array::{new_empty_array, Array};
+use arrow::array::{Array, new_empty_array};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
+    DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, Field, FieldRef, Fields,
+    TimeUnit,
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Diagnostic,
-    Result, Span, Spans,
+    Diagnostic, Result, Span, Spans, exec_err, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err,
 };
 use itertools::Itertools;
 
@@ -124,17 +126,24 @@ impl<'a> BinaryTypeCoercer<'a> {
 
     /// Returns a [`Signature`] for applying `op` to arguments of type `lhs` and `rhs`
     fn signature(&'a self) -> Result<Signature> {
+        // Special handling for arithmetic operations with both `lhs` and `rhs` NULL:
+        // When both operands are NULL, we are providing a concrete numeric type (Int64)
+        // to allow the arithmetic operation to proceed. This ensures NULL `op` NULL returns NULL
+        // instead of failing during planning.
+        if matches!((self.lhs, self.rhs), (DataType::Null, DataType::Null))
+            && self.op.is_numerical_operators()
+        {
+            return Ok(Signature::uniform(DataType::Int64));
+        }
+
         if let Some(coerced) = null_coercion(self.lhs, self.rhs) {
-            use Operator::*;
             // Special handling for arithmetic + null coercion:
             // For arithmetic operators on non-temporal types, we must handle the result type here using Arrow's numeric kernel.
             // This is because Arrow expects concrete numeric types, and this ensures the correct result type (e.g., for NULL + Int32, result is Int32).
             // For all other cases (including temporal arithmetic and non-arithmetic operators),
             // we can delegate to signature_inner(&coerced, &coerced), which handles the necessary logic for those operators.
             // In those cases, signature_inner is designed to work with the coerced type, even if it originated from a NULL.
-            if matches!(self.op, Plus | Minus | Multiply | Divide | Modulo)
-                && !coerced.is_temporal()
-            {
+            if self.op.is_numerical_operators() && !coerced.is_temporal() {
                 let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
                         "Cannot get result type for arithmetic operation {coerced} {} {coerced}: {e}",
@@ -175,8 +184,8 @@ impl<'a> BinaryTypeCoercer<'a> {
     }
 
     fn signature_inner(&'a self, lhs: &DataType, rhs: &DataType) -> Result<Signature> {
-        use arrow::datatypes::DataType::*;
         use Operator::*;
+        use arrow::datatypes::DataType::*;
         let result = match self.op {
         Eq |
         NotEq |
@@ -197,7 +206,7 @@ impl<'a> BinaryTypeCoercer<'a> {
         }
         And | Or => if matches!((lhs, rhs), (Boolean | Null, Boolean | Null)) {
             // Logical binary boolean operators can only be evaluated for
-            // boolean or null arguments.                   
+            // boolean or null arguments.
             Ok(Signature::uniform(Boolean))
         } else {
             plan_err!(
@@ -318,6 +327,16 @@ impl<'a> BinaryTypeCoercer<'a> {
 
 // TODO Move the rest inside of BinaryTypeCoercer
 
+fn is_decimal(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Decimal32(..)
+            | DataType::Decimal64(..)
+            | DataType::Decimal128(..)
+            | DataType::Decimal256(..)
+    )
+}
+
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
 fn math_decimal_coercion(
     lhs_type: &DataType,
@@ -334,22 +353,73 @@ fn math_decimal_coercion(
             let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type)?;
             Some((lhs_type, value_type))
         }
-        (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
-            Some((dec_type.clone(), dec_type.clone()))
-        }
-        (Decimal128(_, _), Decimal128(_, _)) | (Decimal256(_, _), Decimal256(_, _)) => {
+        (
+            Null,
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+        ) => Some((rhs_type.clone(), rhs_type.clone())),
+        (
+            Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
+            Null,
+        ) => Some((lhs_type.clone(), lhs_type.clone())),
+        (Decimal32(_, _), Decimal32(_, _))
+        | (Decimal64(_, _), Decimal64(_, _))
+        | (Decimal128(_, _), Decimal128(_, _))
+        | (Decimal256(_, _), Decimal256(_, _)) => {
             Some((lhs_type.clone(), rhs_type.clone()))
+        }
+        // Cross-variant decimal coercion - choose larger variant with appropriate precision/scale
+        (lhs, rhs)
+            if is_decimal(lhs)
+                && is_decimal(rhs)
+                && std::mem::discriminant(lhs) != std::mem::discriminant(rhs) =>
+        {
+            let coerced_type = get_wider_decimal_type_cross_variant(lhs_type, rhs_type)?;
+            Some((coerced_type.clone(), coerced_type))
         }
         // Unlike with comparison we don't coerce to a decimal in the case of floating point
         // numbers, instead falling back to floating point arithmetic instead
         (
+            Decimal32(_, _),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+        ) => Some((
+            lhs_type.clone(),
+            coerce_numeric_type_to_decimal32(rhs_type)?,
+        )),
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+            Decimal32(_, _),
+        ) => Some((
+            coerce_numeric_type_to_decimal32(lhs_type)?,
+            rhs_type.clone(),
+        )),
+        (
+            Decimal64(_, _),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+        ) => Some((
+            lhs_type.clone(),
+            coerce_numeric_type_to_decimal64(rhs_type)?,
+        )),
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+            Decimal64(_, _),
+        ) => Some((
+            coerce_numeric_type_to_decimal64(lhs_type)?,
+            rhs_type.clone(),
+        )),
+        (
             Decimal128(_, _),
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-        ) => Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?)),
+        ) => Some((
+            lhs_type.clone(),
+            coerce_numeric_type_to_decimal128(rhs_type)?,
+        )),
         (
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
             Decimal128(_, _),
-        ) => Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone())),
+        ) => Some((
+            coerce_numeric_type_to_decimal128(lhs_type)?,
+            rhs_type.clone(),
+        )),
         (
             Decimal256(_, _),
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
@@ -681,13 +751,17 @@ pub fn try_type_union_resolution_with_struct(
             let keys = fields.iter().map(|f| f.name().to_owned()).join(",");
             if let Some(ref k) = keys_string {
                 if *k != keys {
-                    return exec_err!("Expect same keys for struct type but got mismatched pair {} and {}", *k, keys);
+                    return exec_err!(
+                        "Expect same keys for struct type but got mismatched pair {} and {}",
+                        *k,
+                        keys
+                    );
                 }
             } else {
                 keys_string = Some(keys);
             }
         } else {
-            return exec_err!("Expect to get struct but got {}", data_type);
+            return exec_err!("Expect to get struct but got {data_type}");
         }
     }
 
@@ -695,7 +769,9 @@ pub fn try_type_union_resolution_with_struct(
     {
         fields.iter().map(|f| f.data_type().to_owned()).collect()
     } else {
-        return internal_err!("Struct type is checked is the previous function, so this should be unreachable");
+        return internal_err!(
+            "Struct type is checked is the previous function, so this should be unreachable"
+        );
     };
 
     for data_type in data_types.iter().skip(1) {
@@ -719,7 +795,7 @@ pub fn try_type_union_resolution_with_struct(
                 }
             }
         } else {
-            return exec_err!("Expect to get struct but got {}", data_type);
+            return exec_err!("Expect to get struct but got {data_type}");
         }
     }
 
@@ -768,6 +844,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     }
     binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, true))
+        .or_else(|| ree_comparison_coercion(lhs_type, rhs_type, true))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| list_coercion(lhs_type, rhs_type))
@@ -796,6 +873,8 @@ pub fn comparison_coercion_numeric(
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
+        .or_else(|| dictionary_comparison_coercion_numeric(lhs_type, rhs_type, true))
+        .or_else(|| ree_comparison_coercion_numeric(lhs_type, rhs_type, true))
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion_as_numeric(lhs_type, rhs_type))
@@ -860,7 +939,7 @@ fn string_temporal_coercion(
                 match temporal {
                     Date32 | Date64 => Some(temporal.clone()),
                     Time32(_) | Time64(_) => {
-                        if is_time_with_valid_unit(temporal.to_owned()) {
+                        if is_time_with_valid_unit(temporal) {
                             Some(temporal.to_owned())
                         } else {
                             None
@@ -902,19 +981,90 @@ pub fn binary_numeric_coercion(
 pub fn decimal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
+    // Prefer decimal data type over floating point for comparison operation
     match (lhs_type, rhs_type) {
-        // Prefer decimal data type over floating point for comparison operation
-        (Decimal128(_, _), Decimal128(_, _)) => {
+        // Same decimal types
+        (lhs_type, rhs_type)
+            if is_decimal(lhs_type)
+                && is_decimal(rhs_type)
+                && std::mem::discriminant(lhs_type)
+                    == std::mem::discriminant(rhs_type) =>
+        {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
-        (Decimal128(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal128(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
-        (Decimal256(_, _), Decimal256(_, _)) => {
-            get_wider_decimal_type(lhs_type, rhs_type)
+        // Mismatched decimal types
+        (lhs_type, rhs_type)
+            if is_decimal(lhs_type)
+                && is_decimal(rhs_type)
+                && std::mem::discriminant(lhs_type)
+                    != std::mem::discriminant(rhs_type) =>
+        {
+            get_wider_decimal_type_cross_variant(lhs_type, rhs_type)
         }
-        (Decimal256(_, _), _) => get_common_decimal_type(lhs_type, rhs_type),
-        (_, Decimal256(_, _)) => get_common_decimal_type(rhs_type, lhs_type),
+        // Decimal + non-decimal types
+        (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _), _) => {
+            get_common_decimal_type(lhs_type, rhs_type)
+        }
+        (_, Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)) => {
+            get_common_decimal_type(rhs_type, lhs_type)
+        }
         (_, _) => None,
+    }
+}
+/// Handle cross-variant decimal widening by choosing the larger variant
+fn get_wider_decimal_type_cross_variant(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    let (p1, s1) = match lhs_type {
+        Decimal32(p, s) => (*p, *s),
+        Decimal64(p, s) => (*p, *s),
+        Decimal128(p, s) => (*p, *s),
+        Decimal256(p, s) => (*p, *s),
+        _ => return None,
+    };
+
+    let (p2, s2) = match rhs_type {
+        Decimal32(p, s) => (*p, *s),
+        Decimal64(p, s) => (*p, *s),
+        Decimal128(p, s) => (*p, *s),
+        Decimal256(p, s) => (*p, *s),
+        _ => return None,
+    };
+
+    // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+    let s = s1.max(s2);
+    let range = (p1 as i8 - s1).max(p2 as i8 - s2);
+    let required_precision = (range + s) as u8;
+
+    // Choose the larger variant between the two input types, while making sure we don't overflow the precision.
+    match (lhs_type, rhs_type) {
+        (Decimal32(_, _), Decimal64(_, _)) | (Decimal64(_, _), Decimal32(_, _))
+            if required_precision <= DECIMAL64_MAX_PRECISION =>
+        {
+            Some(Decimal64(required_precision, s))
+        }
+        (Decimal32(_, _), Decimal128(_, _))
+        | (Decimal128(_, _), Decimal32(_, _))
+        | (Decimal64(_, _), Decimal128(_, _))
+        | (Decimal128(_, _), Decimal64(_, _))
+            if required_precision <= DECIMAL128_MAX_PRECISION =>
+        {
+            Some(Decimal128(required_precision, s))
+        }
+        (Decimal32(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal32(_, _))
+        | (Decimal64(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal64(_, _))
+        | (Decimal128(_, _), Decimal256(_, _))
+        | (Decimal256(_, _), Decimal128(_, _))
+            if required_precision <= DECIMAL256_MAX_PRECISION =>
+        {
+            Some(Decimal256(required_precision, s))
+        }
+        _ => None,
     }
 }
 
@@ -925,8 +1075,16 @@ fn get_common_decimal_type(
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match decimal_type {
+        Decimal32(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal32(other_type)?;
+            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        }
+        Decimal64(_, _) => {
+            let other_decimal_type = coerce_numeric_type_to_decimal64(other_type)?;
+            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        }
         Decimal128(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal(other_type)?;
+            let other_decimal_type = coerce_numeric_type_to_decimal128(other_type)?;
             get_wider_decimal_type(decimal_type, &other_decimal_type)
         }
         Decimal256(_, _) => {
@@ -937,7 +1095,7 @@ fn get_common_decimal_type(
     }
 }
 
-/// Returns a `DataType::Decimal128` that can store any value from either
+/// Returns a decimal [`DataType`] variant that can store any value from either
 /// `lhs_decimal_type` and `rhs_decimal_type`
 ///
 /// The result decimal type is `(max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2))`.
@@ -946,11 +1104,23 @@ fn get_wider_decimal_type(
     rhs_type: &DataType,
 ) -> Option<DataType> {
     match (lhs_decimal_type, rhs_type) {
+        (DataType::Decimal32(p1, s1), DataType::Decimal32(p2, s2)) => {
+            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+            let s = *s1.max(s2);
+            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
+            Some(create_decimal32_type((range + s) as u8, s))
+        }
+        (DataType::Decimal64(p1, s1), DataType::Decimal64(p2, s2)) => {
+            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+            let s = *s1.max(s2);
+            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
+            Some(create_decimal64_type((range + s) as u8, s))
+        }
         (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
             // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
             let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
-            Some(create_decimal_type((range + s) as u8, s))
+            Some(create_decimal128_type((range + s) as u8, s))
         }
         (DataType::Decimal256(p1, s1), DataType::Decimal256(p2, s2)) => {
             // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
@@ -964,7 +1134,39 @@ fn get_wider_decimal_type(
 
 /// Convert the numeric data type to the decimal data type.
 /// We support signed and unsigned integer types and floating-point type.
-fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
+fn coerce_numeric_type_to_decimal32(numeric_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    // This conversion rule is from spark
+    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
+    match numeric_type {
+        Int8 | UInt8 => Some(Decimal32(3, 0)),
+        Int16 | UInt16 => Some(Decimal32(5, 0)),
+        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
+        Float16 => Some(Decimal32(6, 3)),
+        _ => None,
+    }
+}
+
+/// Convert the numeric data type to the decimal data type.
+/// We support signed and unsigned integer types and floating-point type.
+fn coerce_numeric_type_to_decimal64(numeric_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    // This conversion rule is from spark
+    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
+    match numeric_type {
+        Int8 | UInt8 => Some(Decimal64(3, 0)),
+        Int16 | UInt16 => Some(Decimal64(5, 0)),
+        Int32 | UInt32 => Some(Decimal64(10, 0)),
+        // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
+        Float16 => Some(Decimal64(6, 3)),
+        Float32 => Some(Decimal64(14, 7)),
+        _ => None,
+    }
+}
+
+/// Convert the numeric data type to the decimal data type.
+/// We support signed and unsigned integer types and floating-point type.
+fn coerce_numeric_type_to_decimal128(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
@@ -1113,7 +1315,21 @@ fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
     }
 }
 
-fn create_decimal_type(precision: u8, scale: i8) -> DataType {
+fn create_decimal32_type(precision: u8, scale: i8) -> DataType {
+    DataType::Decimal32(
+        DECIMAL32_MAX_PRECISION.min(precision),
+        DECIMAL32_MAX_SCALE.min(scale),
+    )
+}
+
+fn create_decimal64_type(precision: u8, scale: i8) -> DataType {
+    DataType::Decimal64(
+        DECIMAL64_MAX_PRECISION.min(precision),
+        DECIMAL64_MAX_SCALE.min(scale),
+    )
+}
+
+fn create_decimal128_type(precision: u8, scale: i8) -> DataType {
     DataType::Decimal128(
         DECIMAL128_MAX_PRECISION.min(precision),
         DECIMAL128_MAX_SCALE.min(scale),
@@ -1146,6 +1362,38 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
     }
 }
 
+/// Generic coercion rules for Dictionaries: the type that both lhs and rhs
+/// can be casted to for the purpose of a computation.
+///
+/// Not all operators support dictionaries, if `preserve_dictionaries` is true
+/// dictionaries will be preserved if possible.
+///
+/// The `coerce_fn` parameter determines which comparison coercion function to use
+/// for comparing the dictionary value types.
+fn dictionary_comparison_coercion_generic(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_dictionaries: bool,
+    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (
+            Dictionary(_lhs_index_type, lhs_value_type),
+            Dictionary(_rhs_index_type, rhs_value_type),
+        ) => coerce_fn(lhs_value_type, rhs_value_type),
+        (d @ Dictionary(_, value_type), other_type)
+        | (other_type, d @ Dictionary(_, value_type))
+            if preserve_dictionaries && value_type.as_ref() == other_type =>
+        {
+            Some(d.clone())
+        }
+        (Dictionary(_index_type, value_type), _) => coerce_fn(value_type, rhs_type),
+        (_, Dictionary(_index_type, value_type)) => coerce_fn(lhs_type, value_type),
+        _ => None,
+    }
+}
+
 /// Coercion rules for Dictionaries: the type that both lhs and rhs
 /// can be casted to for the purpose of a computation.
 ///
@@ -1156,26 +1404,98 @@ fn dictionary_comparison_coercion(
     rhs_type: &DataType,
     preserve_dictionaries: bool,
 ) -> Option<DataType> {
+    dictionary_comparison_coercion_generic(
+        lhs_type,
+        rhs_type,
+        preserve_dictionaries,
+        comparison_coercion,
+    )
+}
+
+/// Coercion rules for Dictionaries with numeric preference: similar to
+/// [`dictionary_comparison_coercion`] but uses [`comparison_coercion_numeric`]
+/// which prefers numeric types over strings when both are present.
+///
+/// This is used by [`comparison_coercion_numeric`] to maintain consistent
+/// numeric-preferring semantics when dealing with dictionary types.
+fn dictionary_comparison_coercion_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_dictionaries: bool,
+) -> Option<DataType> {
+    dictionary_comparison_coercion_generic(
+        lhs_type,
+        rhs_type,
+        preserve_dictionaries,
+        comparison_coercion_numeric,
+    )
+}
+
+/// Coercion rules for RunEndEncoded: the type that both lhs and rhs
+/// can be casted to for the purpose of a computation.
+///
+/// Not all operators support REE, if `preserve_ree` is true
+/// REE will be preserved if possible
+///
+/// The `coerce_fn` parameter determines which comparison coercion function to use
+/// for comparing the REE value types.
+fn ree_comparison_coercion_generic(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_ree: bool,
+    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
+) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (
-            Dictionary(_lhs_index_type, lhs_value_type),
-            Dictionary(_rhs_index_type, rhs_value_type),
-        ) => comparison_coercion(lhs_value_type, rhs_value_type),
-        (d @ Dictionary(_, value_type), other_type)
-        | (other_type, d @ Dictionary(_, value_type))
-            if preserve_dictionaries && value_type.as_ref() == other_type =>
+        (RunEndEncoded(_, lhs_values_field), RunEndEncoded(_, rhs_values_field)) => {
+            coerce_fn(lhs_values_field.data_type(), rhs_values_field.data_type())
+        }
+        (ree @ RunEndEncoded(_, values_field), other_type)
+        | (other_type, ree @ RunEndEncoded(_, values_field))
+            if preserve_ree && values_field.data_type() == other_type =>
         {
-            Some(d.clone())
+            Some(ree.clone())
         }
-        (Dictionary(_index_type, value_type), _) => {
-            comparison_coercion(value_type, rhs_type)
+        (RunEndEncoded(_, values_field), _) => {
+            coerce_fn(values_field.data_type(), rhs_type)
         }
-        (_, Dictionary(_index_type, value_type)) => {
-            comparison_coercion(lhs_type, value_type)
+        (_, RunEndEncoded(_, values_field)) => {
+            coerce_fn(lhs_type, values_field.data_type())
         }
         _ => None,
     }
+}
+
+/// Coercion rules for RunEndEncoded: the type that both lhs and rhs
+/// can be casted to for the purpose of a computation.
+///
+/// Not all operators support REE, if `preserve_ree` is true
+/// REE will be preserved if possible
+fn ree_comparison_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_ree: bool,
+) -> Option<DataType> {
+    ree_comparison_coercion_generic(lhs_type, rhs_type, preserve_ree, comparison_coercion)
+}
+
+/// Coercion rules for RunEndEncoded with numeric preference: similar to
+/// [`ree_comparison_coercion`] but uses [`comparison_coercion_numeric`]
+/// which prefers numeric types over strings when both are present.
+///
+/// This is used by [`comparison_coercion_numeric`] to maintain consistent
+/// numeric-preferring semantics when dealing with REE types.
+fn ree_comparison_coercion_numeric(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    preserve_ree: bool,
+) -> Option<DataType> {
+    ree_comparison_coercion_generic(
+        lhs_type,
+        rhs_type,
+        preserve_ree,
+        comparison_coercion_numeric,
+    )
 }
 
 /// Coercion rules for string concat.
@@ -1356,12 +1676,13 @@ fn binary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 }
 
 /// Coercion rules for like operations.
-/// This is a union of string coercion rules and dictionary coercion rules
+/// This is a union of string coercion rules, dictionary coercion rules, and REE coercion rules
 pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| list_coercion(lhs_type, rhs_type))
         .or_else(|| binary_to_string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_comparison_coercion(lhs_type, rhs_type, false))
+        .or_else(|| ree_comparison_coercion(lhs_type, rhs_type, false))
         .or_else(|| regex_null_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
@@ -1388,13 +1709,13 @@ pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
 /// Checks if the TimeUnit associated with a Time32 or Time64 type is consistent,
 /// as Time32 can only be used to Second and Millisecond accuracy, while Time64
 /// is exclusively used to Microsecond and Nanosecond accuracy
-fn is_time_with_valid_unit(datatype: DataType) -> bool {
+fn is_time_with_valid_unit(datatype: &DataType) -> bool {
     matches!(
         datatype,
-        DataType::Time32(TimeUnit::Second)
-            | DataType::Time32(TimeUnit::Millisecond)
-            | DataType::Time64(TimeUnit::Microsecond)
-            | DataType::Time64(TimeUnit::Nanosecond)
+        &DataType::Time32(TimeUnit::Second)
+            | &DataType::Time32(TimeUnit::Millisecond)
+            | &DataType::Time64(TimeUnit::Microsecond)
+            | &DataType::Time64(TimeUnit::Nanosecond)
     )
 }
 
@@ -1528,8 +1849,8 @@ fn timeunit_coercion(lhs_unit: &TimeUnit, rhs_unit: &TimeUnit) -> TimeUnit {
     }
 }
 
-/// Coercion rules from NULL type. Since NULL can be casted to any other type in arrow,
-/// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
+/// Coercion rules from NULL type. Since NULL can be cast to any other type in arrow,
+/// either lhs or rhs is NULL, if NULL can be cast to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
         (DataType::Null, other_type) | (other_type, DataType::Null) => {

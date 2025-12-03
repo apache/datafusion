@@ -81,10 +81,11 @@ fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
         .collect()
 }
 
-fn create_integer_data(size: usize, value_density: f64) -> Vec<Option<u64>> {
-    // use random numbers to avoid spurious compiler optimizations wrt to branching
-    let mut rng = StdRng::seed_from_u64(42);
-
+fn create_integer_data(
+    rng: &mut StdRng,
+    size: usize,
+    value_density: f64,
+) -> Vec<Option<u64>> {
     (0..size)
         .map(|_| {
             if rng.random::<f64>() > value_density {
@@ -116,7 +117,7 @@ fn create_record_batch(
     let values = create_data(batch_size, 0.5);
 
     // Integer values between [0, u64::MAX].
-    let integer_values_wide = create_integer_data(batch_size, 9.0);
+    let integer_values_wide = create_integer_data(rng, batch_size, 9.0);
 
     // Integer values between [0, 9].
     let integer_values_narrow = (0..batch_size)
@@ -138,6 +139,7 @@ fn create_record_batch(
 
 /// Create record batches of `partitions_len` partitions and `batch_size` for each batch,
 /// with a total number of `array_len` records
+#[expect(clippy::needless_pass_by_value)]
 pub fn create_record_batches(
     schema: SchemaRef,
     array_len: usize,

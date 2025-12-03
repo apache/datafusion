@@ -20,6 +20,8 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::Deref;
+use std::slice::from_ref;
 use std::sync::Arc;
 
 use crate::sink::DataSink;
@@ -27,21 +29,21 @@ use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::equivalence::{
-    OrderingEquivalenceClass, ProjectionMapping,
+use datafusion_common::{
+    assert_or_internal_err, plan_err, project_schema, Result, ScalarValue,
 };
-use datafusion_physical_expr::expressions::Column;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::equivalence::project_orderings;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+    all_alias_free_columns, new_projections_for_columns,
 };
 use datafusion_physical_plan::{
-    common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr, SendableRecordBatchStream, Statistics,
+    common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
+    SendableRecordBatchStream, Statistics,
 };
 
 use async_trait::async_trait;
@@ -194,12 +196,27 @@ impl DataSource for MemorySourceConfig {
         SchedulingType::Cooperative
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(common::compute_record_batch_statistics(
-            &self.partitions,
-            &self.schema,
-            self.projection.clone(),
-        ))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        if let Some(partition) = partition {
+            // Compute statistics for a specific partition
+            if let Some(batches) = self.partitions.get(partition) {
+                Ok(common::compute_record_batch_statistics(
+                    from_ref(batches),
+                    &self.schema,
+                    self.projection.clone(),
+                ))
+            } else {
+                // Invalid partition index
+                Ok(Statistics::new_unknown(&self.projected_schema))
+            }
+        } else {
+            // Compute statistics across all partitions
+            Ok(common::compute_record_batch_statistics(
+                &self.partitions,
+                &self.schema,
+                self.projection.clone(),
+            ))
+        }
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
@@ -213,24 +230,25 @@ impl DataSource for MemorySourceConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        all_alias_free_columns(projection.expr())
+        let exprs = projection.iter().cloned().collect_vec();
+        all_alias_free_columns(exprs.as_slice())
             .then(|| {
                 let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(
-                    projection,
+                    &exprs,
                     self.projection().as_ref().unwrap_or(&all_projections),
                 );
 
-                MemorySourceConfig::try_new_exec(
+                MemorySourceConfig::try_new(
                     self.partitions(),
                     self.original_schema(),
                     Some(new_projections),
                 )
-                .map(|e| e as _)
+                .map(|s| Arc::new(s) as Arc<dyn DataSource>)
             })
             .transpose()
     }
@@ -268,6 +286,7 @@ impl MemorySourceConfig {
     }
 
     /// Create a new execution plan from a list of constant values (`ValuesExec`)
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_as_values(
         schema: SchemaRef,
         data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
@@ -325,6 +344,7 @@ impl MemorySourceConfig {
     ///
     /// Errors if any of the batches don't match the provided schema, or if no
     /// batches are provided.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new_from_batches(
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
@@ -424,30 +444,16 @@ impl MemorySourceConfig {
                     .map(|field| field.name() != col.name())
                     .unwrap_or(true)
             });
-        if let Some(col) = ambiguous_column {
-            return internal_err!(
-                "Column {:?} is not found in the original schema of the MemorySourceConfig",
-                col
-            );
-        }
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the MemorySourceConfig",
+            ambiguous_column.as_ref().unwrap()
+        );
 
         // If there is a projection on the source, we also need to project orderings
-        if let Some(projection) = &self.projection {
-            let base_schema = self.original_schema();
-            let proj_exprs = projection.iter().map(|idx| {
-                let name = base_schema.field(*idx).name();
-                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
-            });
-            let projection_mapping =
-                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
-            let base_eqp = EquivalenceProperties::new_with_orderings(
-                Arc::clone(&base_schema),
-                sort_information,
-            );
-            let proj_eqp =
-                base_eqp.project(&projection_mapping, Arc::clone(&self.projected_schema));
-            let oeq_class: OrderingEquivalenceClass = proj_eqp.into();
-            sort_information = oeq_class.into();
+        if self.projection.is_some() {
+            sort_information =
+                project_orderings(&sort_information, &self.projected_schema);
         }
 
         self.sort_information = sort_information;
@@ -498,7 +504,7 @@ impl MemorySourceConfig {
             // by count of rows.
             let mut max_heap = BinaryHeap::with_capacity(target_partitions);
             for rep in to_repartition {
-                max_heap.push(rep);
+                max_heap.push(CompareByRowCount(rep));
             }
 
             // Split the largest partitions into smaller partitions. Maintaining the output
@@ -514,10 +520,10 @@ impl MemorySourceConfig {
                     };
 
                     // Split the partition. The new partitions will be ordered with idx and idx+1.
-                    let mut new_partitions = to_split.split();
+                    let mut new_partitions = to_split.into_inner().split();
                     if new_partitions.len() > 1 {
                         for new_partition in new_partitions {
-                            max_heap.push(new_partition);
+                            max_heap.push(CompareByRowCount(new_partition));
                         }
                         // Successful repartition. Break inner loop, and return to outer `cnt_to_repartition` loop.
                         break;
@@ -526,7 +532,10 @@ impl MemorySourceConfig {
                     }
                 }
             }
-            let mut partitions = max_heap.drain().collect_vec();
+            let mut partitions = max_heap
+                .drain()
+                .map(CompareByRowCount::into_inner)
+                .collect_vec();
             partitions.extend(cannot_split_further);
 
             // Finally, sort all partitions by the output ordering.
@@ -648,26 +657,6 @@ impl RePartition {
     }
 }
 
-impl PartialOrd for RePartition {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for RePartition {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.row_count.cmp(&other.row_count)
-    }
-}
-
-impl PartialEq for RePartition {
-    fn eq(&self, other: &Self) -> bool {
-        self.row_count.eq(&other.row_count)
-    }
-}
-
-impl Eq for RePartition {}
-
 impl fmt::Display for RePartition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -677,6 +666,36 @@ impl fmt::Display for RePartition {
             self.batches.len(),
             self.idx
         )
+    }
+}
+
+struct CompareByRowCount(RePartition);
+impl CompareByRowCount {
+    fn into_inner(self) -> RePartition {
+        self.0
+    }
+}
+impl Ord for CompareByRowCount {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.row_count.cmp(&other.0.row_count)
+    }
+}
+impl PartialOrd for CompareByRowCount {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for CompareByRowCount {
+    fn eq(&self, other: &Self) -> bool {
+        // PartialEq must be consistent with PartialOrd
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for CompareByRowCount {}
+impl Deref for CompareByRowCount {
+    type Target = RePartition;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -835,6 +854,7 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::expressions::lit;
 
+    use datafusion_physical_plan::ExecutionPlan;
     use futures::StreamExt;
 
     #[tokio::test]
@@ -928,10 +948,9 @@ mod tests {
             vec![lit(ScalarValue::Null)],
         ];
         let rows = data.len();
-        let values = MemorySourceConfig::try_new_as_values(
-            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
-            data,
-        )?;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)]));
+        let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
             values.partition_statistics(None)?,

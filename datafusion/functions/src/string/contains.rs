@@ -140,7 +140,7 @@ fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         }
     } else {
         exec_err!(
-            "Unsupported data type {:?}, {:?} for function `contains`.",
+            "Unsupported data type {}, {:?} for function `contains`.",
             args[0].data_type(),
             args[1].data_type()
         )

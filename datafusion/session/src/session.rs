@@ -57,9 +57,12 @@ use std::sync::{Arc, Weak};
 /// // Given a `Session` reference, get the concrete `SessionState` reference
 /// // Note: this may stop working in future versions,
 /// fn session_state_from_session(session: &dyn Session) -> Result<&SessionState> {
-///    session.as_any()
-///     .downcast_ref::<SessionState>()
-///     .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))
+///     session
+///         .as_any()
+///         .downcast_ref::<SessionState>()
+///         .ok_or_else(|| {
+///             exec_datafusion_err!("Failed to downcast Session to SessionState")
+///         })
 /// }
 /// ```
 ///
@@ -97,7 +100,7 @@ pub trait Session: Send + Sync {
     /// + 2` will not be simplified to `a = 3` as this is a more involved process.
     /// See the [expr_api] example for how to simplify expressions.
     ///
-    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
     fn create_physical_expr(
         &self,
         expr: Expr,

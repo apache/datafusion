@@ -30,6 +30,7 @@ use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
+use crate::OptimizerContext;
 
 use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
@@ -50,7 +51,7 @@ use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -190,11 +191,12 @@ impl EnforceDistribution {
 }
 
 impl PhysicalOptimizerRule for EnforceDistribution {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.session_config().options();
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
 
         let adjusted = if top_down_join_key_reordering {
@@ -281,7 +283,6 @@ pub type PlanWithKeyRequirements = PlanContext<Vec<Arc<dyn PhysicalExpr>>>;
 /// 3) If the current plan is RepartitionExec, CoalescePartitionsExec or WindowAggExec, clear all the requirements, return the unchanged plan
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
-///
 pub fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
@@ -407,7 +408,11 @@ pub fn adjust_input_keys_ordering(
         // For Projection, we need to transform the requirements to the columns before the Projection
         // And then to push down the requirements
         // Construct a mapping from new name to the original Column
-        let new_required = map_columns_before_projection(&requirements.data, expr);
+        let proj_exprs: Vec<_> = expr
+            .iter()
+            .map(|p| (Arc::clone(&p.expr), p.alias.clone()))
+            .collect();
+        let new_required = map_columns_before_projection(&requirements.data, &proj_exprs);
         if new_required.len() == requirements.data.len() {
             requirements.children[0].data = new_required;
         } else {
@@ -544,7 +549,10 @@ pub fn reorder_aggregate_keys(
                         .map(|col| {
                             let name = col.name();
                             let index = agg_schema.index_of(name)?;
-                            Ok((Arc::new(Column::new(name, index)) as _, name.to_owned()))
+                            Ok(ProjectionExpr {
+                                expr: Arc::new(Column::new(name, index)) as _,
+                                alias: name.to_owned(),
+                            })
                         })
                         .collect::<Result<Vec<_>>>()?;
                     let agg_fields = agg_schema.fields();
@@ -553,7 +561,10 @@ pub fn reorder_aggregate_keys(
                     {
                         let name = field.name();
                         let plan = Arc::new(Column::new(name, idx)) as _;
-                        proj_exprs.push((plan, name.clone()))
+                        proj_exprs.push(ProjectionExpr {
+                            expr: plan,
+                            alias: name.clone(),
+                        })
                     }
                     return ProjectionExec::try_new(proj_exprs, new_final_agg).map(|p| {
                         PlanWithKeyRequirements::new(Arc::new(p), vec![], vec![agg_node])
@@ -1264,7 +1275,8 @@ pub fn ensure_distribution(
                     child = add_merge_on_top(child);
                 }
                 Distribution::HashPartitioned(exprs) => {
-                    if add_roundrobin {
+                    // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
+                    if add_roundrobin && !hash_necessary {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;

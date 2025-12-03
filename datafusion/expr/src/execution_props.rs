@@ -17,9 +17,9 @@
 
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, TimeZone, Utc};
+use datafusion_common::HashMap;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::HashMap;
 use std::sync::Arc;
 
 /// Holds per-query execution properties and data (such as statement
@@ -102,6 +102,7 @@ impl ExecutionProps {
     }
 
     /// Returns the provider for the `var_type`, if any
+    #[expect(clippy::needless_pass_by_value)]
     pub fn get_var_provider(
         &self,
         var_type: VarType,
@@ -124,6 +125,9 @@ mod test {
     #[test]
     fn debug() {
         let props = ExecutionProps::new();
-        assert_eq!("ExecutionProps { query_execution_start_time: 1970-01-01T00:00:00Z, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None }", format!("{props:?}"));
+        assert_eq!(
+            "ExecutionProps { query_execution_start_time: 1970-01-01T00:00:00Z, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None }",
+            format!("{props:?}")
+        );
     }
 }

@@ -20,11 +20,12 @@
 //! but provide an error message rather than a panic, as the corresponding
 //! kernels in arrow-rs such as `as_boolean_array` do.
 
-use crate::{downcast_value, Result};
+use crate::{Result, downcast_value};
 use arrow::array::{
-    BinaryViewArray, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, Float16Array, Int16Array, Int8Array,
-    LargeBinaryArray, LargeStringArray, StringViewArray, UInt16Array,
+    BinaryViewArray, Decimal32Array, Decimal64Array, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, Float16Array,
+    Int8Array, Int16Array, LargeBinaryArray, LargeListViewArray, LargeStringArray,
+    ListViewArray, StringViewArray, UInt16Array,
 };
 use arrow::{
     array::{
@@ -36,8 +37,8 @@ use arrow::{
         MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
-        UInt8Array, UnionArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt32Array,
+        UInt64Array, UnionArray,
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
@@ -95,6 +96,16 @@ pub fn as_int64_array(array: &dyn Array) -> Result<&Int64Array> {
 // Downcast Array to UInt64Array
 pub fn as_uint64_array(array: &dyn Array) -> Result<&UInt64Array> {
     Ok(downcast_value!(array, UInt64Array))
+}
+
+// Downcast Array to Decimal32Array
+pub fn as_decimal32_array(array: &dyn Array) -> Result<&Decimal32Array> {
+    Ok(downcast_value!(array, Decimal32Array))
+}
+
+// Downcast Array to Decimal64Array
+pub fn as_decimal64_array(array: &dyn Array) -> Result<&Decimal64Array> {
+    Ok(downcast_value!(array, Decimal64Array))
 }
 
 // Downcast Array to Decimal128Array
@@ -302,7 +313,7 @@ pub fn as_fixed_size_list_array(array: &dyn Array) -> Result<&FixedSizeListArray
     Ok(downcast_value!(array, FixedSizeListArray))
 }
 
-// Downcast Array to FixedSizeListArray
+// Downcast Array to FixedSizeBinaryArray
 pub fn as_fixed_size_binary_array(array: &dyn Array) -> Result<&FixedSizeBinaryArray> {
     Ok(downcast_value!(array, FixedSizeBinaryArray))
 }
@@ -312,4 +323,14 @@ pub fn as_generic_string_array<T: OffsetSizeTrait>(
     array: &dyn Array,
 ) -> Result<&GenericStringArray<T>> {
     Ok(downcast_value!(array, GenericStringArray, T))
+}
+
+// Downcast Array to ListViewArray
+pub fn as_list_view_array(array: &dyn Array) -> Result<&ListViewArray> {
+    Ok(downcast_value!(array, ListViewArray))
+}
+
+// Downcast Array to LargeListViewArray
+pub fn as_large_list_view_array(array: &dyn Array) -> Result<&LargeListViewArray> {
+    Ok(downcast_value!(array, LargeListViewArray))
 }

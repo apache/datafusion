@@ -53,7 +53,6 @@ pub async fn from_substrait_rel(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut base_config_builder;
 
-    let source = Arc::new(ParquetSource::default());
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
             if read.filter.is_some() || read.best_effort_filter.is_some() {
@@ -80,9 +79,10 @@ pub async fn from_substrait_rel(
                 .collect::<Result<Vec<Field>>>()
             {
                 Ok(fields) => {
+                    let schema = Arc::new(Schema::new(fields));
+                    let source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
                     base_config_builder = FileScanConfigBuilder::new(
                         ObjectStoreUrl::local_filesystem(),
-                        Arc::new(Schema::new(fields)),
                         source,
                     );
                 }
@@ -151,8 +151,8 @@ pub async fn from_substrait_rel(
                                 .iter()
                                 .map(|item| item.field as usize)
                                 .collect();
-                            base_config_builder =
-                                base_config_builder.with_projection(Some(column_indices));
+                            base_config_builder = base_config_builder
+                                .with_projection_indices(Some(column_indices))?;
                         }
                     }
 
@@ -166,7 +166,7 @@ pub async fn from_substrait_rel(
                 ),
             }
         }
-        _ => not_impl_err!("Unsupported RelType: {:?}", rel.rel_type),
+        _ => not_impl_err!("Unsupported Reltype: {:?}", rel.rel_type),
     }
 }
 

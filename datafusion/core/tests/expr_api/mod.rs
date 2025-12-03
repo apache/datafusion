@@ -24,6 +24,7 @@ use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::expr::NullTreatment;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::ExprFunctionExt;
 use datafusion_functions::core::expr_ext::FieldAccessor;
@@ -31,11 +32,11 @@ use datafusion_functions_aggregate::first_last::first_value_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
-use sqlparser::ast::NullTreatment;
 /// Tests of using and evaluating `Expr`s outside the context of a LogicalPlan
 use std::sync::{Arc, LazyLock};
 
 mod parse_sql_expr;
+#[expect(clippy::needless_pass_by_value)]
 mod simplification;
 
 #[test]
@@ -320,6 +321,26 @@ async fn test_create_physical_expr() {
     create_simplified_expr_test(lit(1i32) + lit(2i32), "3");
 }
 
+#[test]
+fn test_create_physical_expr_nvl2() {
+    let batch = &TEST_BATCH;
+    let df_schema = DFSchema::try_from(batch.schema()).unwrap();
+    let ctx = SessionContext::new();
+
+    let expect_err = |expr| {
+        let physical_expr = ctx.create_physical_expr(expr, &df_schema).unwrap();
+        let err = physical_expr.evaluate(batch).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("nvl2 should have been simplified to case"),
+            "unexpected error: {err:?}"
+        );
+    };
+
+    expect_err(nvl2(col("i"), lit(1i64), lit(0i64)));
+    expect_err(nvl2(lit(1i64), col("i"), lit(0i64)));
+}
+
 #[tokio::test]
 async fn test_create_physical_expr_coercion() {
     // create_physical_expr does apply type coercion and unwrapping in cast
@@ -364,6 +385,7 @@ async fn evaluate_agg_test(expr: Expr, expected_lines: Vec<&str>) {
 
 /// Converts the `Expr` to a `PhysicalExpr`, evaluates it against the provided
 /// `RecordBatch` and compares the result to the expected result.
+#[expect(clippy::needless_pass_by_value)]
 fn evaluate_expr_test(expr: Expr, expected_lines: Vec<&str>) {
     let batch = &TEST_BATCH;
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();

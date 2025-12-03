@@ -26,18 +26,19 @@
 //! select * from data limit 10;
 //! ```
 
-use std::path::Path;
-
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::metrics::MetricsSet;
+use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
 use datafusion::prelude::{
     col, lit, lit_timestamp_nano, Expr, ParquetReadOptions, SessionContext,
 };
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
+use std::path::Path;
 
+use datafusion_common::test_util::parquet_test_data;
+use datafusion_execution::config::SessionConfig;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
@@ -562,9 +563,9 @@ impl<'a> TestCase<'a> {
             }
         };
 
-        let page_index_rows_pruned = get_value(&metrics, "page_index_rows_pruned");
+        let (page_index_rows_pruned, page_index_rows_matched) =
+            get_pruning_metrics(&metrics, "page_index_rows_pruned");
         println!(" page_index_rows_pruned: {page_index_rows_pruned}");
-        let page_index_rows_matched = get_value(&metrics, "page_index_rows_matched");
         println!(" page_index_rows_matched: {page_index_rows_matched}");
 
         let page_index_filtering_expected = if scan_options.enable_page_index {
@@ -591,13 +592,142 @@ impl<'a> TestCase<'a> {
     }
 }
 
+fn get_pruning_metrics(metrics: &MetricsSet, metric_name: &str) -> (usize, usize) {
+    match metrics.sum_by_name(metric_name) {
+        Some(MetricValue::PruningMetrics {
+            pruning_metrics, ..
+        }) => (pruning_metrics.pruned(), pruning_metrics.matched()),
+        Some(_) => {
+            panic!("Metric '{metric_name}' is not a pruning metric in\n\n{metrics:#?}")
+        }
+        None => panic!(
+            "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+        ),
+    }
+}
+
 fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
     match metrics.sum_by_name(metric_name) {
+        Some(MetricValue::PruningMetrics {
+            pruning_metrics, ..
+        }) => pruning_metrics.pruned(),
         Some(v) => v.as_usize(),
-        _ => {
-            panic!(
-                "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
-            );
-        }
+        None => panic!(
+            "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn predicate_cache_default() -> datafusion_common::Result<()> {
+    let ctx = SessionContext::new();
+    // The cache is on by default, but not used unless filter pushdown is enabled
+    PredicateCacheTest {
+        expected_inner_records: 0,
+        expected_records: 0,
+    }
+    .run(&ctx)
+    .await
+}
+
+#[tokio::test]
+async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    let ctx = SessionContext::new_with_config(config);
+    // The cache is on by default, and used when filter pushdown is enabled
+    PredicateCacheTest {
+        expected_inner_records: 8,
+        expected_records: 7, // reads more than necessary from the cache as then another bitmap is applied
+    }
+    .run(&ctx)
+    .await
+}
+
+#[tokio::test]
+async fn predicate_cache_pushdown_default_selections_only(
+) -> datafusion_common::Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    // forcing filter selections minimizes the number of rows read from the cache
+    config
+        .options_mut()
+        .execution
+        .parquet
+        .force_filter_selections = true;
+    let ctx = SessionContext::new_with_config(config);
+    // The cache is on by default, and used when filter pushdown is enabled
+    PredicateCacheTest {
+        expected_inner_records: 8,
+        expected_records: 4,
+    }
+    .run(&ctx)
+    .await
+}
+
+#[tokio::test]
+async fn predicate_cache_pushdown_disable() -> datafusion_common::Result<()> {
+    // Can disable the cache even with filter pushdown by setting the size to 0.
+    // This results in no records read from the cache and no metrics reported
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    config
+        .options_mut()
+        .execution
+        .parquet
+        .max_predicate_cache_size = Some(0);
+    let ctx = SessionContext::new_with_config(config);
+    // Since the cache is disabled, there is no reporting or use of the cache
+    PredicateCacheTest {
+        expected_inner_records: 0,
+        expected_records: 0,
+    }
+    .run(&ctx)
+    .await
+}
+
+/// Runs the query "SELECT * FROM alltypes_plain WHERE double_col != 0.0"
+/// with a given SessionContext and asserts that the predicate cache metrics
+/// are as expected
+#[derive(Debug)]
+struct PredicateCacheTest {
+    /// Expected records read from the underlying reader (to evaluate filters)
+    /// -- this is the total number of records in the file
+    expected_inner_records: usize,
+    /// Expected records to be read from the cache (after filtering)
+    expected_records: usize,
+}
+
+impl PredicateCacheTest {
+    async fn run(self, ctx: &SessionContext) -> datafusion_common::Result<()> {
+        let Self {
+            expected_inner_records,
+            expected_records,
+        } = self;
+        // Create a dataframe that scans the "alltypes_plain.parquet" file with
+        // a filter on `double_col != 0.0`
+        let path = parquet_test_data() + "/alltypes_plain.parquet";
+        let exec = ctx
+            .read_parquet(path, ParquetReadOptions::default())
+            .await?
+            .filter(col("double_col").not_eq(lit(0.0)))?
+            .create_physical_plan()
+            .await?;
+
+        // run the plan to completion
+        let _ = collect(exec.clone(), ctx.task_ctx()).await?; // run plan
+        let metrics =
+            TestParquetFile::parquet_metrics(&exec).expect("found parquet metrics");
+
+        // verify the predicate cache metrics
+        assert_eq!(
+            get_value(&metrics, "predicate_cache_inner_records"),
+            expected_inner_records
+        );
+        assert_eq!(
+            get_value(&metrics, "predicate_cache_records"),
+            expected_records
+        );
+        Ok(())
     }
 }

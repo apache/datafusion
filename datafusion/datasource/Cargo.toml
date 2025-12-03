@@ -18,11 +18,11 @@
 [package]
 name = "datafusion-datasource"
 description = "datafusion-datasource"
+readme = "README.md"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
-readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -31,13 +31,12 @@ version.workspace = true
 all-features = true
 
 [features]
-parquet = ["dep:parquet", "tempfile"]
-compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
+compression = ["async-compression", "liblzma", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
 
 [dependencies]
 arrow = { workspace = true }
-async-compression = { version = "0.4.19", features = [
+async-compression = { version = "0.4.30", features = [
     "bzip2",
     "gzip",
     "xz",
@@ -46,7 +45,7 @@ async-compression = { version = "0.4.19", features = [
 ], optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.6.0", optional = true }
+bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
@@ -57,25 +56,27 @@ datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
-flate2 = { version = "1.1.2", optional = true }
+flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
-glob = "0.3.0"
+glob = { workspace = true }
 itertools = { workspace = true }
+liblzma = { workspace = true, optional = true }
 log = { workspace = true }
 object_store = { workspace = true }
-parquet = { workspace = true, optional = true }
 rand = { workspace = true }
 tempfile = { workspace = true, optional = true }
 tokio = { workspace = true }
-tokio-util = { version = "0.7.16", features = ["io"], optional = true }
+tokio-util = { version = "0.7.17", features = ["io"], optional = true }
 url = { workspace = true }
-xz2 = { version = "0.1", optional = true, features = ["static"] }
-zstd = { version = "0.13", optional = true, default-features = false }
+zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = { workspace = true }
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 

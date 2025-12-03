@@ -33,35 +33,24 @@ use crate::{
 };
 
 use crate::protobuf::{proto_error, ToProtoError};
-use arrow::datatypes::{DataType, Schema, SchemaBuilder, SchemaRef};
-use datafusion::datasource::cte_worktable::CteWorkTable;
-use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
-#[cfg(feature = "avro")]
-use datafusion::datasource::file_format::avro::AvroFormat;
-#[cfg(feature = "parquet")]
-use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
-use datafusion::datasource::file_format::{
-    file_type_to_format, format_as_file_type, FileFormatFactory,
-};
-use datafusion::{
-    datasource::{
-        file_format::{
-            csv::{CsvFormat, CsvFormatFactory},
-            json::{JsonFormat as OtherNdJsonFormat, JsonFormatFactory},
-            FileFormat,
-        },
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
-        view::ViewTable,
-        TableProvider,
-    },
-    datasource::{provider_as_source, source_as_provider},
-    prelude::SessionContext,
-};
+use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    context, exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    DataFusionError, Result, TableReference, ToDFSchema,
+    assert_or_internal_err, context, exec_err, internal_datafusion_err, internal_err,
+    not_impl_err, plan_err, DataFusionError, Result, TableReference, ToDFSchema,
 };
+use datafusion_catalog::cte_worktable::CteWorkTable;
+use datafusion_datasource::file_format::FileFormat;
+use datafusion_datasource::file_format::{
+    file_type_to_format, format_as_file_type, FileFormatFactory,
+};
+use datafusion_datasource_arrow::file_format::ArrowFormat;
+#[cfg(feature = "avro")]
+use datafusion_datasource_avro::file_format::AvroFormat;
+use datafusion_datasource_csv::file_format::CsvFormat;
+use datafusion_datasource_json::file_format::JsonFormat as OtherNdJsonFormat;
+#[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::file_format::ParquetFormat;
 use datafusion_expr::{
     dml,
     logical_plan::{
@@ -83,6 +72,17 @@ use crate::logical_plan::file_formats::{
     ParquetLogicalExtensionCodec,
 };
 use crate::logical_plan::to_proto::serialize_sorts;
+use datafusion_catalog::default_table_source::{provider_as_source, source_as_provider};
+use datafusion_catalog::view::ViewTable;
+use datafusion_catalog::TableProvider;
+use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
+use datafusion_datasource_csv::file_format::CsvFormatFactory;
+use datafusion_datasource_json::file_format::JsonFormatFactory;
+#[cfg(feature = "parquet")]
+use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
+use datafusion_execution::TaskContext;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -102,7 +102,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
 
     fn try_into_logical_plan(
         &self,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan>;
 
@@ -119,7 +119,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         &self,
         buf: &[u8],
         inputs: &[LogicalPlan],
-        ctx: &SessionContext,
+        ctx: &TaskContext,
     ) -> Result<Extension>;
 
     fn try_encode(&self, node: &Extension, buf: &mut Vec<u8>) -> Result<()>;
@@ -129,7 +129,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         buf: &[u8],
         table_ref: &TableReference,
         schema: SchemaRef,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>>;
 
     fn try_encode_table_provider(
@@ -142,7 +142,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
     fn try_decode_file_format(
         &self,
         _buf: &[u8],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn FileFormatFactory>> {
         not_impl_err!("LogicalExtensionCodec is not provided for file format")
     }
@@ -190,7 +190,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Extension> {
         not_impl_err!("LogicalExtensionCodec is not provided")
     }
@@ -204,7 +204,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _buf: &[u8],
         _table_ref: &TableReference,
         _schema: SchemaRef,
-        _ctx: &SessionContext,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>> {
         not_impl_err!("LogicalExtensionCodec is not provided")
     }
@@ -221,7 +221,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     fn try_decode_file_format(
         &self,
         buf: &[u8],
-        ctx: &SessionContext,
+        ctx: &TaskContext,
     ) -> Result<Arc<dyn FileFormatFactory>> {
         if buf.is_empty() {
             return Ok(Arc::new(ArrowFormatFactory::new()));
@@ -260,7 +260,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         }
 
         fn try_decode_roundtrip(
-            ctx: &SessionContext,
+            ctx: &TaskContext,
             buf: &[u8],
         ) -> Option<Arc<dyn FileFormatFactory>> {
             let candidates: &[&dyn LogicalExtensionCodec] = &[
@@ -416,9 +416,9 @@ fn from_table_reference(
     error_context: &str,
 ) -> Result<TableReference> {
     let table_ref = table_ref.ok_or_else(|| {
-        DataFusionError::Internal(format!(
+        internal_datafusion_err!(
             "Protobuf deserialization error, {error_context} was missing required field name."
-        ))
+        )
     })?;
 
     Ok(table_ref.clone().try_into()?)
@@ -429,7 +429,7 @@ fn from_table_reference(
 /// serialized by [from_table_source]
 fn to_table_source(
     node: &Option<Box<LogicalPlanNode>>,
-    ctx: &SessionContext,
+    ctx: &TaskContext,
     extension_codec: &dyn LogicalExtensionCodec,
 ) -> Result<Arc<dyn TableSource>> {
     if let Some(node) = node {
@@ -468,9 +468,8 @@ impl AsLogicalPlan for LogicalPlanNode {
     where
         Self: Sized,
     {
-        LogicalPlanNode::decode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to decode logical plan: {e:?}"))
-        })
+        LogicalPlanNode::decode(buf)
+            .map_err(|e| internal_datafusion_err!("failed to decode logical plan: {e:?}"))
     }
 
     fn try_encode<B>(&self, buf: &mut B) -> Result<()>
@@ -478,14 +477,13 @@ impl AsLogicalPlan for LogicalPlanNode {
         B: BufMut,
         Self: Sized,
     {
-        self.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
-        })
+        self.encode(buf)
+            .map_err(|e| internal_datafusion_err!("failed to encode logical plan: {e:?}"))
     }
 
     fn try_into_logical_plan(
         &self,
-        ctx: &SessionContext,
+        ctx: &TaskContext,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
@@ -565,16 +563,6 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::ListingScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
-
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| schema.index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
 
                 let filters =
                     from_proto::parse_exprs(&scan.filters, ctx, extension_codec)?;
@@ -674,14 +662,21 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_schema(Arc::new(schema));
 
                 let provider = ListingTable::try_new(config)?.with_cache(
-                    ctx.state()
-                        .runtime_env()
-                        .cache_manager
-                        .get_file_statistic_cache(),
+                    ctx.runtime_env().cache_manager.get_file_statistic_cache(),
                 );
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ListingTableScan")?;
+
+                let mut projection = None;
+                if let Some(columns) = &scan.projection {
+                    let column_indices = columns
+                        .columns
+                        .iter()
+                        .map(|name| provider.schema().index_of(name))
+                        .collect::<Result<Vec<usize>, _>>()?;
+                    projection = Some(column_indices);
+                }
 
                 LogicalPlanBuilder::scan_with_filters(
                     table_name,
@@ -736,7 +731,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
             }
             LogicalPlanType::Repartition(repartition) => {
-                use datafusion::logical_expr::Partitioning;
+                use datafusion_expr::Partitioning;
                 let input: LogicalPlan =
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
@@ -768,26 +763,21 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateExternalTable(create_extern_table) => {
                 let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
+                    internal_datafusion_err!(
                         "Protobuf deserialization error, CreateExternalTableNode was missing required field schema."
-                    ))
+                    )
                 })?;
 
                 let constraints = (create_extern_table.constraints.clone()).ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, CreateExternalTableNode was missing required table constraints.",
-                    ))
+                    internal_datafusion_err!(
+                        "Protobuf deserialization error, CreateExternalTableNode was missing required table constraints."
+                    )
                 })?;
                 let definition = if !create_extern_table.definition.is_empty() {
                     Some(create_extern_table.definition.clone())
                 } else {
                     None
                 };
-
-                let file_type = create_extern_table.file_type.as_str();
-                if ctx.table_factory(file_type).is_none() {
-                    internal_err!("No TableProviderFactory for file type: {file_type}")?
-                }
 
                 let mut order_exprs = vec![];
                 for expr in &create_extern_table.order_exprs {
@@ -819,6 +809,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .clone(),
                         order_exprs,
                         if_not_exists: create_extern_table.if_not_exists,
+                        or_replace: create_extern_table.or_replace,
                         temporary: create_extern_table.temporary,
                         definition,
                         unbounded: create_extern_table.unbounded,
@@ -830,9 +821,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateView(create_view) => {
                 let plan = create_view
-                    .input.clone().ok_or_else(|| DataFusionError::Internal(String::from(
-                    "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input.",
-                )))?
+                    .input.clone().ok_or_else(|| internal_datafusion_err!(
+                    "Protobuf deserialization error, CreateViewNode has invalid LogicalPlan input."
+                ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
                 let definition = if !create_view.definition.is_empty() {
                     Some(create_view.definition.clone())
@@ -850,9 +841,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, CreateCatalogSchemaNode was missing required field schema.",
-                    ))
+                    internal_datafusion_err!(
+                        "Protobuf deserialization error, CreateCatalogSchemaNode was missing required field schema."
+                    )
                 })?;
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
@@ -865,9 +856,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::CreateCatalog(create_catalog) => {
                 let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, CreateCatalogNode was missing required field schema.",
-                    ))
+                    internal_datafusion_err!(
+                        "Protobuf deserialization error, CreateCatalogNode was missing required field schema."
+                    )
                 })?;
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
@@ -975,11 +966,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 builder.build()
             }
             LogicalPlanType::Union(union) => {
-                if union.inputs.len() < 2 {
-                    return  Err( DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, Union was require at least two input.",
-                    )));
-                }
+                assert_or_internal_err!(
+                    union.inputs.len() >= 2,
+                    "Protobuf deserialization error, Union requires at least two inputs."
+                );
                 let (first, rest) = union.inputs.split_first().unwrap();
                 let mut builder = LogicalPlanBuilder::from(
                     first.try_into_logical_plan(ctx, extension_codec)?,
@@ -1076,9 +1066,33 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(DataType::try_from)
                     .collect::<Result<_, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .prepare(prepare.name.clone(), data_types)?
-                    .build()
+                let fields: Vec<Field> = prepare
+                    .fields
+                    .iter()
+                    .map(Field::try_from)
+                    .collect::<Result<_, _>>()?;
+
+                // If the fields are empty this may have been generated by an
+                // earlier version of DataFusion, in which case the DataTypes
+                // can be used to construct the plan.
+                if fields.is_empty() {
+                    LogicalPlanBuilder::from(input)
+                        .prepare(
+                            prepare.name.clone(),
+                            data_types
+                                .into_iter()
+                                .map(|dt| Field::new("", dt, true).into())
+                                .collect(),
+                        )?
+                        .build()
+                } else {
+                    LogicalPlanBuilder::from(input)
+                        .prepare(
+                            prepare.name.clone(),
+                            fields.into_iter().map(|f| f.into()).collect(),
+                        )?
+                        .build()
+                }
             }
             LogicalPlanType::DropView(dropview) => {
                 Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
@@ -1118,17 +1132,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let static_term = recursive_query_node
                     .static_term
                     .as_ref()
-                    .ok_or_else(|| DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, RecursiveQueryNode was missing required field static_term.",
-                    )))?
+                    .ok_or_else(|| internal_datafusion_err!(
+                        "Protobuf deserialization error, RecursiveQueryNode was missing required field static_term."
+                    ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
                 let recursive_term = recursive_query_node
                     .recursive_term
                     .as_ref()
-                    .ok_or_else(|| DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, RecursiveQueryNode was missing required field recursive_term.",
-                    )))?
+                    .ok_or_else(|| internal_datafusion_err!(
+                        "Protobuf deserialization error, RecursiveQueryNode was missing required field recursive_term."
+                    ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
 
                 Ok(LogicalPlan::RecursiveQuery(RecursiveQuery {
@@ -1149,14 +1163,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
-            LogicalPlanType::Dml(dml_node) => Ok(LogicalPlan::Dml(
-                datafusion::logical_expr::DmlStatement::new(
+            LogicalPlanType::Dml(dml_node) => {
+                Ok(LogicalPlan::Dml(datafusion_expr::DmlStatement::new(
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
                     to_table_source(&dml_node.target, ctx, extension_codec)?,
                     dml_node.dml_type().into(),
                     Arc::new(into_logical_plan!(dml_node.input, ctx, extension_codec)?),
-                ),
-            )),
+                )))
+            }
         }
     }
 
@@ -1605,14 +1619,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 partitioning_scheme,
             }) => {
-                use datafusion::logical_expr::Partitioning;
+                use datafusion_expr::Partitioning;
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
                 )?;
 
                 // Assumed common usize field was batch size
-                // Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
+                // Used u64 to avoid any nastiness involving large values, most data clusters are probably uniformly 64 bits any ways
                 use protobuf::repartition_node::PartitionMethod;
 
                 let pb_partition_method = match partitioning_scheme {
@@ -1656,6 +1670,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema: df_schema,
                     table_partition_cols,
                     if_not_exists,
+                    or_replace,
                     definition,
                     order_exprs,
                     unbounded,
@@ -1689,6 +1704,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
+                            or_replace: *or_replace,
                             temporary: *temporary,
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),
@@ -1807,7 +1823,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
-                data_types,
+                fields,
                 input,
             })) => {
                 let input =
@@ -1816,11 +1832,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Prepare(Box::new(
                         protobuf::PrepareNode {
                             name: name.clone(),
-                            data_types: data_types
-                                .iter()
-                                .map(|t| t.try_into())
-                                .collect::<Result<Vec<_>, _>>()?,
                             input: Some(Box::new(input)),
+                            // Store the DataTypes for reading by older DataFusion
+                            data_types: fields
+                                .iter()
+                                .map(|f| f.data_type().try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            // Store the Fields for current and future DataFusion
+                            fields: fields
+                                .iter()
+                                .map(|f| f.as_ref().try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
                         },
                     ))),
                 })

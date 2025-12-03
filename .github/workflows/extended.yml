@@ -36,6 +36,15 @@ on:
       # it is not expected to have many changes in these branches,
       # so running extended tests is not a burden
       - 'branch-*'
+  # Also run for changes to some critical areas that are most likely
+  # to trigger errors in extended tests
+  pull_request:
+    branches: [ '**' ]
+    paths:
+      - 'datafusion/physical*/**/*.rs'
+      - 'datafusion/expr*/**/*.rs'
+      - 'datafusion/optimizer/**/*.rs'
+      - 'datafusion-testing'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -60,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -84,7 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -115,7 +124,7 @@ jobs:
             --lib \
             --tests \
             --bins \
-            --features avro,json,backtrace,extended_tests,recursive_protection
+            --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
       - name: Verify Working Directory Clean
         run: git diff --exit-code
       - name: Cleanup
@@ -128,7 +137,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -149,7 +158,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -160,7 +169,7 @@ jobs:
           rust-version: stable
       - name: Run sqllogictest
         run: |
-          cargo test --features backtrace --profile release-nonlto --test sqllogictests -- --include-sqlite
+          cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
 
 

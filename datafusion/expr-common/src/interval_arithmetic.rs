@@ -22,16 +22,19 @@ use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
 
 use crate::operator::Operator;
-use crate::type_coercion::binary::{comparison_coercion_numeric, BinaryTypeCoercer};
+use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion_numeric};
 
-use arrow::compute::{cast_with_options, CastOptions};
+use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
-    DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, TimeUnit,
+    DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
     MAX_DECIMAL128_FOR_EACH_PRECISION, MAX_DECIMAL256_FOR_EACH_PRECISION,
-    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION,
+    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION, TimeUnit,
 };
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    assert_or_internal_err, internal_err,
+};
 
 macro_rules! get_extreme_value {
     ($extreme:ident, $value:expr) => {
@@ -266,24 +269,23 @@ impl Interval {
     ///   - Floating-point endpoints with `NaN`, `INF`, or `NEG_INF` are converted
     ///     to `NULL`s.
     pub fn try_new(lower: ScalarValue, upper: ScalarValue) -> Result<Self> {
-        if lower.data_type() != upper.data_type() {
-            return internal_err!("Endpoints of an Interval should have the same type");
-        }
+        assert_eq_or_internal_err!(
+            lower.data_type(),
+            upper.data_type(),
+            "Endpoints of an Interval should have the same type"
+        );
 
         let interval = Self::new(lower, upper);
 
-        if interval.lower.is_null()
-            || interval.upper.is_null()
-            || interval.lower <= interval.upper
-        {
-            Ok(interval)
-        } else {
-            internal_err!(
-                "Interval's lower bound {} is greater than the upper bound {}",
-                interval.lower,
-                interval.upper
-            )
-        }
+        assert_or_internal_err!(
+            interval.lower.is_null()
+                || interval.upper.is_null()
+                || interval.lower <= interval.upper,
+            "Interval's lower bound {} is greater than the upper bound {}",
+            interval.lower,
+            interval.upper
+        );
+        Ok(interval)
     }
 
     /// Only for internal usage. Responsible for standardizing booleans and
@@ -430,20 +432,32 @@ impl Interval {
         )
     }
 
-    pub const CERTAINLY_FALSE: Self = Self {
+    /// An interval containing only the 'false' truth value.
+    pub const FALSE: Self = Self {
         lower: ScalarValue::Boolean(Some(false)),
         upper: ScalarValue::Boolean(Some(false)),
     };
 
-    pub const UNCERTAIN: Self = Self {
+    #[deprecated(since = "52.0.0", note = "Use `FALSE` instead")]
+    pub const CERTAINLY_FALSE: Self = Self::FALSE;
+
+    /// An interval containing both the 'true', and 'false' truth values.
+    pub const TRUE_OR_FALSE: Self = Self {
         lower: ScalarValue::Boolean(Some(false)),
         upper: ScalarValue::Boolean(Some(true)),
     };
 
-    pub const CERTAINLY_TRUE: Self = Self {
+    #[deprecated(since = "52.0.0", note = "Use `TRUE_OR_FALSE` instead")]
+    pub const UNCERTAIN: Self = Self::TRUE_OR_FALSE;
+
+    /// An interval containing only the 'true' truth value.
+    pub const TRUE: Self = Self {
         lower: ScalarValue::Boolean(Some(true)),
         upper: ScalarValue::Boolean(Some(true)),
     };
+
+    #[deprecated(since = "52.0.0", note = "Use `TRUE` instead")]
+    pub const CERTAINLY_TRUE: Self = Self::TRUE;
 
     /// Decide if this interval is certainly greater than, possibly greater than,
     /// or can't be greater than `other` by returning `[true, true]`,
@@ -454,27 +468,28 @@ impl Interval {
     ///       to an error.
     pub fn gt<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if self.data_type().ne(&rhs.data_type()) {
-            internal_err!(
-                "Only intervals with the same data type are comparable, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            )
-        } else if !(self.upper.is_null() || rhs.lower.is_null())
-            && self.upper <= rhs.lower
-        {
+        let lhs_type = self.data_type();
+        let rhs_type = rhs.data_type();
+        assert_eq_or_internal_err!(
+            lhs_type,
+            rhs_type,
+            "Only intervals with the same data type are comparable, lhs:{}, rhs:{}",
+            self.data_type(),
+            rhs.data_type()
+        );
+        if !(self.upper.is_null() || rhs.lower.is_null()) && self.upper <= rhs.lower {
             // Values in this interval are certainly less than or equal to
             // those in the given interval.
-            Ok(Self::CERTAINLY_FALSE)
+            Ok(Self::FALSE)
         } else if !(self.lower.is_null() || rhs.upper.is_null())
             && (self.lower > rhs.upper)
         {
             // Values in this interval are certainly greater than those in the
             // given interval.
-            Ok(Self::CERTAINLY_TRUE)
+            Ok(Self::TRUE)
         } else {
             // All outcomes are possible.
-            Ok(Self::UNCERTAIN)
+            Ok(Self::TRUE_OR_FALSE)
         }
     }
 
@@ -487,27 +502,28 @@ impl Interval {
     ///       to an error.
     pub fn gt_eq<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if self.data_type().ne(&rhs.data_type()) {
-            internal_err!(
-                "Only intervals with the same data type are comparable, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            )
-        } else if !(self.lower.is_null() || rhs.upper.is_null())
-            && self.lower >= rhs.upper
-        {
+        let lhs_type = self.data_type();
+        let rhs_type = rhs.data_type();
+        assert_eq_or_internal_err!(
+            lhs_type,
+            rhs_type,
+            "Only intervals with the same data type are comparable, lhs:{}, rhs:{}",
+            self.data_type(),
+            rhs.data_type()
+        );
+        if !(self.lower.is_null() || rhs.upper.is_null()) && self.lower >= rhs.upper {
             // Values in this interval are certainly greater than or equal to
             // those in the given interval.
-            Ok(Self::CERTAINLY_TRUE)
+            Ok(Self::TRUE)
         } else if !(self.upper.is_null() || rhs.lower.is_null())
             && (self.upper < rhs.lower)
         {
             // Values in this interval are certainly less than those in the
             // given interval.
-            Ok(Self::CERTAINLY_FALSE)
+            Ok(Self::FALSE)
         } else {
             // All outcomes are possible.
-            Ok(Self::UNCERTAIN)
+            Ok(Self::TRUE_OR_FALSE)
         }
     }
 
@@ -542,25 +558,26 @@ impl Interval {
     ///       to an error.
     pub fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if BinaryTypeCoercer::new(&self.data_type(), &Operator::Eq, &rhs.data_type())
-            .get_result_type()
-            .is_err()
-        {
-            internal_err!(
-                "Interval data types must be compatible for equality checks, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            )
-        } else if !self.lower.is_null()
+        let types_compatible =
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Eq, &rhs.data_type())
+                .get_result_type()
+                .is_ok();
+        assert_or_internal_err!(
+            types_compatible,
+            "Interval data types must be compatible for equality checks, lhs:{}, rhs:{}",
+            self.data_type(),
+            rhs.data_type()
+        );
+        if !self.lower.is_null()
             && (self.lower == self.upper)
             && (rhs.lower == rhs.upper)
             && (self.lower == rhs.lower)
         {
-            Ok(Self::CERTAINLY_TRUE)
+            Ok(Self::TRUE)
         } else if self.intersect(rhs)?.is_none() {
-            Ok(Self::CERTAINLY_FALSE)
+            Ok(Self::FALSE)
         } else {
-            Ok(Self::UNCERTAIN)
+            Ok(Self::TRUE_OR_FALSE)
         }
     }
 
@@ -583,7 +600,9 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical conjunction"),
+
+            // Return TRUE_OR_FALSE when intervals don't have concrete boolean bounds
+            _ => Ok(Self::TRUE_OR_FALSE),
         }
     }
 
@@ -606,20 +625,25 @@ impl Interval {
                     upper: ScalarValue::Boolean(Some(upper)),
                 })
             }
-            _ => internal_err!("Incompatible data types for logical disjunction"),
+
+            // Return TRUE_OR_FALSE when intervals don't have concrete boolean bounds
+            _ => Ok(Self::TRUE_OR_FALSE),
         }
     }
 
     /// Compute the logical negation of this (boolean) interval.
     pub fn not(&self) -> Result<Self> {
-        if self.data_type().ne(&DataType::Boolean) {
-            internal_err!("Cannot apply logical negation to a non-boolean interval")
-        } else if self == &Self::CERTAINLY_TRUE {
-            Ok(Self::CERTAINLY_FALSE)
-        } else if self == &Self::CERTAINLY_FALSE {
-            Ok(Self::CERTAINLY_TRUE)
+        assert_eq_or_internal_err!(
+            self.data_type(),
+            DataType::Boolean,
+            "Cannot apply logical negation to a non-boolean interval"
+        );
+        if self == &Self::TRUE {
+            Ok(Self::FALSE)
+        } else if self == &Self::FALSE {
+            Ok(Self::TRUE)
         } else {
-            Ok(Self::UNCERTAIN)
+            Ok(Self::TRUE_OR_FALSE)
         }
     }
 
@@ -631,13 +655,15 @@ impl Interval {
     ///       to an error.
     pub fn intersect<T: Borrow<Self>>(&self, other: T) -> Result<Option<Self>> {
         let rhs = other.borrow();
-        if self.data_type().ne(&rhs.data_type()) {
-            return internal_err!(
-                "Only intervals with the same data type are intersectable, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            );
-        };
+        let lhs_type = self.data_type();
+        let rhs_type = rhs.data_type();
+        assert_eq_or_internal_err!(
+            lhs_type,
+            rhs_type,
+            "Only intervals with the same data type are intersectable, lhs:{}, rhs:{}",
+            self.data_type(),
+            rhs.data_type()
+        );
 
         // If it is evident that the result is an empty interval, short-circuit
         // and directly return `None`.
@@ -666,13 +692,15 @@ impl Interval {
     ///       to an error.
     pub fn union<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if self.data_type().ne(&rhs.data_type()) {
-            return internal_err!(
-                "Cannot calculate the union of intervals with different data types, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            );
-        };
+        let lhs_type = self.data_type();
+        let rhs_type = rhs.data_type();
+        assert_eq_or_internal_err!(
+            lhs_type,
+            rhs_type,
+            "Cannot calculate the union of intervals with different data types, lhs:{}, rhs:{}",
+            self.data_type(),
+            rhs.data_type()
+        );
 
         let lower = if self.lower.is_null()
             || (!rhs.lower.is_null() && self.lower <= rhs.lower)
@@ -702,27 +730,28 @@ impl Interval {
     pub fn contains_value<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
         let rhs = other.borrow();
 
-        let (lhs_lower, lhs_upper, rhs) = if self.data_type().eq(&rhs.data_type()) {
-            (&self.lower, &self.upper, rhs)
-        } else if let Some(common_type) =
-            comparison_coercion_numeric(&self.data_type(), &rhs.data_type())
-        {
-            (
-                &self.lower.cast_to(&common_type)?,
-                &self.upper.cast_to(&common_type)?,
-                &rhs.cast_to(&common_type)?,
-            )
+        let (lhs_lower, lhs_upper, rhs_value) = if self.data_type().eq(&rhs.data_type()) {
+            (self.lower.clone(), self.upper.clone(), rhs.clone())
         } else {
-            return internal_err!(
+            let maybe_common_type =
+                comparison_coercion_numeric(&self.data_type(), &rhs.data_type());
+            assert_or_internal_err!(
+                maybe_common_type.is_some(),
                 "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
                 self.data_type(),
                 rhs.data_type()
             );
+            let common_type = maybe_common_type.expect("checked for Some");
+            (
+                self.lower.cast_to(&common_type)?,
+                self.upper.cast_to(&common_type)?,
+                rhs.cast_to(&common_type)?,
+            )
         };
 
         // We only check the upper bound for a `None` value because `None`
         // values are less than `Some` values according to Rust.
-        Ok(lhs_lower <= rhs && (lhs_upper.is_null() || rhs <= lhs_upper))
+        Ok(lhs_lower <= rhs_value && (lhs_upper.is_null() || rhs_value <= lhs_upper))
     }
 
     /// Decide if this interval is a superset of, overlaps with, or
@@ -734,23 +763,25 @@ impl Interval {
     ///       to an error.
     pub fn contains<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if self.data_type().ne(&rhs.data_type()) {
-            return internal_err!(
-                "Interval data types must match for containment checks, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            );
-        };
+        let lhs_type = self.data_type();
+        let rhs_type = rhs.data_type();
+        assert_eq_or_internal_err!(
+            lhs_type,
+            rhs_type,
+            "Interval data types must match for containment checks, lhs:{}, rhs:{}",
+            self.data_type(),
+            rhs.data_type()
+        );
 
         match self.intersect(rhs)? {
             Some(intersection) => {
                 if &intersection == rhs {
-                    Ok(Self::CERTAINLY_TRUE)
+                    Ok(Self::TRUE)
                 } else {
-                    Ok(Self::UNCERTAIN)
+                    Ok(Self::TRUE_OR_FALSE)
                 }
             }
-            None => Ok(Self::CERTAINLY_FALSE),
+            None => Ok(Self::FALSE),
         }
     }
 
@@ -761,8 +792,7 @@ impl Interval {
     ///       Attempting to compare intervals of different data types will lead
     ///       to an error.
     pub fn is_superset(&self, other: &Interval, strict: bool) -> Result<bool> {
-        Ok(!(strict && self.eq(other))
-            && (self.contains(other)? == Interval::CERTAINLY_TRUE))
+        Ok(!(strict && self.eq(other)) && (self.contains(other)? == Interval::TRUE))
     }
 
     /// Add the given interval (`other`) to this interval. Say we have intervals
@@ -809,15 +839,15 @@ impl Interval {
     ///       to an error.
     pub fn mul<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = if self.data_type().eq(&rhs.data_type()) {
-            self.data_type()
-        } else {
-            return internal_err!(
-                "Intervals must have the same data type for multiplication, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            );
-        };
+        let dt = self.data_type();
+        let rhs_type = rhs.data_type();
+        assert_eq_or_internal_err!(
+            dt.clone(),
+            rhs_type.clone(),
+            "Intervals must have the same data type for multiplication, lhs:{}, rhs:{}",
+            dt.clone(),
+            rhs_type.clone()
+        );
 
         let zero = ScalarValue::new_zero(&dt)?;
 
@@ -828,12 +858,12 @@ impl Interval {
         ) {
             (true, true, false) => mul_helper_multi_zero_inclusive(&dt, self, rhs),
             (true, false, false) => {
-                mul_helper_single_zero_inclusive(&dt, self, rhs, zero)
+                mul_helper_single_zero_inclusive(&dt, self, rhs, &zero)
             }
             (false, true, false) => {
-                mul_helper_single_zero_inclusive(&dt, rhs, self, zero)
+                mul_helper_single_zero_inclusive(&dt, rhs, self, &zero)
             }
-            _ => mul_helper_zero_exclusive(&dt, self, rhs, zero),
+            _ => mul_helper_zero_exclusive(&dt, self, rhs, &zero),
         };
         Ok(result)
     }
@@ -852,15 +882,15 @@ impl Interval {
     ///           zero should result in an interval set, not the universal set.
     pub fn div<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = if self.data_type().eq(&rhs.data_type()) {
-            self.data_type()
-        } else {
-            return internal_err!(
-                "Intervals must have the same data type for division, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            );
-        };
+        let dt = self.data_type();
+        let rhs_type = rhs.data_type();
+        assert_eq_or_internal_err!(
+            dt.clone(),
+            rhs_type.clone(),
+            "Intervals must have the same data type for division, lhs:{}, rhs:{}",
+            dt.clone(),
+            rhs_type.clone()
+        );
 
         let zero = ScalarValue::new_zero(&dt)?;
         // We want 0 to be approachable from both negative and positive sides.
@@ -871,15 +901,12 @@ impl Interval {
 
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
-        if rhs.contains(&zero_point)? == Self::CERTAINLY_TRUE && !dt.is_unsigned_integer()
-        {
+        if rhs.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer() {
             Self::make_unbounded(&dt)
         }
         // At this point, we know that only one endpoint of the right hand side
         // can be zero.
-        else if self.contains(&zero_point)? == Self::CERTAINLY_TRUE
-            && !dt.is_unsigned_integer()
-        {
+        else if self.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer() {
             Ok(div_helper_lhs_zero_inclusive(&dt, self, rhs, &zero_point))
         } else {
             Ok(div_helper_zero_exclusive(&dt, self, rhs, &zero_point))
@@ -1313,13 +1340,15 @@ pub fn satisfy_greater(
     right: &Interval,
     strict: bool,
 ) -> Result<Option<(Interval, Interval)>> {
-    if left.data_type().ne(&right.data_type()) {
-        return internal_err!(
-            "Intervals must have the same data type, lhs:{}, rhs:{}",
-            left.data_type(),
-            right.data_type()
-        );
-    }
+    let lhs_type = left.data_type();
+    let rhs_type = right.data_type();
+    assert_eq_or_internal_err!(
+        lhs_type.clone(),
+        rhs_type.clone(),
+        "Intervals must have the same data type, lhs:{}, rhs:{}",
+        lhs_type,
+        rhs_type
+    );
 
     if !left.upper.is_null() && left.upper <= right.lower {
         if !strict && left.upper == right.lower {
@@ -1433,10 +1462,10 @@ fn mul_helper_single_zero_inclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero: ScalarValue,
+    zero: &ScalarValue,
 ) -> Interval {
     // With the following interval bounds, there is no possibility to create an invalid interval.
-    if rhs.upper <= zero && !rhs.upper.is_null() {
+    if rhs.upper <= *zero && !rhs.upper.is_null() {
         // <-------=====0=====------->
         // <--======----0------------>
         let lower = mul_bounds::<false>(dt, &lhs.upper, &rhs.lower);
@@ -1485,11 +1514,11 @@ fn mul_helper_zero_exclusive(
     dt: &DataType,
     lhs: &Interval,
     rhs: &Interval,
-    zero: ScalarValue,
+    zero: &ScalarValue,
 ) -> Interval {
     let (lower, upper) = match (
-        lhs.upper <= zero && !lhs.upper.is_null(),
-        rhs.upper <= zero && !rhs.upper.is_null(),
+        lhs.upper <= *zero && !lhs.upper.is_null(),
+        rhs.upper <= *zero && !rhs.upper.is_null(),
     ) {
         // With the following interval bounds, there is no possibility to create an invalid interval.
         (true, true) => (
@@ -1670,22 +1699,23 @@ fn cast_scalar_value(
 ///
 /// // [1, 2) U {NULL}
 /// let maybe_null = NullableInterval::MaybeNull {
-///    values: Interval::try_new(
-///            ScalarValue::Int32(Some(1)),
-///            ScalarValue::Int32(Some(2)),
-///        ).unwrap(),
+///     values: Interval::try_new(
+///         ScalarValue::Int32(Some(1)),
+///         ScalarValue::Int32(Some(2)),
+///     )
+///     .unwrap(),
 /// };
 ///
 /// // (0, ∞)
 /// let not_null = NullableInterval::NotNull {
-///   values: Interval::try_new(
-///            ScalarValue::Int32(Some(0)),
-///            ScalarValue::Int32(None),
-///        ).unwrap(),
+///     values: Interval::try_new(ScalarValue::Int32(Some(0)), ScalarValue::Int32(None))
+///         .unwrap(),
 /// };
 ///
 /// // {NULL}
-/// let null_interval = NullableInterval::Null { datatype: DataType::Int32 };
+/// let null_interval = NullableInterval::Null {
+///     datatype: DataType::Int32,
+/// };
 ///
 /// // {4}
 /// let single_value = NullableInterval::from(ScalarValue::Int32(Some(4)));
@@ -1733,6 +1763,44 @@ impl From<ScalarValue> for NullableInterval {
 }
 
 impl NullableInterval {
+    /// An interval containing only the 'false' truth value.
+    /// This interval is semantically equivalent to [Interval::FALSE].
+    pub const FALSE: Self = NullableInterval::NotNull {
+        values: Interval::FALSE,
+    };
+
+    /// An interval containing only the 'true' truth value.
+    /// This interval is semantically equivalent to [Interval::TRUE].
+    pub const TRUE: Self = NullableInterval::NotNull {
+        values: Interval::TRUE,
+    };
+
+    /// An interval containing only the 'unknown' truth value.
+    pub const UNKNOWN: Self = NullableInterval::Null {
+        datatype: DataType::Boolean,
+    };
+
+    /// An interval containing both the 'true', and 'false' truth values.
+    /// This interval is semantically equivalent to [Interval::TRUE_OR_FALSE].
+    pub const TRUE_OR_FALSE: Self = NullableInterval::NotNull {
+        values: Interval::TRUE_OR_FALSE,
+    };
+
+    /// An interval containing both the 'true' and 'unknown' truth values.
+    pub const TRUE_OR_UNKNOWN: Self = NullableInterval::MaybeNull {
+        values: Interval::TRUE,
+    };
+
+    /// An interval containing both the 'false' and 'unknown' truth values.
+    pub const FALSE_OR_UNKNOWN: Self = NullableInterval::MaybeNull {
+        values: Interval::FALSE,
+    };
+
+    /// An interval that contains all possible truth values: 'true', 'false' and 'unknown'.
+    pub const ANY_TRUTH_VALUE: Self = NullableInterval::MaybeNull {
+        values: Interval::TRUE_OR_FALSE,
+    };
+
     /// Get the values interval, or None if this interval is definitely null.
     pub fn values(&self) -> Option<&Interval> {
         match self {
@@ -1751,27 +1819,98 @@ impl NullableInterval {
 
     /// Return true if the value is definitely true (and not null).
     pub fn is_certainly_true(&self) -> bool {
-        match self {
-            Self::Null { .. } | Self::MaybeNull { .. } => false,
-            Self::NotNull { values } => values == &Interval::CERTAINLY_TRUE,
+        self == &Self::TRUE
+    }
+
+    /// Returns the set of possible values after applying the `is true` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
+    pub fn is_true(&self) -> Result<Self> {
+        let (t, f, u) = self.is_true_false_unknown()?;
+
+        match (t, f, u) {
+            (true, false, false) => Ok(Self::TRUE),
+            (true, _, _) => Ok(Self::TRUE_OR_FALSE),
+            (false, _, _) => Ok(Self::FALSE),
         }
     }
 
     /// Return true if the value is definitely false (and not null).
     pub fn is_certainly_false(&self) -> bool {
-        match self {
-            Self::Null { .. } => false,
-            Self::MaybeNull { .. } => false,
-            Self::NotNull { values } => values == &Interval::CERTAINLY_FALSE,
+        self == &Self::FALSE
+    }
+
+    /// Returns the set of possible values after applying the `is false` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
+    pub fn is_false(&self) -> Result<Self> {
+        let (t, f, u) = self.is_true_false_unknown()?;
+
+        match (t, f, u) {
+            (false, true, false) => Ok(Self::TRUE),
+            (_, true, _) => Ok(Self::TRUE_OR_FALSE),
+            (_, false, _) => Ok(Self::FALSE),
         }
     }
 
-    /// Perform logical negation on a boolean nullable interval.
-    fn not(&self) -> Result<Self> {
+    /// Return true if the value is definitely null (and not true or false).
+    pub fn is_certainly_unknown(&self) -> bool {
+        self == &Self::UNKNOWN
+    }
+
+    /// Returns the set of possible values after applying the `is unknown` test on all
+    /// values in this set.
+    /// The resulting set can only contain 'TRUE' and/or 'FALSE', never 'UNKNOWN'.
+    pub fn is_unknown(&self) -> Result<Self> {
+        let (t, f, u) = self.is_true_false_unknown()?;
+
+        match (t, f, u) {
+            (false, false, true) => Ok(Self::TRUE),
+            (_, _, true) => Ok(Self::TRUE_OR_FALSE),
+            (_, _, false) => Ok(Self::FALSE),
+        }
+    }
+
+    /// Returns a tuple of booleans indicating if this interval contains the
+    /// true, false, and unknown truth values respectively.
+    fn is_true_false_unknown(&self) -> Result<(bool, bool, bool), DataFusionError> {
+        Ok(match self {
+            NullableInterval::Null { .. } => (false, false, true),
+            NullableInterval::MaybeNull { values } => (
+                values.contains_value(ScalarValue::Boolean(Some(true)))?,
+                values.contains_value(ScalarValue::Boolean(Some(false)))?,
+                true,
+            ),
+            NullableInterval::NotNull { values } => (
+                values.contains_value(ScalarValue::Boolean(Some(true)))?,
+                values.contains_value(ScalarValue::Boolean(Some(false)))?,
+                false,
+            ),
+        })
+    }
+
+    /// Returns an interval representing the set of possible values after applying
+    /// SQL three-valued logical NOT on possible value in this interval.
+    ///
+    /// This method uses the following truth table.
+    ///
+    /// ```text
+    ///  A  | ¬A
+    /// ----|----
+    ///  F  |  T
+    ///  U  |  U
+    ///  T  |  F
+    /// ```
+    pub fn not(&self) -> Result<Self> {
         match self {
-            Self::Null { datatype } => Ok(Self::Null {
-                datatype: datatype.clone(),
-            }),
+            Self::Null { datatype } => {
+                assert_eq_or_internal_err!(
+                    datatype,
+                    &DataType::Boolean,
+                    "Cannot apply logical negation to a non-boolean interval"
+                );
+                Ok(Self::UNKNOWN)
+            }
             Self::MaybeNull { values } => Ok(Self::MaybeNull {
                 values: values.not()?,
             }),
@@ -1781,28 +1920,112 @@ impl NullableInterval {
         }
     }
 
+    /// Returns an interval representing the set of possible values after applying SQL
+    /// three-valued logical AND on each combination of possible values from `self` and `other`.
+    ///
+    /// This method uses the following truth table.
+    ///
+    /// ```text
+    ///       │   B
+    /// A ∧ B ├──────
+    ///       │ F U T
+    /// ──┬───┼──────
+    ///   │ F │ F F F
+    /// A │ U │ F U U
+    ///   │ T │ F U T
+    /// ```
+    pub fn and<T: Borrow<Self>>(&self, rhs: T) -> Result<Self> {
+        if self == &Self::FALSE || rhs.borrow() == &Self::FALSE {
+            return Ok(Self::FALSE);
+        }
+
+        match (self.values(), rhs.borrow().values()) {
+            (Some(l), Some(r)) => {
+                let values = l.and(r)?;
+                match (self, rhs.borrow()) {
+                    (Self::NotNull { .. }, Self::NotNull { .. }) => {
+                        Ok(Self::NotNull { values })
+                    }
+                    _ => Ok(Self::MaybeNull { values }),
+                }
+            }
+            (Some(v), None) | (None, Some(v)) => {
+                if v.contains_value(ScalarValue::Boolean(Some(false)))? {
+                    Ok(Self::FALSE_OR_UNKNOWN)
+                } else {
+                    Ok(Self::UNKNOWN)
+                }
+            }
+            _ => Ok(Self::UNKNOWN),
+        }
+    }
+
+    /// Returns an interval representing the set of possible values after applying SQL three-valued
+    /// logical OR on each combination of possible values from `self` and `other`.
+    ///
+    /// This method uses the following truth table.
+    ///
+    /// ```text
+    ///       │   B
+    /// A ∨ B ├──────
+    ///       │ F U T
+    /// ──┬───┼──────
+    ///   │ F │ F U T
+    /// A │ U │ U U T
+    ///   │ T │ T T T
+    /// ```
+    pub fn or<T: Borrow<Self>>(&self, rhs: T) -> Result<Self> {
+        if self == &Self::TRUE || rhs.borrow() == &Self::TRUE {
+            return Ok(Self::TRUE);
+        }
+
+        match (self.values(), rhs.borrow().values()) {
+            (Some(l), Some(r)) => {
+                let values = l.or(r)?;
+                match (self, rhs.borrow()) {
+                    (Self::NotNull { .. }, Self::NotNull { .. }) => {
+                        Ok(Self::NotNull { values })
+                    }
+                    _ => Ok(Self::MaybeNull { values }),
+                }
+            }
+            (Some(v), None) | (None, Some(v)) => {
+                if v.contains_value(ScalarValue::Boolean(Some(true)))? {
+                    Ok(Self::TRUE_OR_UNKNOWN)
+                } else {
+                    Ok(Self::UNKNOWN)
+                }
+            }
+            _ => Ok(Self::UNKNOWN),
+        }
+    }
+
     /// Apply the given operator to this interval and the given interval.
     ///
     /// # Examples
     ///
     /// ```
     /// use datafusion_common::ScalarValue;
-    /// use datafusion_expr_common::operator::Operator;
     /// use datafusion_expr_common::interval_arithmetic::Interval;
     /// use datafusion_expr_common::interval_arithmetic::NullableInterval;
+    /// use datafusion_expr_common::operator::Operator;
     ///
     /// // 4 > 3 -> true
     /// let lhs = NullableInterval::from(ScalarValue::Int32(Some(4)));
     /// let rhs = NullableInterval::from(ScalarValue::Int32(Some(3)));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
-    /// assert_eq!(result, NullableInterval::from(ScalarValue::Boolean(Some(true))));
+    /// assert_eq!(
+    ///     result,
+    ///     NullableInterval::from(ScalarValue::Boolean(Some(true)))
+    /// );
     ///
     /// // [1, 3) > NULL -> NULL
     /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(1)),
-    ///            ScalarValue::Int32(Some(3)),
-    ///        ).unwrap(),
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(3)),
+    ///     )
+    ///     .unwrap(),
     /// };
     /// let rhs = NullableInterval::from(ScalarValue::Int32(None));
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
@@ -1811,29 +2034,34 @@ impl NullableInterval {
     /// // [1, 3] > [2, 4] -> [false, true]
     /// let lhs = NullableInterval::NotNull {
     ///     values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(1)),
-    ///            ScalarValue::Int32(Some(3)),
-    ///        ).unwrap(),
+    ///         ScalarValue::Int32(Some(1)),
+    ///         ScalarValue::Int32(Some(3)),
+    ///     )
+    ///     .unwrap(),
     /// };
     /// let rhs = NullableInterval::NotNull {
-    ///    values: Interval::try_new(
-    ///            ScalarValue::Int32(Some(2)),
-    ///            ScalarValue::Int32(Some(4)),
-    ///        ).unwrap(),
+    ///     values: Interval::try_new(
+    ///         ScalarValue::Int32(Some(2)),
+    ///         ScalarValue::Int32(Some(4)),
+    ///     )
+    ///     .unwrap(),
     /// };
     /// let result = lhs.apply_operator(&Operator::Gt, &rhs).unwrap();
     /// // Both inputs are valid (non-null), so result must be non-null
-    /// assert_eq!(result, NullableInterval::NotNull {
-    /// // Uncertain whether inequality is true or false
-    ///    values: Interval::UNCERTAIN,
-    /// });
+    /// assert_eq!(
+    ///     result,
+    ///     NullableInterval::NotNull {
+    ///         // Uncertain whether inequality is true or false
+    ///         values: Interval::TRUE_OR_FALSE,
+    ///     }
+    /// );
     /// ```
     pub fn apply_operator(&self, op: &Operator, rhs: &Self) -> Result<Self> {
         match op {
             Operator::IsDistinctFrom => {
                 let values = match (self, rhs) {
                     // NULL is distinct from NULL -> False
-                    (Self::Null { .. }, Self::Null { .. }) => Interval::CERTAINLY_FALSE,
+                    (Self::Null { .. }, Self::Null { .. }) => Interval::FALSE,
                     // x is distinct from y -> x != y,
                     // if at least one of them is never null.
                     (Self::NotNull { .. }, _) | (_, Self::NotNull { .. }) => {
@@ -1843,11 +2071,11 @@ impl NullableInterval {
                             (Some(lhs_values), Some(rhs_values)) => {
                                 lhs_values.equal(rhs_values)?.not()?
                             }
-                            (Some(_), None) | (None, Some(_)) => Interval::CERTAINLY_TRUE,
+                            (Some(_), None) | (None, Some(_)) => Interval::TRUE,
                             (None, None) => unreachable!("Null case handled above"),
                         }
                     }
-                    _ => Interval::UNCERTAIN,
+                    _ => Interval::TRUE_OR_FALSE,
                 };
                 // IsDistinctFrom never returns null.
                 Ok(Self::NotNull { values })
@@ -1855,6 +2083,8 @@ impl NullableInterval {
             Operator::IsNotDistinctFrom => self
                 .apply_operator(&Operator::IsDistinctFrom, rhs)
                 .map(|i| i.not())?,
+            Operator::And => self.and(rhs),
+            Operator::Or => self.or(rhs),
             _ => {
                 if let (Some(left_values), Some(right_values)) =
                     (self.values(), rhs.values())
@@ -1904,6 +2134,30 @@ impl NullableInterval {
         }
     }
 
+    /// Determines if this interval contains a [`ScalarValue`] or not.
+    pub fn contains_value<T: Borrow<ScalarValue>>(&self, value: T) -> Result<bool> {
+        match value.borrow() {
+            ScalarValue::Null => match self {
+                NullableInterval::Null { .. } | NullableInterval::MaybeNull { .. } => {
+                    Ok(true)
+                }
+                NullableInterval::NotNull { .. } => Ok(false),
+            },
+            s if s.is_null() => match self {
+                NullableInterval::Null { datatype } => Ok(datatype.eq(&s.data_type())),
+                NullableInterval::MaybeNull { values } => {
+                    Ok(values.data_type().eq(&s.data_type()))
+                }
+                NullableInterval::NotNull { .. } => Ok(false),
+            },
+            s => match self {
+                NullableInterval::Null { .. } => Ok(false),
+                NullableInterval::MaybeNull { values }
+                | NullableInterval::NotNull { values } => values.contains_value(s),
+            },
+        }
+    }
+
     /// If the interval has collapsed to a single value, return that value.
     /// Otherwise, returns `None`.
     ///
@@ -1924,7 +2178,8 @@ impl NullableInterval {
     ///     values: Interval::try_new(
     ///         ScalarValue::Int32(Some(1)),
     ///         ScalarValue::Int32(Some(4)),
-    ///     ).unwrap(),
+    ///     )
+    ///     .unwrap(),
     /// };
     /// assert_eq!(interval.single_value(), None);
     /// ```
@@ -1947,11 +2202,12 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            handle_overflow, next_value, prev_value, satisfy_greater, Interval,
+            Interval, handle_overflow, next_value, prev_value, satisfy_greater,
         },
         operator::Operator,
     };
 
+    use crate::interval_arithmetic::NullableInterval;
     use arrow::datatypes::DataType;
     use datafusion_common::rounding::{next_down, next_up};
     use datafusion_common::{Result, ScalarValue};
@@ -1992,10 +2248,12 @@ mod tests {
             ScalarValue::Float64(Some(1e-6)),
         ];
         values.into_iter().zip(eps).for_each(|(value, eps)| {
-            assert!(next_value(value.clone())
-                .sub(value.clone())
-                .unwrap()
-                .lt(&eps));
+            assert!(
+                next_value(value.clone())
+                    .sub(value.clone())
+                    .unwrap()
+                    .lt(&eps)
+            );
             assert!(value.sub(prev_value(value.clone())).unwrap().lt(&eps));
             assert_ne!(next_value(value.clone()), value);
             assert_ne!(prev_value(value.clone()), value);
@@ -2173,8 +2431,8 @@ mod tests {
             ),
         ];
         for (first, second) in exactly_gt_cases {
-            assert_eq!(first.gt(second.clone())?, Interval::CERTAINLY_TRUE);
-            assert_eq!(second.lt(first)?, Interval::CERTAINLY_TRUE);
+            assert_eq!(first.gt(second.clone())?, Interval::TRUE);
+            assert_eq!(second.lt(first)?, Interval::TRUE);
         }
 
         let possibly_gt_cases = vec![
@@ -2210,8 +2468,8 @@ mod tests {
             ),
         ];
         for (first, second) in possibly_gt_cases {
-            assert_eq!(first.gt(second.clone())?, Interval::UNCERTAIN);
-            assert_eq!(second.lt(first)?, Interval::UNCERTAIN);
+            assert_eq!(first.gt(second.clone())?, Interval::TRUE_OR_FALSE);
+            assert_eq!(second.lt(first)?, Interval::TRUE_OR_FALSE);
         }
 
         let not_gt_cases = vec![
@@ -2247,8 +2505,8 @@ mod tests {
             ),
         ];
         for (first, second) in not_gt_cases {
-            assert_eq!(first.gt(second.clone())?, Interval::CERTAINLY_FALSE);
-            assert_eq!(second.lt(first)?, Interval::CERTAINLY_FALSE);
+            assert_eq!(first.gt(second.clone())?, Interval::FALSE);
+            assert_eq!(second.lt(first)?, Interval::FALSE);
         }
 
         Ok(())
@@ -2293,8 +2551,8 @@ mod tests {
             ),
         ];
         for (first, second) in exactly_gteq_cases {
-            assert_eq!(first.gt_eq(second.clone())?, Interval::CERTAINLY_TRUE);
-            assert_eq!(second.lt_eq(first)?, Interval::CERTAINLY_TRUE);
+            assert_eq!(first.gt_eq(second.clone())?, Interval::TRUE);
+            assert_eq!(second.lt_eq(first)?, Interval::TRUE);
         }
 
         let possibly_gteq_cases = vec![
@@ -2330,8 +2588,8 @@ mod tests {
             ),
         ];
         for (first, second) in possibly_gteq_cases {
-            assert_eq!(first.gt_eq(second.clone())?, Interval::UNCERTAIN);
-            assert_eq!(second.lt_eq(first)?, Interval::UNCERTAIN);
+            assert_eq!(first.gt_eq(second.clone())?, Interval::TRUE_OR_FALSE);
+            assert_eq!(second.lt_eq(first)?, Interval::TRUE_OR_FALSE);
         }
 
         let not_gteq_cases = vec![
@@ -2363,8 +2621,8 @@ mod tests {
             ),
         ];
         for (first, second) in not_gteq_cases {
-            assert_eq!(first.gt_eq(second.clone())?, Interval::CERTAINLY_FALSE);
-            assert_eq!(second.lt_eq(first)?, Interval::CERTAINLY_FALSE);
+            assert_eq!(first.gt_eq(second.clone())?, Interval::FALSE);
+            assert_eq!(second.lt_eq(first)?, Interval::FALSE);
         }
 
         Ok(())
@@ -2391,8 +2649,8 @@ mod tests {
             ),
         ];
         for (first, second) in exactly_eq_cases {
-            assert_eq!(first.equal(second.clone())?, Interval::CERTAINLY_TRUE);
-            assert_eq!(second.equal(first)?, Interval::CERTAINLY_TRUE);
+            assert_eq!(first.equal(second.clone())?, Interval::TRUE);
+            assert_eq!(second.equal(first)?, Interval::TRUE);
         }
 
         let possibly_eq_cases = vec![
@@ -2428,8 +2686,8 @@ mod tests {
             ),
         ];
         for (first, second) in possibly_eq_cases {
-            assert_eq!(first.equal(second.clone())?, Interval::UNCERTAIN);
-            assert_eq!(second.equal(first)?, Interval::UNCERTAIN);
+            assert_eq!(first.equal(second.clone())?, Interval::TRUE_OR_FALSE);
+            assert_eq!(second.equal(first)?, Interval::TRUE_OR_FALSE);
         }
 
         let not_eq_cases = vec![
@@ -2461,8 +2719,8 @@ mod tests {
             ),
         ];
         for (first, second) in not_eq_cases {
-            assert_eq!(first.equal(second.clone())?, Interval::CERTAINLY_FALSE);
-            assert_eq!(second.equal(first)?, Interval::CERTAINLY_FALSE);
+            assert_eq!(first.equal(second.clone())?, Interval::FALSE);
+            assert_eq!(second.equal(first)?, Interval::FALSE);
         }
 
         Ok(())
@@ -2471,19 +2729,74 @@ mod tests {
     #[test]
     fn and_test() -> Result<()> {
         let cases = vec![
-            (false, true, false, false, false, false),
-            (false, false, false, true, false, false),
-            (false, true, false, true, false, true),
-            (false, true, true, true, false, true),
-            (false, false, false, false, false, false),
-            (true, true, true, true, true, true),
+            (Interval::TRUE_OR_FALSE, Interval::FALSE, Interval::FALSE),
+            (
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
+            ),
+            (
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE,
+                Interval::TRUE_OR_FALSE,
+            ),
+            (Interval::FALSE, Interval::FALSE, Interval::FALSE),
+            (Interval::FALSE, Interval::TRUE_OR_FALSE, Interval::FALSE),
+            (Interval::FALSE, Interval::TRUE, Interval::FALSE),
+            (Interval::TRUE, Interval::FALSE, Interval::FALSE),
+            (
+                Interval::TRUE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
+            ),
+            (Interval::TRUE, Interval::TRUE, Interval::TRUE),
         ];
 
         for case in cases {
             assert_eq!(
-                Interval::make(Some(case.0), Some(case.1))?
-                    .and(Interval::make(Some(case.2), Some(case.3))?)?,
-                Interval::make(Some(case.4), Some(case.5))?
+                case.0.and(&case.1)?,
+                case.2,
+                "Failed for {} AND {}",
+                case.0,
+                case.1
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn or_test() -> Result<()> {
+        let cases = vec![
+            (
+                Interval::TRUE_OR_FALSE,
+                Interval::FALSE,
+                Interval::TRUE_OR_FALSE,
+            ),
+            (
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
+            ),
+            (Interval::TRUE_OR_FALSE, Interval::TRUE, Interval::TRUE),
+            (Interval::FALSE, Interval::FALSE, Interval::FALSE),
+            (
+                Interval::FALSE,
+                Interval::TRUE_OR_FALSE,
+                Interval::TRUE_OR_FALSE,
+            ),
+            (Interval::FALSE, Interval::TRUE, Interval::TRUE),
+            (Interval::TRUE, Interval::FALSE, Interval::TRUE),
+            (Interval::TRUE, Interval::TRUE_OR_FALSE, Interval::TRUE),
+            (Interval::TRUE, Interval::TRUE, Interval::TRUE),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                case.0.or(&case.1)?,
+                case.2,
+                "Failed for {} OR {}",
+                case.0,
+                case.1
             );
         }
         Ok(())
@@ -2492,17 +2805,103 @@ mod tests {
     #[test]
     fn not_test() -> Result<()> {
         let cases = vec![
-            (false, true, false, true),
-            (false, false, true, true),
-            (true, true, false, false),
+            (Interval::TRUE_OR_FALSE, Interval::TRUE_OR_FALSE),
+            (Interval::FALSE, Interval::TRUE),
+            (Interval::TRUE, Interval::FALSE),
         ];
 
         for case in cases {
-            assert_eq!(
-                Interval::make(Some(case.0), Some(case.1))?.not()?,
-                Interval::make(Some(case.2), Some(case.3))?
-            );
+            assert_eq!(case.0.not()?, case.1, "Failed for NOT {}", case.0);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_and_or_with_normalized_boolean_intervals() -> Result<()> {
+        // Verify that NULL boolean bounds are normalized and don't cause errors
+        let from_nulls =
+            Interval::try_new(ScalarValue::Boolean(None), ScalarValue::Boolean(None))?;
+
+        assert!(from_nulls.or(&Interval::TRUE).is_ok());
+        assert!(from_nulls.and(&Interval::FALSE).is_ok());
+
+        Ok(())
+    }
+
+    // Tests that there's no such thing as a 'null' boolean interval.
+    // An interval with two `Boolean(None)` boundaries is normalised to `Interval::TRUE_OR_FALSE`.
+    #[test]
+    fn test_null_boolean_interval() {
+        let null_interval =
+            Interval::try_new(ScalarValue::Boolean(None), ScalarValue::Boolean(None))
+                .unwrap();
+
+        assert_eq!(null_interval, Interval::TRUE_OR_FALSE);
+    }
+
+    // Asserts that `Interval::TRUE_OR_FALSE` represents a set that contains `true`, `false`, and does
+    // not contain `null`.
+    #[test]
+    fn test_uncertain_boolean_interval() {
+        assert!(
+            Interval::TRUE_OR_FALSE
+                .contains_value(ScalarValue::Boolean(Some(true)))
+                .unwrap()
+        );
+        assert!(
+            Interval::TRUE_OR_FALSE
+                .contains_value(ScalarValue::Boolean(Some(false)))
+                .unwrap()
+        );
+        assert!(
+            !Interval::TRUE_OR_FALSE
+                .contains_value(ScalarValue::Boolean(None))
+                .unwrap()
+        );
+        assert!(
+            !Interval::TRUE_OR_FALSE
+                .contains_value(ScalarValue::Null)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_and_uncertain_boolean_intervals() -> Result<()> {
+        let and_result = Interval::TRUE_OR_FALSE.and(&Interval::FALSE)?;
+        assert_eq!(and_result, Interval::FALSE);
+
+        let and_result = Interval::FALSE.and(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(and_result, Interval::FALSE);
+
+        let and_result = Interval::TRUE_OR_FALSE.and(&Interval::TRUE)?;
+        assert_eq!(and_result, Interval::TRUE_OR_FALSE);
+
+        let and_result = Interval::TRUE.and(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(and_result, Interval::TRUE_OR_FALSE);
+
+        let and_result = Interval::TRUE_OR_FALSE.and(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(and_result, Interval::TRUE_OR_FALSE);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_or_uncertain_boolean_intervals() -> Result<()> {
+        let or_result = Interval::TRUE_OR_FALSE.or(&Interval::FALSE)?;
+        assert_eq!(or_result, Interval::TRUE_OR_FALSE);
+
+        let or_result = Interval::FALSE.or(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(or_result, Interval::TRUE_OR_FALSE);
+
+        let or_result = Interval::TRUE_OR_FALSE.or(&Interval::TRUE)?;
+        assert_eq!(or_result, Interval::TRUE);
+
+        let or_result = Interval::TRUE.or(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(or_result, Interval::TRUE);
+
+        let or_result = Interval::TRUE_OR_FALSE.or(&Interval::TRUE_OR_FALSE)?;
+        assert_eq!(or_result, Interval::TRUE_OR_FALSE);
+
         Ok(())
     }
 
@@ -2744,37 +3143,37 @@ mod tests {
             (
                 Interval::make::<i64>(None, None)?,
                 Interval::make::<i64>(None, None)?,
-                Interval::CERTAINLY_TRUE,
+                Interval::TRUE,
             ),
             (
                 Interval::make(Some(1500_i64), Some(2000_i64))?,
                 Interval::make(Some(1501_i64), Some(1999_i64))?,
-                Interval::CERTAINLY_TRUE,
+                Interval::TRUE,
             ),
             (
                 Interval::make(Some(1000_i64), None)?,
                 Interval::make::<i64>(None, None)?,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
             ),
             (
                 Interval::make(Some(1000_i64), Some(2000_i64))?,
                 Interval::make(Some(500), Some(1500_i64))?,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
             ),
             (
                 Interval::make(Some(16.0), Some(32.0))?,
                 Interval::make(Some(32.0), Some(64.0))?,
-                Interval::UNCERTAIN,
+                Interval::TRUE_OR_FALSE,
             ),
             (
                 Interval::make(Some(1000_i64), None)?,
                 Interval::make(None, Some(0_i64))?,
-                Interval::CERTAINLY_FALSE,
+                Interval::FALSE,
             ),
             (
                 Interval::make(Some(1500_i64), Some(2000_i64))?,
                 Interval::make(Some(1000_i64), Some(1499_i64))?,
-                Interval::CERTAINLY_FALSE,
+                Interval::FALSE,
             ),
             (
                 Interval::try_new(
@@ -2782,7 +3181,7 @@ mod tests {
                     prev_value(ScalarValue::Float32(Some(1.0))),
                 )?,
                 Interval::make(Some(1.0_f32), Some(1.0_f32))?,
-                Interval::CERTAINLY_FALSE,
+                Interval::FALSE,
             ),
             (
                 Interval::try_new(
@@ -2790,7 +3189,7 @@ mod tests {
                     next_value(ScalarValue::Float32(Some(1.0))),
                 )?,
                 Interval::make(Some(1.0_f32), Some(1.0_f32))?,
-                Interval::CERTAINLY_FALSE,
+                Interval::FALSE,
             ),
         ];
         for (first, second, expected) in possible_cases {
@@ -3536,7 +3935,7 @@ mod tests {
         assert_eq!(interval.cardinality().unwrap(), 9178336040581070850);
 
         let interval = Interval::try_new(
-            ScalarValue::UInt64(Some(u64::MIN + 1)),
+            ScalarValue::UInt64(Some(1)),
             ScalarValue::UInt64(Some(u64::MAX)),
         )?;
         assert_eq!(interval.cardinality().unwrap(), u64::MAX);
@@ -4029,5 +4428,332 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn nullable_and_test() -> Result<()> {
+        // Test cases: (lhs, rhs, expected) => lhs AND rhs = expected
+        #[rustfmt::skip]
+        let cases = vec![
+            (NullableInterval::TRUE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::TRUE, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::TRUE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::TRUE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::FALSE, NullableInterval::TRUE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE_OR_UNKNOWN),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                case.0.apply_operator(&Operator::And, &case.1).unwrap(),
+                case.2,
+                "Failed for {} AND {}",
+                case.0,
+                case.1
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nullable_or_test() -> Result<()> {
+        // Test cases: (lhs, rhs, expected) => lhs OR rhs = expected
+        #[rustfmt::skip]
+        let cases = vec![
+            (NullableInterval::TRUE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::FALSE, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::UNKNOWN, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE),
+            (NullableInterval::TRUE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE),
+            (NullableInterval::FALSE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::FALSE, NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::FALSE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::FALSE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_FALSE, NullableInterval::ANY_TRUTH_VALUE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+        ];
+
+        for case in cases {
+            assert_eq!(
+                case.0.apply_operator(&Operator::Or, &case.1).unwrap(),
+                case.2,
+                "Failed for {} OR {}",
+                case.0,
+                case.1
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nullable_not_test() -> Result<()> {
+        // Test cases: (interval, expected) => NOT interval = expected
+        #[rustfmt::skip]
+        let cases = vec![
+            (NullableInterval::TRUE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE),
+            (NullableInterval::UNKNOWN, NullableInterval::UNKNOWN),
+            (NullableInterval::TRUE_OR_FALSE,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN,NullableInterval::FALSE_OR_UNKNOWN),
+            (NullableInterval::FALSE_OR_UNKNOWN,NullableInterval::TRUE_OR_UNKNOWN),
+            (NullableInterval::ANY_TRUTH_VALUE, NullableInterval::ANY_TRUTH_VALUE),
+        ];
+
+        for case in cases {
+            assert_eq!(case.0.not().unwrap(), case.1, "Failed for NOT {}", case.0,);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nullable_interval_is_certainly_true() {
+        // Test cases: (interval, expected) => interval.is_certainly_true() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, true),
+            (NullableInterval::FALSE, false),
+            (NullableInterval::UNKNOWN, false),
+            (NullableInterval::TRUE_OR_FALSE, false),
+            (NullableInterval::TRUE_OR_UNKNOWN, false),
+            (NullableInterval::FALSE_OR_UNKNOWN, false),
+            (NullableInterval::ANY_TRUTH_VALUE, false),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_certainly_true();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_true() {
+        // Test cases: (interval, expected) => interval.is_true() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, NullableInterval::TRUE),
+            (NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_FALSE,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::FALSE_OR_UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::ANY_TRUTH_VALUE,NullableInterval::TRUE_OR_FALSE),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_true().unwrap();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_certainly_false() {
+        // Test cases: (interval, expected) => interval.is_certainly_false() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, false),
+            (NullableInterval::FALSE, true),
+            (NullableInterval::UNKNOWN, false),
+            (NullableInterval::TRUE_OR_FALSE, false),
+            (NullableInterval::TRUE_OR_UNKNOWN, false),
+            (NullableInterval::FALSE_OR_UNKNOWN, false),
+            (NullableInterval::ANY_TRUTH_VALUE, false),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_certainly_false();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_false() {
+        // Test cases: (interval, expected) => interval.is_false() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::TRUE),
+            (NullableInterval::UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_FALSE,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN, NullableInterval::FALSE),
+            (NullableInterval::FALSE_OR_UNKNOWN,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::ANY_TRUTH_VALUE,NullableInterval::TRUE_OR_FALSE),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_false().unwrap();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_certainly_unknown() {
+        // Test cases: (interval, expected) => interval.is_certainly_unknown() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, false),
+            (NullableInterval::FALSE, false),
+            (NullableInterval::UNKNOWN, true),
+            (NullableInterval::TRUE_OR_FALSE, false),
+            (NullableInterval::TRUE_OR_UNKNOWN, false),
+            (NullableInterval::FALSE_OR_UNKNOWN, false),
+            (NullableInterval::ANY_TRUTH_VALUE, false),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_certainly_unknown();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_is_unknown() {
+        // Test cases: (interval, expected) => interval.is_unknown() = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, NullableInterval::FALSE),
+            (NullableInterval::FALSE, NullableInterval::FALSE),
+            (NullableInterval::UNKNOWN, NullableInterval::TRUE),
+            (NullableInterval::TRUE_OR_FALSE, NullableInterval::FALSE),
+            (NullableInterval::TRUE_OR_UNKNOWN,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::FALSE_OR_UNKNOWN,NullableInterval::TRUE_OR_FALSE),
+            (NullableInterval::ANY_TRUTH_VALUE,NullableInterval::TRUE_OR_FALSE),
+        ];
+
+        for (interval, expected) in test_cases {
+            let result = interval.is_unknown().unwrap();
+            assert_eq!(result, expected, "Failed for interval: {interval}",);
+        }
+    }
+
+    #[test]
+    fn nullable_interval_contains_value() {
+        // Test cases: (interval, value, expected) => interval.contains_value(value) = expected
+        #[rustfmt::skip]
+        let test_cases = vec![
+            (NullableInterval::TRUE, ScalarValue::Boolean(Some(true)), true),
+            (NullableInterval::TRUE, ScalarValue::Boolean(Some(false)), false),
+            (NullableInterval::TRUE, ScalarValue::Boolean(None), false),
+            (NullableInterval::TRUE, ScalarValue::Null, false),
+            (NullableInterval::TRUE, ScalarValue::UInt32(None), false),
+            (NullableInterval::FALSE, ScalarValue::Boolean(Some(true)), false),
+            (NullableInterval::FALSE, ScalarValue::Boolean(Some(false)), true),
+            (NullableInterval::FALSE, ScalarValue::Boolean(None), false),
+            (NullableInterval::FALSE, ScalarValue::Null, false),
+            (NullableInterval::FALSE, ScalarValue::UInt32(None), false),
+            (NullableInterval::UNKNOWN, ScalarValue::Boolean(Some(true)), false),
+            (NullableInterval::UNKNOWN, ScalarValue::Boolean(Some(false)), false),
+            (NullableInterval::UNKNOWN, ScalarValue::Boolean(None), true),
+            (NullableInterval::UNKNOWN, ScalarValue::Null, true),
+            (NullableInterval::UNKNOWN, ScalarValue::UInt32(None), false),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::Boolean(Some(true)), true),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::Boolean(Some(false)), true),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::Boolean(None), false),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::Null, false),
+            (NullableInterval::TRUE_OR_FALSE, ScalarValue::UInt32(None), false),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::Boolean(Some(true)), true),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::Boolean(Some(false)), false),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::Boolean(None), true),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::Null, true),
+            (NullableInterval::TRUE_OR_UNKNOWN, ScalarValue::UInt32(None), false),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::Boolean(Some(true)), false),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::Boolean(Some(false)), true),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::Boolean(None), true),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::Null, true),
+            (NullableInterval::FALSE_OR_UNKNOWN, ScalarValue::UInt32(None), false),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::Boolean(Some(true)), true),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::Boolean(Some(false)), true),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::Boolean(None), true),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::Null, true),
+            (NullableInterval::ANY_TRUTH_VALUE, ScalarValue::UInt32(None), false),
+        ];
+
+        for (interval, value, expected) in test_cases {
+            let result = interval.contains_value(value.clone()).unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for interval: {interval} and value {value:?}",
+            );
+        }
     }
 }

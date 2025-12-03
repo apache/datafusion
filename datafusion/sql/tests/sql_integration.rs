@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This lint violation is acceptable for tests, so suppress for now
+// Issue: <https://github.com/apache/datafusion/issues/18503>
+#![expect(clippy::needless_pass_by_value)]
+
 use std::any::Any;
 use std::hash::Hash;
 #[cfg(test)]
@@ -38,10 +42,12 @@ use datafusion_sql::{
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
-    approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
-    min_max::min_udaf,
+    approx_median::approx_median_udaf,
+    average::avg_udaf,
+    count::count_udaf,
+    grouping::grouping_udaf,
+    min_max::{max_udaf, min_udaf},
 };
-use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
@@ -230,6 +236,22 @@ fn parse_ident_normalization_4() {
         Projection: person.age
           TableScan: person
         "#
+    );
+}
+
+#[test]
+fn within_group_rejected_for_non_ordered_set_udaf() {
+    // MIN is order-sensitive by nature but does not implement the
+    // ordered-set `WITHIN GROUP` opt-in. The planner must reject
+    // explicit `WITHIN GROUP` syntax for functions that do not
+    // advertise `supports_within_group_clause()`.
+    let sql = "SELECT min(c1) WITHIN GROUP (ORDER BY c1) FROM person";
+    let err = logical_plan(sql)
+        .expect_err("expected planning to fail for MIN WITHIN GROUP")
+        .to_string();
+    assert_contains!(
+        err,
+        "WITHIN GROUP is only supported for ordered-set aggregate functions"
     );
 }
 
@@ -669,10 +691,10 @@ fn plan_insert() {
     assert_snapshot!(
         plan,
         @r#"
-        Dml: op=[Insert Into] table=[person]
-          Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀
-            Values: (CAST(Int64(1) AS UInt32), Utf8("Alan"), Utf8("Turing"))
-        "#
+    Dml: op=[Insert Into] table=[person]
+      Projection: column1 AS id, column2 AS first_name, column3 AS last_name, CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, CAST(NULL AS Timestamp(ns)) AS birth_date, CAST(NULL AS Int32) AS 😀
+        Values: (CAST(Int64(1) AS UInt32), Utf8("Alan"), Utf8("Turing"))
+    "#
     );
 }
 
@@ -738,8 +760,8 @@ fn plan_update() {
 }
 
 #[rstest]
-#[case::missing_assignement_target("UPDATE person SET doesnotexist = true")]
-#[case::missing_assignement_expression("UPDATE person SET age = doesnotexist + 42")]
+#[case::missing_assignment_target("UPDATE person SET doesnotexist = true")]
+#[case::missing_assignment_expression("UPDATE person SET age = doesnotexist + 42")]
 #[case::missing_selection_expression(
     "UPDATE person SET age = 42 WHERE doesnotexist = true"
 )]
@@ -875,11 +897,11 @@ fn test_timestamp_filter() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-        Projection: person.state
-          Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(Second, None)) AS Timestamp(Nanosecond, None))
-            TableScan: person
-        "#
+        @r"
+    Projection: person.state
+      Filter: person.birth_date < CAST(CAST(Int64(158412331400600000) AS Timestamp(s)) AS Timestamp(ns))
+        TableScan: person
+    "
     );
 }
 
@@ -1586,11 +1608,11 @@ fn select_from_typed_string_values() {
     assert_snapshot!(
         plan,
         @r#"
-        Projection: t.col1, t.col2
-          SubqueryAlias: t
-            Projection: column1 AS col1, column2 AS col2
-              Values: (CAST(Utf8("2021-06-10 17:01:00Z") AS Timestamp(Nanosecond, None)), CAST(Utf8("2004-04-09") AS Date32))
-        "#
+    Projection: t.col1, t.col2
+      SubqueryAlias: t
+        Projection: column1 AS col1, column2 AS col2
+          Values: (CAST(Utf8("2021-06-10 17:01:00Z") AS Timestamp(ns)), CAST(Utf8("2004-04-09") AS Date32))
+    "#
     );
 }
 
@@ -3151,7 +3173,7 @@ fn select_typed_time_string() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("08:09:10.123") AS Time64(Nanosecond)) AS time
+    Projection: CAST(Utf8("08:09:10.123") AS Time64(ns)) AS time
       EmptyRelation: rows=1
     "#
     );
@@ -3235,6 +3257,55 @@ Sort: avg(person.age) + avg(person.age) ASC NULLS LAST
   Projection: avg(person.age) + avg(person.age), date_trunc(Utf8("month"), person.birth_date) AS birth_date
     Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
       TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_aggregate_on_non_selected_column() {
+    let sql = "SELECT state FROM person GROUP BY state ORDER BY MIN(age)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Sort: min(person.age) ASC NULLS LAST
+    Projection: person.state, min(person.age)
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
+        TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_multiple_aggregates_on_non_selected_columns() {
+    let sql =
+        "SELECT state FROM person GROUP BY state ORDER BY MIN(age), MAX(salary) DESC";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Sort: min(person.age) ASC NULLS LAST, max(person.salary) DESC NULLS FIRST
+    Projection: person.state, min(person.age), max(person.salary)
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age), max(person.salary)]]
+        TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
+    let sql = "SELECT id FROM person GROUP BY id ORDER BY min(age)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id
+  Sort: min(person.age) ASC NULLS LAST
+    Projection: person.id, min(person.age)
+      Aggregate: groupBy=[[person.id]], aggr=[[min(person.age)]]
+        TableScan: person
 "#
     );
 }
@@ -3808,12 +3879,11 @@ fn order_by_unaliased_name() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: z, q
-  Sort: p.state ASC NULLS LAST
-    Projection: p.state AS z, sum(p.age) AS q, p.state
-      Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
-        SubqueryAlias: p
-          TableScan: person
+Sort: z ASC NULLS LAST
+  Projection: p.state AS z, sum(p.age) AS q
+    Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
+      SubqueryAlias: p
+        TableScan: person
 "#
     );
 }
@@ -3899,6 +3969,13 @@ Limit: skip=3, fetch=5
       TableScan: person
 "#
     );
+}
+
+#[test]
+fn fetch_clause_is_not_supported() {
+    let sql = "SELECT 1 FETCH NEXT 1 ROW ONLY";
+    let err = logical_plan(sql).unwrap_err();
+    assert_contains!(err.to_string(), "FETCH clause is not supported yet");
 }
 
 #[test]
@@ -4199,6 +4276,67 @@ Projection: person.id, row_number() PARTITION BY [person.age] ORDER BY [person.i
     WindowAggr: windowExpr=[[row_number() PARTITION BY [person.age] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
       TableScan: person
 "#
+    );
+}
+
+#[test]
+fn test_select_qualify_aggregate_reference() {
+    let sql = "
+        SELECT
+            person.id,
+            ROW_NUMBER() OVER (PARTITION BY person.id ORDER BY person.id) as rn
+        FROM person
+        GROUP BY
+            person.id
+        QUALIFY rn = 1 AND SUM(person.age) > 0";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id, row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+      Filter: row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1) AND sum(person.age) > Int64(0)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [person.id] ORDER BY [person.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
+            TableScan: person
+    "
+    );
+}
+
+#[test]
+fn test_select_qualify_aggregate_reference_within_window_function() {
+    let sql = "
+        SELECT
+            person.id
+        FROM person
+        GROUP BY
+            person.id
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY person.id ORDER BY SUM(person.age) DESC) = 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.id
+      Filter: row_number() PARTITION BY [person.id] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = Int64(1)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [person.id] ORDER BY [sum(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
+            TableScan: person
+    "
+    );
+}
+
+#[test]
+fn test_select_qualify_aggregate_invalid_column_reference() {
+    let sql = "
+        SELECT
+            person.id
+        FROM person
+        GROUP BY
+            person.id
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY person.id ORDER BY person.age DESC) = 1";
+    let err = logical_plan(sql).unwrap_err();
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @r#"Error during planning: Column in QUALIFY must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.age" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "person.id" appears in the SELECT clause satisfies this requirement"#
     );
 }
 
@@ -4572,7 +4710,7 @@ fn test_no_substring_registered() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: Please try with `unicode_expressions` DataFusion feature enabled"
     );
 }
 
@@ -4584,7 +4722,7 @@ fn test_no_substring_registered_alt_syntax() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: enable the `unicode_expressions"
+        @"This feature is not implemented: Substring could not be planned by registered expr planner. Hint: Please try with `unicode_expressions` DataFusion feature enabled"
     );
 }
 
@@ -4603,7 +4741,7 @@ fn test_custom_type_plan() -> Result<()> {
     let err = planner.statement_to_plan(ast.pop_front().unwrap());
     assert_contains!(
         err.unwrap_err().to_string(),
-        "This feature is not implemented: Unsupported SQL type Datetime(None)"
+        "This feature is not implemented: Unsupported SQL type DATETIME"
     );
 
     fn plan_sql(sql: &str) -> LogicalPlan {
@@ -4625,7 +4763,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None))
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
       EmptyRelation: rows=1
     "#
     );
@@ -4635,7 +4773,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)) AS Timestamp(Nanosecond, None))
+    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns))
       EmptyRelation: rows=1
     "#
     );
@@ -4647,7 +4785,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(Nanosecond, None)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(Nanosecond, None)))
+    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns)))
       EmptyRelation: rows=1
     "#
     );

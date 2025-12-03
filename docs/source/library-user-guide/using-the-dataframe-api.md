@@ -198,7 +198,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-[`custom_file_format.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_file_format.rs
+[`custom_file_format.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/custom_file_format.rs
 
 The output file will look like (Example Output):
 

@@ -32,7 +32,7 @@ use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
 use datafusion_execution::TaskContext;
 
 use futures::stream::{Stream, StreamExt};
@@ -105,7 +105,8 @@ impl DisplayAs for GlobalLimitExec {
                     f,
                     "GlobalLimitExec: skip={}, fetch={}",
                     self.skip,
-                    self.fetch.map_or("None".to_string(), |x| x.to_string())
+                    self.fetch
+                        .map_or_else(|| "None".to_string(), |x| x.to_string())
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -166,14 +167,18 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> Result<SendableRecordBatchStream> {
         trace!("Start GlobalLimitExec::execute for partition: {partition}");
         // GlobalLimitExec has a single output partition
-        if 0 != partition {
-            return internal_err!("GlobalLimitExec invalid partition {partition}");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "GlobalLimitExec invalid partition {partition}"
+        );
 
         // GlobalLimitExec requires a single input partition
-        if 1 != self.input.output_partitioning().partition_count() {
-            return internal_err!("GlobalLimitExec requires a single input partition");
-        }
+        assert_eq_or_internal_err!(
+            self.input.output_partitioning().partition_count(),
+            1,
+            "GlobalLimitExec requires a single input partition"
+        );
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(0, context)?;
@@ -194,12 +199,9 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input.partition_statistics(partition)?.with_fetch(
-            self.schema(),
-            self.fetch,
-            self.skip,
-            1,
-        )
+        self.input
+            .partition_statistics(partition)?
+            .with_fetch(self.fetch, self.skip, 1)
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -338,12 +340,9 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input.partition_statistics(partition)?.with_fetch(
-            self.schema(),
-            Some(self.fetch),
-            0,
-            1,
-        )
+        self.input
+            .partition_statistics(partition)?
+            .with_fetch(Some(self.fetch), 0, 1)
     }
 
     fn fetch(&self) -> Option<usize> {

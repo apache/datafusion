@@ -25,7 +25,7 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{col, ExprFunctionExt, LogicalPlanBuilder};
+use datafusion_expr::{col, lit, ExprFunctionExt, Limit, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
@@ -54,6 +54,17 @@ use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
 /// )
 /// ORDER BY a DESC
 /// ```
+///
+/// In case there are no columns, the [[Distinct]] is replaced by a [[Limit]]
+///
+/// ```text
+/// SELECT DISTINCT * FROM empty_table
+/// ```
+///
+/// Into
+/// ```text
+/// SELECT * FROM empty_table LIMIT 1
+/// ```
 #[derive(Default, Debug)]
 pub struct ReplaceDistinctWithAggregate {}
 
@@ -77,6 +88,16 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
         match plan {
             LogicalPlan::Distinct(Distinct::All(input)) => {
                 let group_expr = expand_wildcard(input.schema(), &input, None)?;
+
+                if group_expr.is_empty() {
+                    // Special case: there are no columns to group by, so we can't replace it by a group by
+                    // however, we can replace it by LIMIT 1 because there is either no output or a single empty row
+                    return Ok(Transformed::yes(LogicalPlan::Limit(Limit {
+                        skip: None,
+                        fetch: Some(Box::new(lit(1i64))),
+                        input,
+                    })));
+                }
 
                 let field_count = input.schema().fields().len();
                 for dep in input.schema().functional_dependencies().iter() {
@@ -184,15 +205,17 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
     use crate::test::*;
+    use arrow::datatypes::{Fields, Schema};
+    use std::sync::Arc;
 
     use crate::OptimizerContext;
     use datafusion_common::Result;
-    use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder, Expr};
+    use datafusion_expr::{
+        col, logical_plan::builder::LogicalPlanBuilder, table_scan, Expr,
+    };
     use datafusion_functions_aggregate::sum::sum;
 
     macro_rules! assert_optimized_plan_equal {
@@ -272,6 +295,18 @@ mod tests {
           Projection: test.a, test.b
             Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]
               TableScan: test
+        ")
+    }
+
+    #[test]
+    fn use_limit_1_when_no_columns() -> Result<()> {
+        let plan = table_scan(Some("test"), &Schema::new(Fields::empty()), None)?
+            .distinct()?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Limit: skip=0, fetch=1
+          TableScan: test
         ")
     }
 }

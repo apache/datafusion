@@ -52,7 +52,7 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, DataFusionError, HashMap, Result,
+    arrow_datafusion_err, exec_datafusion_err, exec_err, HashMap, Result,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
@@ -429,16 +429,25 @@ trait PartitionSearcher: Send {
         let partition_batches =
             self.evaluate_partition_batches(&record_batch, window_expr)?;
         for (partition_row, partition_batch) in partition_batches {
-            let partition_batch_state = partition_buffers
-                .entry(partition_row)
+            if let Some(partition_batch_state) = partition_buffers.get_mut(&partition_row)
+            {
+                partition_batch_state.extend(&partition_batch)?
+            } else {
+                let options = RecordBatchOptions::new()
+                    .with_row_count(Some(partition_batch.num_rows()));
                 // Use input_schema for the buffer schema, not `record_batch.schema()`
                 // as it may not have the "correct" schema in terms of output
                 // nullability constraints. For details, see the following issue:
                 // https://github.com/apache/datafusion/issues/9320
-                .or_insert_with(|| {
-                    PartitionBatchState::new(Arc::clone(self.input_schema()))
-                });
-            partition_batch_state.extend(&partition_batch)?;
+                let partition_batch = RecordBatch::try_new_with_options(
+                    Arc::clone(self.input_schema()),
+                    partition_batch.columns().to_vec(),
+                    &options,
+                )?;
+                let partition_batch_state =
+                    PartitionBatchState::new_with_batch(partition_batch);
+                partition_buffers.insert(partition_row, partition_batch_state);
+            }
         }
 
         if self.is_mode_linear() {
@@ -870,9 +879,11 @@ impl SortedSearch {
             cur_window_expr_out_result_len
         });
         argmin(out_col_counts).map_or(0, |(min_idx, minima)| {
-            for (row, count) in counts.swap_remove(min_idx).into_iter() {
-                let partition_batch = &mut partition_buffers[row];
-                partition_batch.n_out_row = count;
+            let mut slowest_partition = counts.swap_remove(min_idx);
+            for (partition_key, partition_batch) in partition_buffers.iter_mut() {
+                if let Some(count) = slowest_partition.remove(partition_key) {
+                    partition_batch.n_out_row = count;
+                }
             }
             minima
         })
@@ -1176,6 +1187,7 @@ fn get_aggregate_result_out_column(
 ) -> Result<ArrayRef> {
     let mut result = None;
     let mut running_length = 0;
+    let mut batches_to_concat = vec![];
     // We assume that iteration order is according to insertion order
     for (
         _,
@@ -1187,23 +1199,31 @@ fn get_aggregate_result_out_column(
     {
         if running_length < len_to_show {
             let n_to_use = min(len_to_show - running_length, out_col.len());
-            let slice_to_use = out_col.slice(0, n_to_use);
-            result = Some(match result {
-                Some(arr) => concat(&[&arr, &slice_to_use])?,
-                None => slice_to_use,
-            });
+            let slice_to_use = if n_to_use == out_col.len() {
+                // avoid slice when the entire column is used
+                Arc::clone(out_col)
+            } else {
+                out_col.slice(0, n_to_use)
+            };
+            batches_to_concat.push(slice_to_use);
             running_length += n_to_use;
         } else {
             break;
         }
     }
+
+    if !batches_to_concat.is_empty() {
+        let array_refs: Vec<&dyn Array> =
+            batches_to_concat.iter().map(|a| a.as_ref()).collect();
+        result = Some(concat(&array_refs)?);
+    }
+
     if running_length != len_to_show {
         return exec_err!(
             "Generated row number should be {len_to_show}, it is {running_length}"
         );
     }
-    result
-        .ok_or_else(|| DataFusionError::Execution("Should contain something".to_string()))
+    result.ok_or_else(|| exec_datafusion_err!("Should contain something"))
 }
 
 /// Constructs a batch from the last row of batch in the argument.
@@ -1223,13 +1243,13 @@ mod tests {
 
     use crate::common::collect;
     use crate::expressions::PhysicalSortExpr;
-    use crate::projection::ProjectionExec;
+    use crate::projection::{ProjectionExec, ProjectionExpr};
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
     use crate::windows::{
         create_udwf_window_expr, create_window_expr, BoundedWindowAggExec, InputOrderMode,
     };
-    use crate::{execute_stream, get_plan_string, ExecutionPlan};
+    use crate::{displayable, execute_stream, ExecutionPlan};
 
     use arrow::array::{
         builder::{Int64Builder, UInt64Builder},
@@ -1375,9 +1395,10 @@ mod tests {
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame),
-                &input.schema(),
+                input.schema(),
                 false,
                 false,
+                None,
             )?],
             input,
             input_order_mode,
@@ -1402,7 +1423,11 @@ mod tests {
                 (expr, name)
             })
             .collect::<Vec<_>>();
-        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+        let proj_exprs: Vec<ProjectionExpr> = exprs
+            .into_iter()
+            .map(|(expr, alias)| ProjectionExpr { expr, alias })
+            .collect();
+        Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
     }
 
     fn task_context_helper() -> TaskContext {
@@ -1445,20 +1470,6 @@ mod tests {
         {
             return Err(exec_datafusion_err!("shouldn't have completed"));
         };
-
-        Ok(results)
-    }
-
-    /// Execute the [ExecutionPlan] and collect the results in memory
-    #[allow(dead_code)]
-    pub async fn collect_bonafide(
-        plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
-    ) -> Result<Vec<RecordBatch>> {
-        let stream = execute_stream(plan, context)?;
-        let mut results = vec![];
-
-        collect_stream(stream, &mut results).await?;
 
         Ok(results)
     }
@@ -1669,16 +1680,11 @@ mod tests {
 
         let batches = collect(physical_plan.execute(0, task_ctx)?).await?;
 
-        let expected = vec![
-            "BoundedWindowAggExec: wdw=[last: Field { name: \"last\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(-1): Field { name: \"nth_value(-1)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(-2): Field { name: \"nth_value(-2)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]",
-            "  DataSourceExec: partitions=1, partition_sizes=[3]",
-        ];
         // Get string representation of the plan
-        let actual = get_plan_string(&physical_plan);
-        assert_eq!(
-            expected, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
+        assert_snapshot!(displayable(physical_plan.as_ref()).indent(true), @r#"
+        BoundedWindowAggExec: wdw=[last: Field { "last": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(-1): Field { "nth_value(-1)": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(-2): Field { "nth_value(-2)": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+          DataSourceExec: partitions=1, partition_sizes=[3]
+        "#);
 
         assert_snapshot!(batches_to_string(&batches), @r#"
             +---+------+---------------+---------------+
@@ -1791,18 +1797,12 @@ mod tests {
 
         let plan = projection_exec(window)?;
 
-        let expected_plan = vec![
-            "ProjectionExec: expr=[sn@0 as sn, hash@1 as hash, count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]@2 as col_2]",
-            "  BoundedWindowAggExec: wdw=[count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]: Field { name: \"count([Column { name: \\\"sn\\\", index: 0 }]) PARTITION BY: [[Column { name: \\\"hash\\\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \\\"sn\\\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, frame: RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING], mode=[Linear]",
-            "    StreamingTableExec: partition_sizes=1, projection=[sn, hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST]",
-        ];
-
         // Get string representation of the plan
-        let actual = get_plan_string(&plan);
-        assert_eq!(
-            expected_plan, actual,
-            "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected_plan:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
+        assert_snapshot!(displayable(plan.as_ref()).indent(true), @r#"
+        ProjectionExec: expr=[sn@0 as sn, hash@1 as hash, count([Column { name: "sn", index: 0 }]) PARTITION BY: [[Column { name: "hash", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: "sn", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]@2 as col_2]
+          BoundedWindowAggExec: wdw=[count([Column { name: "sn", index: 0 }]) PARTITION BY: [[Column { name: "hash", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: "sn", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]: Field { "count([Column { name: \"sn\", index: 0 }]) PARTITION BY: [[Column { name: \"hash\", index: 1 }]], ORDER BY: [[PhysicalSortExpr { expr: Column { name: \"sn\", index: 0 }, options: SortOptions { descending: false, nulls_first: true } }]]": Int64 }, frame: RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING], mode=[Linear]
+            StreamingTableExec: partition_sizes=1, projection=[sn, hash], infinite_source=true, output_ordering=[sn@0 ASC NULLS LAST]
+        "#);
 
         let task_ctx = task_context();
         let batches = collect_with_timeout(plan, task_ctx, timeout_duration).await?;

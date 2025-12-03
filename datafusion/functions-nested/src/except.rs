@@ -22,7 +22,7 @@ use arrow::array::{cast::AsArray, Array, ArrayRef, GenericListArray, OffsetSizeT
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
-use datafusion_common::utils::take_function_args;
+use datafusion_common::utils::{take_function_args, ListCoercion};
 use datafusion_common::{internal_err, HashSet, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -81,7 +81,11 @@ impl Default for ArrayExcept {
 impl ArrayExcept {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::arrays(
+                2,
+                Some(ListCoercion::FixedSizedListToList),
+                Volatility::Immutable,
+            ),
             aliases: vec!["list_except".to_string()],
         }
     }
@@ -122,8 +126,7 @@ impl ScalarUDFImpl for ArrayExcept {
     }
 }
 
-/// Array_except SQL function
-pub fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_except", args)?;
 
     match (array1.data_type(), array2.data_type()) {

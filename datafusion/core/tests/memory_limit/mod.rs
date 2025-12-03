@@ -23,6 +23,7 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
+mod repartition_mem_limit;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
@@ -85,7 +86,8 @@ async fn group_by_none() {
     TestCase::new()
         .with_query("select median(request_bytes) from t")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  AggregateStream"
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  AggregateStream",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -97,7 +99,7 @@ async fn group_by_row_hash() {
     TestCase::new()
         .with_query("select count(*) from t GROUP BY response_bytes")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
         ])
         .with_memory_limit(2_000)
         .run()
@@ -110,7 +112,7 @@ async fn group_by_hash() {
         // group by dict column
         .with_query("select count(*) from t GROUP BY service, host, pod, container")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
         ])
         .with_memory_limit(1_000)
         .run()
@@ -123,7 +125,8 @@ async fn join_by_key_multiple_partitions() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -137,7 +140,8 @@ async fn join_by_key_single_partition() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service = t2.service")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  HashJoinInput",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  HashJoinInput",
         ])
         .with_memory_limit(1_000)
         .with_config(config)
@@ -150,7 +154,7 @@ async fn join_by_expression() {
     TestCase::new()
         .with_query("select t1.* from t t1 JOIN t t2 ON t1.service != t2.service")
         .with_expected_errors(vec![
-           "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]",
+           "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  NestedLoopJoinLoad[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -162,7 +166,8 @@ async fn cross_join() {
     TestCase::new()
         .with_query("select t1.*, t2.* from t t1 CROSS JOIN t t2")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  CrossJoinExec",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  CrossJoinExec",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -218,7 +223,7 @@ async fn symmetric_hash_join() {
             "select t1.* from t t1 JOIN t t2 ON t1.pod = t2.pod AND t1.time = t2.time",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  SymmetricHashJoinStream",
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  SymmetricHashJoinStream",
         ])
         .with_memory_limit(1_000)
         .with_scenario(Scenario::AccessLogStreaming)
@@ -236,7 +241,7 @@ async fn sort_preserving_merge() {
     // so only a merge is needed
         .with_query("select * from t ORDER BY a ASC NULLS LAST, b ASC NULLS LAST LIMIT 10")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  SortPreservingMergeExec",
+            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  SortPreservingMergeExec",
         ])
         // provide insufficient memory to merge
         .with_memory_limit(partition_size / 2)
@@ -315,7 +320,8 @@ async fn sort_spill_reservation() {
 
     test.clone()
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:",
             "B for ExternalSorterMerge",
         ])
         .with_config(config)
@@ -345,7 +351,8 @@ async fn oom_recursive_cte() {
         SELECT * FROM nodes;",
         )
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:\n  RecursiveQuery",
+            "Resources exhausted: Additional allocation failed",
+            "with top memory consumers (across reservations) as:\n  RecursiveQuery",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -397,7 +404,7 @@ async fn oom_with_tracked_consumer_pool() {
         .with_expected_errors(vec![
             "Failed to allocate additional",
             "for ParquetSink(ArrowColumnWriter)",
-            "Additional allocation failed with top memory consumers (across reservations) as:\n  ParquetSink(ArrowColumnWriter)"
+            "Additional allocation failed", "with top memory consumers (across reservations) as:\n  ParquetSink(ArrowColumnWriter)"
         ])
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(
@@ -546,7 +553,7 @@ async fn test_external_sort_zero_merge_reservation() {
 // Tests for disk limit (`max_temp_directory_size` in `DiskManager`)
 // ------------------------------------------------------------------
 
-// Create a new `SessionContext` with speicified disk limit, memory pool limit, and spill compression codec
+// Create a new `SessionContext` with specified disk limit, memory pool limit, and spill compression codec
 async fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
@@ -806,7 +813,7 @@ impl TestCase {
 
     /// Specify an expected plan to review
     pub fn with_expected_plan(mut self, expected_plan: &[&str]) -> Self {
-        self.expected_plan = expected_plan.iter().map(|s| s.to_string()).collect();
+        self.expected_plan = expected_plan.iter().map(|s| (*s).to_string()).collect();
         self
     }
 

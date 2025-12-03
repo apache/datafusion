@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequirements};
@@ -100,6 +100,11 @@ impl Debug for DataSinkExec {
 
 impl DataSinkExec {
     /// Create a plan to write to `sink`
+    /// Note: DataSinkExec requires its input to have a single partition.
+    /// If the input has multiple partitions, the physical optimizer will
+    /// automatically insert a Merge-related operator to merge them.
+    /// If you construct PhysicalPlan without going through the physical optimizer,
+    /// you must ensure that the input has a single partition.
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
@@ -221,9 +226,11 @@ impl ExecutionPlan for DataSinkExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("DataSinkExec can only be called on partition 0!");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "DataSinkExec can only be called on partition 0!"
+        );
         let data = execute_input_stream(
             Arc::clone(&self.input),
             Arc::clone(self.sink.schema()),

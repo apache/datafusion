@@ -27,11 +27,11 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, plan_err, Column, Result};
+use datafusion_common::{assert_or_internal_err, plan_err, Column, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::{conjunction, split_conjunction_owned};
+use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
     exists, in_subquery, lit, not, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
     LogicalPlan, LogicalPlanBuilder, Operator,
@@ -79,11 +79,10 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 .into_iter()
                 .partition(has_subquery);
 
-        if with_subqueries.is_empty() {
-            return internal_err!(
-                "can not find expected subqueries in DecorrelatePredicateSubquery"
-            );
-        }
+        assert_or_internal_err!(
+            !with_subqueries.is_empty(),
+            "can not find expected subqueries in DecorrelatePredicateSubquery"
+        );
 
         // iterate through all exists clauses in predicate, turning each into a join
         let mut cur_input = Arc::unwrap_or_clone(filter.input);
@@ -136,7 +135,7 @@ fn rewrite_inner_subqueries(
         Expr::Exists(Exists {
             subquery: Subquery { subquery, .. },
             negated,
-        }) => match mark_join(&cur_input, Arc::clone(&subquery), None, negated, alias)? {
+        }) => match mark_join(&cur_input, &subquery, None, negated, alias)? {
             Some((plan, exists_expr)) => {
                 cur_input = plan;
                 Ok(Transformed::yes(exists_expr))
@@ -154,13 +153,7 @@ fn rewrite_inner_subqueries(
                 .map_or(plan_err!("single expression required."), |output_expr| {
                     Ok(Expr::eq(*expr.clone(), output_expr))
                 })?;
-            match mark_join(
-                &cur_input,
-                Arc::clone(&subquery),
-                Some(in_predicate),
-                negated,
-                alias,
-            )? {
+            match mark_join(&cur_input, &subquery, Some(&in_predicate), negated, alias)? {
                 Some((plan, exists_expr)) => {
                     cur_input = plan;
                     Ok(Transformed::yes(exists_expr))
@@ -275,7 +268,13 @@ fn build_join_top(
     };
     let subquery = query_info.query.subquery.as_ref();
     let subquery_alias = alias.next("__correlated_sq");
-    build_join(left, subquery, in_predicate_opt, join_type, subquery_alias)
+    build_join(
+        left,
+        subquery,
+        in_predicate_opt.as_ref(),
+        join_type,
+        subquery_alias,
+    )
 }
 
 /// This is used to handle the case when the subquery is embedded in a more complex boolean
@@ -295,8 +294,8 @@ fn build_join_top(
 ///           TableScan: t2
 fn mark_join(
     left: &LogicalPlan,
-    subquery: Arc<LogicalPlan>,
-    in_predicate_opt: Option<Expr>,
+    subquery: &LogicalPlan,
+    in_predicate_opt: Option<&Expr>,
     negated: bool,
     alias_generator: &Arc<AliasGenerator>,
 ) -> Result<Option<(LogicalPlan, Expr)>> {
@@ -306,7 +305,7 @@ fn mark_join(
     let exists_expr = if negated { !exists_col } else { exists_col };
 
     Ok(
-        build_join(left, &subquery, in_predicate_opt, JoinType::LeftMark, alias)?
+        build_join(left, subquery, in_predicate_opt, JoinType::LeftMark, alias)?
             .map(|plan| (plan, exists_expr)),
     )
 }
@@ -314,12 +313,12 @@ fn mark_join(
 fn build_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
-    in_predicate_opt: Option<Expr>,
+    in_predicate_opt: Option<&Expr>,
     join_type: JoinType,
     alias: String,
 ) -> Result<Option<LogicalPlan>> {
     let mut pull_up = PullUpCorrelatedExpr::new()
-        .with_in_predicate_opt(in_predicate_opt.clone())
+        .with_in_predicate_opt(in_predicate_opt.cloned())
         .with_exists_sub_query(in_predicate_opt.is_none());
 
     let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
@@ -342,7 +341,7 @@ fn build_join(
             replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
         })?;
 
-    let join_filter = match (join_filter_opt, in_predicate_opt) {
+    let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
         (
             Some(join_filter),
             Some(Expr::BinaryExpr(BinaryExpr {
@@ -371,6 +370,51 @@ fn build_join(
         (None, None) => lit(true),
         _ => return Ok(None),
     };
+
+    if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
+        let right_schema = sub_query_alias.schema();
+
+        // Gather all columns needed for the join filter + predicates
+        let mut needed = std::collections::HashSet::new();
+        expr_to_columns(&join_filter, &mut needed)?;
+        if let Some(in_pred) = in_predicate_opt {
+            expr_to_columns(in_pred, &mut needed)?;
+        }
+
+        // Keep only columns that actually belong to the RIGHT child, and sort by their
+        // position in the right schema for deterministic order.
+        let mut right_cols_idx_and_col: Vec<(usize, Column)> = needed
+            .into_iter()
+            .filter_map(|c| right_schema.index_of_column(&c).ok().map(|idx| (idx, c)))
+            .collect();
+
+        right_cols_idx_and_col.sort_by_key(|(idx, _)| *idx);
+
+        let right_proj_exprs: Vec<Expr> = right_cols_idx_and_col
+            .into_iter()
+            .map(|(_, c)| Expr::Column(c))
+            .collect();
+
+        let right_projected = if !right_proj_exprs.is_empty() {
+            LogicalPlanBuilder::from(sub_query_alias.clone())
+                .project(right_proj_exprs)?
+                .build()?
+        } else {
+            // Degenerate case: no right columns referenced by the predicate(s)
+            sub_query_alias.clone()
+        };
+        let new_plan = LogicalPlanBuilder::from(left.clone())
+            .join_on(right_projected, join_type, Some(join_filter))?
+            .build()?;
+
+        debug!(
+            "predicate subquery optimized:\n{}",
+            new_plan.display_indent()
+        );
+
+        return Ok(Some(new_plan));
+    }
+
     // join our sub query into the main plan
     let new_plan = LogicalPlanBuilder::from(left.clone())
         .join_on(sub_query_alias, join_type, Some(join_filter))?
@@ -1927,14 +1971,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r#"
+            @r"
         Projection: test.b [b:UInt32]
           LeftSemi Join:  Filter: Boolean(true) [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [arr:Int32;N]
               Unnest: lists[sq.arr|depth=1] structs[] [arr:Int32;N]
-                TableScan: sq [arr:List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]
-        "#
+                TableScan: sq [arr:List(Field { data_type: Int32, nullable: true });N]
+        "
         )
     }
 
@@ -1962,14 +2006,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r#"
+            @r"
         Projection: test.b [b:UInt32]
           LeftSemi Join:  Filter: __correlated_sq_1.a = test.b [a:UInt32, b:UInt32, c:UInt32]
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [a:UInt32;N]
               Unnest: lists[sq.a|depth=1] structs[] [a:UInt32;N]
-                TableScan: sq [a:List(Field { name: "item", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} });N]
-        "#
+                TableScan: sq [a:List(Field { data_type: UInt32, nullable: true });N]
+        "
         )
     }
 

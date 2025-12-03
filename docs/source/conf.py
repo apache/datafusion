@@ -26,16 +26,17 @@
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
-#
-# import os
-# import sys
-# sys.path.insert(0, os.path.abspath('.'))
+import os
+import sys
+
+# To pickup rustdoc_trim.py
+sys.path.insert(0, os.path.abspath(".."))
 
 # -- Project information -----------------------------------------------------
 
-project = 'Apache DataFusion'
-copyright = '2019-2025, Apache Software Foundation'
-author = 'Apache Software Foundation'
+project = "Apache DataFusion"
+copyright = "2019-2025, Apache Software Foundation"
+author = "Apache Software Foundation"
 
 
 # -- General configuration ---------------------------------------------------
@@ -44,24 +45,25 @@ author = 'Apache Software Foundation'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.autosummary',
-    'sphinx.ext.doctest',
-    'sphinx.ext.ifconfig',
-    'sphinx.ext.mathjax',
-    'sphinx.ext.viewcode',
-    'sphinx.ext.napoleon',
-    'myst_parser',
-    'sphinx_reredirects',
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.doctest",
+    "sphinx.ext.ifconfig",
+    "sphinx.ext.mathjax",
+    "sphinx.ext.viewcode",
+    "sphinx.ext.napoleon",
+    "myst_parser",
+    "sphinx_reredirects",
+    "rustdoc_trim",
 ]
 
 source_suffix = {
-    '.rst': 'restructuredtext',
-    '.md': 'markdown',
+    ".rst": "restructuredtext",
+    ".md": "markdown",
 }
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -83,10 +85,16 @@ autosummary_generate = True
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'pydata_sphinx_theme'
+html_theme = "pydata_sphinx_theme"
 
 html_theme_options = {
+     "logo": {
+        "image_light": "_static/images/original.svg", 
+        "image_dark": "_static/images/original_dark.svg", 
+    },
     "use_edit_page_button": True,
+    "navbar_center": [],
+    "navbar_end": ["theme-switcher"],
 }
 
 html_context = {
@@ -99,13 +107,11 @@ html_context = {
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+html_static_path = ["_static"]
 
 html_logo = "_static/images/2x_bgwhite_original.png"
 
-html_css_files = [
-    "theme_overrides.css"
-]
+html_css_files = ["theme_overrides.css"]
 
 html_sidebars = {
     "**": ["docs-sidebar.html"],
@@ -121,7 +127,7 @@ myst_enable_extensions = ["colon_fence", "deflist", "tasklist"]
 # presence of some special characters like: 🚀, å, {,... But this isn’t a major
 # issue for our documentation. So, suppress these warnings to keep our build
 # log cleaner.
-suppress_warnings = ['misc.highlighting_failure']
+suppress_warnings = ["misc.highlighting_failure"]
 
 redirects = {
     "library-user-guide/adding-udfs": "functions/index.html",

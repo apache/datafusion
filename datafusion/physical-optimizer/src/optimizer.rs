@@ -36,12 +36,39 @@ use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
-use crate::coalesce_async_exec_input::CoalesceAsyncExecInput;
+use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
+use datafusion_execution::config::SessionConfig;
 use datafusion_physical_plan::ExecutionPlan;
 
-/// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
+/// Context for optimizing physical plans.
+///
+/// This context provides access to session configuration and optimizer extensions.
+///
+/// Similar to [`TaskContext`] which provides context during execution,
+/// [`OptimizerContext`] provides context during optimization.
+///
+/// [`TaskContext`]: https://docs.rs/datafusion/latest/datafusion/execution/struct.TaskContext.html
+#[derive(Debug, Clone)]
+pub struct OptimizerContext {
+    /// Session configuration
+    session_config: SessionConfig,
+}
+
+impl OptimizerContext {
+    /// Create a new OptimizerContext
+    pub fn new(session_config: SessionConfig) -> Self {
+        Self { session_config }
+    }
+
+    /// Return a reference to the session configuration
+    pub fn session_config(&self) -> &SessionConfig {
+        &self.session_config
+    }
+}
+
+/// `PhysicalOptimizerRule` transforms one [`ExecutionPlan`] into another which
 /// computes the same results, but in a potentially more efficient way.
 ///
 /// Use [`SessionState::add_physical_optimizer_rule`] to register additional
@@ -49,17 +76,57 @@ use datafusion_physical_plan::ExecutionPlan;
 ///
 /// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
 pub trait PhysicalOptimizerRule: Debug {
-    /// Rewrite `plan` to an optimized form
-    fn optimize(
+    /// Rewrite `plan` to an optimized form with additional context
+    ///
+    /// This is the preferred method for implementing optimization rules as it
+    /// provides access to the full optimizer context including session configuration.
+    ///
+    /// The default implementation delegates to [`PhysicalOptimizerRule::optimize`] for
+    /// backwards compatibility with existing implementations.
+    ///
+    /// New implementations should override this method instead of `optimize()`.
+    ///
+    /// Once [`PhysicalOptimizerRule::optimize`] is deprecated and removed, this
+    /// default implementation will be removed and this method will become required.
+    /// This change is scheduled for DataFusion 54.0.0.
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
+        context: &OptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Default implementation: delegate to the old method for backwards compatibility
+        #[allow(deprecated)]
+        self.optimize(plan, context.session_config().options())
+    }
+
+    /// Rewrite `plan` to an optimized form
+    ///
+    /// This method is kept for backwards compatibility. New implementations
+    /// should implement [`optimize_plan`](Self::optimize_plan) instead, which
+    /// provides access to additional context.
+    ///
+    /// The default implementation returns an error indicating that neither
+    /// `optimize` nor `optimize_plan` was properly implemented. At least one
+    /// of these methods must be overridden.
+    #[deprecated(
+        since = "52.0.0",
+        note = "use `PhysicalOptimizerRule::optimize_plan` instead"
+    )]
+    fn optimize(
+        &self,
+        _plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        internal_err!(
+            "PhysicalOptimizerRule '{}' must implement either optimize() or optimize_plan()",
+            self.name()
+        )
+    }
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
-    /// A flag to indicate whether the physical planner should valid the rule will not
+    /// A flag to indicate whether the physical planner should validate that the rule will not
     /// change the schema of the plan after the rewriting.
     /// Some of the optimization rules might change the nullable properties of the schema
     /// and should disable the schema check.
@@ -122,7 +189,6 @@ impl PhysicalOptimizer {
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
-            Arc::new(CoalesceAsyncExecInput::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
@@ -131,6 +197,10 @@ impl PhysicalOptimizer {
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
             // to the aggregation, allowing it to use only y number of accumulators.
             Arc::new(TopKAggregation::new()),
+            // Tries to push limits down through window functions, growing as appropriate
+            // This can possibly be combined with [LimitPushdown]
+            // It needs to come after [EnforceSorting]
+            Arc::new(LimitPushPastWindows::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.

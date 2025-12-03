@@ -26,12 +26,17 @@ use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
+use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
+mod guarantees;
+pub use guarantees::GuaranteeRewriter;
+pub use guarantees::rewrite_with_guarantees;
+pub use guarantees::rewrite_with_guarantees_map;
 mod order_by;
+
 pub use order_by::rewrite_sort_cols_by_aggs;
 
 /// Trait for rewriting [`Expr`]s into function calls.
@@ -355,10 +360,10 @@ mod test {
 
     use super::*;
     use crate::literal::lit_with_metadata;
-    use crate::{col, lit, Cast};
+    use crate::{Cast, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::TreeNodeRewriter;
     use datafusion_common::ScalarValue;
+    use datafusion_common::tree_node::TreeNodeRewriter;
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -434,7 +439,7 @@ mod test {
             vec![Some("tableC".into()), Some("tableC".into())],
             vec!["f", "ff"],
         );
-        let schemas = vec![schema_c, schema_f, schema_b, schema_a];
+        let schemas = [schema_c, schema_f, schema_b, schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
         let normalized_expr =
@@ -477,7 +482,7 @@ mod test {
     ) -> DFSchema {
         let fields = fields
             .iter()
-            .map(|f| Arc::new(Field::new(f.to_string(), DataType::Int8, false)))
+            .map(|f| Arc::new(Field::new((*f).to_string(), DataType::Int8, false)))
             .collect::<Vec<_>>();
         let schema = Arc::new(Schema::new(fields));
         DFSchema::from_field_specific_qualified_schema(qualifiers, &schema).unwrap()

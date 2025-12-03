@@ -28,6 +28,7 @@ use arrow::{
     datatypes::Int32Type,
 };
 use datafusion_common::cast::as_string_view_array;
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
     exec_err, DataFusionError,
@@ -184,15 +185,9 @@ pub fn compute_hex(
     args: &[ColumnarValue],
     lowercase: bool,
 ) -> Result<ColumnarValue, DataFusionError> {
-    if args.len() != 1 {
-        return Err(DataFusionError::Internal(
-            "hex expects exactly one argument".to_string(),
-        ));
-    }
-
-    let input = match &args[0] {
-        ColumnarValue::Scalar(value) => ColumnarValue::Array(value.to_array()?),
-        ColumnarValue::Array(_) => args[0].clone(),
+    let input = match take_function_args("hex", args)? {
+        [ColumnarValue::Scalar(value)] => ColumnarValue::Array(value.to_array()?),
+        [ColumnarValue::Array(arr)] => ColumnarValue::Array(Arc::clone(arr)),
     };
 
     match &input {
@@ -272,7 +267,7 @@ pub fn compute_hex(
                         .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                         .collect::<Result<_, _>>()?,
                     _ => exec_err!(
-                        "hex got an unexpected argument type: {:?}",
+                        "hex got an unexpected argument type: {}",
                         array.data_type()
                     )?,
                 };
@@ -287,10 +282,7 @@ pub fn compute_hex(
 
                 Ok(ColumnarValue::Array(Arc::new(string_array_values)))
             }
-            _ => exec_err!(
-                "hex got an unexpected argument type: {:?}",
-                array.data_type()
-            ),
+            _ => exec_err!("hex got an unexpected argument type: {}", array.data_type()),
         },
         _ => exec_err!("native hex does not support scalar values at this time"),
     }

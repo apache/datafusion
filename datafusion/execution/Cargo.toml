@@ -21,7 +21,7 @@ description = "Execution configuration support for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -38,15 +41,19 @@ workspace = true
 name = "datafusion_execution"
 
 [features]
+default = ["sql"]
+
 parquet_encryption = [
     "parquet/encryption",
 ]
+sql = []
 
 [dependencies]
 arrow = { workspace = true }
+async-trait = { workspace = true }
 dashmap = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
-datafusion-expr = { workspace = true }
+datafusion-common = { workspace = true, default-features = false }
+datafusion-expr = { workspace = true, default-features = false }
 futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true, features = ["fs"] }

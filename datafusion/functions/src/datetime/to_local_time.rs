@@ -20,7 +20,7 @@ use std::ops::Add;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
-use arrow::array::{Array, ArrayRef, PrimitiveBuilder};
+use arrow::array::{ArrayRef, PrimitiveBuilder};
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
@@ -31,10 +31,12 @@ use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
-    exec_err, plan_err, utils::take_function_args, DataFusionError, Result, ScalarValue,
+    exec_err, internal_datafusion_err, internal_err, utils::take_function_args, Result,
+    ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -68,11 +70,11 @@ use datafusion_macros::user_doc;
 FROM (
   SELECT '2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/Brussels' AS time
 );
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
-| time                      | type                                           | to_local_time       | to_local_time_type          |
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
-| 2024-04-01T00:00:20+02:00 | Timestamp(Nanosecond, Some("Europe/Brussels")) | 2024-04-01T00:00:20 | Timestamp(Nanosecond, None) |
-+---------------------------+------------------------------------------------+---------------------+-----------------------------+
++---------------------------+----------------------------------+---------------------+--------------------+
+| time                      | type                             | to_local_time       | to_local_time_type |
++---------------------------+----------------------------------+---------------------+--------------------+
+| 2024-04-01T00:00:20+02:00 | Timestamp(ns, "Europe/Brussels") | 2024-04-01T00:00:20 | Timestamp(ns)      |
++---------------------------+----------------------------------+---------------------+--------------------+
 
 # combine `to_local_time()` with `date_bin()` to bin on boundaries in the timezone rather
 # than UTC boundaries
@@ -110,131 +112,161 @@ impl Default for ToLocalTimeFunc {
 impl ToLocalTimeFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Timestamp)],
+                Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for ToLocalTimeFunc {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "to_local_time"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::Null => Ok(Timestamp(Nanosecond, None)),
+            Timestamp(timeunit, _) => Ok(Timestamp(*timeunit, None)),
+            dt => internal_err!(
+                "The to_local_time function can only accept timestamp as the arg, got {dt}"
+            ),
         }
     }
 
-    fn to_local_time(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let [time_value] = take_function_args(self.name(), args)?;
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
+        let [time_value] = take_function_args(self.name(), &args.args)?;
+        to_local_time(time_value)
+    }
 
-        let arg_type = time_value.data_type();
-        match arg_type {
-            Timestamp(_, None) => {
-                // if no timezone specified, just return the input
-                Ok(time_value.clone())
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+}
+
+fn transform_array<T: ArrowTimestampType>(
+    array: &ArrayRef,
+    tz: Tz,
+) -> Result<ColumnarValue> {
+    let primitive_array = as_primitive_array::<T>(array)?;
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(primitive_array.len());
+    for ts_opt in primitive_array.iter() {
+        match ts_opt {
+            None => builder.append_null(),
+            Some(ts) => {
+                let adjusted_ts: i64 = adjust_to_local_time::<T>(ts, tz)?;
+                builder.append_value(adjusted_ts)
             }
-            // If has timezone, adjust the underlying time value. The current time value
-            // is stored as i64 in UTC, even though the timezone may not be in UTC. Therefore,
-            // we need to adjust the time value to the local time. See [`adjust_to_local_time`]
-            // for more details.
-            //
-            // Then remove the timezone in return type, i.e. return None
-            Timestamp(_, Some(timezone)) => {
-                let tz: Tz = timezone.parse()?;
+        }
+    }
 
-                match time_value {
-                    ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                        Some(ts),
-                        Some(_),
-                    )) => {
-                        let adjusted_ts =
-                            adjust_to_local_time::<TimestampNanosecondType>(*ts, tz)?;
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                            Some(adjusted_ts),
-                            None,
-                        )))
-                    }
-                    ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                        Some(ts),
-                        Some(_),
-                    )) => {
-                        let adjusted_ts =
-                            adjust_to_local_time::<TimestampMicrosecondType>(*ts, tz)?;
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                            Some(adjusted_ts),
-                            None,
-                        )))
-                    }
-                    ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                        Some(ts),
-                        Some(_),
-                    )) => {
-                        let adjusted_ts =
-                            adjust_to_local_time::<TimestampMillisecondType>(*ts, tz)?;
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
-                            Some(adjusted_ts),
-                            None,
-                        )))
-                    }
-                    ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                        Some(ts),
-                        Some(_),
-                    )) => {
-                        let adjusted_ts =
-                            adjust_to_local_time::<TimestampSecondType>(*ts, tz)?;
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampSecond(
-                            Some(adjusted_ts),
-                            None,
-                        )))
-                    }
-                    ColumnarValue::Array(array) => {
-                        fn transform_array<T: ArrowTimestampType>(
-                            array: &ArrayRef,
-                            tz: Tz,
-                        ) -> Result<ColumnarValue> {
-                            let mut builder = PrimitiveBuilder::<T>::new();
+    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+}
 
-                            let primitive_array = as_primitive_array::<T>(array)?;
-                            for ts_opt in primitive_array.iter() {
-                                match ts_opt {
-                                    None => builder.append_null(),
-                                    Some(ts) => {
-                                        let adjusted_ts: i64 =
-                                            adjust_to_local_time::<T>(ts, tz)?;
-                                        builder.append_value(adjusted_ts)
-                                    }
-                                }
-                            }
+fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
+    let arg_type = time_value.data_type();
 
-                            Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-                        }
+    let tz: Tz = match &arg_type {
+        Timestamp(_, Some(timezone)) => timezone.parse()?,
+        Timestamp(_, None) => {
+            // if no timezone specified, just return the input
+            return Ok(time_value.clone());
+        }
+        DataType::Null => {
+            return Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                None, None,
+            )));
+        }
+        dt => {
+            return internal_err!(
+                "to_local_time function requires timestamp argument, got {dt}"
+            )
+        }
+    };
 
-                        match array.data_type() {
-                            Timestamp(_, None) => {
-                                // if no timezone specified, just return the input
-                                Ok(time_value.clone())
-                            }
-                            Timestamp(Nanosecond, Some(_)) => {
-                                transform_array::<TimestampNanosecondType>(array, tz)
-                            }
-                            Timestamp(Microsecond, Some(_)) => {
-                                transform_array::<TimestampMicrosecondType>(array, tz)
-                            }
-                            Timestamp(Millisecond, Some(_)) => {
-                                transform_array::<TimestampMillisecondType>(array, tz)
-                            }
-                            Timestamp(Second, Some(_)) => {
-                                transform_array::<TimestampSecondType>(array, tz)
-                            }
-                            _ => {
-                                exec_err!("to_local_time function requires timestamp argument in array, got {:?}", array.data_type())
-                            }
-                        }
-                    }
-                    _ => {
-                        exec_err!(
-                        "to_local_time function requires timestamp argument, got {:?}",
-                        time_value.data_type()
-                    )
-                    }
-                }
-            }
-            _ => {
-                exec_err!(
-                    "to_local_time function requires timestamp argument, got {:?}",
-                    arg_type
-                )
-            }
+    // If has timezone, adjust the underlying time value. The current time value
+    // is stored as i64 in UTC, even though the timezone may not be in UTC. Therefore,
+    // we need to adjust the time value to the local time. See [`adjust_to_local_time`]
+    // for more details.
+    //
+    // Then remove the timezone in return type, i.e. return None
+    match time_value {
+        ColumnarValue::Scalar(ScalarValue::TimestampSecond(None, Some(_))) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(None, None)),
+        ),
+        ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(None, Some(_))) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(None, None)),
+        ),
+        ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(None, Some(_))) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(None, None)),
+        ),
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(None, Some(_))) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(None, None)),
+        ),
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(ts), Some(_))) => {
+            let adjusted_ts = adjust_to_local_time::<TimestampNanosecondType>(*ts, tz)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(adjusted_ts),
+                None,
+            )))
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(ts), Some(_))) => {
+            let adjusted_ts = adjust_to_local_time::<TimestampMicrosecondType>(*ts, tz)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                Some(adjusted_ts),
+                None,
+            )))
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(Some(ts), Some(_))) => {
+            let adjusted_ts = adjust_to_local_time::<TimestampMillisecondType>(*ts, tz)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                Some(adjusted_ts),
+                None,
+            )))
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampSecond(Some(ts), Some(_))) => {
+            let adjusted_ts = adjust_to_local_time::<TimestampSecondType>(*ts, tz)?;
+            Ok(ColumnarValue::Scalar(ScalarValue::TimestampSecond(
+                Some(adjusted_ts),
+                None,
+            )))
+        }
+        ColumnarValue::Array(array)
+            if matches!(array.data_type(), Timestamp(Nanosecond, Some(_))) =>
+        {
+            transform_array::<TimestampNanosecondType>(array, tz)
+        }
+        ColumnarValue::Array(array)
+            if matches!(array.data_type(), Timestamp(Microsecond, Some(_))) =>
+        {
+            transform_array::<TimestampMicrosecondType>(array, tz)
+        }
+        ColumnarValue::Array(array)
+            if matches!(array.data_type(), Timestamp(Millisecond, Some(_))) =>
+        {
+            transform_array::<TimestampMillisecondType>(array, tz)
+        }
+        ColumnarValue::Array(array)
+            if matches!(array.data_type(), Timestamp(Second, Some(_))) =>
+        {
+            transform_array::<TimestampSecondType>(array, tz)
+        }
+        _ => {
+            internal_err!(
+                "to_local_time function requires timestamp argument, got {arg_type}"
+            )
         }
     }
 }
@@ -326,80 +358,19 @@ fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
         // This should not fail under normal circumstances as the
         // maximum possible offset is 26 hours (93,600 seconds)
         TimeDelta::try_seconds(offset_seconds)
-            .ok_or(DataFusionError::Internal("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000".to_string()))?,
+            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
     );
 
     // convert the naive datetime back to i64
     match T::UNIT {
-        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or(
-            DataFusionError::Internal(
-                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807".to_string(),
-            ),
+        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(||
+            internal_datafusion_err!(
+                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
+            )
         ),
         Microsecond => Ok(adjusted_date_time.timestamp_micros()),
         Millisecond => Ok(adjusted_date_time.timestamp_millis()),
         Second => Ok(adjusted_date_time.timestamp()),
-    }
-}
-
-impl ScalarUDFImpl for ToLocalTimeFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "to_local_time"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [time_value] = take_function_args(self.name(), arg_types)?;
-
-        match time_value {
-            Timestamp(timeunit, _) => Ok(Timestamp(*timeunit, None)),
-            _ => exec_err!(
-                "The to_local_time function can only accept timestamp as the arg, got {:?}", time_value
-            )
-        }
-    }
-
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        let [time_value] = take_function_args(self.name(), args.args)?;
-
-        self.to_local_time(std::slice::from_ref(&time_value))
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return plan_err!(
-                "to_local_time function requires 1 argument, got {:?}",
-                arg_types.len()
-            );
-        }
-
-        let first_arg = arg_types[0].clone();
-        match &first_arg {
-            Timestamp(Nanosecond, timezone) => {
-                Ok(vec![Timestamp(Nanosecond, timezone.clone())])
-            }
-            Timestamp(Microsecond, timezone) => {
-                Ok(vec![Timestamp(Microsecond, timezone.clone())])
-            }
-            Timestamp(Millisecond, timezone) => {
-                Ok(vec![Timestamp(Millisecond, timezone.clone())])
-            }
-            Timestamp(Second, timezone) => Ok(vec![Timestamp(Second, timezone.clone())]),
-            _ => plan_err!("The to_local_time function can only accept Timestamp as the arg got {first_arg}"),
-        }
-    }
-    fn documentation(&self) -> Option<&Documentation> {
-        self.doc()
     }
 }
 
