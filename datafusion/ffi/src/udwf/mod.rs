@@ -15,46 +15,47 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::{
+    ffi::c_void,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
 use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
     StableAbi,
 };
-use arrow::datatypes::Schema;
 use arrow::{
     compute::SortOptions,
-    datatypes::{DataType, SchemaRef},
+    datatypes::{DataType, Schema, SchemaRef},
 };
 use arrow_schema::{Field, FieldRef};
-use datafusion::logical_expr::LimitEffect;
-use datafusion::physical_expr::PhysicalExpr;
 use datafusion::{
-    error::DataFusionError,
+    error::{DataFusionError, Result},
     logical_expr::{
         function::WindowUDFFieldArgs, type_coercion::functions::fields_with_window_udf,
-        PartitionEvaluator,
+        LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
     },
+    physical_expr::PhysicalExpr,
 };
-use datafusion::{
-    error::Result,
-    logical_expr::{Signature, WindowUDF, WindowUDFImpl},
-};
-use datafusion_common::exec_err;
+use datafusion_common::ffi_err;
 use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
 };
-use std::hash::{Hash, Hasher};
-use std::{ffi::c_void, sync::Arc};
 
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
-use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
+use crate::util::FFIResult;
 use crate::{
     arrow_wrappers::WrappedSchema,
     df_result, rresult, rresult_return,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
+    util::{
+        rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
+        vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped,
+    },
     volatility::FFI_Volatility,
 };
 
@@ -72,17 +73,17 @@ pub struct FFI_WindowUDF {
     /// FFI equivalent to the `volatility` of a [`WindowUDF`]
     pub volatility: FFI_Volatility,
 
-    pub partition_evaluator:
-        unsafe extern "C" fn(
-            udwf: &Self,
-            args: FFI_PartitionEvaluatorArgs,
-        ) -> RResult<FFI_PartitionEvaluator, RString>,
+    pub partition_evaluator: unsafe extern "C" fn(
+        udwf: &Self,
+        args: FFI_PartitionEvaluatorArgs,
+    )
+        -> FFIResult<FFI_PartitionEvaluator>,
 
     pub field: unsafe extern "C" fn(
         udwf: &Self,
         input_types: RVec<WrappedSchema>,
         display_name: RString,
-    ) -> RResult<WrappedSchema, RString>,
+    ) -> FFIResult<WrappedSchema>,
 
     /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
@@ -91,7 +92,7 @@ pub struct FFI_WindowUDF {
     pub coerce_types: unsafe extern "C" fn(
         udf: &Self,
         arg_types: RVec<WrappedSchema>,
-    ) -> RResult<RVec<WrappedSchema>, RString>,
+    ) -> FFIResult<RVec<WrappedSchema>>,
 
     pub sort_options: ROption<FFI_SortOptions>,
 
@@ -129,7 +130,7 @@ impl FFI_WindowUDF {
 unsafe extern "C" fn partition_evaluator_fn_wrapper(
     udwf: &FFI_WindowUDF,
     args: FFI_PartitionEvaluatorArgs,
-) -> RResult<FFI_PartitionEvaluator, RString> {
+) -> FFIResult<FFI_PartitionEvaluator> {
     let inner = udwf.inner();
 
     let args = rresult_return!(ForeignPartitionEvaluatorArgs::try_from(args));
@@ -143,7 +144,7 @@ unsafe extern "C" fn field_fn_wrapper(
     udwf: &FFI_WindowUDF,
     input_fields: RVec<WrappedSchema>,
     display_name: RString,
-) -> RResult<WrappedSchema, RString> {
+) -> FFIResult<WrappedSchema> {
     let inner = udwf.inner();
 
     let input_fields = rresult_return!(rvec_wrapped_to_vec_fieldref(&input_fields));
@@ -161,7 +162,7 @@ unsafe extern "C" fn field_fn_wrapper(
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udwf: &FFI_WindowUDF,
     arg_types: RVec<WrappedSchema>,
-) -> RResult<RVec<WrappedSchema>, RString> {
+) -> FFIResult<RVec<WrappedSchema>> {
     let inner = udwf.inner();
 
     let arg_fields = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types))
@@ -180,8 +181,10 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) {
+    debug_assert!(!udwf.private_data.is_null());
     let private_data = Box::from_raw(udwf.private_data as *mut WindowUDFPrivateData);
     drop(private_data);
+    udwf.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
@@ -347,7 +350,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
             let schema: SchemaRef = schema.into();
 
             match schema.fields().is_empty() {
-                true => exec_err!(
+                true => ffi_err!(
                     "Unable to retrieve field in WindowUDF via FFI - schema has no fields"
                 ),
                 false => Ok(schema.field(0).to_owned().into()),
@@ -394,14 +397,19 @@ impl From<&FFI_SortOptions> for SortOptions {
 #[cfg(test)]
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use crate::tests::create_record_batch;
-    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
-    use arrow::array::{create_array, ArrayRef};
-    use datafusion::functions_window::lead_lag::{lag_udwf, WindowShift};
-    use datafusion::logical_expr::expr::Sort;
-    use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
-    use datafusion::prelude::SessionContext;
     use std::sync::Arc;
+
+    use arrow::array::{create_array, ArrayRef};
+    use datafusion::{
+        functions_window::lead_lag::{lag_udwf, WindowShift},
+        logical_expr::{col, expr::Sort, ExprFunctionExt, WindowUDF, WindowUDFImpl},
+        prelude::SessionContext,
+    };
+
+    use crate::{
+        tests::create_record_batch,
+        udwf::{FFI_WindowUDF, ForeignWindowUDF},
+    };
 
     fn create_test_foreign_udwf(
         original_udwf: impl WindowUDFImpl + 'static,

@@ -110,8 +110,8 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
     let mut datetime_str = s;
     let mut format = format;
 
-    // we manually handle the most common case of a named timezone at the end of the timestamp
-    // not that %+ handles 'Z' at the end of the string without a space. This code doesn't
+    // Manually handle the most common case of a named timezone at the end of the timestamp.
+    // Note that %+ handles 'Z' at the end of the string without a space. This code doesn't
     // handle named timezones with no preceding space since that would require writing a
     // custom parser (or switching to Jiff)
     let tz: Option<chrono_tz::Tz> = if format.ends_with(" %Z") {

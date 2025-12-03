@@ -16,7 +16,7 @@
 // under the License.
 
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
+    std_types::{RResult, RVec},
     StableAbi,
 };
 use arrow::{array::ArrayRef, error::ArrowError};
@@ -29,6 +29,7 @@ use prost::Message;
 use std::ptr::null_mut;
 use std::{ffi::c_void, ops::Deref};
 
+use crate::util::FFIResult;
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`Accumulator`] across FFI boundaries.
@@ -41,26 +42,24 @@ pub struct FFI_Accumulator {
     pub update_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
         values: RVec<WrappedArray>,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     // Evaluate and return a ScalarValues as protobuf bytes
-    pub evaluate:
-        unsafe extern "C" fn(accumulator: &mut Self) -> RResult<RVec<u8>, RString>,
+    pub evaluate: unsafe extern "C" fn(accumulator: &mut Self) -> FFIResult<RVec<u8>>,
 
     pub size: unsafe extern "C" fn(accumulator: &Self) -> usize,
 
-    pub state:
-        unsafe extern "C" fn(accumulator: &mut Self) -> RResult<RVec<RVec<u8>>, RString>,
+    pub state: unsafe extern "C" fn(accumulator: &mut Self) -> FFIResult<RVec<RVec<u8>>>,
 
     pub merge_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
         states: RVec<WrappedArray>,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     pub retract_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
         values: RVec<WrappedArray>,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     pub supports_retract_batch: bool,
 
@@ -101,7 +100,7 @@ impl FFI_Accumulator {
 unsafe extern "C" fn update_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
-) -> RResult<(), RString> {
+) -> FFIResult<()> {
     let accumulator = accumulator.inner_mut();
 
     let values_arrays = values
@@ -115,7 +114,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
-) -> RResult<RVec<u8>, RString> {
+) -> FFIResult<RVec<u8>> {
     let accumulator = accumulator.inner_mut();
 
     let scalar_result = rresult_return!(accumulator.evaluate());
@@ -131,7 +130,7 @@ unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_Accumulator) -> usize {
 
 unsafe extern "C" fn state_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
-) -> RResult<RVec<RVec<u8>>, RString> {
+) -> FFIResult<RVec<RVec<u8>>> {
     let accumulator = accumulator.inner_mut();
 
     let state = rresult_return!(accumulator.state());
@@ -151,7 +150,7 @@ unsafe extern "C" fn state_fn_wrapper(
 unsafe extern "C" fn merge_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     states: RVec<WrappedArray>,
-) -> RResult<(), RString> {
+) -> FFIResult<()> {
     let accumulator = accumulator.inner_mut();
 
     let states = rresult_return!(states
@@ -165,7 +164,7 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
 unsafe extern "C" fn retract_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
-) -> RResult<(), RString> {
+) -> FFIResult<()> {
     let accumulator = accumulator.inner_mut();
 
     let values_arrays = values
@@ -182,6 +181,7 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
         let private_data =
             Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
         drop(private_data);
+        accumulator.private_data = null_mut();
     }
 }
 
