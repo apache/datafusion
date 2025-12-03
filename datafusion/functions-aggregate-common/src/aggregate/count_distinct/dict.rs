@@ -18,7 +18,7 @@
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::downcast_dictionary_array;
 use datafusion_common::internal_err;
-use datafusion_common::{arrow_datafusion_err, ScalarValue};
+use datafusion_common::{ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::Accumulator;
 
 #[derive(Debug)]
