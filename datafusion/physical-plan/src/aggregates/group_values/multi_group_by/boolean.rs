@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::aggregates::group_values::multi_group_by::Nulls;
+use crate::aggregates::group_values::multi_group_by::{FixedBitPackedMutableBuffer, Nulls};
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{Array as _, ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
@@ -81,19 +81,18 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut FixedBitPackedMutableBuffer,
     ) {
         let array = array.as_boolean();
 
         let iter = izip!(
             lhs_rows.iter(),
             rhs_rows.iter(),
-            equal_to_results.iter_mut(),
         );
 
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+        for (index, (&lhs_row, &rhs_row)) in iter.enumerate() {
             // Has found not equal to in previous column, don't need to check
-            if !*equal_to_result {
+            if !equal_to_results.0.get_bit(index) {
                 continue;
             }
 
@@ -101,12 +100,12 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
                 let exist_null = self.nulls.is_null(lhs_row);
                 let input_null = array.is_null(rhs_row);
                 if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                    *equal_to_result = result;
+                    equal_to_results.0.set_bit(index, result);
                     continue;
                 }
             }
 
-            *equal_to_result = self.buffer.get_bit(lhs_row) == array.value(rhs_row);
+            equal_to_results.0.set_bit(index, self.buffer.get_bit(lhs_row) == array.value(rhs_row));
         }
     }
 
@@ -213,7 +212,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
                 equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
@@ -237,7 +236,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
             builder.vectorized_equal_to(
                 lhs_rows,
                 input_array,
@@ -257,7 +256,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut FixedBitPackedMutableBuffer,
         ),
     {
         // Will cover such cases:
@@ -302,7 +301,7 @@ mod tests {
         let input_array = Arc::new(BooleanArray::new(values, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(builder.len());
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5],
@@ -310,6 +309,7 @@ mod tests {
             &[0, 1, 2, 3, 4, 5],
             &mut equal_to_results,
         );
+        let equal_to_results: Vec<bool> = equal_to_results.into();
 
         assert!(!equal_to_results[0]);
         assert!(equal_to_results[1]);
@@ -357,7 +357,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
             builder.vectorized_equal_to(
                 lhs_rows,
                 input_array,
@@ -377,7 +377,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut FixedBitPackedMutableBuffer,
         ),
     {
         // Will cover such cases:
@@ -403,7 +403,7 @@ mod tests {
         ])) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(builder.len());
         equal_to(
             &builder,
             &[0, 1, 2, 3],
@@ -411,6 +411,7 @@ mod tests {
             &[0, 1, 2, 3],
             &mut equal_to_results,
         );
+        let equal_to_results: Vec<bool> = equal_to_results.into();
 
         assert!(equal_to_results[0]);
         assert!(!equal_to_results[1]);
@@ -432,13 +433,14 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(all_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let equal_to_results: Vec<bool> = equal_to_results.into();
 
         assert!(equal_to_results[0]);
         assert!(equal_to_results[1]);
@@ -458,13 +460,14 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(all_not_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let equal_to_results: Vec<bool> = equal_to_results.into();
 
         assert!(equal_to_results[0]);
         assert!(equal_to_results[1]);

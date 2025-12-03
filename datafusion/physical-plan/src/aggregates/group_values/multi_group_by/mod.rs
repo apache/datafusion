@@ -21,16 +21,17 @@ mod boolean;
 mod bytes;
 pub mod bytes_view;
 pub mod primitive;
+mod helper;
 
 use std::mem::{self, size_of};
-
+use std::ops::Index;
 use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
 };
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, RecordBatch};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
@@ -50,6 +51,39 @@ use hashbrown::hash_table::HashTable;
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
+
+pub struct FixedBitPackedMutableBuffer(BooleanBufferBuilder);
+
+impl FixedBitPackedMutableBuffer {
+    pub(crate) fn new_set(size: usize) -> Self {
+        let mut builder = BooleanBufferBuilder::new(size);
+        builder.append_n(size, true);
+        Self(builder)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn set_bit(&mut self, index: usize, value: bool) {
+        self.0.set_bit(index, value);
+    }
+}
+
+impl Index<usize> for FixedBitPackedMutableBuffer {
+    type Output = bool;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0.get_bit(index)
+    }
+}
+
+#[cfg(test)]
+impl From<FixedBitPackedMutableBuffer> for Vec<bool> {
+    fn from(mut value: FixedBitPackedMutableBuffer) -> Self {
+        value.0.finish().into_iter().collect()
+    }
+}
 
 /// Trait for storing a single column of group values in [`GroupValuesColumn`]
 ///
@@ -82,7 +116,7 @@ pub trait GroupColumn: Send + Sync {
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut FixedBitPackedMutableBuffer,
     );
 
     /// The vectorized version `append_val`
@@ -224,7 +258,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
 
 /// Buffers to store intermediate results in `vectorized_append`
 /// and `vectorized_equal_to`, for reducing memory allocation
-#[derive(Default)]
 struct VectorizedOperationBuffers {
     /// The `vectorized append` row indices buffer
     append_row_indices: Vec<usize>,
@@ -236,7 +269,7 @@ struct VectorizedOperationBuffers {
     equal_to_group_indices: Vec<usize>,
 
     /// The `vectorized_equal_to` result buffer
-    equal_to_results: Vec<bool>,
+    equal_to_results: BooleanBufferBuilder,
 
     /// The buffer for storing row indices found not equal to
     /// exist groups in `group_values` in `vectorized_equal_to`.
@@ -249,8 +282,20 @@ impl VectorizedOperationBuffers {
         self.append_row_indices.clear();
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
-        self.equal_to_results.clear();
+        self.equal_to_results.truncate(0);
         self.remaining_row_indices.clear();
+    }
+}
+
+impl Default for VectorizedOperationBuffers {
+    fn default() -> Self {
+        Self {
+            append_row_indices: Vec::default(),
+            equal_to_row_indices: Vec::default(),
+            equal_to_group_indices: Vec::default(),
+            equal_to_results: BooleanBufferBuilder::new(0),
+            remaining_row_indices: Vec::default(),
+        }
     }
 }
 
@@ -617,21 +662,23 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         // 1. Perform `vectorized_equal_to` for `rows` in `vectorized_equal_to_group_indices`
         //    and `group_indices` in `vectorized_equal_to_group_indices`
         let mut equal_to_results =
-            mem::take(&mut self.vectorized_operation_buffers.equal_to_results);
-        equal_to_results.clear();
-        equal_to_results.resize(
+            mem::replace(&mut self.vectorized_operation_buffers.equal_to_results, BooleanBufferBuilder::new(0));
+        equal_to_results.truncate(0);
+        equal_to_results.append_n(
             self.vectorized_operation_buffers
                 .equal_to_group_indices
                 .len(),
             true,
         );
+        let mut fixed_bit_packed_equal_to_results =
+            FixedBitPackedMutableBuffer(equal_to_results);
 
         for (col_idx, group_col) in self.group_values.iter().enumerate() {
             group_col.vectorized_equal_to(
                 &self.vectorized_operation_buffers.equal_to_group_indices,
                 &cols[col_idx],
                 &self.vectorized_operation_buffers.equal_to_row_indices,
-                &mut equal_to_results,
+                &mut fixed_bit_packed_equal_to_results,
             );
         }
 
@@ -644,7 +691,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .iter()
             .enumerate()
         {
-            let equal_to_result = equal_to_results[idx];
+            let equal_to_result = fixed_bit_packed_equal_to_results[idx];
 
             // Equal to case, set the `group_indices` to `rows` in `groups`
             if equal_to_result {

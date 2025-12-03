@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_group_by::{
-    nulls_equal_to, GroupColumn, Nulls,
-};
+use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, FixedBitPackedMutableBuffer, GroupColumn, Nulls};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{
     types::GenericStringType, Array, ArrayRef, AsArray, BufferBuilder,
@@ -32,6 +30,8 @@ use itertools::izip;
 use std::mem::size_of;
 use std::sync::Arc;
 use std::vec;
+use arrow::util::bit_util::apply_bitwise_unary_op;
+use crate::aggregates::group_values::multi_group_by::helper::CollectBool;
 
 /// An implementation of [`GroupColumn`] for binary and utf8 types.
 ///
@@ -106,26 +106,50 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut FixedBitPackedMutableBuffer,
     ) where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
 
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
 
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to, don't need to check
-            if !*equal_to_result {
-                continue;
+        assert_eq!(lhs_rows.len(), rhs_rows.len());
+        assert_eq!(lhs_rows.len(), equal_to_results.len());
+
+        // TODO - skip to the first true bit in equal_to_results to avoid unnecessary work
+        //        in iterating over unnecessary bits oe even get a slice of starting from first true bit to the last true bit
+
+        // TODO - do not assume for byte aligned, added here just for POC
+        let mut index = 0;
+        let num_rows = lhs_rows.len();
+        apply_bitwise_unary_op(
+            equal_to_results.0.as_slice_mut(),
+            0,
+            lhs_rows.len(),
+            |eq| {
+                // If already false, skip 64 items
+                if eq == 0 {
+                    index += 64;
+                    return 0;
+                }
+
+                let result = u64::collect_bool(
+                    num_rows - index,
+                    // Using rest true as we don't wanna change bits beyond num_rows
+                    true,
+                    |bit_idx| {
+                        if !eq.get_bit(bit_idx) {
+                           return false;
+                        }
+                        let current_index = index + bit_idx;
+                        self.do_equal_to_inner(lhs_rows[current_index], array, rhs_rows[current_index])
+                    }
+                );
+
+                index += 64;
+                eq & result
             }
-
-            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
-        }
+        );
     }
 
     fn vectorized_append_inner<B>(
@@ -275,7 +299,7 @@ where
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut FixedBitPackedMutableBuffer,
     ) {
         // Sanity array type
         match self.output_type {
@@ -433,10 +457,11 @@ mod tests {
     use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::bytes::ByteGroupValueBuilder;
-    use arrow::array::{ArrayRef, NullBufferBuilder, StringArray};
+    use arrow::array::{ArrayRef, BooleanBufferBuilder, NullBufferBuilder, StringArray};
+    use itertools::Itertools;
     use datafusion_common::DataFusionError;
     use datafusion_physical_expr::binary_map::OutputType;
-
+    use crate::aggregates::group_values::multi_group_by::FixedBitPackedMutableBuffer;
     use super::GroupColumn;
 
     #[test]
@@ -520,10 +545,10 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
+                equal_to_results.set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
             }
         };
 
@@ -544,7 +569,7 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
             builder.vectorized_equal_to(
                 lhs_rows,
                 input_array,
@@ -575,7 +600,12 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+
+        let mut equal_to_results = FixedBitPackedMutableBuffer({
+            let mut b = BooleanBufferBuilder::new(all_nulls_input_array.len());
+            b.append_n(all_nulls_input_array.len(), true);
+            b
+        });
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
@@ -601,7 +631,7 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(all_not_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
@@ -624,7 +654,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut FixedBitPackedMutableBuffer,
         ),
     {
         // Will cover such cases:
@@ -670,7 +700,11 @@ mod tests {
             Arc::new(StringArray::new(offsets, buffer, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer({
+            let mut b = BooleanBufferBuilder::new(builder.len());
+            b.append_n(builder.len(), true);
+            b
+        });
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5],
@@ -678,6 +712,8 @@ mod tests {
             &[0, 1, 2, 3, 4, 5],
             &mut equal_to_results,
         );
+
+        let equal_to_results = equal_to_results.0.finish().iter().collect_vec();
 
         assert!(!equal_to_results[0]);
         assert!(equal_to_results[1]);
