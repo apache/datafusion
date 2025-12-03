@@ -2906,7 +2906,8 @@ fn test_default_codec_legacy_empty_buffer() -> Result<()> {
     codec.try_encode_file_format(&mut re_encoded, decoded.clone())?;
 
     // Re-encoded Arrow format should decode back to Arrow
-    let re_decoded = codec.try_decode_file_format(&re_encoded, ctx.task_ctx().as_ref())?;
+    let re_decoded =
+        codec.try_decode_file_format(&re_encoded, ctx.task_ctx().as_ref())?;
     assert_eq!(
         re_decoded.get_ext(),
         "arrow",
@@ -2942,7 +2943,8 @@ fn test_default_codec_legacy_raw_bytes_roundtrip() -> Result<()> {
     json_codec.try_encode_file_format(&mut json_raw, json_factory.clone())?;
 
     // DefaultLogicalExtensionCodec should decode raw JSON bytes via roundtrip
-    let decoded_json = codec.try_decode_file_format(&json_raw, ctx.task_ctx().as_ref())?;
+    let decoded_json =
+        codec.try_decode_file_format(&json_raw, ctx.task_ctx().as_ref())?;
     decoded_json
         .as_ref()
         .as_any()
@@ -2956,7 +2958,8 @@ fn test_default_codec_legacy_raw_bytes_roundtrip() -> Result<()> {
     parquet_codec.try_encode_file_format(&mut parquet_raw, parquet_factory.clone())?;
 
     // DefaultLogicalExtensionCodec should decode raw Parquet bytes via roundtrip
-    let decoded_parquet = codec.try_decode_file_format(&parquet_raw, ctx.task_ctx().as_ref())?;
+    let decoded_parquet =
+        codec.try_decode_file_format(&parquet_raw, ctx.task_ctx().as_ref())?;
     decoded_parquet
         .as_ref()
         .as_any()

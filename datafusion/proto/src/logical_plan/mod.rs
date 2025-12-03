@@ -34,12 +34,12 @@ use crate::{
 
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
+use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     assert_or_internal_err, context, exec_err, internal_datafusion_err, internal_err,
     not_impl_err, plan_err, DataFusionError, Result, TableReference, ToDFSchema,
 };
-use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
     file_type_to_format, format_as_file_type, FileFormatFactory,
