@@ -332,6 +332,102 @@ let config = FileScanConfigBuilder::new(url, source)
 
 **Handling projections in `FileSource`:**
 
+### `PhysicalOptimizerRule::optimize` deprecated in favor of `optimize_plan`
+
+The `PhysicalOptimizerRule` trait has been updated to provide optimizer rules with access to broader session context. A new method `optimize_plan` has been added that accepts an `OptimizerContext` parameter, and the existing `optimize` method has been deprecated.
+
+**Who is affected:**
+
+- Users who have implemented custom `PhysicalOptimizerRule` implementations
+
+**Breaking changes:**
+
+1. **New `optimize_plan` method**: This is the preferred method for implementing optimization rules. It provides access to the full `SessionConfig` through `OptimizerContext`, rather than just `ConfigOptions`.
+
+2. **`optimize` method deprecated**: The old `optimize` method that takes `&ConfigOptions` is now deprecated and will be removed in DataFusion 58.0.0.
+
+**Migration guide:**
+
+If you have a custom `PhysicalOptimizerRule` implementation, update it to implement `optimize_plan` instead of `optimize`:
+
+**Before:**
+
+```rust
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_physical_plan::ExecutionPlan;
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct MyOptimizerRule;
+
+#[allow(deprecated)]
+impl PhysicalOptimizerRule for MyOptimizerRule {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Use config.optimizer, config.execution, etc.
+        // ... optimization logic ...
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+```
+
+**After:**
+
+```rust
+use datafusion::physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
+use datafusion_common::Result;
+use datafusion_physical_plan::ExecutionPlan;
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct MyOptimizerRule;
+
+impl PhysicalOptimizerRule for MyOptimizerRule {
+    fn optimize_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &OptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Access ConfigOptions through session_config
+        let _config = context.session_config().options();
+        // Or access extensions through session_config
+        let _extensions = context.session_config().extensions();
+        // ... optimization logic ...
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+```
+
+**What is `OptimizerContext`?**
+
+`OptimizerContext` is a new struct that provides context during physical plan optimization, similar to how `TaskContext` provides context during execution. It wraps `SessionConfig`, giving optimizer rules access to:
+
+- Configuration options via `context.session_config().options()`
+- Session extensions via `context.session_config().extensions()`
+
+This enables optimizer rules to access custom extensions registered with the session, which was not possible with the old `&ConfigOptions` parameter.
+
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0

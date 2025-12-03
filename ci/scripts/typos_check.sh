@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,35 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Security audit
-
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-
-  pull_request:
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-  
-  merge_group:
-
-jobs:
-  security_audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@92e6dd1c202153a204d471a3c509bf1e03dcfa44  # v2.62.61
-        with:
-          tool: cargo-audit
-      - name: Run audit check
-        run: cargo audit
+set -ex
+# To use this script, you must have installed `typos`, for example:
+# cargo install typos-cli --locked --version 1.37.0
+typos --config typos.toml

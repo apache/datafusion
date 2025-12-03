@@ -19,20 +19,20 @@
 
 use arrow::array::{
     ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
     DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
+    Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
     IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray,
     LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::{
-    downcast_value, internal_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, downcast_value, internal_err,
 };
 use datafusion_expr_common::accumulator::Accumulator;
 use std::{cmp::Ordering, mem::size_of_val};
@@ -108,7 +108,9 @@ macro_rules! interval_min_max {
             Some(choose_min_max!($OP)) => $RHS.clone(),
             Some(_) => $LHS.clone(),
             None => {
-                return internal_err!("Comparison error while computing interval min/max")
+                return internal_err!(
+                    "Comparison error while computing interval min/max"
+                );
             }
         }
     }};
