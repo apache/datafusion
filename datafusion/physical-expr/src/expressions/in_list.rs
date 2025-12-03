@@ -632,10 +632,7 @@ pub fn in_list(
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(InListExpr::try_from_static_filter(
-        Arc::clone(&expr),
-        list.clone(),
-        *negated,
-        schema,
+        expr, list, *negated, schema,
     )?))
 }
 
