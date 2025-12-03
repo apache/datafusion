@@ -142,7 +142,7 @@ The columns of the returned table are:
 
 Similarly to the `metadata_cache`, the `statistics_cache` function can be used to show information
 about the File Statistics Cache that is used by the [`ListingTable`] implementation in DataFusion.
-For the statistics to collected, the config `datafusion.execution.collect_statistics` must be
+For the statistics to be collected, the config `datafusion.execution.collect_statistics` must be
 enabled.
 
 You can inspect the metadata cache by querying the `metadata_cache` function. For example:
