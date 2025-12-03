@@ -43,7 +43,6 @@ use datafusion_common::{
     assert_eq_or_internal_err, assert_or_internal_err, internal_datafusion_err,
     internal_err, not_impl_err, plan_err, Column, Result, ScalarValue,
 };
-use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
@@ -1785,6 +1784,7 @@ mod tests {
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::{Spans, TableReference};
+    use datafusion_common::datatype::DataTypeExt;
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,

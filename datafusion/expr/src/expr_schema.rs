@@ -1,4 +1,4 @@
-// Licensed to the Apache Software Foundation (ASF) under one
+    // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -506,7 +506,7 @@ impl ExprSchemable for Expr {
                 Ok(Arc::clone(field).renamed(&schema_name))
             }
             Expr::ScalarVariable(field, _) => {
-                Ok(Arc::new(field.as_ref().clone().with_name(&schema_name)))
+                Ok(Arc::clone(field).renamed(&schema_name))
             }
             Expr::Literal(l, metadata) => Ok(Arc::new(
                 Field::new(&schema_name, l.data_type(), l.is_null())
