@@ -40,9 +40,9 @@ pub trait FileStatisticsCache:
     fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// Represents information about a cached statistics entry.
 /// This is used to expose the statistics cache contents to outside modules.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStatisticsCacheEntry {
     pub object_meta: ObjectMeta,
     /// Number of table rows.
