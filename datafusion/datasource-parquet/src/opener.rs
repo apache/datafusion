@@ -68,6 +68,8 @@ pub(super) struct ParquetOpener {
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
     pub limit: Option<usize>,
+    /// If should keep the output rows in order
+    pub preserve_order: bool,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Schema of the output table without partition columns.
@@ -162,6 +164,8 @@ impl FileOpener for ParquetOpener {
         #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
+
+        let preserve_order = self.preserve_order;
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -407,8 +411,12 @@ impl FileOpener for ParquetOpener {
                     .add_matched(n_remaining_row_groups);
             }
 
-            let mut access_plan = row_groups.build();
+            // Prune by limit if limit is set and limit order is not sensitive
+            if let (Some(limit), false) = (limit, preserve_order) {
+                row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
+            }
 
+            let mut access_plan = row_groups.build();
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
@@ -877,6 +885,7 @@ mod test {
                 projection: Arc::new([0, 1]),
                 batch_size: 1024,
                 limit: None,
+                preserve_order: false,
                 predicate: Some(predicate),
                 logical_file_schema: schema.clone(),
                 metadata_size_hint: None,
@@ -946,6 +955,7 @@ mod test {
                 projection: Arc::new([0]),
                 batch_size: 1024,
                 limit: None,
+                preserve_order: false,
                 predicate: Some(predicate),
                 logical_file_schema: file_schema.clone(),
                 metadata_size_hint: None,
@@ -1035,6 +1045,7 @@ mod test {
                 projection: Arc::new([0]),
                 batch_size: 1024,
                 limit: None,
+                preserve_order: false,
                 predicate: Some(predicate),
                 logical_file_schema: file_schema.clone(),
                 metadata_size_hint: None,
@@ -1127,6 +1138,7 @@ mod test {
                 projection: Arc::new([0]),
                 batch_size: 1024,
                 limit: None,
+                preserve_order: false,
                 predicate: Some(predicate),
                 logical_file_schema: file_schema.clone(),
                 metadata_size_hint: None,
@@ -1219,6 +1231,7 @@ mod test {
                 projection: Arc::new([0]),
                 batch_size: 1024,
                 limit: None,
+                preserve_order: false,
                 predicate: Some(predicate),
                 logical_file_schema: file_schema.clone(),
                 metadata_size_hint: None,
@@ -1373,6 +1386,7 @@ mod test {
             projection: Arc::new([0, 1]),
             batch_size: 1024,
             limit: None,
+            preserve_order: false,
             predicate: Some(predicate),
             logical_file_schema: Arc::clone(&table_schema),
             metadata_size_hint: None,

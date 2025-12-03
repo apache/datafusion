@@ -259,6 +259,7 @@ fn optimize_projections(
                 projection,
                 filters,
                 fetch,
+                preserve_order,
                 projected_schema: _,
             } = table_scan;
 
@@ -268,15 +269,11 @@ fn optimize_projections(
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            return TableScan::try_new(
-                table_name,
-                source,
-                Some(projection),
-                filters,
-                fetch,
-            )
-            .map(LogicalPlan::TableScan)
-            .map(Transformed::yes);
+            let mut new_scan =
+                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+            new_scan.preserve_order = preserve_order;
+
+            return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }
         // Other node types are handled below
         _ => {}

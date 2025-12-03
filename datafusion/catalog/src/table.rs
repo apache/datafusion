@@ -336,6 +336,7 @@ pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
     projection: Option<&'a [usize]>,
     limit: Option<usize>,
+    preserve_order: bool,
 }
 
 impl<'a> ScanArgs<'a> {
@@ -396,6 +397,17 @@ impl<'a> ScanArgs<'a> {
     /// Returns the row limit, or `None` if no limit was specified.
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+
+    /// Set whether should keep the output rows in order
+    pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
+        self.preserve_order = order_sensitive;
+        self
+    }
+
+    /// Get whether should keep the output rows in order
+    pub fn preserve_order(&self) -> bool {
+        self.preserve_order
     }
 }
 
