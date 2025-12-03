@@ -34,11 +34,49 @@ use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, Pushe
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use object_store::ObjectStore;
 
 /// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
     Arc::new(source)
+}
+
+/// Result of attempting to push down sort ordering to a file source
+#[derive(Debug, Clone)]
+pub enum SortOrderPushdownResult<T> {
+    /// The source can guarantee exact ordering (data is perfectly sorted)
+    Exact { inner: T },
+    /// The source has optimized for the ordering but cannot guarantee perfect sorting
+    /// (e.g., reordered files/row groups based on statistics)
+    Inexact { inner: T },
+    /// The source cannot optimize for this ordering
+    Unsupported,
+}
+
+impl<T> SortOrderPushdownResult<T> {
+    /// Returns true if the result is Exact
+    pub fn is_exact(&self) -> bool {
+        matches!(self, Self::Exact { .. })
+    }
+
+    /// Returns true if the result is Inexact
+    pub fn is_inexact(&self) -> bool {
+        matches!(self, Self::Inexact { .. })
+    }
+
+    /// Returns true if optimization was successful (Exact or Inexact)
+    pub fn is_supported(&self) -> bool {
+        !matches!(self, Self::Unsupported)
+    }
+
+    /// Extract the inner value if present
+    pub fn into_inner(self) -> Option<T> {
+        match self {
+            Self::Exact { inner } | Self::Inexact { inner } => Some(inner),
+            Self::Unsupported => None,
+        }
+    }
 }
 
 /// file format specific behaviors for elements in [`DataSource`]
@@ -127,6 +165,21 @@ pub trait FileSource: Send + Sync {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to create a new FileSource that can produce data in the specified sort order.
+    ///
+    /// # Returns
+    /// * `Exact` - Created a source that guarantees perfect ordering
+    /// * `Inexact` - Created a source optimized for ordering (e.g., reordered files) but not perfectly sorted
+    /// * `Unsupported` - Cannot optimize for this ordering
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
     }
 
     /// Try to push down a projection into a this FileSource.
