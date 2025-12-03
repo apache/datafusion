@@ -463,8 +463,8 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
-    use datafusion_common::stats::Precision;
     use datafusion_common::Statistics;
+    use datafusion_common::stats::Precision;
     use object_store::ObjectMeta;
     use object_store::path::Path;
 

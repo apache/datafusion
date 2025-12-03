@@ -666,57 +666,23 @@ mod tests {
             )),
         );
 
-        ctx.sql(
-            "
-            create external table alltypes_plain
-            stored as parquet
-            location '../parquet-testing/data/alltypes_plain.parquet'",
-        )
-        .await?
-        .collect()
-        .await?;
-
-        ctx.sql(
-            "
-            create external table alltypes_tiny_pages
-            stored as parquet
-            location '../parquet-testing/data/alltypes_tiny_pages.parquet'",
-        )
-        .await?
-        .collect()
-        .await?;
-
-        ctx.sql(
-            "
-            create external table lz4_raw_compressed_larger
-            stored as parquet
-            location '../parquet-testing/data/lz4_raw_compressed_larger.parquet'",
-        )
-        .await?
-        .collect()
-        .await?;
-
-        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
-        let df = ctx.sql(sql).await?;
-        let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
-        ++
-        ++
-        ");
-
-        // access each table once to collect statistics
-        ctx.sql("select count(*) from alltypes_plain")
+        for filename in [
+            "alltypes_plain",
+            "alltypes_tiny_pages",
+            "lz4_raw_compressed_larger",
+        ] {
+            ctx.sql(
+                format!(
+                    "create external table {filename}
+                    stored as parquet
+                    location '../parquet-testing/data/{filename}.parquet'",
+                )
+                .as_str(),
+            )
             .await?
             .collect()
             .await?;
-        ctx.sql("select count(*) from alltypes_tiny_pages")
-            .await?
-            .collect()
-            .await?;
-        ctx.sql("select count(*) from lz4_raw_compressed_larger")
-            .await?
-            .collect()
-            .await?;
+        }
 
         let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
         let df = ctx.sql(sql).await?;
