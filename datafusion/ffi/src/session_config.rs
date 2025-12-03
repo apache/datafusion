@@ -78,9 +78,11 @@ unsafe extern "C" fn config_options_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
+    debug_assert!(!config.private_data.is_null());
     let private_data =
         Box::from_raw(config.private_data as *mut SessionConfigPrivateData);
     drop(private_data);
+    config.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig {
