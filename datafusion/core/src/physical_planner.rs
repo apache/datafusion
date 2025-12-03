@@ -3279,10 +3279,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
-        assert!(
-            formatted.contains("mode=Single"),
-            "expected Single aggregate, got {formatted}"
-        );
+        assert!(formatted.contains("mode: Single"));
         Ok(())
     }
 
