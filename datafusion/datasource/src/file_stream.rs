@@ -354,7 +354,7 @@ impl StartableTime {
     }
 }
 
-#[allow(rustdoc::broken_intra_doc_links)]
+#[expect(rustdoc::broken_intra_doc_links)]
 /// Metrics for [`FileStream`]
 ///
 /// Note that all of these metrics are in terms of wall clock time

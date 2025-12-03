@@ -19,7 +19,7 @@
 //! file sources.
 
 use crate::file_groups::FileGroup;
-#[allow(unused_imports)]
+#[expect(unused_imports)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use crate::{
     display::FileGroupsDisplay, file::FileSource,
