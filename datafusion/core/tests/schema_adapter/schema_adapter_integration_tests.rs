@@ -228,7 +228,7 @@ fn push_down_filters(
     plan: Arc<dyn ExecutionPlan>,
     filter: &Expr,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let filter_expr = logical2physical(&filter, &plan.schema());
+    let filter_expr = logical2physical(filter, &plan.schema());
     let plan = Arc::new(FilterExec::try_new(filter_expr, plan)?);
     let cfg = SessionConfig::new()
         .set_str("datafusion.execution.parquet.pushdown_filters", "true");
