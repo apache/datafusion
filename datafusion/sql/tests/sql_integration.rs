@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This lint violation is acceptable for tests, so suppress for now
+// Issue: <https://github.com/apache/datafusion/issues/18503>
+#![expect(clippy::needless_pass_by_value)]
+
 use std::any::Any;
 use std::hash::Hash;
 #[cfg(test)]
@@ -38,10 +42,12 @@ use datafusion_sql::{
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::{
-    approx_median::approx_median_udaf, count::count_udaf, min_max::max_udaf,
-    min_max::min_udaf,
+    approx_median::approx_median_udaf,
+    average::avg_udaf,
+    count::count_udaf,
+    grouping::grouping_udaf,
+    min_max::{max_udaf, min_udaf},
 };
-use datafusion_functions_aggregate::{average::avg_udaf, grouping::grouping_udaf};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
 use insta::{allow_duplicates, assert_snapshot};
@@ -230,6 +236,22 @@ fn parse_ident_normalization_4() {
         Projection: person.age
           TableScan: person
         "#
+    );
+}
+
+#[test]
+fn within_group_rejected_for_non_ordered_set_udaf() {
+    // MIN is order-sensitive by nature but does not implement the
+    // ordered-set `WITHIN GROUP` opt-in. The planner must reject
+    // explicit `WITHIN GROUP` syntax for functions that do not
+    // advertise `supports_within_group_clause()`.
+    let sql = "SELECT min(c1) WITHIN GROUP (ORDER BY c1) FROM person";
+    let err = logical_plan(sql)
+        .expect_err("expected planning to fail for MIN WITHIN GROUP")
+        .to_string();
+    assert_contains!(
+        err,
+        "WITHIN GROUP is only supported for ordered-set aggregate functions"
     );
 }
 
@@ -3239,6 +3261,55 @@ Sort: avg(person.age) + avg(person.age) ASC NULLS LAST
     );
 }
 
+#[test]
+fn select_groupby_orderby_aggregate_on_non_selected_column() {
+    let sql = "SELECT state FROM person GROUP BY state ORDER BY MIN(age)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Sort: min(person.age) ASC NULLS LAST
+    Projection: person.state, min(person.age)
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
+        TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_multiple_aggregates_on_non_selected_columns() {
+    let sql =
+        "SELECT state FROM person GROUP BY state ORDER BY MIN(age), MAX(salary) DESC";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Sort: min(person.age) ASC NULLS LAST, max(person.salary) DESC NULLS FIRST
+    Projection: person.state, min(person.age), max(person.salary)
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age), max(person.salary)]]
+        TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
+    let sql = "SELECT id FROM person GROUP BY id ORDER BY min(age)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id
+  Sort: min(person.age) ASC NULLS LAST
+    Projection: person.id, min(person.age)
+      Aggregate: groupBy=[[person.id]], aggr=[[min(person.age)]]
+        TableScan: person
+"#
+    );
+}
+
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }
@@ -3808,12 +3879,11 @@ fn order_by_unaliased_name() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: z, q
-  Sort: p.state ASC NULLS LAST
-    Projection: p.state AS z, sum(p.age) AS q, p.state
-      Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
-        SubqueryAlias: p
-          TableScan: person
+Sort: z ASC NULLS LAST
+  Projection: p.state AS z, sum(p.age) AS q
+    Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
+      SubqueryAlias: p
+        TableScan: person
 "#
     );
 }
@@ -3899,6 +3969,13 @@ Limit: skip=3, fetch=5
       TableScan: person
 "#
     );
+}
+
+#[test]
+fn fetch_clause_is_not_supported() {
+    let sql = "SELECT 1 FETCH NEXT 1 ROW ONLY";
+    let err = logical_plan(sql).unwrap_err();
+    assert_contains!(err.to_string(), "FETCH clause is not supported yet");
 }
 
 #[test]

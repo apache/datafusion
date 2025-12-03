@@ -21,17 +21,17 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr,
-    Filter, Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery,
-    Repartition, Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan,
-    Unnest, Values, Window,
+    Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
+    Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort,
+    Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values,
+    Window, expr_vec_fmt,
 };
 
 use crate::dml::CopyTo;
 use arrow::datatypes::Schema;
 use datafusion_common::display::GraphvizBuilder;
 use datafusion_common::tree_node::{TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::{internal_datafusion_err, Column, DataFusionError};
+use datafusion_common::{Column, DataFusionError, internal_datafusion_err};
 use serde_json::json;
 
 /// Formats plans with a single line per node. For example:
@@ -319,7 +319,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Is Distinct": is_distinct,
                 })
             }
-            LogicalPlan::Values(Values { ref values, .. }) => {
+            LogicalPlan::Values(Values { values, .. }) => {
                 let str_values = values
                     .iter()
                     // limit to only 5 values to avoid horrible display
@@ -344,10 +344,10 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 })
             }
             LogicalPlan::TableScan(TableScan {
-                ref source,
-                ref table_name,
-                ref filters,
-                ref fetch,
+                source,
+                table_name,
+                filters,
+                fetch,
                 ..
             }) => {
                 let mut object = json!({
@@ -403,7 +403,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
 
                 object
             }
-            LogicalPlan::Projection(Projection { ref expr, .. }) => {
+            LogicalPlan::Projection(Projection { expr, .. }) => {
                 json!({
                     "Node Type": "Projection",
                     "Expressions": expr.iter().map(|e| e.to_string()).collect::<Vec<_>>()
@@ -443,25 +443,22 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 })
             }
             LogicalPlan::Filter(Filter {
-                predicate: ref expr,
-                ..
+                predicate: expr, ..
             }) => {
                 json!({
                     "Node Type": "Filter",
                     "Condition": format!("{}", expr)
                 })
             }
-            LogicalPlan::Window(Window {
-                ref window_expr, ..
-            }) => {
+            LogicalPlan::Window(Window { window_expr, .. }) => {
                 json!({
                     "Node Type": "WindowAggr",
                     "Expressions": expr_vec_fmt!(window_expr)
                 })
             }
             LogicalPlan::Aggregate(Aggregate {
-                ref group_expr,
-                ref aggr_expr,
+                group_expr,
+                aggr_expr,
                 ..
             }) => {
                 json!({
@@ -483,7 +480,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 object
             }
             LogicalPlan::Join(Join {
-                on: ref keys,
+                on: keys,
                 filter,
                 join_constraint,
                 join_type,
@@ -534,11 +531,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     })
                 }
             },
-            LogicalPlan::Limit(Limit {
-                ref skip,
-                ref fetch,
-                ..
-            }) => {
+            LogicalPlan::Limit(Limit { skip, fetch, .. }) => {
                 let mut object = serde_json::json!(
                     {
                         "Node Type": "Limit",
@@ -557,7 +550,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "Subquery"
                 })
             }
-            LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
                 json!({
                     "Node Type": "Subquery",
                     "Alias": alias.table(),

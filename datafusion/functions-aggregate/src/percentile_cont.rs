@@ -33,18 +33,24 @@ use arrow::{
 };
 
 use arrow::array::ArrowNativeTypeOp;
+use datafusion_doc::Documentation;
 
+use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, DataFusionError, Result, ScalarValue,
+    assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError,
+    Result, ScalarValue,
 };
-use datafusion_expr::expr::{AggregateFunction, Sort};
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, Volatility,
+    expr::{AggregateFunction, Cast, Sort},
+    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+    simplify::SimplifyInfo,
 };
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, EmitTo, Expr, GroupsAccumulator, Signature, Volatility,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
@@ -164,7 +170,7 @@ impl PercentileCont {
         }
     }
 
-    fn create_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn create_accumulator(&self, args: &AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let percentiles = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
         let is_descending = args
@@ -283,13 +289,15 @@ impl AggregateUDFImpl for PercentileCont {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        print!(
+            "Calculating return type for PERCENTILE_CONT with arg types: {:?}\n",
+            arg_types
+        );
         let value_type = &arg_types[0];
 
         if !value_type.is_numeric() {
             return plan_err!("percentile_cont requires numeric input types");
         }
-
-        let percentile_type = &arg_types[1];
 
         // PERCENTILE_CONT performs linear interpolation and should return a float type
         // For integer inputs, return Float64 (matching PostgreSQL/DuckDB behavior)
@@ -319,6 +327,8 @@ impl AggregateUDFImpl for PercentileCont {
                 )
             }
         };
+
+        let percentile_type = &arg_types.get(1).unwrap_or(&elem_type);
 
         match percentile_type {
             DataType::List(field) => {
@@ -369,7 +379,7 @@ impl AggregateUDFImpl for PercentileCont {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        self.create_accumulator(acc_args)
+        self.create_accumulator(&acc_args)
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -381,12 +391,12 @@ impl AggregateUDFImpl for PercentileCont {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let num_args = args.exprs.len();
-        if num_args != 2 {
-            return internal_err!(
-                "percentile_cont should have 2 args, but found num args:{}",
-                args.exprs.len()
-            );
-        }
+        assert_eq_or_internal_err!(
+            num_args,
+            2,
+            "percentile_cont should have 2 args, but found num args:{}",
+            num_args
+        );
 
         let percentiles = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
@@ -436,12 +446,200 @@ impl AggregateUDFImpl for PercentileCont {
         }
     }
 
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        Some(Box::new(|aggregate_function, info| {
+            simplify_percentile_cont_aggregate(aggregate_function, info)
+        }))
+    }
+
     fn supports_within_group_clause(&self) -> bool {
         true
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn schema_name(
+        &self,
+        params: &datafusion_expr::expr::AggregateFunctionParams,
+    ) -> Result<String> {
+        datafusion_expr::udaf_default_schema_name(self, params)
+    }
+
+    fn human_display(
+        &self,
+        params: &datafusion_expr::expr::AggregateFunctionParams,
+    ) -> Result<String> {
+        datafusion_expr::udaf_default_human_display(self, params)
+    }
+
+    fn window_function_schema_name(
+        &self,
+        params: &datafusion_expr::expr::WindowFunctionParams,
+    ) -> Result<String> {
+        datafusion_expr::udaf_default_window_function_schema_name(self, params)
+    }
+
+    fn display_name(
+        &self,
+        params: &datafusion_expr::expr::AggregateFunctionParams,
+    ) -> Result<String> {
+        datafusion_expr::udaf_default_display_name(self, params)
+    }
+
+    fn window_function_display_name(
+        &self,
+        params: &datafusion_expr::expr::WindowFunctionParams,
+    ) -> Result<String> {
+        datafusion_expr::udaf_default_window_function_display_name(self, params)
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        datafusion_expr::udaf_default_return_field(self, arg_fields)
+    }
+
+    fn is_nullable(&self) -> bool {
+        true
+    }
+
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        self.accumulator(args)
+    }
+
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        _beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        if self.order_sensitivity().is_beneficial() {
+            return datafusion_common::exec_err!(
+                "Should implement with satisfied for aggregator :{:?}",
+                self.name()
+            );
+        }
+        Ok(None)
+    }
+
+    fn order_sensitivity(&self) -> datafusion_expr::utils::AggregateOrderSensitivity {
+        // We have hard ordering requirements by default, meaning that order
+        // sensitive UDFs need their input orderings to satisfy their ordering
+        // requirements to generate correct results.
+        datafusion_expr::utils::AggregateOrderSensitivity::HardRequirement
+    }
+
+    fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        datafusion_expr::ReversedUDAF::NotSupported
+    }
+
+    fn is_descending(&self) -> Option<bool> {
+        None
+    }
+
+    fn value_from_stats(
+        &self,
+        _statistics_args: &datafusion_expr::StatisticsArgs,
+    ) -> Option<ScalarValue> {
+        None
+    }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        ScalarValue::try_from(data_type)
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        false
+    }
+
+    fn set_monotonicity(
+        &self,
+        _data_type: &DataType,
+    ) -> datafusion_expr::SetMonotonicity {
+        datafusion_expr::SetMonotonicity::NotMonotonic
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PercentileRewriteTarget {
+    Min,
+    Max,
+}
+
+#[expect(clippy::needless_pass_by_value)]
+fn simplify_percentile_cont_aggregate(
+    aggregate_function: AggregateFunction,
+    info: &dyn SimplifyInfo,
+) -> Result<Expr> {
+    let original_expr = Expr::AggregateFunction(aggregate_function.clone());
+    let params = &aggregate_function.params;
+
+    let [value, percentile] = take_function_args("percentile_cont", &params.args)?;
+
+    let is_descending = params
+        .order_by
+        .first()
+        .map(|sort| !sort.asc)
+        .unwrap_or(false);
+
+    let rewrite_target = match extract_percentile_literal(percentile) {
+        Some(0.0) => {
+            if is_descending {
+                PercentileRewriteTarget::Max
+            } else {
+                PercentileRewriteTarget::Min
+            }
+        }
+        Some(1.0) => {
+            if is_descending {
+                PercentileRewriteTarget::Min
+            } else {
+                PercentileRewriteTarget::Max
+            }
+        }
+        _ => return Ok(original_expr),
+    };
+
+    let input_type = match info.get_data_type(value) {
+        Ok(data_type) => data_type,
+        Err(_) => return Ok(original_expr),
+    };
+
+    let expected_return_type =
+        match percentile_cont_udaf().return_type(std::slice::from_ref(&input_type)) {
+            Ok(data_type) => data_type,
+            Err(_) => return Ok(original_expr),
+        };
+
+    let mut agg_arg = value.clone();
+    if expected_return_type != input_type {
+        // min/max return the same type as their input. percentile_cont widens
+        // integers to Float64 (and preserves float/decimal types), so ensure the
+        // rewritten aggregate sees an input of the final return type.
+        agg_arg = Expr::Cast(Cast::new(Box::new(agg_arg), expected_return_type.clone()));
+    }
+
+    let udaf = match rewrite_target {
+        PercentileRewriteTarget::Min => min_udaf(),
+        PercentileRewriteTarget::Max => max_udaf(),
+    };
+
+    let rewritten = Expr::AggregateFunction(AggregateFunction::new_udf(
+        udaf,
+        vec![agg_arg],
+        params.distinct,
+        params.filter.clone(),
+        vec![],
+        params.null_treatment,
+    ));
+    Ok(rewritten)
+}
+
+fn extract_percentile_literal(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Literal(ScalarValue::Float64(Some(value)), _) => Some(*value),
+        _ => None,
     }
 }
 

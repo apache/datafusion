@@ -21,11 +21,11 @@
 
 use dashmap::DashMap;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, Result,
+    DataFusionError, Result, exec_err, internal_datafusion_err, not_impl_err,
 };
+use object_store::ObjectStore;
 #[cfg(not(target_arch = "wasm32"))]
 use object_store::local::LocalFileSystem;
-use object_store::ObjectStore;
 use std::sync::Arc;
 use url::Url;
 
@@ -160,7 +160,9 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// deregistered store if it existed.
     #[allow(unused_variables)]
     fn deregister_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        not_impl_err!("ObjectStoreRegistry::deregister_store is not implemented for this ObjectStoreRegistry")
+        not_impl_err!(
+            "ObjectStoreRegistry::deregister_store is not implemented for this ObjectStoreRegistry"
+        )
     }
 
     /// Get a suitable store for the provided URL. For example:
@@ -290,17 +292,29 @@ mod tests {
         assert_eq!(err.strip_backtrace(), "External error: invalid port number");
 
         let err = ObjectStoreUrl::parse("s3://bucket?").unwrap_err();
-        assert_eq!(err.strip_backtrace(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: ?");
+        assert_eq!(
+            err.strip_backtrace(),
+            "Execution error: ObjectStoreUrl must only contain scheme and authority, got: ?"
+        );
 
         let err = ObjectStoreUrl::parse("s3://bucket?foo=bar").unwrap_err();
-        assert_eq!(err.strip_backtrace(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: ?foo=bar");
+        assert_eq!(
+            err.strip_backtrace(),
+            "Execution error: ObjectStoreUrl must only contain scheme and authority, got: ?foo=bar"
+        );
 
         let err = ObjectStoreUrl::parse("s3://host:123/foo").unwrap_err();
-        assert_eq!(err.strip_backtrace(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo");
+        assert_eq!(
+            err.strip_backtrace(),
+            "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo"
+        );
 
         let err =
             ObjectStoreUrl::parse("s3://username:password@host:123/foo").unwrap_err();
-        assert_eq!(err.strip_backtrace(), "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo");
+        assert_eq!(
+            err.strip_backtrace(),
+            "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo"
+        );
     }
 
     #[test]

@@ -16,16 +16,15 @@
 // under the License.
 
 use arrow::array::BooleanArray;
-use arrow::array::{make_comparator, ArrayRef, Datum};
+use arrow::array::{ArrayRef, Datum, make_comparator};
 use arrow::buffer::NullBuffer;
 use arrow::compute::kernels::cmp::{
     distinct, eq, gt, gt_eq, lt, lt_eq, neq, not_distinct,
 };
-use arrow::compute::{ilike, like, nilike, nlike, SortOptions};
+use arrow::compute::{SortOptions, ilike, like, nilike, nlike};
 use arrow::error::ArrowError;
-use datafusion_common::DataFusionError;
-use datafusion_common::{arrow_datafusion_err, internal_err};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::operator::Operator;
 use std::sync::Arc;
@@ -99,29 +98,24 @@ pub fn apply_cmp_for_nested(
     let left_data_type = lhs.data_type();
     let right_data_type = rhs.data_type();
 
-    if matches!(
-        op,
-        Operator::Eq
-            | Operator::NotEq
-            | Operator::Lt
-            | Operator::Gt
-            | Operator::LtEq
-            | Operator::GtEq
-            | Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-    ) && left_data_type.equals_datatype(&right_data_type)
-    {
-        apply(lhs, rhs, |l, r| {
-            Ok(Arc::new(compare_op_for_nested(op, l, r)?))
-        })
-    } else {
-        internal_err!(
-            "invalid operator or data type mismatch for nested data, op {} left {}, right {}",
+    assert_or_internal_err!(
+        matches!(
             op,
-            left_data_type,
-            right_data_type
-        )
-    }
+            Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::Gt
+                | Operator::LtEq
+                | Operator::GtEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom
+        ) && left_data_type.equals_datatype(&right_data_type),
+        "invalid operator or data type mismatch for nested data, op {op} left {left_data_type}, right {right_data_type}",
+    );
+
+    apply(lhs, rhs, |l, r| {
+        Ok(Arc::new(compare_op_for_nested(op, l, r)?))
+    })
 }
 
 /// Compare with eq with either nested or non-nested
@@ -148,9 +142,7 @@ pub fn compare_op_for_nested(
     let l_len = l.len();
     let r_len = r.len();
 
-    if l_len != r_len && !is_l_scalar && !is_r_scalar {
-        return internal_err!("len mismatch");
-    }
+    assert_or_internal_err!(l_len == r_len || is_l_scalar || is_r_scalar, "len mismatch");
 
     let len = match is_l_scalar {
         true => r_len,
