@@ -432,3 +432,109 @@ SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
 
 statement ok
 SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+# Test 6: Sort Pushdown for ordered Parquet files
+
+# Create a sorted dataset
+statement ok
+CREATE TABLE sorted_data(id INT, value INT, name VARCHAR) AS VALUES
+(1, 100, 'a'),
+(2, 200, 'b'),
+(3, 300, 'c'),
+(4, 400, 'd'),
+(5, 500, 'e'),
+(6, 600, 'f'),
+(7, 700, 'g'),
+(8, 800, 'h'),
+(9, 900, 'i'),
+(10, 1000, 'j');
+
+# Copy to parquet with sorting
+query I
+COPY (SELECT * FROM sorted_data ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet';
+----
+10
+
+statement ok
+CREATE EXTERNAL TABLE sorted_parquet(id INT, value INT, name VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet'
+WITH ORDER (id ASC);
+
+# Test 6.1: Sort pushdown with DESC (opposite of ASC)
+# Should show reverse_scan_inexact=true
+query TT
+EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_parquet.id DESC NULLS FIRST, fetch=3
+02)--TableScan: sorted_parquet projection=[id, value, name]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_scan_inexact=true
+
+# Test 6.2: Verify results are correct
+query IIT
+SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
+----
+10 1000 j
+9 900 i
+8 800 h
+
+# Test 6.3: Should NOT apply for ASC (same direction)
+query TT
+EXPLAIN SELECT * FROM sorted_parquet ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_parquet.id ASC NULLS LAST, fetch=3
+02)--TableScan: sorted_parquet projection=[id, value, name]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Test 6.4: Disable sort pushdown
+statement ok
+SET datafusion.execution.parquet.enable_sort_pushdown = false;
+
+query TT
+EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_parquet.id DESC NULLS FIRST, fetch=3
+02)--TableScan: sorted_parquet projection=[id, value, name]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Re-enable
+statement ok
+SET datafusion.execution.parquet.enable_sort_pushdown = true;
+
+# Test 6.5: With OFFSET
+query TT
+EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
+----
+logical_plan
+01)Limit: skip=2, fetch=3
+02)--Sort: sorted_parquet.id DESC NULLS FIRST, fetch=5
+03)----TableScan: sorted_parquet projection=[id, value, name]
+physical_plan
+01)GlobalLimitExec: skip=2, fetch=3
+02)--SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_scan_inexact=true
+
+query IIT
+SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
+----
+8 800 h
+7 700 g
+6 600 f
+
+# Cleanup
+statement ok
+DROP TABLE sorted_data;
+
+statement ok
+DROP TABLE sorted_parquet;
+
+statement ok
+SET datafusion.execution.parquet.enable_sort_pushdown = true;
