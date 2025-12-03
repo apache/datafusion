@@ -208,18 +208,9 @@ impl RunOpt {
             // query 15 is special, with 3 statements. the second statement is the one from which we
             // want to capture the results
             let mut result = vec![];
-            if query_id == 15 {
-                for (n, query) in sql.iter().enumerate() {
-                    if n == 1 {
-                        result = self.execute_query(ctx, query).await?;
-                    } else {
-                        self.execute_query(ctx, query).await?;
-                    }
-                }
-            } else {
-                for query in sql {
-                    result = self.execute_query(ctx, query).await?;
-                }
+
+            for query in sql {
+                result = self.execute_query(ctx, query).await?;
             }
 
             let elapsed = start.elapsed();
