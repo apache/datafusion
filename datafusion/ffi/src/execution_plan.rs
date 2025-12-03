@@ -18,7 +18,7 @@
 use std::{ffi::c_void, pin::Pin, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
+    std_types::{RString, RVec},
     StableAbi,
 };
 use datafusion::{
@@ -29,6 +29,7 @@ use datafusion::{
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 use tokio::runtime::Handle;
 
+use crate::util::FFIResult;
 use crate::{
     df_result, plan_properties::FFI_PlanProperties,
     record_batch_stream::FFI_RecordBatchStream, rresult,
@@ -53,7 +54,7 @@ pub struct FFI_ExecutionPlan {
     pub execute: unsafe extern "C" fn(
         plan: &Self,
         partition: usize,
-    ) -> RResult<FFI_RecordBatchStream, RString>,
+    ) -> FFIResult<FFI_RecordBatchStream>,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -116,7 +117,7 @@ unsafe extern "C" fn children_fn_wrapper(
 unsafe extern "C" fn execute_fn_wrapper(
     plan: &FFI_ExecutionPlan,
     partition: usize,
-) -> RResult<FFI_RecordBatchStream, RString> {
+) -> FFIResult<FFI_RecordBatchStream> {
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
     let ctx = &(*private_data).context;
@@ -132,8 +133,10 @@ unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
 }
 
 unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
+    debug_assert!(!plan.private_data.is_null());
     let private_data = Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
     drop(private_data);
+    plan.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan {
