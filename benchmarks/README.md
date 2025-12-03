@@ -607,6 +607,12 @@ Alternatively benchmark the specific query
 ```shell
 DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/bench.sh run tpcds 30
 ```
+
+More help
+```shell
+cargo run --release --bin dfbench -- tpcds --help
+```
+
 ## External Aggregation
 
 Run the benchmark for aggregations with limited memory.
