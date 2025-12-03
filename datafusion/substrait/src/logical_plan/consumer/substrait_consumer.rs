@@ -509,7 +509,7 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         };
 
         // Check if this is a RecursiveQuery extension
-        if ext_detail.type_url == crate::logical_plan::producer::RECURSIVE_QUERY_TYPE_URL
+        if ext_detail.type_url == crate::logical_plan::recursive::RECURSIVE_QUERY_TYPE_URL
         {
             return from_recursive_query_rel(self, rel).await;
         }

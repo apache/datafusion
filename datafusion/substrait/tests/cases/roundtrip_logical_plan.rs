@@ -2007,9 +2007,7 @@ async fn roundtrip_recursive_query() -> Result<()> {
         LogicalPlan::RecursiveQuery(ref rq) => rq,
         LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
             LogicalPlan::RecursiveQuery(ref rq) => rq,
-            _ => panic!(
-                "Expected RecursiveQuery inside Projection, got: {plan2:?}"
-            ),
+            _ => panic!("Expected RecursiveQuery inside Projection, got: {plan2:?}"),
         },
         _ => panic!("Expected RecursiveQuery or Projection, got: {plan2:?}"),
     };
@@ -2049,14 +2047,34 @@ async fn serialize_recursive_query_with_empty_name_errors() -> Result<()> {
 
     let result = to_substrait_plan(&plan, &ctx.state());
     assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("RecursiveQuery name cannot be empty")
-    );
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("RecursiveQuery name cannot be empty"));
 
     Ok(())
+}
+
+#[test]
+fn decode_recursive_query_detail_malformed_bytes_errors() {
+    let res =
+        datafusion_substrait::logical_plan::recursive::decode_recursive_query_detail(&[
+            1, 2, 3,
+        ]);
+    assert!(res.is_err());
+    let msg = res.unwrap_err().to_string();
+    assert!(msg.contains("Failed to decode RecursiveQueryDetail"));
+}
+
+#[test]
+fn decode_recursive_scan_detail_malformed_bytes_errors() {
+    let res =
+        datafusion_substrait::logical_plan::recursive::decode_recursive_scan_detail(&[
+            1, 2, 3,
+        ]);
+    assert!(res.is_err());
+    let msg = res.unwrap_err().to_string();
+    assert!(msg.contains("Failed to decode RecursiveScanDetail"));
 }
 
 #[tokio::test]
@@ -2097,9 +2115,7 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
         LogicalPlan::RecursiveQuery(ref rq) => rq,
         LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
             LogicalPlan::RecursiveQuery(ref rq) => rq,
-            _ => panic!(
-                "Expected RecursiveQuery inside Projection, got: {plan2:?}"
-            ),
+            _ => panic!("Expected RecursiveQuery inside Projection, got: {plan2:?}"),
         },
         _ => panic!("Expected RecursiveQuery or Projection, got: {plan2:?}"),
     };
@@ -2154,9 +2170,7 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
                 "Expected RecursiveQuery inside Projection, got: {roundtrip_plan:?}"
             ),
         },
-        _ => panic!(
-            "Expected RecursiveQuery or Projection, got: {roundtrip_plan:?}"
-        ),
+        _ => panic!("Expected RecursiveQuery or Projection, got: {roundtrip_plan:?}"),
     };
 
     // Verify metadata is preserved

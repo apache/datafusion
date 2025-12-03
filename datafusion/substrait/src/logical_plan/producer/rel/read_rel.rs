@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    encode_recursive_scan_detail, RECURSIVE_SCAN_TYPE_URL,
-};
-use crate::logical_plan::producer::{
     to_substrait_literal, to_substrait_named_struct, SubstraitProducer,
+};
+use crate::logical_plan::recursive::{
+    encode_recursive_scan_detail, RECURSIVE_SCAN_TYPE_URL,
 };
 use datafusion::catalog::cte_worktable::CteWorkTable;
 use datafusion::catalog::default_table_source::DefaultTableSource;

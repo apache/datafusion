@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::recursive::decode_recursive_query_detail;
 use datafusion::common::substrait_err;
 use datafusion::logical_expr::{LogicalPlan, RecursiveQuery};
 use std::sync::Arc;
@@ -46,8 +47,7 @@ pub async fn from_recursive_query_rel(
     };
 
     // Decode metadata
-    let (name, is_distinct) =
-        crate::logical_plan::producer::decode_recursive_query_detail(&detail.value)?;
+    let (name, is_distinct) = decode_recursive_query_detail(&detail.value)?;
 
     // Convert child plans
     let static_term = Arc::new(consumer.consume_rel(&rel.inputs[0]).await?);

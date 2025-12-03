@@ -16,6 +16,9 @@
 // under the License.
 
 use crate::logical_plan::producer::SubstraitProducer;
+use crate::logical_plan::recursive::{
+    encode_recursive_query_detail, RECURSIVE_QUERY_TYPE_URL,
+};
 use datafusion::logical_expr::RecursiveQuery;
 use pbjson_types::Any as ProtoAny;
 use prost::Message;
@@ -35,10 +38,7 @@ pub fn from_recursive_query(
     let recursive_term_rel = producer.handle_plan(&recursive_query.recursive_term)?;
 
     // Encode metadata into a simple protobuf message
-    let detail_bytes = encode_recursive_query_detail(
-        &recursive_query.name,
-        recursive_query.is_distinct,
-    )?;
+    let detail_bytes = encode_recursive_query_detail(&recursive_query.name, recursive_query.is_distinct)?;
 
     let detail = ProtoAny {
         type_url: RECURSIVE_QUERY_TYPE_URL.to_string(),
@@ -60,95 +60,4 @@ pub fn from_recursive_query(
     }))
 }
 
-/// Type URL to identify RecursiveQuery in Substrait extensions
-/// Type URL to identify RecursiveQuery in Substrait extensions
-pub const RECURSIVE_QUERY_TYPE_URL: &str = "datafusion.RecursiveQuery";
-
-/// Type URL to identify recursive scan (work-table used for recursive CTEs)
-/// in Substrait `ReadRel` advanced_extension payloads.
-///
-/// This value is used when serializing a `TableScan` that represents a
-/// `CteWorkTable` (the internal work-table for a recursive common-table
-/// expression). The consumer side checks for this type URL and decodes the
-/// `RecursiveScanDetail` to recreate a `CteWorkTable` source when deserializing
-/// a `ReadRel` coming from Substrait.
-pub const RECURSIVE_SCAN_TYPE_URL: &str = "datafusion.RecursiveScan";
-
-/// Simple protobuf message to encode RecursiveQuery metadata
-#[derive(Clone, PartialEq, prost::Message)]
-struct RecursiveQueryDetail {
-    #[prost(string, tag = "1")]
-    name: String,
-    #[prost(bool, tag = "2")]
-    is_distinct: bool,
-}
-
-#[derive(Clone, PartialEq, prost::Message)]
-pub struct RecursiveScanDetail {
-    #[prost(string, tag = "1")]
-    pub name: String,
-}
-
-fn encode_recursive_query_detail(
-    name: &str,
-    is_distinct: bool,
-) -> datafusion::common::Result<Vec<u8>> {
-    if name.is_empty() {
-        return datafusion::common::substrait_err!(
-            "RecursiveQuery name cannot be empty"
-        );
-    }
-
-    let detail = RecursiveQueryDetail {
-        name: name.to_string(),
-        is_distinct,
-    };
-    Ok(detail.encode_to_vec())
-}
-
-pub fn encode_recursive_scan_detail(name: &str) -> datafusion::common::Result<Vec<u8>> {
-    if name.is_empty() {
-        return datafusion::common::substrait_err!(
-            "Recursive table name cannot be empty"
-        );
-    }
-
-    let detail = RecursiveScanDetail {
-        name: name.to_string(),
-    };
-    Ok(detail.encode_to_vec())
-}
-
-/// Decodes RecursiveQuery metadata from protobuf bytes
-pub fn decode_recursive_query_detail(
-    bytes: &[u8],
-) -> datafusion::common::Result<(String, bool)> {
-    let detail = RecursiveQueryDetail::decode(bytes).map_err(|e| {
-        datafusion::common::DataFusionError::Substrait(format!(
-            "Failed to decode RecursiveQueryDetail: {e}"
-        ))
-    })?;
-
-    // Validate that name is not empty
-    if detail.name.is_empty() {
-        return datafusion::common::substrait_err!("RecursiveQuery name cannot be empty");
-    }
-
-    Ok((detail.name, detail.is_distinct))
-}
-
-pub fn decode_recursive_scan_detail(bytes: &[u8]) -> datafusion::common::Result<String> {
-    let detail = RecursiveScanDetail::decode(bytes).map_err(|e| {
-        datafusion::common::DataFusionError::Substrait(format!(
-            "Failed to decode RecursiveScanDetail: {e}"
-        ))
-    })?;
-
-    if detail.name.is_empty() {
-        return datafusion::common::substrait_err!(
-            "Recursive table name cannot be empty"
-        );
-    }
-
-    Ok(detail.name)
-}
+// encode/decode helpers and type URLs live in `logical_plan::recursive`
