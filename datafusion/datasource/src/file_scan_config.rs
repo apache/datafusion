@@ -855,29 +855,11 @@ fn is_reverse_ordering(
     }
 
     requested.iter().zip(current.iter()).all(|(req, cur)| {
-        // IMPORTANT: Compare only the expressions (column names), not the entire PhysicalSortExpr!
-        //
-        // We want to check if the SAME expression is being sorted, regardless of direction.
-        // For example:
-        //   - Current: "number ASC NULLS LAST"
-        //   - Requested: "number DESC NULLS FIRST"
-        //
-        // The expressions are the same ("number"), only the sort options differ.
-        // That's exactly what we want - we can satisfy this by reversing the scan!
-        //
-        // If we used `req == cur` instead, it would compare the entire struct including
-        // the SortOptions, which would fail because:
-        //   - req.options = { descending: true, nulls_first: true }
-        //   - cur.options = { descending: false, nulls_first: false }
-        //   - These are different, so `req == cur` would be false!
-        //
-        // But that's wrong - we WANT the options to be different (reversed)!
-        //
-        // Using to_string() on the expr only gives us the column name without options:
-        //   - req.expr.to_string() = "number"
-        //   - cur.expr.to_string() = "number"
-        //   - These are equal! ✓
-        let exprs_match = req.expr.to_string() == cur.expr.to_string();
+        // Check if the expressions are semantically equivalent using PhysicalExpr::eq
+        // This is more robust than string comparison as it handles:
+        // - Expression equivalence (not just string representation)
+        // - Complex expressions that might have different string forms but same semantics
+        let exprs_match = req.expr.eq(&cur.expr);
 
         // Now check if the sort options are exactly reversed
         // For a valid reverse scan:
@@ -887,7 +869,7 @@ fn is_reverse_ordering(
             && req.options.nulls_first != cur.options.nulls_first;
 
         // Both conditions must be true:
-        //   1. Same expression/column
+        //   1. Expressions are semantically equivalent
         //   2. Completely reversed sort options
         exprs_match && options_reversed
     })

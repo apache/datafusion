@@ -799,24 +799,6 @@ fn should_enable_page_index(
             .unwrap_or(false)
 }
 
-fn reverse_batch(batch: RecordBatch) -> Result<RecordBatch> {
-    let num_rows = batch.num_rows();
-    if num_rows <= 1 {
-        return Ok(batch);
-    }
-
-    let indices = UInt32Array::from_iter_values((0..num_rows as u32).rev());
-
-    let reversed_columns = batch
-        .columns()
-        .iter()
-        .map(|col| take(col.as_ref(), &indices, None))
-        .collect::<std::result::Result<Vec<ArrayRef>, arrow::error::ArrowError>>()
-        .map_err(DataFusionError::from)?;
-
-    RecordBatch::try_new(batch.schema(), reversed_columns).map_err(DataFusionError::from)
-}
-
 /// Stream adapter for reversed parquet reading with row-group-level buffering.
 ///
 /// # Architecture
@@ -907,6 +889,10 @@ struct ReversedParquetStream<S> {
 
     /// Pending error from batch reversal
     pending_error: Option<DataFusionError>,
+
+    /// Cached indices array for the most recent batch size
+    /// (size, indices) - only cache one size to minimize memory overhead
+    cached_indices: Option<(usize, Arc<UInt32Array>)>,
 }
 
 impl<S> ReversedParquetStream<S> {
@@ -938,6 +924,7 @@ impl<S> ReversedParquetStream<S> {
             batches_reversed,
             reverse_time,
             pending_error: None,
+            cached_indices: None,
         }
     }
 
@@ -984,7 +971,44 @@ impl<S> ReversedParquetStream<S> {
         // Step 1: Reverse rows within each batch
         let mut reversed_batches = Vec::with_capacity(self.current_rg_batches.len());
         for batch in self.current_rg_batches.drain(..) {
-            match reverse_batch(batch) {
+            let num_rows = batch.num_rows();
+            if num_rows <= 1 {
+                reversed_batches.push(batch);
+                continue;
+            }
+
+            // Get or create indices array, using cache when possible
+            let indices = if let Some((cached_size, cached_indices)) =
+                &self.cached_indices
+            {
+                if *cached_size == num_rows {
+                    Arc::clone(cached_indices)
+                } else {
+                    // Size mismatch, create new indices and update cache
+                    let new_indices = Arc::new(UInt32Array::from_iter_values(
+                        (0..num_rows as u32).rev(),
+                    ));
+                    self.cached_indices = Some((num_rows, Arc::clone(&new_indices)));
+                    new_indices
+                }
+            } else {
+                // First use, create and cache
+                let new_indices =
+                    Arc::new(UInt32Array::from_iter_values((0..num_rows as u32).rev()));
+                self.cached_indices = Some((num_rows, Arc::clone(&new_indices)));
+                new_indices
+            };
+
+            match batch
+                .columns()
+                .iter()
+                .map(|col| take(col.as_ref(), indices.as_ref(), None))
+                .collect::<std::result::Result<Vec<ArrayRef>, arrow::error::ArrowError>>()
+                .map_err(DataFusionError::from)
+                .and_then(|reversed_columns| {
+                    RecordBatch::try_new(batch.schema(), reversed_columns)
+                        .map_err(DataFusionError::from)
+                }) {
                 Ok(reversed) => reversed_batches.push(reversed),
                 Err(e) => {
                     // Store error and return it on next poll
@@ -1073,6 +1097,11 @@ where
                     // Check if current row group is complete
                     if this.current_rg_rows_read >= this.current_rg_total_rows {
                         this.finalize_current_row_group();
+
+                        // Check for errors after finalization
+                        if let Some(err) = this.pending_error.take() {
+                            return Poll::Ready(Some(Err(err)));
+                        }
                         // Continue loop to output the reversed batches
                     }
                     // Otherwise continue reading next batch from current row group
@@ -1082,6 +1111,11 @@ where
                     // Handle the last row group if any
                     if !this.current_rg_batches.is_empty() {
                         this.finalize_current_row_group();
+
+                        // Check for errors after finalization
+                        if let Some(err) = this.pending_error.take() {
+                            return Poll::Ready(Some(Err(err)));
+                        }
                         // Continue loop to output final batches
                     } else {
                         this.done = true;
