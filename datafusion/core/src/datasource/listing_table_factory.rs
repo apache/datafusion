@@ -414,7 +414,7 @@ mod tests {
 
         let cmd = CreateExternalTable::builder(
             name,
-            dir.path().to_str().unwrap().to_string(),
+            dir.path().to_str().unwrap(),
             "parquet",
             Arc::new(DFSchema::empty()),
         )
