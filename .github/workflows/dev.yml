@@ -34,6 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
       - name: Install HawkEye
+      # This CI job is bound by installation time, use `--profile dev` to speed it up
         run: cargo install hawkeye --version 6.2.0 --locked --profile dev
       - name: Run license header check
         run: ci/scripts/license_header.sh
@@ -57,3 +58,18 @@ jobs:
             README.md \
             CONTRIBUTING.md
           git diff --exit-code
+
+  typos:
+    name: Spell Check with Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+        with:
+          persist-credentials: false
+      # Version fixed on purpose. It uses heuristics to detect typos, so upgrading 
+      # it may cause checks to fail more often.
+      # We can upgrade it manually once a while.
+      - name: Install typos-cli
+        run: cargo install typos-cli --locked --version 1.37.0
+      - name: Run typos check
+        run: ci/scripts/typos_check.sh
