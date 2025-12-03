@@ -313,10 +313,10 @@ async fn test_fn_arrow_typeof() -> Result<()> {
     +----------------------+
     | arrow_typeof(test.l) |
     +----------------------+
-    | List(nullable Int32) |
-    | List(nullable Int32) |
-    | List(nullable Int32) |
-    | List(nullable Int32) |
+    | List(Int32)          |
+    | List(Int32)          |
+    | List(Int32)          |
+    | List(Int32)          |
     +----------------------+
     ");
 

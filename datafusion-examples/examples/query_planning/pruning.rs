@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -188,6 +190,7 @@ impl PruningStatistics for MyCatalog {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate {
     let df_schema = DFSchema::try_from(Arc::clone(schema)).unwrap();
     let props = ExecutionProps::new();

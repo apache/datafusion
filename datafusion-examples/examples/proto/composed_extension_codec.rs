@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! This example demonstrates how to compose multiple PhysicalExtensionCodecs
 //!
 //! This can be helpful when an Execution plan tree has different nodes from different crates
@@ -44,8 +46,8 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf;
 
-#[tokio::main]
-async fn main() {
+/// Example of using multiple extension codecs for serialization / deserialization
+pub async fn composed_extension_codec() -> Result<()> {
     // build execution plan that has both types of nodes
     //
     // Note each node requires a different `PhysicalExtensionCodec` to decode
@@ -66,16 +68,16 @@ async fn main() {
         protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec_plan.clone(),
             &composed_codec,
-        )
-        .expect("to proto");
+        )?;
 
     // deserialize proto back to execution plan
-    let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), &composed_codec)
-        .expect("from proto");
+    let result_exec_plan: Arc<dyn ExecutionPlan> =
+        proto.try_into_physical_plan(&ctx.task_ctx(), &composed_codec)?;
 
     // assert that the original and deserialized execution plans are equal
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
+
+    Ok(())
 }
 
 /// This example has two types of nodes: `ParentExec` and `ChildExec` which can only

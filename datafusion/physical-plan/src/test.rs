@@ -37,8 +37,7 @@ use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
-    assert_or_internal_err, config::ConfigOptions, project_schema, DataFusionError,
-    Result, Statistics,
+    assert_or_internal_err, config::ConfigOptions, project_schema, Result, Statistics,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::equivalence::{
@@ -271,10 +270,9 @@ impl TestMemoryExec {
     }
 
     // Equivalent of `DataSourceExec::new`
-    pub fn update_cache(source: Arc<TestMemoryExec>) -> TestMemoryExec {
+    pub fn update_cache(source: &Arc<TestMemoryExec>) -> TestMemoryExec {
         let cache = source.compute_properties();
-        let source = &*source;
-        let mut source = source.clone();
+        let mut source = (**source).clone();
         source.cache = cache;
         source
     }

@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cache::cache_unit::DefaultFilesMetadataCache;
 use crate::cache::CacheAccessor;
+use crate::cache::cache_unit::DefaultFilesMetadataCache;
 use datafusion_common::{Result, Statistics};
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};

@@ -222,10 +222,10 @@ async fn test_parameter_invalid_types() -> Result<()> {
         .await;
     assert_snapshot!(results.unwrap_err().strip_backtrace(),
         @r"
-        type_coercion
-        caused by
-        Error during planning: Cannot infer common argument type for comparison operation List(nullable Int32) = Int32
-        ");
+    type_coercion
+    caused by
+    Error during planning: Cannot infer common argument type for comparison operation List(Int32) = Int32
+    ");
     Ok(())
 }
 
@@ -412,5 +412,22 @@ async fn test_select_no_projection() -> Result<()> {
     ++
     ++
     ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_select_cast_date_literal_to_timestamp_overflow() -> Result<()> {
+    let ctx = SessionContext::new();
+    let err = ctx
+        .sql("SELECT CAST(DATE '9999-12-31' AS TIMESTAMP)")
+        .await?
+        .collect()
+        .await
+        .unwrap_err();
+
+    assert_contains!(
+        err.to_string(),
+        "Cannot cast Date32 value 2932896 to Timestamp(ns): converted value exceeds the representable i64 range"
+    );
     Ok(())
 }
