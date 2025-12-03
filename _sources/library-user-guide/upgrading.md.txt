@@ -231,7 +231,7 @@ Previously you may write:
 Instead this should now be:
 
 ```rust,ignore
-    let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.try_into()?;
+    let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.into();
     let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
 ```
 

@@ -577,7 +577,7 @@ Aggregate and window functions follow the same pattern.</p>
 </pre></div>
 </div>
 <p>Instead this should now be:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ScalarUDFImpl</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_udf</span><span class="p">.</span><span class="n">try_into</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ScalarUDFImpl</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ffi_udf</span><span class="p">.</span><span class="n">into</span><span class="p">();</span>
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ScalarUDF</span><span class="p">::</span><span class="n">new_from_shared_impl</span><span class="p">(</span><span class="n">foreign_udf</span><span class="p">);</span>
 </pre></div>
 </div>
