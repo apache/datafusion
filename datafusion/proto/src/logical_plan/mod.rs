@@ -211,6 +211,193 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     ) -> Result<()> {
         not_impl_err!("LogicalExtensionCodec is not provided")
     }
+
+    fn try_decode_file_format(
+        &self,
+        buf: &[u8],
+        ctx: &SessionContext,
+    ) -> Result<Arc<dyn FileFormatFactory>> {
+        use crate::logical_plan::file_formats::{
+            ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec,
+            JsonLogicalExtensionCodec, ParquetLogicalExtensionCodec,
+        };
+        use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+        use datafusion_common::exec_err;
+
+        // 1) Try self-describing wrapper first
+        if let Ok(wrapper) = FileFormatWrapper::try_decode(buf) {
+            return match wrapper.kind {
+                FileFormatKind::Csv => {
+                    let codec = CsvLogicalExtensionCodec {};
+                    codec
+                        .try_decode_file_format(&wrapper.blob, ctx)
+                        .map_err(|e| context!("Decoding CSV file format", e))
+                }
+                FileFormatKind::Json => {
+                    let codec = JsonLogicalExtensionCodec {};
+                    codec
+                        .try_decode_file_format(&wrapper.blob, ctx)
+                        .map_err(|e| context!("Decoding JSON file format", e))
+                }
+                FileFormatKind::Parquet => {
+                    let codec = ParquetLogicalExtensionCodec {};
+                    codec
+                        .try_decode_file_format(&wrapper.blob, ctx)
+                        .map_err(|e| context!("Decoding Parquet file format", e))
+                }
+                FileFormatKind::Arrow => {
+                    let codec = ArrowLogicalExtensionCodec {};
+                    codec
+                        .try_decode_file_format(&wrapper.blob, ctx)
+                        .map_err(|e| context!("Decoding Arrow file format", e))
+                }
+            };
+        }
+
+        // 2) Legacy fallback (raw bytes produced by specific codecs)
+        // - empty means Arrow
+        if buf.is_empty() {
+            return Ok(Arc::new(ArrowFormatFactory::new()));
+        }
+
+        // helper that accepts a decode fn and re-encodes to verify exact bytes
+        fn try_decode_roundtrip(
+            ctx: &SessionContext,
+            buf: &[u8],
+        ) -> Option<Arc<dyn FileFormatFactory>> {
+            use crate::logical_plan::file_formats::{
+                CsvLogicalExtensionCodec, JsonLogicalExtensionCodec,
+                ParquetLogicalExtensionCodec,
+            };
+            let candidates: &[&dyn LogicalExtensionCodec] = &[
+                &ParquetLogicalExtensionCodec {},
+                &CsvLogicalExtensionCodec {},
+                &JsonLogicalExtensionCodec {},
+            ];
+
+            for codec in candidates {
+                if let Ok(ff) = codec.try_decode_file_format(buf, ctx) {
+                    let mut re = Vec::new();
+                    if codec.try_encode_file_format(&mut re, ff.clone()).is_ok() && re == buf {
+                        return Some(ff);
+                    }
+                }
+            }
+            None
+        }
+
+        if let Some(ff) = try_decode_roundtrip(ctx, buf) {
+            return Ok(ff);
+        }
+
+        // If nothing matched, return a clear error rather than guessing
+        exec_err!(
+            "Unsupported FileFormatFactory bytes for DefaultLogicalExtensionCodec ({} bytes)",
+            buf.len()
+        )
+    }
+
+    fn try_encode_file_format(
+        &self,
+        buf: &mut Vec<u8>,
+        node: Arc<dyn FileFormatFactory>,
+    ) -> Result<()> {
+        use crate::logical_plan::file_formats::{
+            CsvLogicalExtensionCodec, JsonLogicalExtensionCodec,
+            ParquetLogicalExtensionCodec,
+        };
+        use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
+
+        // CSV
+        if node.as_any().is::<datafusion::datasource::file_format::csv::CsvFormatFactory>() {
+            let mut blob = Vec::new();
+            CsvLogicalExtensionCodec {}
+                .try_encode_file_format(&mut blob, node)
+                .map_err(|e| context!("Encoding CSV file format", e))?;
+            return FileFormatWrapper::new(FileFormatKind::Csv, blob).encode_into(buf);
+        }
+
+        // JSON
+        if node.as_any().is::<datafusion::datasource::file_format::json::JsonFormatFactory>() {
+            let mut blob = Vec::new();
+            JsonLogicalExtensionCodec {}
+                .try_encode_file_format(&mut blob, node)
+                .map_err(|e| context!("Encoding JSON file format", e))?;
+            return FileFormatWrapper::new(FileFormatKind::Json, blob).encode_into(buf);
+        }
+
+        // Parquet
+        if node
+            .as_any()
+            .is::<datafusion::datasource::file_format::parquet::ParquetFormatFactory>()
+        {
+            let mut blob = Vec::new();
+            ParquetLogicalExtensionCodec {}
+                .try_encode_file_format(&mut blob, node)
+                .map_err(|e| context!("Encoding Parquet file format", e))?;
+            return FileFormatWrapper::new(FileFormatKind::Parquet, blob)
+                .encode_into(buf);
+        }
+
+        // Arrow: encode empty blob for compatibility
+        if node.as_any().is::<ArrowFormatFactory>() {
+            return FileFormatWrapper::new(FileFormatKind::Arrow, Vec::new())
+                .encode_into(buf);
+        }
+
+        not_impl_err!("Unsupported FileFormatFactory type for DefaultLogicalExtensionCodec")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileFormatKind {
+    Csv = 0,
+    Json = 1,
+    Parquet = 2,
+    Arrow = 3,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct FileFormatProtoWrapper {
+    #[prost(int32, tag = "1")]
+    kind: i32,
+    #[prost(bytes, tag = "2")]
+    blob: Vec<u8>,
+}
+
+struct FileFormatWrapper {
+    kind: FileFormatKind,
+    blob: Vec<u8>,
+}
+
+impl FileFormatWrapper {
+    fn new(kind: FileFormatKind, blob: Vec<u8>) -> Self {
+        Self { kind, blob }
+    }
+
+    fn encode_into(self, buf: &mut Vec<u8>) -> Result<()> {
+        let proto = FileFormatProtoWrapper {
+            kind: self.kind as i32,
+            blob: self.blob,
+        };
+        proto
+            .encode(buf)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))
+    }
+
+    fn try_decode(buf: &[u8]) -> Result<Self> {
+        let proto = FileFormatProtoWrapper
+            ::decode(buf)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+        let kind = match proto.kind {
+            0 => FileFormatKind::Csv,
+            1 => FileFormatKind::Json,
+            2 => FileFormatKind::Parquet,
+            3 => FileFormatKind::Arrow,
+            _ => return Err(DataFusionError::Internal("Unknown file format kind".to_string())),
+        };
+        Ok(Self { kind, blob: proto.blob })
+    }
 }
 
 #[macro_export]
