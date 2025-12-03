@@ -2021,6 +2021,45 @@ async fn roundtrip_recursive_query() -> Result<()> {
 }
 
 #[tokio::test]
+async fn serialize_recursive_query_with_empty_name_errors() -> Result<()> {
+    use datafusion::logical_expr::{
+        col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
+    };
+    use std::sync::Arc;
+
+    let ctx = create_context().await?;
+
+    let empty_plan = LogicalPlanBuilder::empty(false).build()?;
+    let static_term = LogicalPlanBuilder::from(empty_plan.clone())
+        .project(vec![lit(1i64).alias("id")])?
+        .build()?;
+
+    let table = ctx.table("data").await?;
+    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
+        .filter(col("a").lt(lit(10i64)))?
+        .project(vec![col("a").add(lit(1i64)).alias("id")])?
+        .build()?;
+
+    let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+        name: "".to_string(),
+        static_term: Arc::new(static_term),
+        recursive_term: Arc::new(recursive_term),
+        is_distinct: false,
+    });
+
+    let result = to_substrait_plan(&plan, &ctx.state());
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("RecursiveQuery name cannot be empty")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_recursive_query_distinct() -> Result<()> {
     use datafusion::logical_expr::{
         col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,

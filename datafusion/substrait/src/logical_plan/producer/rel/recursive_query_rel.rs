@@ -93,6 +93,12 @@ fn encode_recursive_query_detail(
     name: &str,
     is_distinct: bool,
 ) -> datafusion::common::Result<Vec<u8>> {
+    if name.is_empty() {
+        return datafusion::common::substrait_err!(
+            "RecursiveQuery name cannot be empty"
+        );
+    }
+
     let detail = RecursiveQueryDetail {
         name: name.to_string(),
         is_distinct,
