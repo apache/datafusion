@@ -1783,8 +1783,8 @@ mod tests {
     use arrow::array::{LargeListArray, ListArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
-    use datafusion_common::{Spans, TableReference};
     use datafusion_common::datatype::DataTypeExt;
+    use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
