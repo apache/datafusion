@@ -37,7 +37,10 @@ pub fn from_recursive_query(
     let recursive_term_rel = producer.handle_plan(&recursive_query.recursive_term)?;
 
     // Encode metadata into a simple protobuf message
-    let detail_bytes = encode_recursive_query_detail(&recursive_query.name, recursive_query.is_distinct)?;
+    let detail_bytes = encode_recursive_query_detail(
+        &recursive_query.name,
+        recursive_query.is_distinct,
+    )?;
 
     let detail = ProtoAny {
         type_url: RECURSIVE_QUERY_TYPE_URL.to_string(),

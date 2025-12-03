@@ -19,7 +19,9 @@ use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
 use crate::logical_plan::consumer::SubstraitConsumer;
-use crate::logical_plan::recursive::{decode_recursive_scan_detail, RECURSIVE_SCAN_TYPE_URL};
+use crate::logical_plan::recursive::{
+    decode_recursive_scan_detail, RECURSIVE_SCAN_TYPE_URL,
+};
 use datafusion::catalog::cte_worktable::CteWorkTable;
 use datafusion::common::{
     not_impl_err, plan_err, substrait_datafusion_err, substrait_err, DFSchema,
