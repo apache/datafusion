@@ -189,8 +189,8 @@ main() {
             echo "***************************"
             case "$BENCHMARK" in
                 all)
-                    data_tpch "1"
-                    data_tpch "10"
+                    data_tpch "1" "parquet"
+                    data_tpch "10" "parquet"
                     data_h2o "SMALL"
                     data_h2o "MEDIUM"
                     data_h2o "BIG"
@@ -293,19 +293,19 @@ main() {
                     ;;
                 external_aggr)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 sort_tpch)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 sort_tpch10)
                     # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 topk_tpch)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 nlj)
                     # nlj uses range() function, no data generation needed
@@ -316,7 +316,7 @@ main() {
                     echo "HJ benchmark does not require data generation"
                     ;;
                 compile_profile)
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -545,6 +545,10 @@ data_tpch() {
         exit 1
     fi
     FORMAT=$2
+    if [ -z "$FORMAT" ] ; then
+        echo "Internal error: Format not specified"
+        exit 1
+    fi
 
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
     echo "Creating tpch $FORMAT dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
