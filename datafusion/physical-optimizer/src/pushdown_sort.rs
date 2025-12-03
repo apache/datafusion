@@ -115,7 +115,7 @@ impl PhysicalOptimizerRule for PushdownSort {
 
             optimize_sort(sort_exec)
         })
-            .data()
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -284,7 +284,6 @@ fn try_pushdown_sort(
             // Continue to recursive case
         }
     }
-
 
     // Recursive case: Try to push through transparent nodes
 

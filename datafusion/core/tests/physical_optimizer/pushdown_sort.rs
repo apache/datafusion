@@ -75,7 +75,7 @@ fn test_sort_pushdown_basic_phase1() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let plan = sort_exec(desc_ordering, source);
 
     insta::assert_snapshot!(
@@ -135,7 +135,7 @@ fn test_sort_with_limit_phase1() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let plan = sort_exec_with_fetch(desc_ordering, Some(10), source);
 
     insta::assert_snapshot!(
@@ -171,7 +171,7 @@ fn test_global_limit_sort_pushdown_phase1() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let sort = sort_exec(desc_ordering, source);
     let plan = global_limit_exec(sort, 0, Some(10));
 
@@ -210,7 +210,7 @@ fn test_global_limit_sort_with_skip_phase1() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let sort = sort_exec(desc_ordering, source);
     let plan = global_limit_exec(sort, 5, Some(10));
 
@@ -248,7 +248,7 @@ fn test_sort_multiple_columns_phase1() {
         ),
         sort_expr("b", &schema),
     ])
-        .unwrap();
+    .unwrap();
     let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
 
     // Request [a ASC NULLS FIRST, b DESC] ordering (exact reverse)
@@ -270,7 +270,7 @@ fn test_sort_multiple_columns_phase1() {
             },
         ),
     ])
-        .unwrap();
+    .unwrap();
     let plan = sort_exec(reverse_ordering, source);
 
     insta::assert_snapshot!(
@@ -304,7 +304,7 @@ fn test_sort_through_coalesce_batches() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let plan = sort_exec(desc_ordering, coalesce);
 
     insta::assert_snapshot!(
@@ -340,7 +340,7 @@ fn test_sort_through_repartition() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let plan = sort_exec(desc_ordering, repartition);
 
     insta::assert_snapshot!(
@@ -375,7 +375,7 @@ fn test_nested_sorts() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let inner_sort = sort_exec(desc_ordering, source);
 
     let sort_exprs2 = LexOrdering::new(vec![sort_expr("b", &schema)]).unwrap();
@@ -529,7 +529,7 @@ fn test_sort_through_coalesce_partitions() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let plan = sort_exec(desc_ordering, coalesce_parts);
 
     insta::assert_snapshot!(
@@ -569,7 +569,7 @@ fn test_complex_plan_with_multiple_operators() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let plan = sort_exec(desc_ordering, coalesce_parts);
 
     insta::assert_snapshot!(
@@ -609,7 +609,7 @@ fn test_multiple_sorts_different_columns() {
             nulls_first: false,
         },
     )])
-        .unwrap();
+    .unwrap();
     let sort1 = sort_exec(desc_ordering, source);
 
     // Then sort by column 'c' (different column, can't optimize)

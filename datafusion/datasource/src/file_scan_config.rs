@@ -30,13 +30,15 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, ColumnStatistics, Constraints, Result, ScalarValue, Statistics,
+    internal_datafusion_err, internal_err, ColumnStatistics, Constraints, Result,
+    ScalarValue, Statistics,
 };
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
 };
 use datafusion_expr::Operator;
 
+use crate::file::SortOrderPushdownResult;
 use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -55,7 +57,6 @@ use datafusion_physical_plan::{
 };
 use log::{debug, warn};
 use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
-use crate::file::SortOrderPushdownResult;
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -785,8 +786,8 @@ impl DataSource for FileScanConfig {
         let pushdown_result = self.file_source.try_pushdown_sort(order)?;
 
         let new_file_source = match pushdown_result {
-            SortOrderPushdownResult::Exact { inner } |
-            SortOrderPushdownResult::Inexact { inner } => inner,
+            SortOrderPushdownResult::Exact { inner }
+            | SortOrderPushdownResult::Inexact { inner } => inner,
             SortOrderPushdownResult::Unsupported => return Ok(None),
         };
 
