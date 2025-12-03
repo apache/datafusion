@@ -208,7 +208,7 @@ mod tests {
         let provider = create_ffi_out_of_scope();
         let failed_ctx = <Arc<TaskContext>>::try_from(&provider);
 
-        let Err(DataFusionError::Execution(_)) = failed_ctx else {
+        let Err(DataFusionError::Ffi(_)) = failed_ctx else {
             panic!("Expected out of scope error")
         };
     }
