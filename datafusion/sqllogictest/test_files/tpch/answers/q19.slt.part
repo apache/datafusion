@@ -53,4 +53,4 @@ where
             and l_shipinstruct = 'DELIVER IN PERSON'
         );
 ----
-NULL
+168597.286
