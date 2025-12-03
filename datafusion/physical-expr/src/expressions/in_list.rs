@@ -3481,10 +3481,6 @@ mod tests {
 
     #[test]
     fn test_in_list_dictionary_int32() -> Result<()> {
-        // Test that Int32StaticFilter handles dictionary-encoded Int32 columns.
-        // This exposes a bug where as_primitive_opt::<Int32Type>() returns None
-        // for dictionary arrays, causing an error.
-
         // Create schema with dictionary-encoded Int32 column
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32));
