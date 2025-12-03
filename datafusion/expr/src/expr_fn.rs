@@ -28,9 +28,9 @@ use crate::function::{
 use crate::ptr_eq::PtrEq;
 use crate::select_expr::SelectExpr;
 use crate::{
-    conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
     AggregateUDF, Expr, LimitEffect, LogicalPlan, Operator, PartitionEvaluator,
     ScalarFunctionArgs, ScalarFunctionImplementation, ScalarUDF, Signature, Volatility,
+    conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
 };
 use crate::{
     AggregateUDFImpl, ColumnarValue, ScalarUDFImpl, WindowFrame, WindowUDF, WindowUDFImpl,
@@ -39,7 +39,7 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{plan_err, Column, Result, ScalarValue, Spans, TableReference};
+use datafusion_common::{Column, Result, ScalarValue, Spans, TableReference, plan_err};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;

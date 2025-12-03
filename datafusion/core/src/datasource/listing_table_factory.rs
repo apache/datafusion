@@ -190,6 +190,16 @@ impl TableProviderFactory for ListingTableFactory {
             .with_definition(cmd.definition.clone())
             .with_constraints(cmd.constraints.clone())
             .with_column_defaults(cmd.column_defaults.clone());
+
+        // Pre-warm statistics cache if collect_statistics is enabled
+        if session_state.config().collect_statistics() {
+            let filters = &[];
+            let limit = None;
+            if let Err(e) = table.list_files_for_scan(state, filters, limit).await {
+                log::warn!("Failed to pre-warm statistics cache: {e}");
+            }
+        }
+
         Ok(Arc::new(table))
     }
 }
@@ -205,16 +215,20 @@ fn get_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
+        test_util::parquet_test_data,
+    };
+    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
+    use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+    use datafusion_execution::cache::CacheAccessor;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use glob::Pattern;
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
-
-    use super::*;
-    use crate::{
-        datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
-    };
 
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{Constraints, DFSchema, TableReference};
@@ -518,5 +532,94 @@ mod tests {
 
         let listing_options = listing_table.options();
         assert!(listing_options.table_partition_cols.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_statistics_cache_prewarming() {
+        let factory = ListingTableFactory::new();
+
+        let location = PathBuf::from(parquet_test_data())
+            .join("alltypes_tiny_pages_plain.parquet")
+            .to_string_lossy()
+            .to_string();
+
+        // Test with collect_statistics enabled
+        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let cache_config = CacheManagerConfig::default()
+            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_cache_manager(cache_config)
+            .build_arc()
+            .unwrap();
+
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.collect_statistics = true;
+        let context = SessionContext::new_with_config_rt(config, runtime);
+        let state = context.state();
+        let name = TableReference::bare("test");
+
+        let cmd = CreateExternalTable {
+            name,
+            location: location.clone(),
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+
+        let _table_provider = factory.create(&state, &cmd).await.unwrap();
+
+        assert!(
+            file_statistics_cache.len() > 0,
+            "Statistics cache should be pre-warmed when collect_statistics is enabled"
+        );
+
+        // Test with collect_statistics disabled
+        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let cache_config = CacheManagerConfig::default()
+            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_cache_manager(cache_config)
+            .build_arc()
+            .unwrap();
+
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.collect_statistics = false;
+        let context = SessionContext::new_with_config_rt(config, runtime);
+        let state = context.state();
+        let name = TableReference::bare("test");
+
+        let cmd = CreateExternalTable {
+            name,
+            location,
+            file_type: "parquet".to_string(),
+            schema: Arc::new(DFSchema::empty()),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            temporary: false,
+            definition: None,
+            order_exprs: vec![],
+            unbounded: false,
+            options: HashMap::new(),
+            constraints: Constraints::default(),
+            column_defaults: HashMap::new(),
+        };
+
+        let _table_provider = factory.create(&state, &cmd).await.unwrap();
+
+        assert_eq!(
+            file_statistics_cache.len(),
+            0,
+            "Statistics cache should not be pre-warmed when collect_statistics is disabled"
+        );
     }
 }
