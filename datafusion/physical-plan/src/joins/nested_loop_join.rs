@@ -768,7 +768,7 @@ pub(crate) struct NestedLoopJoinStream {
     state: NLJState,
     /// Output buffer holds the join result to output. It will emit eagerly when
     /// the threshold is reached.
-    batch_coalescer: Box<BatchCoalescer>,
+    output_buffer: Box<BatchCoalescer>,
     /// See comments in [`NLJState::Done`] for its purpose
     handled_empty_output: bool,
 
@@ -1033,7 +1033,7 @@ impl NestedLoopJoinStream {
             left_data,
             metrics,
             buffered_left_data: None,
-            batch_coalescer: Box::new(BatchCoalescer::new(schema, batch_size)),
+            output_buffer: Box::new(BatchCoalescer::new(schema, batch_size)),
             batch_size,
             current_right_batch: None,
             current_right_batch_matched: None,
@@ -1173,7 +1173,7 @@ impl NestedLoopJoinStream {
         // Construct the result batch for unmatched right rows using a utility function
         match self.process_right_unmatched() {
             Ok(Some(batch)) => {
-                match self.batch_coalescer.push_batch(batch) {
+                match self.output_buffer.push_batch(batch) {
                     Ok(()) => {
                         // Processed all in one pass
                         // cleared inside `process_right_unmatched`
@@ -1211,7 +1211,7 @@ impl NestedLoopJoinStream {
             Ok(true) => ControlFlow::Continue(()),
             // To Done state
             // We have finished processing all unmatched rows
-            Ok(false) => match self.batch_coalescer.finish_buffered_batch() {
+            Ok(false) => match self.output_buffer.finish_buffered_batch() {
                 Ok(()) => {
                     self.state = NLJState::Done;
                     ControlFlow::Continue(())
@@ -1302,7 +1302,7 @@ impl NestedLoopJoinStream {
             )?;
 
             if let Some(batch) = joined_batch {
-                self.batch_coalescer.push_batch(batch)?;
+                self.output_buffer.push_batch(batch)?;
             }
 
             self.left_probe_idx += l_row_count;
@@ -1315,7 +1315,7 @@ impl NestedLoopJoinStream {
             self.process_single_left_row_join(&left_data, &right_batch, l_idx)?;
 
         if let Some(batch) = joined_batch {
-            self.batch_coalescer.push_batch(batch)?;
+            self.output_buffer.push_batch(batch)?;
         }
 
         // ==== Prepare for the next iteration ====
@@ -1606,7 +1606,7 @@ impl NestedLoopJoinStream {
         if let Some(batch) =
             self.process_left_unmatched_range(left_data, start_idx, end_idx)?
         {
-            self.batch_coalescer.push_batch(batch)?;
+            self.output_buffer.push_batch(batch)?;
         }
 
         // ==== Prepare for the next iteration ====
@@ -1711,8 +1711,8 @@ impl NestedLoopJoinStream {
     /// Flush the `output_buffer` if there are batches ready to output
     /// None if no result batch ready.
     fn maybe_flush_ready_batch(&mut self) -> Option<Poll<Option<Result<RecordBatch>>>> {
-        if self.batch_coalescer.has_completed_batch() {
-            if let Some(batch) = self.batch_coalescer.next_completed_batch() {
+        if self.output_buffer.has_completed_batch() {
+            if let Some(batch) = self.output_buffer.next_completed_batch() {
                 // Update output rows for selectivity metric
                 let output_rows = batch.num_rows();
                 self.metrics.selectivity.add_part(output_rows);
