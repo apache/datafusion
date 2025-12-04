@@ -334,7 +334,6 @@ pub mod test {
     }
 
     use arrow::datatypes::DataType;
-    #[allow(unused_imports)]
     pub(crate) use test_function;
 
     use super::*;

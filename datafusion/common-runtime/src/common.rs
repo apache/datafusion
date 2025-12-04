@@ -44,7 +44,7 @@ impl<R: 'static> SpawnedTask<R> {
         R: Send,
     {
         // Ok to use spawn here as SpawnedTask handles aborting/cancelling the task on Drop
-        #[allow(clippy::disallowed_methods)]
+        #[expect(clippy::disallowed_methods)]
         let inner = tokio::task::spawn(trace_future(task));
         Self { inner }
     }
@@ -56,7 +56,7 @@ impl<R: 'static> SpawnedTask<R> {
         R: Send,
     {
         // Ok to use spawn_blocking here as SpawnedTask handles aborting/cancelling the task on Drop
-        #[allow(clippy::disallowed_methods)]
+        #[expect(clippy::disallowed_methods)]
         let inner = tokio::task::spawn_blocking(trace_block(task));
         Self { inner }
     }
@@ -115,14 +115,14 @@ impl<R> Drop for SpawnedTask<R> {
 mod tests {
     use super::*;
 
-    use std::future::{pending, Pending};
+    use std::future::{Pending, pending};
 
     use tokio::{runtime::Runtime, sync::oneshot};
 
     #[tokio::test]
     async fn runtime_shutdown() {
         let rt = Runtime::new().unwrap();
-        #[allow(clippy::async_yields_async)]
+        #[expect(clippy::async_yields_async)]
         let task = rt
             .spawn(async {
                 SpawnedTask::spawn(async {

@@ -23,7 +23,130 @@
 
 **Note:** DataFusion `52.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 
-You can see the current [status of the `52.0.0` release here](https://github.com/apache/datafusion/issues/18566)
+You can see the current [status of the `52.0.0`release here](https://github.com/apache/datafusion/issues/18566)
+
+### Changes to DFSchema API
+
+To permit more efficient planning, several methods on `DFSchema` have been
+changed to return references to the underlying [`&FieldRef`] rather than
+[`&Field`]. This allows planners to more cheaply copy the references via
+`Arc::clone` rather than cloning the entire `Field` structure.
+
+You may need to change code to use `Arc::clone` instead of `.as_ref().clone()`
+directly on the `Field`. For example:
+
+```diff
+- let field = df_schema.field("my_column").as_ref().clone();
++ let field = Arc::clone(df_schema.field("my_column"));
+```
+
+### Removal of `pyarrow` feature
+
+The `pyarrow` feature flag has been removed. This feature has been migrated to
+the `datafusion-python` repository since version `44.0.0`.
+
+### Adaptive filter representation in Parquet filter pushdown
+
+As of Arrow 57.1.0, DataFusion uses a new adaptive filter strategy when
+evaluating pushed down filters for Parquet files. This new strategy improves
+performance for certain types of queries where the results of filtering are
+more efficiently represented with a bitmask rather than a selection.
+See [arrow-rs #5523] for more details.
+
+This change only applies to the built-in Parquet data source with filter-pushdown enabled (
+which is [not yet the default behavior]).
+
+You can disable the new behavior by setting the
+`datafusion.execution.parquet.force_filter_selections` [configuration setting] to true.
+
+```sql
+> set datafusion.execution.parquet.force_filter_selections = true;
+```
+
+[arrow-rs #5523]: https://github.com/apache/arrow-rs/issues/5523
+[configuration setting]: https://datafusion.apache.org/user-guide/configs.html
+[not yet the default behavior]: https://github.com/apache/datafusion/issues/3463
+
+### Statistics handling moved from `FileSource` to `FileScanConfig`
+
+Statistics are now managed directly by `FileScanConfig` instead of being delegated to `FileSource` implementations. This simplifies the `FileSource` trait and provides more consistent statistics handling across all file formats.
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations
+
+**Breaking changes:**
+
+Two methods have been removed from the `FileSource` trait:
+
+- `with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>`
+- `statistics(&self) -> Result<Statistics>`
+
+**Migration guide:**
+
+If you have a custom `FileSource` implementation, you need to:
+
+1. Remove the `with_statistics` method implementation
+2. Remove the `statistics` method implementation
+3. Remove any internal state that was storing statistics
+
+**Before:**
+
+```rust,ignore
+#[derive(Clone)]
+struct MyCustomSource {
+    table_schema: TableSchema,
+    projected_statistics: Option<Statistics>,
+    // other fields...
+}
+
+impl FileSource for MyCustomSource {
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        Arc::new(Self {
+            table_schema: self.table_schema.clone(),
+            projected_statistics: Some(statistics),
+            // other fields...
+        })
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        Ok(self.projected_statistics.clone().unwrap_or_else(||
+            Statistics::new_unknown(self.table_schema.file_schema())
+        ))
+    }
+
+    // other methods...
+}
+```
+
+**After:**
+
+```rust,ignore
+#[derive(Clone)]
+struct MyCustomSource {
+    table_schema: TableSchema,
+    // projected_statistics field removed
+    // other fields...
+}
+
+impl FileSource for MyCustomSource {
+    // with_statistics method removed
+    // statistics method removed
+
+    // other methods...
+}
+```
+
+**Accessing statistics:**
+
+Statistics are now accessed through `FileScanConfig` instead of `FileSource`:
+
+```diff
+- let stats = config.file_source.statistics()?;
++ let stats = config.statistics();
+```
+
+Note that `FileScanConfig::statistics()` automatically marks statistics as inexact when filters are present, ensuring correctness when filters are pushed down.
 
 ### Planner now requires explicit opt-in for WITHIN GROUP syntax
 
@@ -66,6 +189,266 @@ SELECT median(c1) IGNORE NULLS FROM table
 ```
 
 Instead of silently succeeding.
+
+### API change for `CacheAccessor` trait
+
+The remove API no longer requires a mutable instance
+
+### FFI crate updates
+
+Many of the structs in the `datafusion-ffi` crate have been updated to allow easier
+conversion to the underlying trait types they represent. This simplifies some code
+paths, but also provides an additional improvement in cases where library code goes
+through a round trip via the foreign function interface.
+
+To update your code, suppose you have a `FFI_SchemaProvider` called `ffi_provider`
+and you wish to use this as a `SchemaProvider`. In the old approach you would do
+something like:
+
+```rust,ignore
+    let foreign_provider: ForeignSchemaProvider = ffi_provider.into();
+    let foreign_provider = Arc::new(foreign_provider) as Arc<dyn SchemaProvider>;
+```
+
+This code should now be written as:
+
+```rust,ignore
+    let foreign_provider: Arc<dyn SchemaProvider + Send> = ffi_provider.into();
+    let foreign_provider = foreign_provider as Arc<dyn SchemaProvider>;
+```
+
+For the case of user defined functions, the updates are similar but you
+may need to change the way you call the creation of the `ScalarUDF`.
+Aggregate and window functions follow the same pattern.
+
+Previously you may write:
+
+```rust,ignore
+    let foreign_udf: ForeignScalarUDF = ffi_udf.try_into()?;
+    let foreign_udf: ScalarUDF = foreign_udf.into();
+```
+
+Instead this should now be:
+
+```rust,ignore
+    let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.into();
+    let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
+```
+
+Additionally, the FFI structure for Scalar UDF's no longer contains a
+`return_type` call. This code was not used since the `ForeignScalarUDF`
+struct implements the `return_field_from_args` instead.
+
+### Projection handling moved from FileScanConfig to FileSource
+
+Projection handling has been moved from `FileScanConfig` into `FileSource` implementations. This enables format-specific projection pushdown (e.g., Parquet can push down struct field access, Vortex can push down computed expressions into un-decoded data).
+
+**Who is affected:**
+
+- Users who have implemented custom `FileSource` implementations
+- Users who use `FileScanConfigBuilder::with_projection_indices` directly
+
+**Breaking changes:**
+
+1. **`FileSource::with_projection` replaced with `try_pushdown_projection`:**
+
+   The `with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>` method has been removed and replaced with `try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>>`.
+
+2. **`FileScanConfig.projection_exprs` field removed:**
+
+   Projections are now stored in the `FileSource` directly, not in `FileScanConfig`.
+   Various public helper methods that access projection information have been removed from `FileScanConfig`.
+
+3. **`FileScanConfigBuilder::with_projection_indices` now returns `Result<Self>`:**
+
+   This method can now fail if the projection pushdown fails.
+
+4. **`FileSource::create_file_opener` now returns `Result<Arc<dyn FileOpener>>`:**
+
+   Previously returned `Arc<dyn FileOpener>` directly.
+   Any `FileSource` implementation that may fail to create a `FileOpener` should now return an appropriate error.
+
+5. **`DataSource::try_swapping_with_projection` signature changed:**
+
+   Parameter changed from `&[ProjectionExpr]` to `&ProjectionExprs`.
+
+**Migration guide:**
+
+If you have a custom `FileSource` implementation:
+
+**Before:**
+
+```rust,ignore
+impl FileSource for MyCustomSource {
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
+        // Apply projection from config
+        Arc::new(Self { /* ... */ })
+    }
+
+    fn create_file_opener(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(MyOpener { /* ... */ })
+    }
+}
+```
+
+**After:**
+
+```rust,ignore
+impl FileSource for MyCustomSource {
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        // Return None if projection cannot be pushed down
+        // Return Some(new_source) with projection applied if it can
+        Ok(Some(Arc::new(Self {
+            projection: Some(projection.clone()),
+            /* ... */
+        })))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        self.projection.as_ref()
+    }
+
+    fn create_file_opener(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+        base_config: &FileScanConfig,
+        partition: usize,
+    ) -> Result<Arc<dyn FileOpener>> {
+        Ok(Arc::new(MyOpener { /* ... */ }))
+    }
+}
+```
+
+We recommend you look at [#18627](https://github.com/apache/datafusion/pull/18627)
+that introduced these changes for more examples for how this was handled for the various built in file sources.
+
+We have added [`SplitProjection`](https://docs.rs/datafusion-datasource/latest/datafusion_datasource/projection/struct.SplitProjection.html) and [`ProjectionOpener`](https://docs.rs/datafusion-datasource/latest/datafusion_datasource/projection/struct.ProjectionOpener.html) helpers to make it easier to handle projections in your `FileSource` implementations.
+
+For file sources that can only handle simple column selections (not computed expressions), use the `SplitProjection` and `ProjectionOpener` helpers to split the projection into pushdownable and non-pushdownable parts:
+
+```rust,ignore
+use datafusion_datasource::projection::{SplitProjection, ProjectionOpener};
+
+// In try_pushdown_projection:
+let split = SplitProjection::new(projection, self.table_schema())?;
+// Use split.file_projection() for what to push down to the file format
+// The ProjectionOpener wrapper will handle the rest
+```
+
+**For `FileScanConfigBuilder` users:**
+
+```diff
+let config = FileScanConfigBuilder::new(url, source)
+-   .with_projection_indices(Some(vec![0, 2, 3]))
++   .with_projection_indices(Some(vec![0, 2, 3]))?
+    .build();
+```
+
+**Handling projections in `FileSource`:**
+
+### `PhysicalOptimizerRule::optimize` deprecated in favor of `optimize_plan`
+
+The `PhysicalOptimizerRule` trait has been updated to provide optimizer rules with access to broader session context. A new method `optimize_plan` has been added that accepts an `OptimizerContext` parameter, and the existing `optimize` method has been deprecated.
+
+**Who is affected:**
+
+- Users who have implemented custom `PhysicalOptimizerRule` implementations
+
+**Breaking changes:**
+
+1. **New `optimize_plan` method**: This is the preferred method for implementing optimization rules. It provides access to the full `SessionConfig` through `OptimizerContext`, rather than just `ConfigOptions`.
+
+2. **`optimize` method deprecated**: The old `optimize` method that takes `&ConfigOptions` is now deprecated and will be removed in DataFusion 58.0.0.
+
+**Migration guide:**
+
+If you have a custom `PhysicalOptimizerRule` implementation, update it to implement `optimize_plan` instead of `optimize`:
+
+**Before:**
+
+```rust
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_physical_plan::ExecutionPlan;
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct MyOptimizerRule;
+
+#[allow(deprecated)]
+impl PhysicalOptimizerRule for MyOptimizerRule {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Use config.optimizer, config.execution, etc.
+        // ... optimization logic ...
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+```
+
+**After:**
+
+```rust
+use datafusion::physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
+use datafusion_common::Result;
+use datafusion_physical_plan::ExecutionPlan;
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct MyOptimizerRule;
+
+impl PhysicalOptimizerRule for MyOptimizerRule {
+    fn optimize_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &OptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Access ConfigOptions through session_config
+        let _config = context.session_config().options();
+        // Or access extensions through session_config
+        let _extensions = context.session_config().extensions();
+        // ... optimization logic ...
+        Ok(plan)
+    }
+
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+```
+
+**What is `OptimizerContext`?**
+
+`OptimizerContext` is a new struct that provides context during physical plan optimization, similar to how `TaskContext` provides context during execution. It wraps `SessionConfig`, giving optimizer rules access to:
+
+- Configuration options via `context.session_config().options()`
+- Session extensions via `context.session_config().extensions()`
+
+This enables optimizer rules to access custom extensions registered with the session, which was not possible with the old `&ConfigOptions` parameter.
 
 ## DataFusion `51.0.0`
 
@@ -880,7 +1263,7 @@ By default if you do not use a custom `SchemaAdapterFactory` we will use express
 If you do set a custom `SchemaAdapterFactory` we will continue to use it but emit a warning about that code path being deprecated.
 
 To resolve this you need to implement a custom `PhysicalExprAdapterFactory` and use that instead of a `SchemaAdapterFactory`.
-See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/default_column_values.rs) for an example of how to do this.
+See the [default values](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for an example of how to do this.
 Opting into the new APIs will set you up for future changes since we plan to expand use of `PhysicalExprAdapterFactory` to other areas of DataFusion.
 
 See [#16800] for details.

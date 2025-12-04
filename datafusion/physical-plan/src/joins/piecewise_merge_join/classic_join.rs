@@ -70,7 +70,6 @@ pub(super) struct SortedStreamBatch {
 }
 
 impl SortedStreamBatch {
-    #[allow(dead_code)]
     fn new(batch: RecordBatch, compare_key_values: Vec<ArrayRef>) -> Self {
         Self {
             batch,
@@ -132,7 +131,7 @@ impl RecordBatchStream for ClassicPWMJStream {
 //      `Completed` however for Full and Right we will need to process the unmatched buffered rows.
 impl ClassicPWMJStream {
     // Creates a new `PiecewiseMergeJoinStream` instance
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         schema: Arc<Schema>,
         on_streamed: PhysicalExprRef,
@@ -248,10 +247,7 @@ impl ClassicPWMJStream {
                 // Reset BatchProcessState before processing a new stream batch
                 self.batch_process_state.reset();
                 self.state = PiecewiseMergeJoinStreamState::ProcessStreamBatch(
-                    SortedStreamBatch {
-                        batch: stream_batch,
-                        compare_key_values: vec![stream_values],
-                    },
+                    SortedStreamBatch::new(stream_batch, vec![stream_values]),
                 );
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -280,7 +276,7 @@ impl ClassicPWMJStream {
         let batch = resolve_classic_join(
             buffered_side,
             stream_batch,
-            Arc::clone(&self.schema),
+            &self.schema,
             self.operator,
             self.sort_option,
             self.join_type,
@@ -451,11 +447,10 @@ impl Stream for ClassicPWMJStream {
 }
 
 // For Left, Right, Full, and Inner joins, incoming stream batches will already be sorted.
-#[allow(clippy::too_many_arguments)]
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,
-    join_schema: Arc<Schema>,
+    join_schema: &SchemaRef,
     operator: Operator,
     sort_options: SortOptions,
     join_type: JoinType,
@@ -504,7 +499,7 @@ fn resolve_classic_join(
                             buffered_side,
                             stream_batch,
                             join_type,
-                            Arc::clone(&join_schema),
+                            join_schema,
                         )?;
 
                         batch_process_state.output_batches.push_batch(batch)?;
@@ -532,7 +527,7 @@ fn resolve_classic_join(
                             buffered_side,
                             stream_batch,
                             join_type,
-                            Arc::clone(&join_schema),
+                            join_schema,
                         )?;
 
                         // Flush batch and update pointers if we have a completed batch
@@ -579,14 +574,14 @@ fn resolve_classic_join(
         let batch = create_unmatched_batch(
             &mut batch_process_state.unmatched_indices,
             stream_batch,
-            Arc::clone(&join_schema),
+            join_schema,
         )?;
 
         batch_process_state.output_batches.push_batch(batch)?;
     }
 
     batch_process_state.continue_process = false;
-    Ok(RecordBatch::new_empty(Arc::clone(&join_schema)))
+    Ok(RecordBatch::new_empty(Arc::clone(join_schema)))
 }
 
 // Builds a record batch from indices ranges on the buffered and streamed side.
@@ -599,7 +594,7 @@ fn build_matched_indices_and_set_buffered_bitmap(
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,
     join_type: JoinType,
-    join_schema: Arc<Schema>,
+    join_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     // Mark the buffered indices as visited
     if need_produce_result_in_final(join_type) {
@@ -622,7 +617,7 @@ fn build_matched_indices_and_set_buffered_bitmap(
     buffered_columns.extend(streamed_columns);
 
     Ok(RecordBatch::try_new(
-        Arc::clone(&join_schema),
+        Arc::clone(join_schema),
         buffered_columns,
     )?)
 }
@@ -631,7 +626,7 @@ fn build_matched_indices_and_set_buffered_bitmap(
 fn create_unmatched_batch(
     streamed_indices: &mut PrimitiveBuilder<UInt32Type>,
     stream_batch: &SortedStreamBatch,
-    join_schema: Arc<Schema>,
+    join_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     let streamed_indices = streamed_indices.finish();
     let new_stream_batch = take_record_batch(&stream_batch.batch, &streamed_indices)?;
@@ -649,7 +644,7 @@ fn create_unmatched_batch(
     buffered_columns.extend(streamed_columns);
 
     Ok(RecordBatch::try_new(
-        Arc::clone(&join_schema),
+        Arc::clone(join_schema),
         buffered_columns,
     )?)
 }

@@ -130,47 +130,47 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
         (DataType::Utf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string::<i32>();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::Utf8, DataType::Utf8View) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string_view();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::Utf8, DataType::LargeUtf8) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string::<i64>();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::LargeUtf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string::<i32>();
-            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int64Type>(&string_array, &substring_array)
         }
         (DataType::LargeUtf8, DataType::Utf8View) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string_view();
-            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int64Type>(&string_array, &substring_array)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string::<i64>();
-            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int64Type>(&string_array, &substring_array)
         }
         (DataType::Utf8View, DataType::Utf8View) => {
             let string_array = args[0].as_string_view();
             let substring_array = args[1].as_string_view();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::Utf8View, DataType::Utf8) => {
             let string_array = args[0].as_string_view();
             let substring_array = args[1].as_string::<i32>();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::Utf8View, DataType::LargeUtf8) => {
             let string_array = args[0].as_string_view();
             let substring_array = args[1].as_string::<i64>();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
 
         other => {
@@ -183,8 +183,8 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// strpos('high', 'ig') = 2
 /// The implementation uses UTF-8 code points as characters
 fn calculate_strpos<'a, V1, V2, T: ArrowPrimitiveType>(
-    string_array: V1,
-    substring_array: V2,
+    string_array: &V1,
+    substring_array: &V2,
 ) -> Result<ArrayRef>
 where
     V1: StringArrayType<'a, Item = &'a str>,

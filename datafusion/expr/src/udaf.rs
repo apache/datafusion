@@ -26,23 +26,23 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
+use datafusion_common::{Result, ScalarValue, Statistics, exec_err, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
+    AggregateFunction, AggregateFunctionParams, ExprListDisplay, WindowFunctionParams,
     schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
-    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams, ExprListDisplay,
-    WindowFunctionParams,
+    schema_name_from_sorts,
 };
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
-use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
-use crate::{expr_vec_fmt, Accumulator, Expr};
+use crate::utils::format_state_name;
+use crate::{Accumulator, Expr, expr_vec_fmt};
 use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -74,8 +74,8 @@ use crate::{Documentation, Signature};
 /// [aggregate function]: https://en.wikipedia.org/wiki/Aggregate_function
 /// [`Accumulator`]: Accumulator
 /// [`create_udaf`]: crate::expr_fn::create_udaf
-/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 #[derive(Debug, Clone, PartialOrd)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
@@ -360,7 +360,7 @@ where
 /// See [`advanced_udaf.rs`] for a full example with complete implementation and
 /// [`AggregateUDF`] for other available options.
 ///
-/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 ///
 /// # Basic Example
 /// ```
@@ -565,11 +565,12 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let fields = vec![args
-            .return_field
-            .as_ref()
-            .clone()
-            .with_name(format_state_name(args.name, "value"))];
+        let fields = vec![
+            args.return_field
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(args.name, "value")),
+        ];
 
         Ok(fields
             .into_iter()

@@ -31,6 +31,7 @@ use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
     metadata::FieldMetadata,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
+    HashMap,
 };
 use datafusion_common::{
     exec_datafusion_err, internal_err, DFSchema, DataFusionError, Result, ScalarValue,
@@ -50,7 +51,6 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
@@ -58,6 +58,7 @@ use crate::simplify_expressions::unwrap_cast::{
     unwrap_cast_in_comparison_for_binary,
 };
 use crate::simplify_expressions::SimplifyInfo;
+use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
 use regex::Regex;
@@ -226,7 +227,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
-        let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
+        let guarantees_map: HashMap<&Expr, &NullableInterval> =
+            self.guarantees.iter().map(|(k, v)| (k, v)).collect();
 
         if self.canonicalize {
             expr = expr.rewrite(&mut Canonicalizer::new()).data()?
@@ -243,7 +245,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             } = expr
                 .rewrite(&mut const_evaluator)?
                 .transform_data(|expr| expr.rewrite(&mut simplifier))?
-                .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
+                .transform_data(|expr| {
+                    rewrite_with_guarantees_map(expr, &guarantees_map)
+                })?;
             expr = data;
             num_cycles += 1;
             // Track if any transformation occurred

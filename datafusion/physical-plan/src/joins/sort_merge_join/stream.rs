@@ -533,7 +533,7 @@ pub(super) fn get_corrected_filter_mask(
                     // If the left row seen as true its needed to output it once
                     // To do that we mark all other matches for same row as null to avoid the output
                     if seen_true {
-                        #[allow(clippy::needless_range_loop)]
+                        #[expect(clippy::needless_range_loop)]
                         for j in first_row_idx..last_true_idx {
                             mask[j] = None;
                         }
@@ -748,7 +748,7 @@ impl Stream for SortMergeJoinStream {
 }
 
 impl SortMergeJoinStream {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         // Configured via `datafusion.execution.spill_compression`.
         spill_compression: SpillCompression,
@@ -857,7 +857,7 @@ impl SortMergeJoinStream {
         }
     }
 
-    fn free_reservation(&mut self, buffered_batch: BufferedBatch) -> Result<()> {
+    fn free_reservation(&mut self, buffered_batch: &BufferedBatch) -> Result<()> {
         // Shrink memory usage for in-memory batches only
         if let BufferedBatchState::InMemory(_) = buffered_batch.batch {
             self.reservation
@@ -915,7 +915,7 @@ impl SortMergeJoinStream {
                                 self.buffered_data.batches.pop_front()
                             {
                                 self.produce_buffered_not_matched(&mut buffered_batch)?;
-                                self.free_reservation(buffered_batch)?;
+                                self.free_reservation(&buffered_batch)?;
                             }
                         } else {
                             // If the head batch is not fully processed, break the loop.
@@ -1533,16 +1533,16 @@ impl SortMergeJoinStream {
             &out_mask
         };
 
-        self.filter_record_batch_by_join_type(record_batch, corrected_mask)
+        self.filter_record_batch_by_join_type(&record_batch, corrected_mask)
     }
 
     fn filter_record_batch_by_join_type(
         &mut self,
-        record_batch: RecordBatch,
+        record_batch: &RecordBatch,
         corrected_mask: &BooleanArray,
     ) -> Result<RecordBatch> {
         let mut filtered_record_batch =
-            filter_record_batch(&record_batch, corrected_mask)?;
+            filter_record_batch(record_batch, corrected_mask)?;
         let left_columns_length = self.streamed_schema.fields.len();
         let right_columns_length = self.buffered_schema.fields.len();
 
@@ -1551,7 +1551,7 @@ impl SortMergeJoinStream {
             JoinType::Left | JoinType::LeftMark | JoinType::Right | JoinType::RightMark
         ) {
             let null_mask = compute::not(corrected_mask)?;
-            let null_joined_batch = filter_record_batch(&record_batch, &null_mask)?;
+            let null_joined_batch = filter_record_batch(record_batch, &null_mask)?;
 
             let mut right_columns = create_unmatched_columns(
                 self.join_type,
@@ -1595,12 +1595,14 @@ impl SortMergeJoinStream {
                 &self.schema,
                 &[filtered_record_batch, null_joined_streamed_batch],
             )?;
-        } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
+        } else if matches!(
+            self.join_type,
+            JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+                | JoinType::RightSemi
+        ) {
             let output_column_indices = (0..left_columns_length).collect::<Vec<_>>();
-            filtered_record_batch =
-                filtered_record_batch.project(&output_column_indices)?;
-        } else if matches!(self.join_type, JoinType::RightAnti | JoinType::RightSemi) {
-            let output_column_indices = (0..right_columns_length).collect::<Vec<_>>();
             filtered_record_batch =
                 filtered_record_batch.project(&output_column_indices)?;
         } else if matches!(self.join_type, JoinType::Full)
@@ -1609,7 +1611,7 @@ impl SortMergeJoinStream {
             // Find rows which joined by key but Filter predicate evaluated as false
             let joined_filter_not_matched_mask = compute::not(corrected_mask)?;
             let joined_filter_not_matched_batch =
-                filter_record_batch(&record_batch, &joined_filter_not_matched_mask)?;
+                filter_record_batch(record_batch, &joined_filter_not_matched_mask)?;
 
             // Add left unmatched rows adding the right side as nulls
             let right_null_columns = self
