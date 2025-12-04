@@ -82,6 +82,9 @@ pub struct RunOpt {
     /// Column name that the data is sorted by (e.g., "EventTime")
     /// If specified, DataFusion will be informed that the data has this sort order
     /// using CREATE EXTERNAL TABLE with WITH ORDER clause
+    ///
+    /// This is for `sorted_clickbench` benchmark's internal usage. If you want to specify
+    /// a different order, make sure the dataset is generated with the same sort order.
     #[structopt(long = "sorted-by")]
     sorted_by: Option<String>,
 
