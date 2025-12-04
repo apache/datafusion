@@ -141,7 +141,7 @@ impl ScalarUDFImpl for SubstrFunc {
 /// substr('alphabet', 3) = 'phabet'
 /// substr('alphabet', 3, 2) = 'ph'
 /// The implementation uses UTF-8 code points as characters
-pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();

@@ -735,32 +735,34 @@ mod tests {
         let non_existing = cwd.join("non-existing-dir").display().to_string();
         let non_existing_str = non_existing.as_str();
 
-        env::set_var(udf_env, non_existing_str);
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_err());
+        unsafe {
+            env::set_var(udf_env, non_existing_str);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_err());
 
-        env::set_var(udf_env, "");
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, "");
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::set_var(udf_env, " ");
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, " ");
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::set_var(udf_env, existing_str);
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, existing_str);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::remove_var(udf_env);
-        let res = get_data_dir(udf_env, non_existing_str);
-        assert!(res.is_err());
+            env::remove_var(udf_env);
+            let res = get_data_dir(udf_env, non_existing_str);
+            assert!(res.is_err());
 
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
+        }
     }
 
     #[test]

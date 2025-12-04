@@ -264,7 +264,7 @@ impl WindowUDFImpl for WindowShift {
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let shift_offset =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
-                .map(get_signed_integer)
+                .map(|v| get_signed_integer(&v))
                 .map_or(Ok(None), |v| v.map(Some))
                 .map(|n| self.kind.shift_offset(n))
                 .map(|offset| {
@@ -640,7 +640,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         // OR
         // - ignore nulls mode and current value is null and is within window bounds
         // .unwrap() is safe here as there is a none check in front
-        #[allow(clippy::unnecessary_unwrap)]
+        #[expect(clippy::unnecessary_unwrap)]
         if !(idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap()))) {
             ScalarValue::try_from_array(array, idx.unwrap())
         } else {

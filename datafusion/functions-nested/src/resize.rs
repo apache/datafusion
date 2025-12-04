@@ -152,8 +152,7 @@ impl ScalarUDFImpl for ArrayResize {
     }
 }
 
-/// array_resize SQL function
-pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {
         return exec_err!("array_resize needs two or three arguments");
     }

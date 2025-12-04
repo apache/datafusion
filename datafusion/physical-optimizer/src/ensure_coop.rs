@@ -23,9 +23,8 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::{OptimizerContext, PhysicalOptimizerRule};
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::Result;
 use datafusion_physical_plan::coop::CooperativeExec;
@@ -62,10 +61,10 @@ impl PhysicalOptimizerRule for EnsureCooperative {
         "EnsureCooperative"
     }
 
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        _context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
             let is_leaf = plan.children().is_empty();
@@ -96,16 +95,17 @@ impl PhysicalOptimizerRule for EnsureCooperative {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::config::ConfigOptions;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_physical_plan::{displayable, test::scan_partitioned};
     use insta::assert_snapshot;
 
     #[tokio::test]
     async fn test_cooperative_exec_for_custom_exec() {
         let test_custom_exec = scan_partitioned(1);
-        let config = ConfigOptions::new();
+        let session_config = SessionConfig::new();
+        let optimizer_context = OptimizerContext::new(session_config);
         let optimized = EnsureCooperative::new()
-            .optimize(test_custom_exec, &config)
+            .optimize_plan(test_custom_exec, &optimizer_context)
             .unwrap();
 
         let display = displayable(optimized.as_ref()).indent(true).to_string();

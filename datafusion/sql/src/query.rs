@@ -46,17 +46,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut query_plan_context = outer_planner_context.clone();
         let planner_context = &mut query_plan_context;
 
-        if let Some(with) = query.with {
+        let Query {
+            with,
+            body,
+            order_by,
+            limit_clause,
+            fetch,
+            locks: _,
+            for_clause: _,
+            settings: _,
+            format_clause: _,
+            pipe_operators,
+        } = query;
+
+        if fetch.is_some() {
+            return not_impl_err!("FETCH clause is not supported yet");
+        }
+
+        if let Some(with) = with {
             self.plan_with_clause(with, planner_context)?;
         }
 
-        let set_expr = *query.body;
+        let set_expr = *body;
         let plan = match set_expr {
             SetExpr::Select(mut select) => {
                 let select_into = select.into.take();
                 let plan =
-                    self.select_to_plan(*select, query.order_by, planner_context)?;
-                let plan = self.limit(plan, query.limit_clause, planner_context)?;
+                    self.select_to_plan(*select, order_by.clone(), planner_context)?;
+                let plan = self.limit(plan, limit_clause.clone(), planner_context)?;
                 // Process the `SELECT INTO` after `LIMIT`.
                 self.select_into(plan, select_into)
             }
@@ -69,7 +86,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let _guard = StackGuard::new(256 * 1024);
                     self.set_expr_to_plan(other, planner_context)
                 }?;
-                let oby_exprs = to_order_by_exprs(query.order_by)?;
+                let oby_exprs = to_order_by_exprs(order_by)?;
                 let order_by_rex = self.order_by_to_sort_expr(
                     oby_exprs,
                     plan.schema(),
@@ -78,11 +95,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None,
                 )?;
                 let plan = self.order_by(plan, order_by_rex)?;
-                self.limit(plan, query.limit_clause, planner_context)
+                self.limit(plan, limit_clause, planner_context)
             }
         }?;
 
-        self.pipe_operators(plan, query.pipe_operators, planner_context)
+        self.pipe_operators(plan, pipe_operators, planner_context)
     }
 
     /// Apply pipe operators to a plan

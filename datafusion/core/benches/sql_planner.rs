@@ -93,6 +93,7 @@ fn create_context() -> SessionContext {
 
 /// Register the table definitions as a MemTable with the context and return the
 /// context
+#[expect(clippy::needless_pass_by_value)]
 fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     defs.iter().for_each(|TableDef { name, schema }| {
         ctx.register_table(
@@ -519,9 +520,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     };
 
     let raw_tpcds_sql_queries = (1..100)
-        // skip query 75 until it is fixed
-        // https://github.com/apache/datafusion/issues/17801
-        .filter(|q| *q != 75)
         .map(|q| std::fs::read_to_string(format!("{tests_path}tpc-ds/{q}.sql")).unwrap())
         .collect::<Vec<_>>();
 

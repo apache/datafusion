@@ -284,34 +284,31 @@ impl ScalarUDFImpl for ArrayRemoveAll {
     }
 }
 
-/// Array_remove SQL function
-pub fn array_remove_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_remove_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, element] = take_function_args("array_remove", args)?;
 
     let arr_n = vec![1; array.len()];
-    array_remove_internal(array, element, arr_n)
+    array_remove_internal(array, element, &arr_n)
 }
 
-/// Array_remove_n SQL function
-pub fn array_remove_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_remove_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, element, max] = take_function_args("array_remove_n", args)?;
 
     let arr_n = as_int64_array(max)?.values().to_vec();
-    array_remove_internal(array, element, arr_n)
+    array_remove_internal(array, element, &arr_n)
 }
 
-/// Array_remove_all SQL function
-pub fn array_remove_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_remove_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, element] = take_function_args("array_remove_all", args)?;
 
     let arr_n = vec![i64::MAX; array.len()];
-    array_remove_internal(array, element, arr_n)
+    array_remove_internal(array, element, &arr_n)
 }
 
 fn array_remove_internal(
     array: &ArrayRef,
     element_array: &ArrayRef,
-    arr_n: Vec<i64>,
+    arr_n: &[i64],
 ) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
@@ -348,7 +345,7 @@ fn array_remove_internal(
 fn general_remove<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     element_array: &ArrayRef,
-    arr_n: Vec<i64>,
+    arr_n: &[i64],
 ) -> Result<ArrayRef> {
     let data_type = list_array.value_type();
     let mut new_values = vec![];

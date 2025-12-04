@@ -36,12 +36,12 @@ use log::{debug, trace};
 
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TransformedResult;
+use datafusion_common::{assert_eq_or_internal_err, Column, DFSchema};
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
+    internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
-use datafusion_common::{Column, DFSchema};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
@@ -86,7 +86,7 @@ use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 /// example of how to use `PruningPredicate` to prune files based on min/max
 /// values.
 ///
-/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/pruning.rs
+/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/pruning.rs
 ///
 /// Given an expression like `x = 5` and statistics for 3 containers (Row
 /// Groups, files, etc) `A`, `B`, and `C`:
@@ -919,13 +919,13 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
-        if num_containers != array.len() {
-            return internal_err!(
-                "mismatched statistics length. Expected {}, got {}",
-                num_containers,
-                array.len()
-            );
-        }
+        assert_eq_or_internal_err!(
+            num_containers,
+            array.len(),
+            "mismatched statistics length. Expected {}, got {}",
+            num_containers,
+            array.len()
+        );
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")

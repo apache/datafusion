@@ -102,24 +102,25 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Int8 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int8Type>()
-                .unary(|v| bit_count(v.into()));
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int16 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int16Type>()
-                .unary(|v| bit_count(v.into()));
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int32 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int32Type>()
-                .unary(|v| bit_count(v.into()));
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int64 => {
-            let result: Int32Array =
-                value_array.as_primitive::<Int64Type>().unary(bit_count);
+            let result: Int32Array = value_array
+                .as_primitive::<Int64Type>()
+                .unary(|v| v.count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::UInt8 => {
@@ -153,20 +154,6 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
     }
-}
-
-// Here’s the equivalent Rust implementation of the bitCount function (similar to Apache Spark's bitCount for LongType)
-// Spark: https://github.com/apache/spark/blob/ac717dd7aec665de578d7c6b0070e8fcdde3cea9/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/bitwiseExpressions.scala#L243
-// Java impl: https://github.com/openjdk/jdk/blob/d226023643f90027a8980d161ec6d423887ae3ce/src/java.base/share/classes/java/lang/Long.java#L1584
-fn bit_count(i: i64) -> i32 {
-    let mut u = i as u64;
-    u = u - ((u >> 1) & 0x5555555555555555);
-    u = (u & 0x3333333333333333) + ((u >> 2) & 0x3333333333333333);
-    u = (u + (u >> 4)) & 0x0f0f0f0f0f0f0f0f;
-    u = u + (u >> 8);
-    u = u + (u >> 16);
-    u = u + (u >> 32);
-    (u as i32) & 0x7f
 }
 
 #[cfg(test)]

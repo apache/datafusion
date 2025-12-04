@@ -90,7 +90,7 @@ impl UnnestExec {
             &input,
             &list_column_indices,
             &struct_column_indices,
-            Arc::clone(&schema),
+            &schema,
         )?;
 
         Ok(UnnestExec {
@@ -109,7 +109,7 @@ impl UnnestExec {
         input: &Arc<dyn ExecutionPlan>,
         list_column_indices: &[ListUnnest],
         struct_column_indices: &[usize],
-        schema: SchemaRef,
+        schema: &SchemaRef,
     ) -> Result<PlanProperties> {
         // Find out which indices are not unnested, such that they can be copied over from the input plan
         let input_schema = input.schema();
@@ -159,7 +159,7 @@ impl UnnestExec {
         // the unnest operation invalidates any global uniqueness or primary-key constraints.
         let input_eq_properties = input.equivalence_properties();
         let eq_properties = input_eq_properties
-            .project(&projection_mapping, Arc::clone(&schema))
+            .project(&projection_mapping, Arc::clone(schema))
             .with_constraints(Constraints::default());
 
         // Output partitioning must use the projection mapping

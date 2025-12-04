@@ -68,7 +68,7 @@ fn observer(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
 ## Writing Optimization Rules
 
 Please refer to the
-[optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/optimizer_rule.rs)
+[optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/optimizer_rule.rs)
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.
 
