@@ -83,6 +83,10 @@ impl TableSource for DefaultTableSource {
     fn get_column_default(&self, column: &str) -> Option<&Expr> {
         self.table_provider.get_column_default(column)
     }
+
+    fn statistics(&self) -> Option<datafusion_common::Statistics> {
+        self.table_provider.statistics()
+    }
 }
 
 /// Wrap TableProvider in TableSource
