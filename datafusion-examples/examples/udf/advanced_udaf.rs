@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::datatypes::{Field, Schema};
 use datafusion::physical_expr::NullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};

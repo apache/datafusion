@@ -126,8 +126,7 @@ impl ScalarUDFImpl for ArrayExcept {
     }
 }
 
-/// Array_except SQL function
-pub fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_except", args)?;
 
     match (array1.data_type(), array2.data_type()) {

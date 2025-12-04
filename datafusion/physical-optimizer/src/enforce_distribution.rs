@@ -30,6 +30,7 @@ use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
+use crate::OptimizerContext;
 
 use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
@@ -190,11 +191,12 @@ impl EnforceDistribution {
 }
 
 impl PhysicalOptimizerRule for EnforceDistribution {
-    fn optimize(
+    fn optimize_plan(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.session_config().options();
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
 
         let adjusted = if top_down_join_key_reordering {

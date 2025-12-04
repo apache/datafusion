@@ -490,6 +490,7 @@ fn bench_spill_compression(c: &mut Criterion) {
     group.finish();
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn benchmark_spill_batches_for_all_codec(
     group: &mut BenchmarkGroup<'_, WallTime>,
     batch_label: &str,

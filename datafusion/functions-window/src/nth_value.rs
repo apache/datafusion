@@ -282,7 +282,7 @@ impl WindowUDFImpl for NthValue {
                     exec_datafusion_err!(
                 "Expected a signed integer literal for the second argument of nth_value")
                 })?
-                .map(get_signed_integer)
+                .map(|v| get_signed_integer(&v))
             {
                 Some(Ok(n)) => {
                     if partition_evaluator_args.is_reversed() {

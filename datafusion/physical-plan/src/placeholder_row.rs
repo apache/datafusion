@@ -30,7 +30,7 @@ use crate::{
 
 use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
+use datafusion_common::{assert_or_internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 

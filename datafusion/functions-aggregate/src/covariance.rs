@@ -24,8 +24,7 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 use datafusion_common::{
-    downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, Result,
-    ScalarValue,
+    downcast_value, plan_err, unwrap_or_internal_err, Result, ScalarValue,
 };
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},

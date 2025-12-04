@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use datafusion::common::DataFusionError;
 use datafusion::config::{ConfigFileEncryptionProperties, TableParquetOptions};
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};

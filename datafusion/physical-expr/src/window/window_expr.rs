@@ -32,8 +32,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, internal_err, DataFusionError, Result,
-    ScalarValue,
+    arrow_datafusion_err, exec_datafusion_err, internal_err, Result, ScalarValue,
 };
 use datafusion_expr::window_state::{
     PartitionBatchState, WindowAggState, WindowFrameContext, WindowFrameStateGroups,
@@ -282,7 +281,7 @@ pub trait AggregateWindowExpr: WindowExpr {
     /// * `window_frame_ctx`: Details about the window frame (see [`WindowFrameContext`]).
     /// * `idx`: The index of the current row in the record batch.
     /// * `not_end`: is the current row not the end of the partition (see [`PartitionBatchState`]).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn get_result_column(
         &self,
         accumulator: &mut Box<dyn Accumulator>,

@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+/// Tests for user defined Async Scalar functions
+mod user_defined_async_scalar_functions;
+
 /// Tests for user defined Scalar functions
 mod user_defined_scalar_functions;
 

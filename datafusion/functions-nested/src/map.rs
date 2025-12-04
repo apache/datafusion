@@ -89,7 +89,7 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let values = get_first_array_ref(values_arg)?;
 
-    make_map_batch_internal(keys, values, can_evaluate_to_const, keys_arg.data_type())
+    make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_arg.data_type())
 }
 
 /// Validates that map keys are non-null and unique.
@@ -126,10 +126,10 @@ fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
 }
 
 fn make_map_batch_internal(
-    keys: ArrayRef,
-    values: ArrayRef,
+    keys: &ArrayRef,
+    values: &ArrayRef,
     can_evaluate_to_const: bool,
-    data_type: DataType,
+    data_type: &DataType,
 ) -> Result<ColumnarValue> {
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
@@ -159,8 +159,8 @@ fn make_map_batch_internal(
     let mut entry_offsets_buffer = VecDeque::new();
     entry_offsets_buffer.push_back(0);
 
-    entry_struct_buffer.push_back((Arc::clone(&key_field), Arc::clone(&keys)));
-    entry_struct_buffer.push_back((Arc::clone(&value_field), Arc::clone(&values)));
+    entry_struct_buffer.push_back((Arc::clone(&key_field), Arc::clone(keys)));
+    entry_struct_buffer.push_back((Arc::clone(&value_field), Arc::clone(values)));
     entry_offsets_buffer.push_back(keys.len() as u32);
 
     let entry_struct: Vec<(Arc<Field>, ArrayRef)> = entry_struct_buffer.into();
@@ -368,8 +368,8 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// +-----------+      +-----------+
 /// ```text
 fn make_map_array_internal<O: OffsetSizeTrait>(
-    keys: ArrayRef,
-    values: ArrayRef,
+    keys: &ArrayRef,
+    values: &ArrayRef,
 ) -> Result<ColumnarValue> {
     // Save original data types and array length before list_to_arrays transforms them
     let keys_data_type = keys.data_type().clone();
@@ -380,14 +380,14 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
     // This tells us which MAP values are NULL (not which keys within maps are null)
     let nulls_bitmap = keys.nulls().cloned();
 
-    let keys = list_to_arrays::<O>(&keys);
-    let values = list_to_arrays::<O>(&values);
+    let keys = list_to_arrays::<O>(keys);
+    let values = list_to_arrays::<O>(values);
 
     build_map_array(
-        keys,
-        values,
-        keys_data_type,
-        values_data_type,
+        &keys,
+        &values,
+        &keys_data_type,
+        &values_data_type,
         original_len,
         nulls_bitmap,
     )
@@ -396,8 +396,8 @@ fn make_map_array_internal<O: OffsetSizeTrait>(
 /// Helper function specifically for FixedSizeList inputs
 /// Similar to make_map_array_internal but uses fixed_size_list_to_arrays instead of list_to_arrays
 fn make_map_array_from_fixed_size_list(
-    keys: ArrayRef,
-    values: ArrayRef,
+    keys: &ArrayRef,
+    values: &ArrayRef,
 ) -> Result<ColumnarValue> {
     // Save original data types and array length
     let keys_data_type = keys.data_type().clone();
@@ -407,14 +407,14 @@ fn make_map_array_from_fixed_size_list(
     // Save the nulls bitmap from the original keys array
     let nulls_bitmap = keys.nulls().cloned();
 
-    let keys = fixed_size_list_to_arrays(&keys);
-    let values = fixed_size_list_to_arrays(&values);
+    let keys = fixed_size_list_to_arrays(keys);
+    let values = fixed_size_list_to_arrays(values);
 
     build_map_array(
-        keys,
-        values,
-        keys_data_type,
-        values_data_type,
+        &keys,
+        &values,
+        &keys_data_type,
+        &values_data_type,
         original_len,
         nulls_bitmap,
     )
@@ -422,10 +422,10 @@ fn make_map_array_from_fixed_size_list(
 
 /// Common logic to build a MapArray from decomposed list arrays
 fn build_map_array(
-    keys: Vec<ArrayRef>,
-    values: Vec<ArrayRef>,
-    keys_data_type: DataType,
-    values_data_type: DataType,
+    keys: &[ArrayRef],
+    values: &[ArrayRef],
+    keys_data_type: &DataType,
+    values_data_type: &DataType,
     original_len: usize,
     nulls_bitmap: Option<arrow::buffer::NullBuffer>,
 ) -> Result<ColumnarValue> {
@@ -470,8 +470,8 @@ fn build_map_array(
     let (flattened_keys, flattened_values) = if key_array_vec.is_empty() {
         // All maps are NULL - create empty arrays
         // We need to infer the data type from the original keys/values arrays
-        let key_type = get_element_type(&keys_data_type)?;
-        let value_type = get_element_type(&values_data_type)?;
+        let key_type = get_element_type(keys_data_type)?;
+        let value_type = get_element_type(values_data_type)?;
 
         (
             arrow::array::new_empty_array(key_type),

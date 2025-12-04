@@ -135,10 +135,10 @@ impl WindowUDFImpl for Ntile {
         }
 
         if scalar_n.is_unsigned() {
-            let n = get_unsigned_integer(scalar_n)?;
+            let n = get_unsigned_integer(&scalar_n)?;
             Ok(Box::new(NtileEvaluator { n }))
         } else {
-            let n: i64 = get_signed_integer(scalar_n)?;
+            let n: i64 = get_signed_integer(&scalar_n)?;
             if n <= 0 {
                 return exec_err!("NTILE requires a positive integer");
             }

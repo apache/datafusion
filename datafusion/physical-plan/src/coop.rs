@@ -85,7 +85,7 @@ use crate::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
-use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result, Statistics};
+use datafusion_common::{assert_eq_or_internal_err, Result, Statistics};
 use datafusion_execution::TaskContext;
 
 use crate::execution_plan::SchedulingType;

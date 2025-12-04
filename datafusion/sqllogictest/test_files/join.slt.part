@@ -1504,7 +1504,7 @@ drop table t0;
 statement ok
 create table t1(v1 int, v2 int);
 
-query error DataFusion error: Schema error: No field named tt1.v2. Valid fields are tt1.v1.
+query error DataFusion error: Error during planning: Column in ORDER BY must be in GROUP BY or an aggregate function
 select v1 from t1 as tt1 natural join t1 as tt2 group by v1 order by v2;
 
 statement ok

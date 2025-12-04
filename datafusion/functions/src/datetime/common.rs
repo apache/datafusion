@@ -190,19 +190,19 @@ where
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8View => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<&StringViewArray, O, _>(
-                    a.as_ref().as_string_view(),
+                    &a.as_string_view(),
                     op,
                 )?,
             ))),
             DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<&GenericStringArray<i64>, O, _>(
-                    a.as_ref().as_string::<i64>(),
+                    &a.as_string::<i64>(),
                     op,
                 )?,
             ))),
             DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<&GenericStringArray<i32>, O, _>(
-                    a.as_ref().as_string::<i32>(),
+                    &a.as_string::<i32>(),
                     op,
                 )?,
             ))),
@@ -431,7 +431,7 @@ where
 /// * the number of arguments is not 1 or
 /// * the function `op` errors
 fn unary_string_to_primitive_function<'a, StringArrType, O, F>(
-    array: StringArrType,
+    array: &StringArrType,
     op: F,
 ) -> Result<PrimitiveArray<O>>
 where

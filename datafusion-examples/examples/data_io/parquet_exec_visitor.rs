@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;

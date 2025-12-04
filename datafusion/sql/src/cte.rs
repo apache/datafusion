@@ -92,7 +92,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => (left, right, set_quantifier),
             other => {
                 // If the query is not a UNION, then it is not a recursive CTE
-                cte_query.body = Box::new(other);
+                *cte_query.body = other;
                 return self.non_recursive_cte(cte_query, planner_context);
             }
         };

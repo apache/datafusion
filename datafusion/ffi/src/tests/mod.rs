@@ -34,6 +34,8 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udwf::FFI_WindowUDF;
 
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
+use crate::catalog_provider_list::FFI_CatalogProviderList;
+use crate::tests::catalog::create_catalog_provider_list;
 use arrow::array::RecordBatch;
 use async_provider::create_async_table_provider;
 use datafusion::{
@@ -61,6 +63,9 @@ pub mod utils;
 pub struct ForeignLibraryModule {
     /// Construct an opinionated catalog provider
     pub create_catalog: extern "C" fn() -> FFI_CatalogProvider,
+
+    /// Construct an opinionated catalog provider list
+    pub create_catalog_list: extern "C" fn() -> FFI_CatalogProviderList,
 
     /// Constructs the table provider
     pub create_table: extern "C" fn(synchronous: bool) -> FFI_TableProvider,
@@ -123,6 +128,7 @@ extern "C" fn construct_table_provider(synchronous: bool) -> FFI_TableProvider {
 pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
     ForeignLibraryModule {
         create_catalog: create_catalog_provider,
+        create_catalog_list: create_catalog_provider_list,
         create_table: construct_table_provider,
         create_scalar_udf: create_ffi_abs_func,
         create_nullary_udf: create_ffi_random_func,

@@ -15,22 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{
     builder::PrimitiveBuilder,
     cast::AsArray,
     types::{Float64Type, Int64Type},
-    Array, ArrayRef, ArrowNumericType, Int64Array, PrimitiveArray,
+    Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, Int64Array, PrimitiveArray,
 };
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::utils::take_function_args;
-use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_common::types::{logical_float64, NativeType};
+use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, EmitTo, GroupsAccumulator, ReversedUDAF, Signature,
+    Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
+    Signature, TypeSignatureClass, Volatility,
 };
 use std::{any::Any, sync::Arc};
 
@@ -56,7 +55,14 @@ impl SparkAvg {
     /// Implement AVG aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Immutable),
+            signature: Signature::coercible(
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_float64()),
+                    vec![TypeSignatureClass::Numeric],
+                    NativeType::Float64,
+                )],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -64,21 +70,6 @@ impl SparkAvg {
 impl AggregateUDFImpl for SparkAvg {
     fn as_any(&self) -> &dyn Any {
         self
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [args] = take_function_args(self.name(), arg_types)?;
-
-        fn coerced_type(data_type: &DataType) -> Result<DataType> {
-            match &data_type {
-                d if d.is_numeric() => Ok(DataType::Float64),
-                DataType::Dictionary(_, v) => coerced_type(v.as_ref()),
-                _ => {
-                    plan_err!("Avg does not support inputs of type {data_type}.")
-                }
-            }
-        }
-        Ok(vec![coerced_type(args)?])
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {

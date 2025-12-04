@@ -164,8 +164,7 @@ impl ScalarUDFImpl for ArraySort {
     }
 }
 
-/// Array_sort SQL function
-pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 3 {
         return exec_err!("array_sort expects one to three arguments");
     }
@@ -218,8 +217,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Array_sort SQL function
-pub fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
+fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: &FieldRef,
     sort_options: Option<SortOptions>,

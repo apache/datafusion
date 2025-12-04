@@ -23,8 +23,6 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! DataFusion execution configuration and runtime structures
@@ -49,4 +47,4 @@ pub mod registry {
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
-pub use task::TaskContext;
+pub use task::{TaskContext, TaskContextProvider};

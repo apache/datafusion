@@ -19,7 +19,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{assert_or_internal_err, DFSchema, DataFusionError};
+use datafusion_common::{assert_or_internal_err, DFSchema};
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};

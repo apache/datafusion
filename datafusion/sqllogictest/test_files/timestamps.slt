@@ -2250,7 +2250,7 @@ SET TIME ZONE = '+05:00'
 
 statement ok
 CREATE TABLE foo (time TIMESTAMPTZ) AS VALUES
-    ('2020-01-01T00:00:00+05:00'), 
+    ('2020-01-01T00:00:00+05:00'),
     ('2020-01-01T01:00:00+05:00'),
     ('2020-01-01T02:00:00+05:00'),
     ('2020-01-01T03:00:00+05:00')
@@ -2335,17 +2335,17 @@ NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:5
 # verify timestamp syntax styles are consistent
 query BBBBBBBBBBBBB
 SELECT to_timestamp(null) is null as c1,
-       null::timestamp is null as c2, 
-       cast(null as timestamp) is null as c3, 
-       to_timestamp(0) = 0::timestamp as c4, 
-       to_timestamp(1926632005) = 1926632005::timestamp as c5, 
-       to_timestamp(1) = 1::timestamp as c6, 
-       to_timestamp(-1) = -1::timestamp as c7, 
+       null::timestamp is null as c2,
+       cast(null as timestamp) is null as c3,
+       to_timestamp(0) = 0::timestamp as c4,
+       to_timestamp(1926632005) = 1926632005::timestamp as c5,
+       to_timestamp(1) = 1::timestamp as c6,
+       to_timestamp(-1) = -1::timestamp as c7,
        to_timestamp(0-1) = (0-1)::timestamp as c8,
-       to_timestamp(0) = cast(0 as timestamp) as c9, 
-       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10, 
-       to_timestamp(1) = cast(1 as timestamp) as c11, 
-       to_timestamp(-1) = cast(-1 as timestamp) as c12, 
+       to_timestamp(0) = cast(0 as timestamp) as c9,
+       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10,
+       to_timestamp(1) = cast(1 as timestamp) as c11,
+       to_timestamp(-1) = cast(-1 as timestamp) as c12,
        to_timestamp(0-1) = cast(0-1 as timestamp) as c13
 ----
 true true true true true true true true true true true true true
@@ -2358,10 +2358,10 @@ Timestamp(ns) Timestamp(ns) Timestamp(ns)
 
 # verify timestamp output types using timestamp literal syntax
 query BBBBBB
-SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1, 
+SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1,
        arrow_typeof(to_timestamp(null)) = arrow_typeof(null::timestamp) as c2,
        arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof('2023-01-10 12:34:56.000'::timestamp) as c3,
-       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4, 
+       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4,
        arrow_typeof(to_timestamp(null)) = arrow_typeof(cast(null as timestamp)) as c5,
        arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof(cast('2023-01-10 12:34:56.000' as timestamp)) as c6
 ----
@@ -2605,13 +2605,13 @@ drop table table_a
 ##########
 
 statement ok
-create table table_a (ts timestamp) as values 
-    ('2020-09-08T11:42:29Z'::timestamp), 
+create table table_a (ts timestamp) as values
+    ('2020-09-08T11:42:29Z'::timestamp),
     ('2020-09-08T12:42:29Z'::timestamp),
     ('2020-09-08T13:42:29Z'::timestamp)
 
 statement ok
-create table table_b (ts timestamp) as values 
+create table table_b (ts timestamp) as values
     ('2020-09-08T11:42:29.190Z'::timestamp),
     ('2020-09-08T13:42:29.190Z'::timestamp),
     ('2020-09-08T12:42:29.190Z'::timestamp)
@@ -2733,8 +2733,8 @@ statement ok
 drop table t1
 
 statement ok
-create table table_a (val int, ts1 timestamp, ts2 timestamp) as values 
-    (1, '2018-07-01T06:00:00'::timestamp, '2018-07-01T07:00:00'::timestamp), 
+create table table_a (val int, ts1 timestamp, ts2 timestamp) as values
+    (1, '2018-07-01T06:00:00'::timestamp, '2018-07-01T07:00:00'::timestamp),
     (2, '2018-07-01T07:00:00'::timestamp, '2018-07-01T08:00:00'::timestamp)
 
 query I?
@@ -3038,7 +3038,7 @@ NULL
 
 query T
 SELECT to_char(date_column, '%Y-%m-%d')
-FROM (VALUES 
+FROM (VALUES
     (DATE '2020-09-01'),
     (NULL)
 ) AS t(date_column);
@@ -3048,7 +3048,7 @@ NULL
 
 query T
 SELECT to_char(date_column, '%Y-%m-%d')
-FROM (VALUES 
+FROM (VALUES
     (NULL),
     (DATE '2020-09-01')
 ) AS t(date_column);
@@ -3249,7 +3249,7 @@ statement error
 select to_local_time('2024-04-01T00:00:20Z'::timestamp, 'some string');
 
 # invalid argument data type
-statement error The to_local_time function can only accept Timestamp as the arg got Utf8
+statement error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Timestamp but received NativeType::String, DataType: Utf8
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone
@@ -3276,6 +3276,13 @@ query P
 select to_local_time(NULL);
 ----
 NULL
+
+query PT
+select
+  to_local_time(arrow_cast(null, 'Timestamp(s, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast(null, 'Timestamp(s, "Asia/Tokyo")')));
+----
+NULL Timestamp(s)
 
 query PTPT
 select

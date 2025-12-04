@@ -28,7 +28,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{
-    assert_or_internal_err, exec_err, not_impl_err, DataFusionError, Result, ScalarValue,
+    assert_or_internal_err, exec_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;

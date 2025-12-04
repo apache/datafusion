@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use arrow::error::ArrowError;
-use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, exec_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,

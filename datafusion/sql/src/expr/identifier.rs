@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::Field;
+use arrow::datatypes::FieldRef;
 use datafusion_common::{
     assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, Column, DFSchema, DataFusionError, Result, Span,
-    TableReference,
+    plan_datafusion_err, plan_err, Column, DFSchema, Result, Span, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
@@ -77,7 +76,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                     return Ok(Expr::OuterReferenceColumn(
-                        Arc::new(field.clone()),
+                        Arc::clone(field),
                         Column::from((qualifier, field)),
                     ));
                 }
@@ -180,7 +179,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
-                                        Arc::new(field.clone()),
+                                        Arc::clone(field),
                                         Column::from((qualifier, field)),
                                     ))
                                 }
@@ -292,7 +291,7 @@ fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
 ) -> Option<(
-    &'schema Field,
+    &'schema FieldRef,
     Option<&'schema TableReference>,
     &'ids [String],
 )> {

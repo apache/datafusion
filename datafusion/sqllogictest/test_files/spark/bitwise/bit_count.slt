@@ -225,3 +225,18 @@ query I
 SELECT bit_count(arrow_cast(-9223372036854775808, 'Int64'));
 ----
 1
+
+query I
+SELECT bit_count(true);
+----
+1
+
+query I
+SELECT bit_count(false);
+----
+0
+
+query I
+SELECT bit_count(cast(null as boolean));
+----
+NULL

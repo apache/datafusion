@@ -35,14 +35,6 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
-[[example]]
-name = "dataframe_to_s3"
-path = "examples/external_dependency/dataframe-to-s3.rs"
-
-[[example]]
-name = "query_aws_s3"
-path = "examples/external_dependency/query-aws-s3.rs"
-
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
@@ -54,7 +46,6 @@ dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 base64 = "0.22.1"
 datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
-datafusion-ffi = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
 datafusion-proto = { workspace = true }
 env_logger = { workspace = true }

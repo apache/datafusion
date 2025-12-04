@@ -952,23 +952,11 @@ explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table2;
 ----
 physical_plan
 01)┌───────────────────────────┐
-02)│       ProjectionExec      │
+02)│       DataSourceExec      │
 03)│    --------------------   │
-04)│        bigint_col:        │
-05)│         bigint_col        │
-06)│                           │
-07)│      int_col: int_col     │
-08)│                           │
-09)│          sum_col:         │
-10)│  CAST(int_col AS Int64) + │
-11)│         bigint_col        │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│       DataSourceExec      │
-15)│    --------------------   │
-16)│          files: 1         │
-17)│      format: parquet      │
-18)└───────────────────────────┘
+04)│          files: 1         │
+05)│      format: parquet      │
+06)└───────────────────────────┘
 
 # Query with projection on memory
 query TT

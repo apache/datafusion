@@ -27,7 +27,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::display::StringifiedPlan;
-use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
+use datafusion_common::{assert_eq_or_internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 

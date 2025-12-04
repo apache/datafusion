@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! This example shows how to use separate thread pools (tokio [`Runtime`]))s to
 //! run the IO and CPU intensive parts of DataFusion plans.
 //!

@@ -53,7 +53,7 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup,
-    FileScanConfigBuilder, FileSinkConfig, FileSource, ParquetSource,
+    FileScanConfigBuilder, FileSinkConfig, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
@@ -928,7 +928,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_projection_indices(Some(vec![0, 1]))
+            .with_projection_indices(Some(vec![0, 1]))?
             .with_file_group(FileGroup::new(vec![file_group]))
             .with_newlines_in_values(false)
             .build();
@@ -1805,8 +1805,7 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let statistics = Statistics::new_unknown(&schema);
 
-    let file_source =
-        ParquetSource::new(Arc::clone(&schema)).with_statistics(statistics.clone());
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
@@ -1814,7 +1813,7 @@ async fn roundtrip_projection_source() -> Result<()> {
                 1024,
             )])])
             .with_statistics(statistics)
-            .with_projection_indices(Some(vec![0, 1, 2]))
+            .with_projection_indices(Some(vec![0, 1, 2]))?
             .build();
 
     let filter = Arc::new(

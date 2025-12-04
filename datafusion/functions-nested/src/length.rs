@@ -150,8 +150,7 @@ macro_rules! array_length_impl {
     }};
 }
 
-/// Array_length SQL function
-pub fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
         return exec_err!("array_length expects one or two arguments");
     }

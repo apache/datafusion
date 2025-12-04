@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+//!
 //! This example shows how to create and use "Async UDFs" in DataFusion.
 //!
 //! Async UDFs allow you to perform asynchronous operations, such as

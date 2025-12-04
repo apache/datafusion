@@ -21,7 +21,7 @@ use abi_stable::{
 };
 use arrow_schema::FieldRef;
 use datafusion::{
-    common::exec_datafusion_err, error::DataFusionError, logical_expr::ReturnFieldArgs,
+    common::ffi_datafusion_err, error::DataFusionError, logical_expr::ReturnFieldArgs,
     scalar::ScalarValue,
 };
 
@@ -91,7 +91,7 @@ impl TryFrom<&FFI_ReturnFieldArgs> for ForeignReturnFieldArgsOwned {
                 let maybe_arg = maybe_arg.as_ref().map(|arg| {
                     let proto_value =
                         datafusion_proto::protobuf::ScalarValue::decode(arg.as_ref())
-                            .map_err(|err| exec_datafusion_err!("{}", err))?;
+                            .map_err(|err| ffi_datafusion_err!("{}", err))?;
                     let scalar_value: ScalarValue = (&proto_value).try_into()?;
                     Ok(scalar_value)
                 });

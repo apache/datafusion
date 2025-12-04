@@ -27,8 +27,8 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
-    config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
-    Result, TableReference,
+    DFSchema, Result, TableReference, config::ConfigOptions,
+    file_options::file_type::FileType, not_impl_err,
 };
 
 /// Provides the `SQL` query planner meta-data about tables and

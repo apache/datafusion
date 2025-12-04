@@ -169,7 +169,7 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-pub fn substr_index_general<
+fn substr_index_general<
     'a,
     T: ArrowPrimitiveType,
     V: ArrayAccessor<Item = &'a str>,

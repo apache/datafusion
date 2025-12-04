@@ -31,14 +31,14 @@ This page covers how to add UDFs to DataFusion. In particular, it covers how to 
 | Table          | A function that takes parameters and returns a `TableProvider` to be used in an query plan.                | [simple_udtf.rs]                      |
 | Scalar (async) | A scalar function for performing `async` operations (such as network or I/O calls) within the UDF.         | [async_udf.rs]                        |
 
-[simple_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
-[simple_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-[advanced_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
-[simple_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-[advanced_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-[simple_udtf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udtf.rs
-[async_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs
+[simple_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udf.rs
+[advanced_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
+[simple_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udwf.rs
+[advanced_udwf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
+[simple_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udaf.rs
+[advanced_udaf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
+[simple_udtf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udtf.rs
+[async_udf.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/async_udf.rs
 
 First we'll talk about adding an Scalar UDF end-to-end, then we'll talk about the differences between the different
 types of UDFs.
@@ -579,12 +579,12 @@ After registration, you can use these async UDFs directly in SQL queries, for ex
 SELECT async_upper('datafusion');
 ```
 
-For async UDF implementation details, see [`async_udf.rs`](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/async_udf.rs).
+For async UDF implementation details, see [`async_udf.rs`](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/async_udf.rs).
 
 [`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
 [`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
 [`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
-[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
 
 ## Named Arguments
 
@@ -820,7 +820,7 @@ let smooth_it = create_udwf(
 
 [`windowudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.WindowUDF.html
 [`create_udwf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udwf.html
-[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+[`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 
 The `create_udwf` has five arguments to check:
 
@@ -1348,7 +1348,7 @@ async fn main() -> Result<()> {
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
-[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 
 ## Adding a Table UDF
 

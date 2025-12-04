@@ -293,7 +293,7 @@ fn create_random_string_generator(
 /// `null_percentage` is the percentage of null values
 /// The rest of the values will be outside the specified range
 fn generate_values_for_lookup<T, A>(
-    options: Options<T>,
+    options: &Options<T>,
     generate_other_value: impl Fn(&mut StdRng, &[T]) -> T,
 ) -> A
 where
@@ -416,7 +416,7 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                         &input,
                         |b, input| {
                             let array: Int32Array = generate_values_for_lookup(
-                                Options::<i32> {
+                                &Options::<i32> {
                                     number_of_rows: batch_size,
                                     range_of_values: when_thens_primitive_to_string
                                         .iter()
@@ -469,7 +469,7 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                         &input,
                         |b, input| {
                             let array: StringArray = generate_values_for_lookup(
-                                Options::<String> {
+                                &Options::<String> {
                                     number_of_rows: batch_size,
                                     range_of_values: when_thens_string_to_primitive
                                         .iter()

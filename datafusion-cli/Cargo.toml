@@ -37,7 +37,7 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.7"
+aws-config = "1.8.11"
 aws-credential-types = "1.2.7"
 chrono = { workspace = true }
 clap = { version = "4.5.50", features = ["cargo", "derive"] }

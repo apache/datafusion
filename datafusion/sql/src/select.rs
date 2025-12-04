@@ -41,7 +41,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning,
+    LogicalPlanBuilderOptions, Partitioning, SortExpr,
 };
 
 use indexmap::IndexMap;
@@ -50,6 +50,21 @@ use sqlparser::ast::{
     OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
+
+/// Result of the `aggregate` function, containing the aggregate plan and
+/// rewritten expressions that reference the aggregate output columns.
+struct AggregatePlanResult {
+    /// The aggregate logical plan
+    plan: LogicalPlan,
+    /// SELECT expressions rewritten to reference aggregate output columns
+    select_exprs: Vec<Expr>,
+    /// HAVING expression rewritten to reference aggregate output columns
+    having_expr: Option<Expr>,
+    /// QUALIFY expression rewritten to reference aggregate output columns
+    qualify_expr: Option<Expr>,
+    /// ORDER BY expressions rewritten to reference aggregate output columns
+    order_by_exprs: Vec<SortExpr>,
+}
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
@@ -219,33 +234,53 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .transpose()?;
 
         // The outer expressions we will search through for aggregates.
-        // Aggregates may be sourced from the SELECT list or from the HAVING expression.
-        let aggr_expr_haystack = select_exprs
-            .iter()
-            .chain(having_expr_opt.iter())
-            .chain(qualify_expr_opt.iter());
-        // All of the aggregate expressions (deduplicated).
-        let aggr_exprs = find_aggregate_exprs(aggr_expr_haystack);
+        // First, find aggregates in SELECT, HAVING, and QUALIFY
+        let select_having_qualify_aggrs = find_aggregate_exprs(
+            select_exprs
+                .iter()
+                .chain(having_expr_opt.iter())
+                .chain(qualify_expr_opt.iter()),
+        );
+
+        // Find aggregates in ORDER BY
+        let order_by_aggrs = find_aggregate_exprs(order_by_rex.iter().map(|s| &s.expr));
+
+        // Combine: all aggregates from SELECT/HAVING/QUALIFY, plus ORDER BY aggregates
+        // that aren't already in SELECT/HAVING/QUALIFY
+        let mut aggr_exprs = select_having_qualify_aggrs;
+        for order_by_aggr in order_by_aggrs {
+            if !aggr_exprs.iter().any(|e| e == &order_by_aggr) {
+                aggr_exprs.push(order_by_aggr);
+            }
+        }
 
         // Process group by, aggregation or having
-        let (
+        let AggregatePlanResult {
             plan,
-            mut select_exprs_post_aggr,
-            having_expr_post_aggr,
-            qualify_expr_post_aggr,
-        ) = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
+            select_exprs: mut select_exprs_post_aggr,
+            having_expr: having_expr_post_aggr,
+            qualify_expr: qualify_expr_post_aggr,
+            order_by_exprs: order_by_rex,
+        } = if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
             self.aggregate(
                 &base_plan,
                 &select_exprs,
                 having_expr_opt.as_ref(),
                 qualify_expr_opt.as_ref(),
+                &order_by_rex,
                 &group_by_exprs,
                 &aggr_exprs,
             )?
         } else {
             match having_expr_opt {
                 Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
-                None => (base_plan.clone(), select_exprs.clone(), having_expr_opt, qualify_expr_opt)
+                None => AggregatePlanResult {
+                    plan: base_plan.clone(),
+                    select_exprs: select_exprs.clone(),
+                    having_expr: having_expr_opt,
+                    qualify_expr: qualify_expr_opt,
+                    order_by_exprs: order_by_rex,
+                }
             }
         };
 
@@ -366,7 +401,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        self.order_by(plan, order_by_rex)
+        let plan = self.order_by(plan, order_by_rex)?;
+        Ok(plan)
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -872,16 +908,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///   the aggregate
     /// * `qualify_expr_post_aggr`  - The "qualify" expression rewritten to reference a column from
     ///   the aggregate
-    #[allow(clippy::type_complexity)]
+    /// * `order_by_post_aggr`     - The ORDER BY expressions rewritten to reference columns from
+    ///   the aggregate
+    #[allow(clippy::too_many_arguments)]
     fn aggregate(
         &self,
         input: &LogicalPlan,
         select_exprs: &[Expr],
         having_expr_opt: Option<&Expr>,
         qualify_expr_opt: Option<&Expr>,
+        order_by_exprs: &[SortExpr],
         group_by_exprs: &[Expr],
         aggr_exprs: &[Expr],
-    ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>, Option<Expr>)> {
+    ) -> Result<AggregatePlanResult> {
         // create the aggregate plan
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
@@ -988,12 +1027,65 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             None
         };
 
-        Ok((
+        // Rewrite the ORDER BY expressions to use the columns produced by the
+        // aggregation. If an ORDER BY expression matches a SELECT expression
+        // (ignoring aliases), use the SELECT's output column name to avoid
+        // duplication when the SELECT expression has an alias.
+        let order_by_post_aggr = order_by_exprs
+            .iter()
+            .map(|sort_expr| {
+                let rewritten_expr =
+                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, input)?;
+
+                // Check if this ORDER BY expression matches any aliased SELECT expression
+                // If so, use the SELECT's alias instead of the raw expression
+                let final_expr = select_exprs_post_aggr
+                    .iter()
+                    .find_map(|select_expr| {
+                        // Only consider aliased expressions
+                        if let Expr::Alias(alias) = select_expr {
+                            if alias.expr.as_ref() == &rewritten_expr {
+                                // Use the alias name
+                                return Some(Expr::Column(alias.name.clone().into()));
+                            }
+                        }
+                        None
+                    })
+                    .unwrap_or(rewritten_expr);
+
+                Ok(sort_expr.with_expr(final_expr))
+            })
+            .collect::<Result<Vec<SortExpr>>>()?;
+
+        let all_valid_exprs: Vec<Expr> = column_exprs_post_aggr
+            .iter()
+            .cloned()
+            .chain(select_exprs_post_aggr.iter().filter_map(|e| {
+                if let Expr::Alias(alias) = e {
+                    Some(Expr::Column(alias.name.clone().into()))
+                } else {
+                    None
+                }
+            }))
+            .collect();
+
+        let order_by_exprs_only: Vec<Expr> =
+            order_by_post_aggr.iter().map(|s| s.expr.clone()).collect();
+        check_columns_satisfy_exprs(
+            &all_valid_exprs,
+            &order_by_exprs_only,
+            CheckColumnsSatisfyExprsPurpose::Aggregate(
+                CheckColumnsMustReferenceAggregatePurpose::OrderBy,
+            ),
+        )?;
+
+        Ok(AggregatePlanResult {
             plan,
-            select_exprs_post_aggr,
-            having_expr_post_aggr,
-            qualify_expr_post_aggr,
-        ))
+            select_exprs: select_exprs_post_aggr,
+            having_expr: having_expr_post_aggr,
+            qualify_expr: qualify_expr_post_aggr,
+            order_by_exprs: order_by_post_aggr,
+        })
     }
 
     // If the projection is done over a named window, that window

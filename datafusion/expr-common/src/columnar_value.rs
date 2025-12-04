@@ -19,16 +19,16 @@
 
 use arrow::{
     array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
-    compute::{kernels, max, min, CastOptions},
+    compute::{CastOptions, kernels, max, min},
     datatypes::DataType,
     util::pretty::pretty_format_columns,
 };
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
+    Result, ScalarValue,
     format::DEFAULT_CAST_OPTIONS,
     internal_err,
     scalar::{date_to_timestamp_multiplier, ensure_timestamp_in_bounds},
-    Result, ScalarValue,
 };
 use std::fmt;
 use std::sync::Arc;

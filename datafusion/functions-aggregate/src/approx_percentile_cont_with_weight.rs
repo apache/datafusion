@@ -244,14 +244,13 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             is_distinct: acc_args.is_distinct,
         };
         let approx_percentile_cont_accumulator =
-            self.approx_percentile_cont.create_accumulator(sub_args)?;
+            self.approx_percentile_cont.create_accumulator(&sub_args)?;
         let accumulator = ApproxPercentileWithWeightAccumulator::new(
             approx_percentile_cont_accumulator,
         );
         Ok(Box::new(accumulator))
     }
 
-    #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {

@@ -40,7 +40,7 @@ use datafusion_common::{assert_eq_or_internal_err, Column, DFSchema};
 use datafusion_common::{
     internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
-    DataFusionError, ScalarValue,
+    ScalarValue,
 };
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
@@ -86,7 +86,7 @@ use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 /// example of how to use `PruningPredicate` to prune files based on min/max
 /// values.
 ///
-/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/pruning.rs
+/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/pruning.rs
 ///
 /// Given an expression like `x = 5` and statistics for 3 containers (Row
 /// Groups, files, etc) `A`, `B`, and `C`:

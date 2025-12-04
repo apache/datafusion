@@ -167,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::single_range_in_vec_init)]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_cume_dist() -> Result<()> {
         test_f64_result(0, vec![], vec![])?;
 

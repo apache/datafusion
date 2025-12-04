@@ -1542,6 +1542,18 @@ pub struct PhysicalSortExprNodeCollection {
     pub physical_sort_expr_nodes: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProjectionExpr {
+    #[prost(string, tag = "1")]
+    pub alias: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub expr: ::core::option::Option<PhysicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProjectionExprs {
+    #[prost(message, repeated, tag = "1")]
+    pub projections: ::prost::alloc::vec::Vec<ProjectionExpr>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileScanExecConf {
     #[prost(message, repeated, tag = "1")]
     pub file_groups: ::prost::alloc::vec::Vec<FileGroup>,
@@ -1563,6 +1575,8 @@ pub struct FileScanExecConf {
     pub constraints: ::core::option::Option<super::datafusion_common::Constraints>,
     #[prost(uint64, optional, tag = "12")]
     pub batch_size: ::core::option::Option<u64>,
+    #[prost(message, optional, tag = "13")]
+    pub projection_exprs: ::core::option::Option<ProjectionExprs>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {

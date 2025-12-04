@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::ScalarFunctionExpr;
-use arrow::array::{make_array, MutableArrayData, RecordBatch};
+use arrow::array::RecordBatch;
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
@@ -192,17 +193,21 @@ impl AsyncFuncExpr {
             );
         }
 
-        let datas = ColumnarValue::values_to_arrays(&result_batches)?
+        let datas = result_batches
+            .into_iter()
+            .map(|cv| match cv {
+                ColumnarValue::Array(arr) => Ok(arr),
+                ColumnarValue::Scalar(scalar) => Ok(scalar.to_array_of_size(1)?),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Get references to the arrays as dyn Array to call concat
+        let dyn_arrays = datas
             .iter()
-            .map(|b| b.to_data())
+            .map(|arr| arr as &dyn arrow::array::Array)
             .collect::<Vec<_>>();
-        let total_len = datas.iter().map(|d| d.len()).sum();
-        let mut mutable = MutableArrayData::new(datas.iter().collect(), false, total_len);
-        datas.iter().enumerate().for_each(|(i, data)| {
-            mutable.extend(i, 0, data.len());
-        });
-        let array_ref = make_array(mutable.freeze());
-        Ok(ColumnarValue::Array(array_ref))
+        let result_array = concat(&dyn_arrays)?;
+        Ok(ColumnarValue::Array(result_array))
     }
 }
 

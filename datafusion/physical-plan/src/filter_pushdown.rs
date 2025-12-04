@@ -412,6 +412,7 @@ impl FilterDescription {
     /// This method automatically determines filter routing based on column analysis:
     /// - If all columns referenced by a filter exist in a child's schema, it can be pushed down
     /// - Otherwise, it cannot be pushed down to that child
+    #[expect(clippy::needless_pass_by_value)]
     pub fn from_children(
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         children: &[&Arc<dyn crate::ExecutionPlan>],

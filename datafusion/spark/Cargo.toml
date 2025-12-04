@@ -48,6 +48,7 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
+datafusion-functions-nested = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
 sha1 = "0.10"

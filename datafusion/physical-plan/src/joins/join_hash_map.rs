@@ -22,6 +22,7 @@
 use std::fmt::{self, Debug};
 use std::ops::Sub;
 
+use arrow::datatypes::ArrowNativeType;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 use hashbrown::HashTable;
 
@@ -254,39 +255,50 @@ impl JoinHashMapType for JoinHashMapU64 {
 // Type of offsets for obtaining indices from JoinHashMap.
 pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
 
-// Macro for traversing chained values with limit.
-// Early returns in case of reaching output tuples limit.
-macro_rules! chain_traverse {
-    (
-        $input_indices:ident, $match_indices:ident,
-        $hash_values:ident, $next_chain:ident,
-        $input_idx:ident, $chain_idx:ident, $remaining_output:ident, $one:ident, $zero:ident
-    ) => {{
-        // now `one` and `zero` are in scope from the outer function
-        let mut match_row_idx = $chain_idx - $one;
-        loop {
-            $match_indices.push(match_row_idx.into());
-            $input_indices.push($input_idx as u32);
-            $remaining_output -= 1;
+/// Traverses the chain of matching indices, collecting results up to the remaining limit.
+/// Returns `Some(offset)` if the limit was reached and there are more results to process,
+/// or `None` if the chain was fully traversed.
+#[inline(always)]
+fn traverse_chain<T>(
+    next_chain: &[T],
+    input_idx: usize,
+    start_chain_idx: T,
+    remaining: &mut usize,
+    input_indices: &mut Vec<u32>,
+    match_indices: &mut Vec<u64>,
+    is_last_input: bool,
+) -> Option<JoinHashMapOffset>
+where
+    T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+    T: ArrowNativeType,
+{
+    let zero = T::usize_as(0);
+    let one = T::usize_as(1);
+    let mut match_row_idx = start_chain_idx - one;
 
-            let next = $next_chain[match_row_idx.into() as usize];
+    loop {
+        match_indices.push(match_row_idx.into());
+        input_indices.push(input_idx as u32);
+        *remaining -= 1;
 
-            if $remaining_output == 0 {
-                // we compare against `zero` (of type T) here too
-                let next_offset = if $input_idx == $hash_values.len() - 1 && next == $zero
-                {
-                    None
-                } else {
-                    Some(($input_idx, Some(next.into())))
-                };
-                return ($input_indices, $match_indices, next_offset);
-            }
-            if next == $zero {
-                break;
-            }
-            match_row_idx = next - $one;
+        let next = next_chain[match_row_idx.into() as usize];
+
+        if *remaining == 0 {
+            // Limit reached - return offset for next call
+            return if is_last_input && next == zero {
+                // Finished processing the last input row
+                None
+            } else {
+                Some((input_idx, Some(next.into())))
+            };
         }
-    }};
+        if next == zero {
+            // End of chain
+            return None;
+        }
+        match_row_idx = next - one;
+    }
 }
 
 pub fn update_from_iter<'a, T>(
@@ -380,10 +392,10 @@ pub fn get_matched_indices_with_limit_offset<T>(
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
+    T: ArrowNativeType,
 {
     let mut input_indices = Vec::with_capacity(limit);
     let mut match_indices = Vec::with_capacity(limit);
-    let zero = T::try_from(0).unwrap();
     let one = T::try_from(1).unwrap();
 
     // Check if hashmap consists of unique values
@@ -409,7 +421,7 @@ where
 
     // Calculate initial `hash_values` index before iterating
     let to_skip = match offset {
-        // None `initial_next_idx` indicates that `initial_idx` processing has'n been started
+        // None `initial_next_idx` indicates that `initial_idx` processing hasn't been started
         (idx, None) => idx,
         // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
         // previous iteration, and it should be skipped
@@ -417,39 +429,41 @@ where
         // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
         // to start with the next index
         (idx, Some(next_idx)) => {
-            let next_idx: T = T::try_from(next_idx as usize).unwrap();
-            chain_traverse!(
-                input_indices,
-                match_indices,
-                hash_values,
+            let next_idx: T = T::usize_as(next_idx as usize);
+            let is_last = idx == hash_values.len() - 1;
+            if let Some(next_offset) = traverse_chain(
                 next_chain,
                 idx,
                 next_idx,
-                remaining_output,
-                one,
-                zero
-            );
+                &mut remaining_output,
+                &mut input_indices,
+                &mut match_indices,
+                is_last,
+            ) {
+                return (input_indices, match_indices, Some(next_offset));
+            }
             idx + 1
         }
     };
 
-    let mut row_idx = to_skip;
-    for &hash in &hash_values[to_skip..] {
+    let hash_values_len = hash_values.len();
+    for (i, &hash) in hash_values[to_skip..].iter().enumerate() {
+        let row_idx = to_skip + i;
         if let Some((_, idx)) = map.find(hash, |(h, _)| hash == *h) {
             let idx: T = *idx;
-            chain_traverse!(
-                input_indices,
-                match_indices,
-                hash_values,
+            let is_last = row_idx == hash_values_len - 1;
+            if let Some(next_offset) = traverse_chain(
                 next_chain,
                 row_idx,
                 idx,
-                remaining_output,
-                one,
-                zero
-            );
+                &mut remaining_output,
+                &mut input_indices,
+                &mut match_indices,
+                is_last,
+            ) {
+                return (input_indices, match_indices, Some(next_offset));
+            }
         }
-        row_idx += 1;
     }
     (input_indices, match_indices, None)
 }

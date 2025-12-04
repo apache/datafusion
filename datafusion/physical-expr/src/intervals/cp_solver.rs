@@ -780,7 +780,7 @@ mod tests {
     use rand::{Rng, SeedableRng};
     use rstest::*;
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn experiment(
         expr: Arc<dyn PhysicalExpr>,
         exprs_with_interval: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),

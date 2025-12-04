@@ -98,6 +98,7 @@ fn create_args<O: OffsetSizeTrait>(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn invoke_pad_with_args(
     args: Vec<ColumnarValue>,
     number_rows: usize,

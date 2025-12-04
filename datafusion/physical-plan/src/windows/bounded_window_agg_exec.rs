@@ -52,7 +52,7 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
 use datafusion_common::{
-    arrow_datafusion_err, exec_datafusion_err, exec_err, DataFusionError, HashMap, Result,
+    arrow_datafusion_err, exec_datafusion_err, exec_err, HashMap, Result,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
@@ -1470,20 +1470,6 @@ mod tests {
         {
             return Err(exec_datafusion_err!("shouldn't have completed"));
         };
-
-        Ok(results)
-    }
-
-    /// Execute the [ExecutionPlan] and collect the results in memory
-    #[allow(dead_code)]
-    pub async fn collect_bonafide(
-        plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
-    ) -> Result<Vec<RecordBatch>> {
-        let stream = execute_stream(plan, context)?;
-        let mut results = vec![];
-
-        collect_stream(stream, &mut results).await?;
 
         Ok(results)
     }

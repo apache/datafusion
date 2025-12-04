@@ -21,9 +21,7 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
-use datafusion_common::{
-    assert_or_internal_err, DataFusionError, HashMap, Result, ScalarValue,
-};
+use datafusion_common::{assert_or_internal_err, HashMap, Result, ScalarValue};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::PartitionedFile;
 use datafusion_expr::{lit, utils, BinaryExpr, Operator};

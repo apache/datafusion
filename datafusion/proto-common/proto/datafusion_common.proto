@@ -519,6 +519,7 @@ message ParquetOptions {
   bool skip_metadata = 3; // default = true
   bool pushdown_filters = 5; // default = false
   bool reorder_filters = 6; // default = false
+  bool force_filter_selections = 34; // default = false
   uint64 data_pagesize_limit = 7; // default = 1024 * 1024
   uint64 write_batch_size = 8; // default = 1024
   string writer_version = 9; // default = "1.0"

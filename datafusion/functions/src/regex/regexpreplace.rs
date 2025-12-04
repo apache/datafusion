@@ -61,7 +61,7 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 | aAbBac                                                            |
 +-------------------------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
     argument(
@@ -76,7 +76,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     argument(
         name = "flags",
         description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-- **g**: (global) Search globally and don't return after the first match        
+- **g**: (global) Search globally and don't return after the first match
 - **i**: case-insensitive: letters match both upper and lower case
 - **m**: multi-line mode: ^ and $ match begin/end of line
 - **s**: allow . to match \n
@@ -382,48 +382,32 @@ where
     }
 }
 
-fn _regexp_replace_early_abort<T: ArrayAccessor>(
-    input_array: T,
-    sz: usize,
-) -> Result<ArrayRef> {
-    // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
-    // are actually null, then the result will be an array of the same size as the first argument with all nulls.
-    //
-    // Also acts like an early abort mechanism when the input array is empty.
-    Ok(new_null_array(input_array.data_type(), sz))
-}
-
 /// Get the first argument from the given string array.
 ///
 /// Note: If the array is empty or the first argument is null,
-/// then calls the given early abort function.
+/// then aborts early.
 macro_rules! fetch_string_arg {
-    ($ARG:expr, $NAME:expr, $EARLY_ABORT:ident, $ARRAY_SIZE:expr) => {{
+    ($ARG:expr, $NAME:expr, $ARRAY_SIZE:expr) => {{
         let string_array_type = ($ARG).data_type();
         match string_array_type {
+            dt if $ARG.len() == 0 || $ARG.is_null(0) => {
+                // Mimicking the existing behavior of regexp_replace, if any of the scalar arguments
+                // are actually null, then the result will be an array of the same size as the first argument with all nulls.
+                //
+                // Also acts like an early abort mechanism when the input array is empty.
+                return Ok(new_null_array(dt, $ARRAY_SIZE));
+            }
             DataType::Utf8 => {
                 let array = as_string_array($ARG)?;
-                if array.len() == 0 || array.is_null(0) {
-                    return $EARLY_ABORT(array, $ARRAY_SIZE);
-                } else {
-                    array.value(0)
-                }
+                array.value(0)
             }
             DataType::LargeUtf8 => {
                 let array = as_large_string_array($ARG)?;
-                if array.len() == 0 || array.is_null(0) {
-                    return $EARLY_ABORT(array, $ARRAY_SIZE);
-                } else {
-                    array.value(0)
-                }
+                array.value(0)
             }
             DataType::Utf8View => {
                 let array = as_string_view_array($ARG)?;
-                if array.len() == 0 || array.is_null(0) {
-                    return $EARLY_ABORT(array, $ARRAY_SIZE);
-                } else {
-                    array.value(0)
-                }
+                array.value(0)
             }
             _ => unreachable!(
                 "Invalid data type for regexp_replace: {}",
@@ -442,17 +426,11 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     let array_size = args[0].len();
-    let pattern =
-        fetch_string_arg!(&args[1], "pattern", _regexp_replace_early_abort, array_size);
-    let replacement = fetch_string_arg!(
-        &args[2],
-        "replacement",
-        _regexp_replace_early_abort,
-        array_size
-    );
+    let pattern = fetch_string_arg!(&args[1], "pattern", array_size);
+    let replacement = fetch_string_arg!(&args[2], "replacement", array_size);
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(&args[3], "flags", _regexp_replace_early_abort, array_size)),
+        4 => Some(fetch_string_arg!(&args[3], "flags", array_size)),
         other => {
             return exec_err!(
                 "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
@@ -537,7 +515,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
 
 /// Determine which implementation of the regexp_replace to use based
 /// on the given set of arguments.
-pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
+fn specialize_regexp_replace<T: OffsetSizeTrait>(
     args: &[ColumnarValue],
 ) -> Result<ArrayRef> {
     // This will serve as a dispatch table where we can

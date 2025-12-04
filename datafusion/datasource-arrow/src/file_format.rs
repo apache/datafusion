@@ -208,13 +208,20 @@ impl FileFormat for ArrowFormat {
             conf.table_partition_cols().clone(),
         );
 
-        let source: Arc<dyn FileSource> =
+        let mut source: Arc<dyn FileSource> =
             match is_object_in_arrow_ipc_file_format(object_store, object_location).await
             {
                 Ok(true) => Arc::new(ArrowSource::new_file_source(table_schema)),
                 Ok(false) => Arc::new(ArrowSource::new_stream_file_source(table_schema)),
                 Err(e) => Err(e)?,
             };
+
+        // Preserve projection from the original file source
+        if let Some(projection) = conf.file_source.projection() {
+            if let Some(new_source) = source.try_pushdown_projection(projection)? {
+                source = new_source;
+            }
+        }
 
         let config = FileScanConfigBuilder::from(conf)
             .with_source(source)

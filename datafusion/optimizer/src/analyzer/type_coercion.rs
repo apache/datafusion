@@ -2465,7 +2465,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: a = CAST(CAST(a AS Map("key_value": Struct("key": Utf8, "value": nullable Float64), unsorted)) AS Map("entries": Struct("key": Utf8, "value": nullable Float64), unsorted))
+        Projection: a = CAST(CAST(a AS Map("key_value": non-null Struct("key": non-null Utf8, "value": Float64), unsorted)) AS Map("entries": non-null Struct("key": non-null Utf8, "value": Float64), unsorted))
           EmptyRelation: rows=0
         "#
         )
