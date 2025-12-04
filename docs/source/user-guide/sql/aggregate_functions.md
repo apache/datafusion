@@ -422,37 +422,45 @@ min(expression)
 
 ### `percentile_cont`
 
-Returns the exact percentile of input values, interpolating between values if needed.
+Returns the exact percentile(s) of input values, interpolating between values if needed. Supports both scalar percentiles and arrays of percentiles.
 
 ```sql
 percentile_cont(percentile) WITHIN GROUP (ORDER BY expression)
+percentile_cont(expression, percentile)
+percentile_cont(expression, ARRAY[percentile1, percentile2, ...])
 ```
 
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
+- **percentile**: Percentile or list of percentiles to compute. Can be a single float between 0 and 1 (inclusive), or an array of float values in that range. When an array is provided, an array of results is returned in the same order.
 
 #### Example
 
 ```sql
+-- Standard WITHIN GROUP syntax
 > SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) FROM table_name;
 +----------------------------------------------------------+
 | percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) |
 +----------------------------------------------------------+
 | 45.5                                                     |
 +----------------------------------------------------------+
-```
 
-An alternate syntax is also supported:
-
-```sql
+-- Alternate function-call syntax
 > SELECT percentile_cont(column_name, 0.75) FROM table_name;
 +---------------------------------------+
 | percentile_cont(column_name, 0.75)    |
 +---------------------------------------+
 | 45.5                                  |
 +---------------------------------------+
+
+-- Multiple percentiles using an array
+> SELECT percentile_cont(column_name, ARRAY[0.25, 0.5, 0.75]) FROM table_name;
++--------------------------------------------------------------+
+| percentile_cont(column_name, ARRAY[0.25, 0.5, 0.75])         |
++--------------------------------------------------------------+
+| [12.0, 30.0, 45.5]                                           |
++--------------------------------------------------------------+
 ```
 
 #### Aliases
