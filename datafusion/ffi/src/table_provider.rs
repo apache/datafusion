@@ -45,7 +45,6 @@ use tokio::runtime::Handle;
 use crate::{
     arrow_wrappers::WrappedSchema,
     df_result, rresult_return,
-    session_config::ForeignSessionConfig,
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };
 
@@ -55,6 +54,7 @@ use super::{
 };
 use crate::util::FFIResult;
 use datafusion::error::Result;
+use datafusion_execution::config::SessionConfig;
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 ///
@@ -239,10 +239,10 @@ unsafe extern "C" fn scan_fn_wrapper(
     let session_config = session_config.clone();
 
     async move {
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
+        let config = rresult_return!(SessionConfig::try_from(&session_config));
         let session = SessionStateBuilder::new()
             .with_default_features()
-            .with_config(config.0)
+            .with_config(config)
             .build();
         let ctx = SessionContext::new_with_state(session);
 
@@ -292,10 +292,10 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     let input = input.clone();
 
     async move {
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
+        let config = rresult_return!(SessionConfig::try_from(&session_config));
         let session = SessionStateBuilder::new()
             .with_default_features()
-            .with_config(config.0)
+            .with_config(config)
             .build();
         let ctx = SessionContext::new_with_state(session);
 

@@ -171,10 +171,10 @@ impl PredicateBoundsEvaluator<'_> {
         }
 
         // Check if the expression is the `certainly_null_expr` that was passed in.
-        if let Some(certainly_null_expr) = &self.certainly_null_expr {
-            if expr.eq(certainly_null_expr) {
-                return NullableInterval::TRUE;
-            }
+        if let Some(certainly_null_expr) = &self.certainly_null_expr
+            && expr.eq(certainly_null_expr)
+        {
+            return NullableInterval::TRUE;
         }
 
         // `expr` is nullable, so our default answer for `is null` is going to be `{ TRUE, FALSE }`.
@@ -235,8 +235,8 @@ mod tests {
     use crate::expr::ScalarFunction;
     use crate::predicate_bounds::evaluate_bounds;
     use crate::{
-        binary_expr, col, create_udf, is_false, is_not_false, is_not_null, is_not_true,
-        is_not_unknown, is_null, is_true, is_unknown, lit, not, Expr,
+        Expr, binary_expr, col, create_udf, is_false, is_not_false, is_not_null,
+        is_not_true, is_not_unknown, is_null, is_true, is_unknown, lit, not,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{DFSchema, Result, ScalarValue};

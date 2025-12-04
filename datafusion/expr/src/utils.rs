@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
-    and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
+    BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator, and,
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature};
 
@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap, Result,
-    TableReference,
+    Column, DFSchema, DFSchemaRef, HashMap, Result, TableReference, internal_err,
+    plan_err,
 };
 
 #[cfg(not(feature = "sql"))]
@@ -114,7 +114,9 @@ pub fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>> {
 fn check_grouping_set_size_limit(size: usize) -> Result<()> {
     let max_grouping_set_size = 65535;
     if size > max_grouping_set_size {
-        return plan_err!("The number of group_expression in grouping_set exceeds the maximum limit {max_grouping_set_size}, found {size}");
+        return plan_err!(
+            "The number of group_expression in grouping_set exceeds the maximum limit {max_grouping_set_size}, found {size}"
+        );
     }
 
     Ok(())
@@ -124,7 +126,9 @@ fn check_grouping_set_size_limit(size: usize) -> Result<()> {
 fn check_grouping_sets_size_limit(size: usize) -> Result<()> {
     let max_grouping_sets_size = 4096;
     if size > max_grouping_sets_size {
-        return plan_err!("The number of grouping_set in grouping_sets exceeds the maximum limit {max_grouping_sets_size}, found {size}");
+        return plan_err!(
+            "The number of grouping_set in grouping_sets exceeds the maximum limit {max_grouping_sets_size}, found {size}"
+        );
     }
 
     Ok(())
@@ -947,9 +951,11 @@ pub fn generate_signature_error_msg(
         .join("\n");
 
     format!(
-            "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
-            func_name, TypeSignature::join_types(input_expr_types, ", "), candidate_signatures
-        )
+        "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
+        func_name,
+        TypeSignature::join_types(input_expr_types, ", "),
+        candidate_signatures
+    )
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -1280,11 +1286,10 @@ pub fn collect_subquery_cols(
 mod tests {
     use super::*;
     use crate::{
-        col, cube,
+        Cast, ExprFunctionExt, WindowFunctionDefinition, col, cube,
         expr::WindowFunction,
         expr_vec_fmt, grouping_set, lit, rollup,
         test::function_stub::{max_udaf, min_udaf, sum_udaf},
-        Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
     use datafusion_expr_common::signature::{TypeSignature, Volatility};

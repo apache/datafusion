@@ -30,15 +30,13 @@ pub use udaf::aggregate_doc_sections;
 pub use udf::scalar_doc_sections;
 pub use udwf::window_doc_sections;
 
-#[allow(rustdoc::broken_intra_doc_links)]
-/// Documentation for use by [`ScalarUDFImpl`](ScalarUDFImpl),
-/// [`AggregateUDFImpl`](AggregateUDFImpl) and [`WindowUDFImpl`](WindowUDFImpl) functions.
+/// Documentation for use by `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` functions.
 ///
 /// See the [`DocumentationBuilder`] to create a new [`Documentation`] struct.
 ///
 /// The DataFusion [SQL function documentation] is automatically  generated from these structs.
-/// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](ScalarUDFImpl::name),
-/// [`AggregateUDFImpl::name`](AggregateUDFImpl::name) or [`WindowUDFImpl::name`](WindowUDFImpl::name)
+/// The name of the udf will be pulled from the `ScalarUDFImpl::name`,
+/// `AggregateUDFImpl::name` or `WindowUDFImpl::name`
 /// function as appropriate.
 ///
 /// All strings in the documentation are required to be

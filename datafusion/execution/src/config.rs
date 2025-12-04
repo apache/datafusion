@@ -23,8 +23,8 @@ use std::{
 };
 
 use datafusion_common::{
-    config::{ConfigExtension, ConfigOptions, SpillCompression},
     Result, ScalarValue,
+    config::{ConfigExtension, ConfigOptions, SpillCompression},
 };
 
 /// Configuration options for [`SessionContext`].

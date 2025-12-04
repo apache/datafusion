@@ -803,7 +803,7 @@ mod tests {
     use datafusion_physical_expr::expressions::lit;
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_parquet_source_predicate_same_as_filter() {
         let predicate = lit(true);
 

@@ -18,9 +18,9 @@
 //! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use std::hash::{Hash, Hasher};
-use std::{cmp::Ordering, sync::atomic, sync::Arc};
+use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
 mod pool;
 pub mod proxy {
