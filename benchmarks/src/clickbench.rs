@@ -143,7 +143,7 @@ impl RunOpt {
         // This ensures the file is not split into multiple partitions, we
         // can get the pure performance benefit of sorted data to compare.
         if self.sorted_by.is_some() {
-            println!("⚠️  Forcing target_partitions=1 to preserve sort order");
+            println!("⚠️  Overriding target_partitions=1 to preserve sort order");
             println!(
                 "⚠️  (Because we want to get the pure performance benefit of sorted data to compare)"
             );
