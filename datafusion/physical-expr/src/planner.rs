@@ -23,7 +23,7 @@ use crate::{
     PhysicalExpr,
 };
 
-use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
@@ -404,10 +404,9 @@ where
         .collect()
 }
 
-/// Convert a logical expression to a physical expression (without any simplification, etc)
-pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
-    // TODO this makes a deep copy of the Schema. Should take SchemaRef instead and avoid deep copy
-    let df_schema = schema.clone().to_dfschema().unwrap();
+/// Convert a logical expression to a physical expression (without any simplification, etc.)
+pub fn logical2physical(expr: &Expr, schema: SchemaRef) -> Arc<dyn PhysicalExpr> {
+    let df_schema = schema.to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     create_physical_expr(expr, &df_schema, &execution_props).unwrap()
 }
@@ -415,7 +414,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_expr::{col, lit};
 
