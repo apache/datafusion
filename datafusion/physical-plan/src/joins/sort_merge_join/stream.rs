@@ -40,7 +40,6 @@ use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
-use arrow::compute::kernels::numeric::mul;
 use arrow::compute::{
     self, concat_batches, filter_record_batch, is_not_null, take, BatchCoalescer,
     SortOptions,
