@@ -24,7 +24,9 @@ use arrow::array::{
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{DataType, Float64Type, Int32Type};
 use datafusion_common::types::{logical_float64, logical_int32, NativeType};
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
@@ -57,6 +59,7 @@ impl SparkMakeDtInterval {
         );
 
         let variants = vec![
+            TypeSignature::Nullary,
             // (days)
             TypeSignature::Coercible(vec![int32.clone()]),
             // (days, hours)
@@ -108,6 +111,25 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
             )));
         }
         make_scalar_function(make_dt_interval_kernel, vec![])(&args.args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() > 4 {
+            return exec_err!(
+                "make_dt_interval expects between 0 and 4 arguments, got {}",
+                arg_types.len()
+            );
+        }
+
+        Ok((0..arg_types.len())
+            .map(|i| {
+                if i == 3 {
+                    DataType::Float64
+                } else {
+                    DataType::Int32
+                }
+            })
+            .collect())
     }
 }
 
