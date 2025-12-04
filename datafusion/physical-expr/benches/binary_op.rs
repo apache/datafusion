@@ -20,12 +20,12 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
 };
 use arrow::{array::StringArray, record_batch::RecordBatch};
-use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_expr::{and, binary_expr, col, lit, or, Operator};
+use criterion::{Criterion, criterion_group, criterion_main};
+use datafusion_expr::{Operator, and, binary_expr, col, lit, or};
 use datafusion_physical_expr::{
+    PhysicalExpr,
     expressions::{BinaryExpr, Column},
     planner::logical2physical,
-    PhysicalExpr,
 };
 use std::hint::black_box;
 use std::sync::Arc;

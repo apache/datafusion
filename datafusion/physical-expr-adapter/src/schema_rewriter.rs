@@ -22,16 +22,15 @@ use std::sync::Arc;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::{
-    exec_err,
+    Result, ScalarValue, exec_err,
     nested_struct::validate_struct_compatibility,
     tree_node::{Transformed, TransformedResult, TreeNode},
-    Result, ScalarValue,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::{
-    expressions::{self, Column},
     ScalarFunctionExpr,
+    expressions::{self, Column},
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -372,23 +371,24 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
         };
 
         // Check if the column exists in the physical schema
-        let physical_column_index =
-            match self.physical_file_schema.index_of(column.name()) {
-                Ok(index) => index,
-                Err(_) => {
-                    if !logical_field.is_nullable() {
-                        return exec_err!(
+        let physical_column_index = match self
+            .physical_file_schema
+            .index_of(column.name())
+        {
+            Ok(index) => index,
+            Err(_) => {
+                if !logical_field.is_nullable() {
+                    return exec_err!(
                         "Non-nullable column '{}' is missing from the physical schema",
                         column.name()
                     );
-                    }
-                    // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` used to do.
-                    // If users want a different behavior they need to provide a custom `PhysicalExprAdapter` implementation.
-                    let null_value =
-                        ScalarValue::Null.cast_to(logical_field.data_type())?;
-                    return Ok(Transformed::yes(expressions::lit(null_value)));
                 }
-            };
+                // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` used to do.
+                // If users want a different behavior they need to provide a custom `PhysicalExprAdapter` implementation.
+                let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
+                return Ok(Transformed::yes(expressions::lit(null_value)));
+            }
+        };
         let physical_field = self.physical_file_schema.field(physical_column_index);
 
         let column = match (
@@ -463,9 +463,9 @@ mod tests {
         StringArray, StringViewArray, StructArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-    use datafusion_common::{assert_contains, record_batch, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, assert_contains, record_batch};
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, lit, Column, Literal};
+    use datafusion_physical_expr::expressions::{Column, Literal, col, lit};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use itertools::Itertools;
     use std::sync::Arc;
