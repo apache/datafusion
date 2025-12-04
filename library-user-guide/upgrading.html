@@ -420,6 +420,19 @@ directly on the <code class="docutils literal notranslate"><span class="pre">Fie
 </pre></div>
 </div>
 </section>
+<section id="listingtableprovider-now-caches-list-commands">
+<h3>ListingTableProvider now caches <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands<a class="headerlink" href="#listingtableprovider-now-caches-list-commands" title="Link to this heading">#</a></h3>
+<p>In prior versions, <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> would issue <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands to
+the underlying object store each time it needed to list files for a query.
+To improve performance, <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> now caches the results of
+<code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands for the lifetime of the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> instance.</p>
+<p>Note that by default the cache has no expiration time, so if files are added or removed
+from the underlying object store, the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> will not see
+those changes until the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> instance is dropped and recreated.</p>
+<p>You will be able to configure the maximum cache size and cache expiration time via a configuration option:</p>
+<p>See <a class="github reference external" href="https://github.com/apache/datafusion/issues/19056">apache/datafusion#19056</a> for more details.</p>
+<p>Note that the internal API has changed to use a trait <code class="docutils literal notranslate"><span class="pre">ListFilesCache</span></code> instead of a type alias.</p>
+</section>
 <section id="removal-of-pyarrow-feature">
 <h3>Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature<a class="headerlink" href="#removal-of-pyarrow-feature" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature flag has been removed. This feature has been migrated to
@@ -2009,6 +2022,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changes-to-dfschema-api">Changes to DFSchema API</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingtableprovider-now-caches-list-commands">ListingTableProvider now caches <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#removal-of-pyarrow-feature">Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptive-filter-representation-in-parquet-filter-pushdown">Adaptive filter representation in Parquet filter pushdown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
