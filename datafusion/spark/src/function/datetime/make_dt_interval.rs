@@ -23,11 +23,11 @@ use arrow::array::{
 };
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{DataType, Float64Type, Int32Type};
-use datafusion_common::{
-    exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::types::{logical_float64, logical_int32, NativeType};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -44,8 +44,36 @@ impl Default for SparkMakeDtInterval {
 
 impl SparkMakeDtInterval {
     pub fn new() -> Self {
+        let int32 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int32()),
+            vec![TypeSignatureClass::Integer],
+            NativeType::Int32,
+        );
+
+        let float64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
+
+        let variants = vec![
+            // (days)
+            TypeSignature::Coercible(vec![int32.clone()]),
+            // (days, hours)
+            TypeSignature::Coercible(vec![int32.clone(), int32.clone()]),
+            // (days, hours, minutes)
+            TypeSignature::Coercible(vec![int32.clone(), int32.clone(), int32.clone()]),
+            // (days, hours, minutes, seconds)
+            TypeSignature::Coercible(vec![
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                float64,
+            ]),
+        ];
+
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(variants, Volatility::Immutable),
         }
     }
 }
@@ -80,25 +108,6 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
             )));
         }
         make_scalar_function(make_dt_interval_kernel, vec![])(&args.args)
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() > 4 {
-            return exec_err!(
-                "make_dt_interval expects between 0 and 4 arguments, got {}",
-                arg_types.len()
-            );
-        }
-
-        Ok((0..arg_types.len())
-            .map(|i| {
-                if i == 3 {
-                    DataType::Float64
-                } else {
-                    DataType::Int32
-                }
-            })
-            .collect())
     }
 }
 
