@@ -801,25 +801,24 @@ impl FileScanConfig {
 
     fn projected_stats(&self) -> Statistics {
         let statistics = self.statistics();
-
-        let table_cols_stats = self
-            .projection_indices()
-            .into_iter()
-            .map(|idx| {
-                if idx < self.file_schema().fields().len() {
-                    statistics.column_statistics[idx].clone()
-                } else {
-                    // TODO provide accurate stat for partition column (#1186)
-                    ColumnStatistics::new_unknown()
+        let projection = self.file_source.projection();
+        if let Some(projection) = &projection {
+            // TODO: correct byte size: https://github.com/apache/datafusion/issues/14936
+            match projection.project_statistics(
+                statistics.clone(),
+                self.file_source.table_schema().table_schema(),
+            ) {
+                Ok(proj_stats) => proj_stats,
+                Err(e) => {
+                    warn!("Failed to project statistics: {e}");
+                    #[cfg(not(debug_assertions))]
+                    return statistics;
+                    #[cfg(debug_assertions)]
+                    panic!("Failed to project statistics: {e}");
                 }
-            })
-            .collect();
-
-        Statistics {
-            num_rows: statistics.num_rows,
-            // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-            total_byte_size: statistics.total_byte_size,
-            column_statistics: table_cols_stats,
+            }
+        } else {
+            statistics
         }
     }
 
