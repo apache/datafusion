@@ -22,17 +22,17 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Date32Array, StringArray};
 use arrow::datatypes::{DataType, Field};
-use chrono::prelude::*;
 use chrono::TimeDelta;
-use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_common::config::ConfigOptions;
+use chrono::prelude::*;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_char;
+use rand::Rng;
 use rand::prelude::IndexedRandom;
 use rand::rngs::ThreadRng;
-use rand::Rng;
 
 fn pick_date_in_range(
     rng: &mut ThreadRng,

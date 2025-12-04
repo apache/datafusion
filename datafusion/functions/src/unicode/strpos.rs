@@ -26,7 +26,7 @@ use arrow::datatypes::{
     ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int64Type,
 };
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,

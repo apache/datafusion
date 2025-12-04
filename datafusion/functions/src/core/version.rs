@@ -18,7 +18,7 @@
 //! [`VersionFunc`]: Implementation of the `version` function.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,

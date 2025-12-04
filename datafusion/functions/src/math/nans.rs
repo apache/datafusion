@@ -18,7 +18,7 @@
 //! Math function: `isnan()`.
 
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, TypeSignature};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
@@ -100,7 +100,7 @@ impl ScalarUDFImpl for IsNanFunc {
                 return exec_err!(
                     "Unsupported data type {other:?} for function {}",
                     self.name()
-                )
+                );
             }
         };
         Ok(ColumnarValue::Array(arr))

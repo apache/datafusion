@@ -20,14 +20,14 @@ extern crate criterion;
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
 use criterion::{
-    criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup, Criterion,
-    SamplingMode,
+    BenchmarkGroup, Criterion, SamplingMode, criterion_group, criterion_main,
+    measurement::Measurement,
 };
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
-use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, distr::Alphanumeric, rngs::StdRng};
 use std::hint::black_box;
 use std::{fmt, sync::Arc};
 

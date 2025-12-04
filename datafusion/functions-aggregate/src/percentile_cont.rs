@@ -26,8 +26,8 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
     array::{Array, ArrayRef, AsArray},
     datatypes::{
-        ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-        Decimal64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
+        ArrowNativeType, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
     },
 };
 
@@ -35,21 +35,21 @@ use arrow::array::ArrowNativeTypeOp;
 
 use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, plan_err,
-    utils::take_function_args, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_datafusion_err, plan_err, utils::take_function_args,
 };
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{
-    expr::{AggregateFunction, Cast, Sort},
-    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-    simplify::SimplifyInfo,
-};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
     Volatility,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{
+    expr::{AggregateFunction, Cast, Sort},
+    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+    simplify::SimplifyInfo,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
@@ -287,12 +287,14 @@ impl AggregateUDFImpl for PercentileCont {
             "percentile_cont"
         };
 
-        Ok(vec![Field::new(
-            format_state_name(args.name, state_name),
-            DataType::List(Arc::new(field)),
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, state_name),
+                DataType::List(Arc::new(field)),
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

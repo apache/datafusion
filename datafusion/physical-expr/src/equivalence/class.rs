@@ -737,10 +737,10 @@ impl EquivalenceGroup {
         if let Some(lit) = expr.as_any().downcast_ref::<Literal>() {
             return Some(AcrossPartitions::Uniform(Some(lit.value().clone())));
         }
-        if let Some(cls) = self.get_equivalence_class(expr) {
-            if cls.constant.is_some() {
-                return cls.constant.clone();
-            }
+        if let Some(cls) = self.get_equivalence_class(expr)
+            && cls.constant.is_some()
+        {
+            return cls.constant.clone();
         }
         // TODO: This function should be able to return values of non-literal
         //       complex constants as well; e.g. it should return `8` for the
@@ -819,15 +819,15 @@ impl EquivalenceGroup {
 
         // Check if expressions are equivalent through equivalence classes
         // We need to check both directions since expressions might be in different classes
-        if let Some(left_class) = self.get_equivalence_class(left) {
-            if left_class.contains(right) {
-                return true;
-            }
+        if let Some(left_class) = self.get_equivalence_class(left)
+            && left_class.contains(right)
+        {
+            return true;
         }
-        if let Some(right_class) = self.get_equivalence_class(right) {
-            if right_class.contains(left) {
-                return true;
-            }
+        if let Some(right_class) = self.get_equivalence_class(right)
+            && right_class.contains(left)
+        {
+            return true;
         }
 
         // For non-leaf nodes, check structural equality
@@ -910,7 +910,7 @@ impl From<Vec<EquivalenceClass>> for EquivalenceGroup {
 mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{binary, col, lit, BinaryExpr, Column, Literal};
+    use crate::expressions::{BinaryExpr, Column, Literal, binary, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_common::{Result, ScalarValue};
@@ -1082,8 +1082,7 @@ mod tests {
                 left: Arc::clone(&col_a),
                 right: Arc::clone(&col_b),
                 expected: false,
-                description:
-                    "Columns in different equivalence classes should not be equal",
+                description: "Columns in different equivalence classes should not be equal",
             },
             // Literal tests
             TestCase {
@@ -1111,8 +1110,7 @@ mod tests {
                     Arc::clone(&col_y),
                 )) as _,
                 expected: true,
-                description:
-                    "Binary expressions with equivalent operands should be equal",
+                description: "Binary expressions with equivalent operands should be equal",
             },
             TestCase {
                 left: Arc::new(BinaryExpr::new(
@@ -1126,8 +1124,7 @@ mod tests {
                     Arc::clone(&col_a),
                 )) as _,
                 expected: false,
-                description:
-                    "Binary expressions with non-equivalent operands should not be equal",
+                description: "Binary expressions with non-equivalent operands should not be equal",
             },
             TestCase {
                 left: Arc::new(BinaryExpr::new(

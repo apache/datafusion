@@ -25,16 +25,16 @@ use arrow::{
 };
 use arrow_buffer::{Buffer, OffsetBufferBuilder};
 use base64::{
-    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
     Engine as _,
+    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
+use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{ScalarValue, exec_err, internal_datafusion_err};
 use datafusion_common::{
     cast::{as_generic_binary_array, as_generic_string_array},
     not_impl_err, plan_err,
     utils::take_function_args,
 };
-use datafusion_common::{exec_err, internal_datafusion_err, ScalarValue};
-use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
@@ -542,7 +542,7 @@ fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let encoding = match format {
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
-            Some(Some(method))=> method.parse::<Encoding>(),
+            Some(Some(method)) => method.parse::<Encoding>(),
             _ => not_impl_err!(
                 "Second argument to decode must be a non null constant string: Decode using dynamically decided method is not yet supported. Got {scalar:?}"
             ),

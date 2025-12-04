@@ -22,21 +22,21 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::physical_expr::physical_exprs_bag_equal;
 use crate::PhysicalExpr;
+use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
-use arrow::compute::{take, SortOptions};
+use arrow::compute::{SortOptions, take};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::hash_utils::with_hashes;
 use datafusion_common::{
-    assert_or_internal_err, exec_datafusion_err, exec_err, DFSchema, HashSet, Result,
-    ScalarValue,
+    DFSchema, HashSet, Result, ScalarValue, assert_or_internal_err, exec_datafusion_err,
+    exec_err,
 };
-use datafusion_expr::{expr_vec_fmt, ColumnarValue};
+use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 use ahash::RandomState;
 use datafusion_common::HashMap;
@@ -488,11 +488,7 @@ impl PhysicalExpr for InListExpr {
                     },
                 )?;
 
-                if self.negated {
-                    not(&found)?
-                } else {
-                    found
-                }
+                if self.negated { not(&found)? } else { found }
             }
         };
         Ok(ColumnarValue::Array(Arc::new(r)))
