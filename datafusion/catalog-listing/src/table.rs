@@ -578,6 +578,11 @@ impl TableProvider for ListingTable {
         let keep_partition_by_columns =
             state.config_options().execution.keep_partition_by_columns;
 
+        // Invalidate cache entries for this table if they exist
+        if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
+            let _ = lfc.remove(table_path.prefix());
+        }
+
         // Sink related option, apart from format
         let config = FileSinkConfig {
             original_url: String::default(),
