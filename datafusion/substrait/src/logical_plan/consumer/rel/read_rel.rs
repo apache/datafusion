@@ -21,8 +21,8 @@ use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::catalog::TableProvider;
 use datafusion::common::{
-    not_impl_err, plan_datafusion_err, plan_err, substrait_datafusion_err, substrait_err,
-    DFSchema, DFSchemaRef, TableReference,
+    not_impl_err, plan_err, substrait_datafusion_err, substrait_err, DFSchema,
+    DFSchemaRef, TableReference,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::utils::split_conjunction_owned;
