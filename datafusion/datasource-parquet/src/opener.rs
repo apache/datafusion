@@ -584,7 +584,6 @@ where
 }
 
 #[derive(Default)]
-#[cfg_attr(not(feature = "parquet_encryption"), allow(dead_code))]
 struct EncryptionContext {
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -626,7 +625,7 @@ impl EncryptionContext {
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
-#[allow(dead_code)]
+#[expect(dead_code)]
 impl EncryptionContext {
     async fn get_file_decryption_properties(
         &self,
@@ -646,7 +645,7 @@ impl ParquetOpener {
     }
 
     #[cfg(not(feature = "parquet_encryption"))]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn get_encryption_context(&self) -> EncryptionContext {
         EncryptionContext::default()
     }
