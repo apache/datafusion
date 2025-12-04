@@ -1,0 +1,31 @@
+# interval * double precision → interval
+# Multiply an interval by a scalar
+# interval '1 second' * 900 → 00:15:00
+# interval '1 day' * 21 → 21 days
+# interval '1 hour' * 3.5 → 03:30:00
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \* Int64 to valid types
+SELECT interval '1 second' * 900
+
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \* Int64 to valid types
+SELECT interval '1 day' * 21
+
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \* Float64 to valid types
+SELECT interval '1 hour' * 3.5
+
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \* Int64 to valid types
+SELECT arrow_typeof(interval '1 second' * 900)
+
+# interval / double precision → interval
+# Divide an interval by a scalar
+# interval '1 hour' / 1.5 → 00:40:00
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) / Float64 to valid types
+SELECT interval '1 hour' / 1.5
+
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) / Float64 to valid types
+SELECT arrow_typeof(interval '1 hour' / 1.5)

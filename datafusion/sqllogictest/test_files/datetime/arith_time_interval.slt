@@ -1,0 +1,21 @@
+# time + interval → time
+# Add an interval to a time
+# time '01:00' + interval '3 hours' → 04:00:00
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Time64\(ns\) \+ Interval\(MonthDayNano\) to valid types
+SELECT '01:00'::time + interval '3 hours'
+
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Time64\(ns\) \+ Interval\(MonthDayNano\) to valid types
+SELECT arrow_typeof('01:00'::time + interval '3 hours')
+
+# time - interval → time
+# Subtract an interval from a time
+# time '05:00' - interval '2 hours' → 03:00:00
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Time64\(ns\) \- Interval\(MonthDayNano\) to valid types
+SELECT '05:00'::time - interval '2 hours'
+
+
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Time64\(ns\) \- Interval\(MonthDayNano\) to valid types
+SELECT arrow_typeof('05:00'::time - interval '2 hours')

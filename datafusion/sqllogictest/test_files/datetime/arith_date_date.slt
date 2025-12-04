@@ -1,0 +1,13 @@
+# date - date → integer
+# Subtract dates, producing the number of days elapsed
+# date '2001-10-01' - date '2001-09-28' → 3
+
+query ?
+SELECT '2001-10-01'::date - '2001-09-28'::date
+----
+3 days 0 hours 0 mins 0 secs
+
+query T
+SELECT arrow_typeof('2001-10-01'::date - '2001-09-28'::date)
+----
+Duration(s)

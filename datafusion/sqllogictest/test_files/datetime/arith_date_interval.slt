@@ -1,0 +1,27 @@
+# date + interval → timestamp
+# Add an interval to a date
+# date '2001-09-28' + interval '1 hour' → 2001-09-28 01:00:00
+
+query D
+SELECT '2001-09-28'::date + interval '1 hour'
+----
+2001-09-28
+
+query T
+SELECT arrow_typeof('2001-09-28'::date + interval '1 hour')
+----
+Date32
+
+# date - interval → timestamp
+# Subtract an interval from a date
+# date '2001-09-28' - interval '1 hour' → 2001-09-27 23:00:00
+
+query D
+SELECT '2001-09-28'::date - interval '1 hour'
+----
+2001-09-28
+
+query T
+SELECT arrow_typeof('2001-09-28'::date - interval '1 hour')
+----
+Date32
