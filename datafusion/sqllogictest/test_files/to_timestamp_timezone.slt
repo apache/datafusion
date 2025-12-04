@@ -63,7 +63,7 @@ SET datafusion.execution.time_zone = 'America/New_York';
 
 ## Test 7: Naive timestamp with configured timezone
 ## '2020-09-08T13:42:29' in America/New_York is EDT (UTC-4)
-## So this should become '2020-09-08T13:42:29Z-04:00'
+## So this should become '2020-09-08T13:42:29-04:00'
 query P
 SELECT to_timestamp('2020-09-08T13:42:29');
 ----

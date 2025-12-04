@@ -2909,7 +2909,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `to_timestamp_nanos`
 
-Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z<TZ>`) in the session time zone. Supports strings,
+Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
 if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
 session time zone. Integers, unsigned integers, and doubles are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).

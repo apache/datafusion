@@ -116,20 +116,23 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
     // custom parser (or switching to Jiff)
     let tz: Option<chrono_tz::Tz> = if format.ends_with(" %Z") {
         // grab the string after the last space as the named timezone
-        let parts: Vec<&str> = datetime_str.rsplitn(2, ' ').collect();
-        let timezone_name = parts[0];
-        datetime_str = parts[1];
+        if let Some((dt_str, timezone_name)) = datetime_str.rsplit_once(' ') {
+            datetime_str = dt_str;
 
-        // attempt to parse the timezone name
-        let result: Result<chrono_tz::Tz, chrono_tz::ParseError> = timezone_name.parse();
-        let Ok(tz) = result else {
-            return Err(err(&result.unwrap_err().to_string()));
-        };
+            // attempt to parse the timezone name
+            let result: Result<chrono_tz::Tz, chrono_tz::ParseError> =
+                timezone_name.parse();
+            let Ok(tz) = result else {
+                return Err(err(&result.unwrap_err().to_string()));
+            };
 
-        // successfully parsed the timezone name, remove the ' %Z' from the format
-        format = format.trim_end_matches(" %Z");
+            // successfully parsed the timezone name, remove the ' %Z' from the format
+            format = &format[..format.len() - 3];
 
-        Some(tz)
+            Some(tz)
+        } else {
+            None
+        }
     } else if format.contains("%Z") {
         return Err(err(
             "'%Z' is only supported at the end of the format string preceded by a space",
