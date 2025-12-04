@@ -40,6 +40,7 @@ use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
+use arrow::compute::kernels::numeric::mul;
 use arrow::compute::{
     self, concat_batches, filter_record_batch, is_not_null, take, BatchCoalescer,
     SortOptions,
@@ -381,10 +382,10 @@ impl JoinedRecordBatches {
             all_batches.push(batch);
         }
 
-        match all_batches.len() {
-            0 => unreachable!("concat_batches called with empty BatchCoalescer"),
-            1 => Ok(all_batches.pop().unwrap()),
-            _ => Ok(concat_batches(schema, &all_batches)?),
+        match all_batches.as_slice() {
+            [] => unreachable!("concat_batches called with empty BatchCoalescer"),
+            [single_batch] => Ok(single_batch.clone()),
+            multiple_batches => Ok(concat_batches(schema, multiple_batches)?),
         }
     }
 
