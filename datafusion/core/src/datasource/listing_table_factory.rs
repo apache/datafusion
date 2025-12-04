@@ -499,22 +499,13 @@ mod tests {
         let state = context.state();
         let name = TableReference::bare("test");
 
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: location.clone(),
-            file_type: "parquet".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::new(),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            location.clone(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
 
         let _table_provider = factory.create(&state, &cmd).await.unwrap();
 
@@ -538,22 +529,13 @@ mod tests {
         let state = context.state();
         let name = TableReference::bare("test");
 
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
             location,
-            file_type: "parquet".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::new(),
-            constraints: Constraints::default(),
-            column_defaults: HashMap::new(),
-        };
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
 
         let _table_provider = factory.create(&state, &cmd).await.unwrap();
 
