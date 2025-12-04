@@ -67,9 +67,10 @@ use datafusion_expr::{
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
+#[cfg(feature = "parquet")]
+use crate::logical_plan::file_formats::ParquetLogicalExtensionCodec;
 use crate::logical_plan::file_formats::{
     ArrowLogicalExtensionCodec, CsvLogicalExtensionCodec, JsonLogicalExtensionCodec,
-    ParquetLogicalExtensionCodec,
 };
 use crate::logical_plan::to_proto::serialize_sorts;
 use datafusion_catalog::default_table_source::{provider_as_source, source_as_provider};
@@ -241,11 +242,16 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
                         .try_decode_file_format(&wrapper.blob, ctx)
                         .map_err(|e| context!("Decoding JSON file format", e))
                 }
+                #[cfg(feature = "parquet")]
                 FileFormatKind::Parquet => {
                     let codec = ParquetLogicalExtensionCodec {};
                     codec
                         .try_decode_file_format(&wrapper.blob, ctx)
                         .map_err(|e| context!("Decoding Parquet file format", e))
+                }
+                #[cfg(not(feature = "parquet"))]
+                FileFormatKind::Parquet => {
+                    internal_err!("Parquet feature is not enabled")
                 }
                 FileFormatKind::Arrow => {
                     let codec = ArrowLogicalExtensionCodec {};
@@ -263,11 +269,15 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
             ctx: &TaskContext,
             buf: &[u8],
         ) -> Option<Arc<dyn FileFormatFactory>> {
+            #[cfg(feature = "parquet")]
             let candidates: &[&dyn LogicalExtensionCodec] = &[
                 &ParquetLogicalExtensionCodec {},
                 &CsvLogicalExtensionCodec {},
                 &JsonLogicalExtensionCodec {},
             ];
+            #[cfg(not(feature = "parquet"))]
+            let candidates: &[&dyn LogicalExtensionCodec] =
+                &[&CsvLogicalExtensionCodec {}, &JsonLogicalExtensionCodec {}];
 
             for codec in candidates {
                 if let Ok(ff) = codec.try_decode_file_format(buf, ctx) {
@@ -322,6 +332,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         }
 
         // Parquet
+        #[cfg(feature = "parquet")]
         if node.as_any().is::<ParquetFormatFactory>() {
             let mut blob = Vec::new();
             ParquetLogicalExtensionCodec {}
