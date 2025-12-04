@@ -686,7 +686,7 @@ impl FileSource for ParquetSource {
 
                 // Add reverse_scan info if enabled
                 if self.reverse_scan_inexact {
-                    writeln!(f, ", reverse_scan_inexact=true")?;
+                    write!(f, ", reverse_scan_inexact=true")?;
                 }
 
                 // Try to build a the pruning predicates.

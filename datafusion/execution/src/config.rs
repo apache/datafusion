@@ -442,8 +442,8 @@ impl SessionConfig {
         self
     }
 
-    /// Enable sort pushdown optimization for Parquet files
-    pub fn with_parquet_reverse_scan(mut self, enabled: bool) -> Self {
+    /// Enables or disables sort pushdown optimization for Parquet files
+    pub fn with_parquet_enable_sort_pushdown(mut self, enabled: bool) -> Self {
         self.options_mut().execution.parquet.enable_sort_pushdown = enabled;
         self
     }

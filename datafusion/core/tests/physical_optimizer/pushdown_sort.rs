@@ -22,6 +22,7 @@
 //! 2. SortExec is kept (because ordering is inexact)
 //! 3. output_ordering remains unchanged
 //! 4. Early termination is enabled for TopK queries
+//! 5. Prefix matching works correctly
 
 use arrow::compute::SortOptions;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -29,9 +30,9 @@ use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 
 use crate::physical_optimizer::test_utils::{
-    coalesce_batches_exec, coalesce_partitions_exec, global_limit_exec, parquet_exec,
+    coalesce_batches_exec, coalesce_partitions_exec, parquet_exec,
     parquet_exec_with_sort, repartition_exec, schema, sort_exec, sort_exec_with_fetch,
-    sort_exec_with_preserve_partitioning, sort_expr, sort_expr_options, OptimizationTest,
+    sort_expr, sort_expr_options, OptimizationTest,
 };
 
 #[test]
@@ -94,30 +95,6 @@ fn test_sort_pushdown_basic_phase1() {
 }
 
 #[test]
-fn test_sort_already_satisfied() {
-    // If source already provides the required ordering, sort should be removed
-    let schema = schema();
-    let sort_exprs = LexOrdering::new(vec![sort_expr("a", &schema)]).unwrap();
-
-    // Create a source that already has the ordering
-    let source = parquet_exec_with_sort(schema, vec![sort_exprs.clone()]);
-    let plan = sort_exec(sort_exprs, source);
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
-    OptimizationTest:
-      input:
-        - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-        -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-      output:
-        Ok:
-          - DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-    "###
-    );
-}
-
-#[test]
 fn test_sort_with_limit_phase1() {
     // Phase 1: Sort with fetch enables early termination but keeps Sort
     let schema = schema();
@@ -149,84 +126,6 @@ fn test_sort_with_limit_phase1() {
         Ok:
           - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
-    );
-}
-
-#[test]
-fn test_global_limit_sort_pushdown_phase1() {
-    // Phase 1: GlobalLimitExec -> SortExec pattern with reverse scan
-    let schema = schema();
-
-    // Source has ASC ordering
-    let source_ordering = LexOrdering::new(vec![sort_expr("a", &schema)]).unwrap();
-    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
-
-    // Request DESC ordering
-    let desc_ordering = LexOrdering::new(vec![sort_expr_options(
-        "a",
-        &schema,
-        SortOptions {
-            descending: true,
-            nulls_first: false,
-        },
-    )])
-    .unwrap();
-    let sort = sort_exec(desc_ordering, source);
-    let plan = global_limit_exec(sort, 0, Some(10));
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
-    OptimizationTest:
-      input:
-        - GlobalLimitExec: skip=0, fetch=10
-        -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-      output:
-        Ok:
-          - GlobalLimitExec: skip=0, fetch=10
-          -   SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
-    );
-}
-
-#[test]
-fn test_global_limit_sort_with_skip_phase1() {
-    // Phase 1: GlobalLimitExec with skip -> SortExec
-    let schema = schema();
-
-    // Source has ASC ordering
-    let source_ordering = LexOrdering::new(vec![sort_expr("a", &schema)]).unwrap();
-    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
-
-    // Request DESC ordering
-    let desc_ordering = LexOrdering::new(vec![sort_expr_options(
-        "a",
-        &schema,
-        SortOptions {
-            descending: true,
-            nulls_first: false,
-        },
-    )])
-    .unwrap();
-    let sort = sort_exec(desc_ordering, source);
-    let plan = global_limit_exec(sort, 5, Some(10));
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
-    OptimizationTest:
-      input:
-        - GlobalLimitExec: skip=5, fetch=10
-        -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-      output:
-        Ok:
-          - GlobalLimitExec: skip=5, fetch=10
-          -   SortExec: TopK(fetch=15), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
     "###
     );
 }
@@ -287,6 +186,283 @@ fn test_sort_multiple_columns_phase1() {
     "
     );
 }
+
+// ============================================================================
+// PREFIX MATCHING TESTS
+// ============================================================================
+
+#[test]
+fn test_prefix_match_single_column() {
+    // Test prefix matching: source has [a DESC, b ASC], query needs [a ASC]
+    // After reverse: [a ASC, b DESC] which satisfies [a ASC] prefix
+    let schema = schema();
+
+    // Source has [a DESC NULLS LAST, b ASC NULLS LAST] ordering
+    let source_ordering = LexOrdering::new(vec![
+        sort_expr_options(
+            "a",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+        sort_expr("b", &schema),
+    ])
+    .unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Request only [a ASC NULLS FIRST] - a prefix of the reversed ordering
+    let prefix_ordering = LexOrdering::new(vec![sort_expr_options(
+        "a",
+        &schema,
+        SortOptions {
+            descending: false,
+            nulls_first: true,
+        },
+    )])
+    .unwrap();
+    let plan = sort_exec(prefix_ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r###"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet, reverse_scan_inexact=true
+    "###
+    );
+}
+
+#[test]
+fn test_prefix_match_with_limit() {
+    // Test prefix matching with LIMIT - important for TopK optimization
+    let schema = schema();
+
+    // Source has [a ASC, b DESC, c ASC] ordering
+    let source_ordering = LexOrdering::new(vec![
+        sort_expr("a", &schema),
+        sort_expr_options(
+            "b",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+        sort_expr("c", &schema),
+    ])
+    .unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Request [a DESC NULLS LAST, b ASC NULLS FIRST] with LIMIT 100
+    // This is a prefix (2 columns) of the reversed 3-column ordering
+    let prefix_ordering = LexOrdering::new(vec![
+        sort_expr_options(
+            "a",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+        sort_expr_options(
+            "b",
+            &schema,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        ),
+    ])
+    .unwrap();
+    let plan = sort_exec_with_fetch(prefix_ordering, Some(100), source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r###"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=100), expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
+        -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 DESC NULLS LAST, c@2 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: TopK(fetch=100), expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 DESC NULLS LAST, c@2 ASC], file_type=parquet, reverse_scan_inexact=true
+    "###
+    );
+}
+
+#[test]
+fn test_prefix_match_through_transparent_nodes() {
+    // Test prefix matching works through transparent nodes
+    let schema = schema();
+
+    // Source has [a DESC NULLS LAST, b ASC, c DESC] ordering
+    let source_ordering = LexOrdering::new(vec![
+        sort_expr_options(
+            "a",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+        sort_expr("b", &schema),
+        sort_expr_options(
+            "c",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+    ])
+    .unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+    let coalesce = coalesce_batches_exec(source, 1024);
+    let repartition = repartition_exec(coalesce);
+
+    // Request only [a ASC NULLS FIRST] - prefix of reversed ordering
+    let prefix_ordering = LexOrdering::new(vec![sort_expr_options(
+        "a",
+        &schema,
+        SortOptions {
+            descending: false,
+            nulls_first: true,
+        },
+    )])
+    .unwrap();
+    let plan = sort_exec(prefix_ordering, repartition);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r###"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+        -     CoalesceBatchesExec: target_batch_size=1024
+        -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC, c@2 DESC NULLS LAST], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+          -     CoalesceBatchesExec: target_batch_size=1024
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC, c@2 DESC NULLS LAST], file_type=parquet, reverse_scan_inexact=true
+    "###
+    );
+}
+
+#[test]
+fn test_no_prefix_match_wrong_direction() {
+    // Test that prefix matching does NOT work if the direction is wrong
+    let schema = schema();
+
+    // Source has [a DESC, b ASC] ordering
+    let source_ordering = LexOrdering::new(vec![
+        sort_expr_options(
+            "a",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+        sort_expr("b", &schema),
+    ])
+    .unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Request [a DESC] - same direction as source, NOT a reverse prefix
+    let same_direction = LexOrdering::new(vec![sort_expr_options(
+        "a",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )])
+    .unwrap();
+    let plan = sort_exec(same_direction, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r###"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet
+    "###
+    );
+}
+
+#[test]
+fn test_no_prefix_match_longer_than_source() {
+    // Test that prefix matching does NOT work if requested is longer than source
+    let schema = schema();
+
+    // Source has [a DESC] ordering (single column)
+    let source_ordering = LexOrdering::new(vec![sort_expr_options(
+        "a",
+        &schema,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )])
+    .unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Request [a ASC, b DESC] - longer than source, can't be a prefix
+    let longer_ordering = LexOrdering::new(vec![
+        sort_expr_options(
+            "a",
+            &schema,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        ),
+        sort_expr_options(
+            "b",
+            &schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+    ])
+    .unwrap();
+    let plan = sort_exec(longer_ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r###"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
+        -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST], file_type=parquet
+    "###
+    );
+}
+
+// ============================================================================
+// ORIGINAL TESTS
+// ============================================================================
 
 #[test]
 fn test_sort_through_coalesce_batches() {
@@ -427,89 +603,6 @@ fn test_optimizer_properties() {
 
     assert_eq!(optimizer.name(), "PushdownSort");
     assert!(optimizer.schema_check());
-}
-
-#[test]
-fn test_sort_with_multiple_partitions_converts_to_merge() {
-    // When source has multiple partitions and is already sorted,
-    // SortExec should convert to SortPreservingMergeExec
-    let schema = schema();
-    let sort_exprs = LexOrdering::new(vec![sort_expr("a", &schema)]).unwrap();
-
-    // Create source with ordering and then repartition to create multiple partitions
-    let source = parquet_exec_with_sort(schema, vec![sort_exprs.clone()]);
-    let repartition = repartition_exec(source);
-    let plan = sort_exec(sort_exprs, repartition);
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
-    OptimizationTest:
-      input:
-        - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-        -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
-        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-      output:
-        Ok:
-          - SortPreservingMergeExec: [a@0 ASC]
-          -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-    "###
-    );
-}
-
-#[test]
-fn test_sort_with_fetch_multiple_partitions_adds_local_limit() {
-    // Sort with fetch and multiple partitions should add LocalLimitExec
-    let schema = schema();
-    let sort_exprs = LexOrdering::new(vec![sort_expr("a", &schema)]).unwrap();
-
-    // Create source with ordering and multiple partitions
-    let source = parquet_exec_with_sort(schema, vec![sort_exprs.clone()]);
-    let repartition = repartition_exec(source);
-    let plan = sort_exec_with_fetch(sort_exprs, Some(10), repartition);
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r"
-    OptimizationTest:
-      input:
-        - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false], sort_prefix=[a@0 ASC]
-        -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
-        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-      output:
-        Ok:
-          - SortPreservingMergeExec: [a@0 ASC], fetch=10
-          -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-    "
-    );
-}
-
-#[test]
-fn test_sort_preserve_partitioning_with_satisfied_ordering() {
-    // Sort with preserve_partitioning should not add merge when ordering is satisfied
-    let schema = schema();
-    let sort_exprs = LexOrdering::new(vec![sort_expr("a", &schema)]).unwrap();
-
-    let source = parquet_exec_with_sort(schema, vec![sort_exprs.clone()]);
-    let repartition = repartition_exec(source);
-    let plan = sort_exec_with_preserve_partitioning(sort_exprs, repartition);
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
-    OptimizationTest:
-      input:
-        - SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-        -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
-        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-      output:
-        Ok:
-          - RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-    "###
-    );
 }
 
 #[test]

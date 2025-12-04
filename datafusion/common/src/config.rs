@@ -833,19 +833,14 @@ config_namespace! {
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
 
         /// Enable sort pushdown optimization for Parquet files.
-        ///
         /// When enabled, optimizes queries with ORDER BY:
         /// - Reordering files based on statistics
         /// - Reversing row group read order when beneficial
-        ///
         /// Returns **inexact ordering**: Sort operator is kept for correctness,
         /// but can terminate early for TopK queries (ORDER BY ... LIMIT N),
         /// providing huge speedup.
-        ///
         /// Memory: No additional overhead (only changes read order).
-        ///
-        /// Future TODO: Will add option to support detect perfectly sorted data and eliminate Sort completely.
-        ///
+        /// Future TODO: Will add option to support detecting perfectly sorted data and eliminate Sort completely.
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
     }

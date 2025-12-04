@@ -529,6 +529,128 @@ SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
 7 700 g
 6 600 f
 
+# Test 6.6: Reverse scan with row selection (page index pruning)
+# This tests that when reverse_scan_inexact=true, the RowSelection is also properly reversed
+
+# Create a dataset with multiple row groups and enable page index
+statement ok
+CREATE TABLE multi_rg_data(id INT, category VARCHAR, value INT) AS VALUES
+(1, 'alpha', 10),
+(2, 'alpha', 20),
+(3, 'beta', 30),
+(4, 'beta', 40),
+(5, 'gamma', 50),
+(6, 'gamma', 60),
+(7, 'delta', 70),
+(8, 'delta', 80);
+
+# Write with small row groups (2 rows each = 4 row groups)
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 2;
+
+query I
+COPY (SELECT * FROM multi_rg_data ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/multi_rg_sorted.parquet';
+----
+8
+
+# Reset row group size
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE multi_rg_sorted(id INT, category VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/multi_rg_sorted.parquet'
+WITH ORDER (id ASC);
+
+# Enable page index for better pruning
+statement ok
+SET datafusion.execution.parquet.enable_page_index = true;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+# Test with reverse scan and filter that prunes some row groups
+# This will create a RowSelection with partial row group scans
+query TT
+EXPLAIN SELECT * FROM multi_rg_sorted
+WHERE category IN ('alpha', 'gamma')
+ORDER BY id DESC LIMIT 5;
+----
+logical_plan
+01)Sort: multi_rg_sorted.id DESC NULLS FIRST, fetch=5
+02)--Filter: multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")
+03)----TableScan: multi_rg_sorted projection=[id, category, value], partial_filters=[multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")]
+physical_plan
+01)SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/multi_rg_sorted.parquet]]}, projection=[id, category, value], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], reverse_scan_inexact=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1, required_guarantees=[category in (alpha, gamma)]
+
+# Verify the results are correct despite reverse scanning with row selection
+# Expected: gamma values (6, 5) then alpha values (2, 1), in DESC order by id
+query ITI
+SELECT * FROM multi_rg_sorted
+WHERE category IN ('alpha', 'gamma')
+ORDER BY id DESC LIMIT 5;
+----
+6 gamma 60
+5 gamma 50
+2 alpha 20
+1 alpha 10
+
+# Test with more complex selection pattern
+query ITI
+SELECT * FROM multi_rg_sorted
+WHERE category IN ('beta', 'delta')
+ORDER BY id DESC;
+----
+8 delta 80
+7 delta 70
+4 beta 40
+3 beta 30
+
+# Test forward scan for comparison (should give same logical results in ASC order)
+query ITI
+SELECT * FROM multi_rg_sorted
+WHERE category IN ('alpha', 'gamma')
+ORDER BY id ASC;
+----
+1 alpha 10
+2 alpha 20
+5 gamma 50
+6 gamma 60
+
+# Disable reverse scan and verify it still works
+statement ok
+SET datafusion.execution.parquet.enable_sort_pushdown = false;
+
+query ITI
+SELECT * FROM multi_rg_sorted
+WHERE category IN ('alpha', 'gamma')
+ORDER BY id DESC LIMIT 5;
+----
+6 gamma 60
+5 gamma 50
+2 alpha 20
+1 alpha 10
+
+# Re-enable
+statement ok
+SET datafusion.execution.parquet.enable_sort_pushdown = true;
+
+# Cleanup
+statement ok
+DROP TABLE multi_rg_data;
+
+statement ok
+DROP TABLE multi_rg_sorted;
+
+statement ok
+SET datafusion.execution.parquet.enable_page_index = false;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;
+
 # Cleanup
 statement ok
 DROP TABLE sorted_data;
