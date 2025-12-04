@@ -1575,6 +1575,7 @@ mod test {
             partition_fields: vec![],
             pushdown_filters: false,
             reorder_filters: false,
+            force_filter_selections: false,
             enable_page_index: false,
             enable_bloom_filter: false,
             schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
@@ -1667,6 +1668,7 @@ mod test {
             partition_fields: vec![],
             pushdown_filters: false,
             reorder_filters: false,
+            force_filter_selections: false,
             enable_page_index: false,
             enable_bloom_filter: false,
             schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
@@ -1774,6 +1776,7 @@ mod test {
             partition_fields: vec![],
             pushdown_filters: false,
             reorder_filters: false,
+            force_filter_selections: false,
             enable_page_index: false,
             enable_bloom_filter: false,
             schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
@@ -1807,7 +1810,6 @@ mod test {
             }
         }
 
-        println!("Forward scan values: {:?}", forward_values);
         // Forward scan should produce: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
         assert_eq!(
             forward_values,
@@ -1837,8 +1839,6 @@ mod test {
                 }
             }
         }
-
-        println!("Reverse scan values: {:?}", reverse_values);
 
         // Correct expected result: row groups reversed but each keeps its own selection
         // RG2 with its selection (9,10), RG1 with its selection (5,6,7,8), RG0 with its selection (3,4)
