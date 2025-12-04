@@ -215,7 +215,7 @@ mod tests {
                         equal_to_results: &mut FixedBitPackedMutableBuffer| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
+                equal_to_results.set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
             }
         };
 
@@ -333,10 +333,10 @@ mod tests {
                         lhs_rows: &[usize],
                         input_array: &ArrayRef,
                         rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
+                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
             let iter = lhs_rows.iter().zip(rhs_rows.iter());
             for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
+                equal_to_results.set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
             }
         };
 

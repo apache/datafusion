@@ -41,6 +41,7 @@ use arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
+use arrow::util::bit_iterator::BitIterator;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{internal_datafusion_err, not_impl_err, Result};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
@@ -52,6 +53,7 @@ use hashbrown::hash_table::HashTable;
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 
+#[derive(Clone, Debug)]
 pub struct FixedBitPackedMutableBuffer(BooleanBufferBuilder);
 
 impl FixedBitPackedMutableBuffer {
@@ -68,15 +70,12 @@ impl FixedBitPackedMutableBuffer {
     pub(crate) fn set_bit(&mut self, index: usize, value: bool) {
         self.0.set_bit(index, value);
     }
-}
 
-impl Index<usize> for FixedBitPackedMutableBuffer {
-    type Output = bool;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0.get_bit(index)
+    pub(crate) fn iter(&self) -> BitIterator<'_> {
+        BitIterator::new(self.0.as_slice(), 0, self.0.len())
     }
 }
+
 
 #[cfg(test)]
 impl From<FixedBitPackedMutableBuffer> for Vec<bool> {
@@ -685,13 +684,14 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         // 2. Check `equal_to_results`, if found not equal to `row`s, just add them
         //    to `scalarized_indices`, and perform `scalarized_intern` for them after.
         let mut current_row_equal_to_result = false;
-        for (idx, &row) in self
+        for (idx, (&row, equal_to_result)) in self
             .vectorized_operation_buffers
             .equal_to_row_indices
             .iter()
+            .zip(fixed_bit_packed_equal_to_results.iter())
             .enumerate()
         {
-            let equal_to_result = fixed_bit_packed_equal_to_results[idx];
+            // let equal_to_result = fixed_bit_packed_equal_to_results[idx];
 
             // Equal to case, set the `group_indices` to `rows` in `groups`
             if equal_to_result {
@@ -722,7 +722,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             }
         }
 
-        self.vectorized_operation_buffers.equal_to_results = equal_to_results;
+        self.vectorized_operation_buffers.equal_to_results = fixed_bit_packed_equal_to_results.0;
     }
 
     /// It is possible that some `input rows` have the same

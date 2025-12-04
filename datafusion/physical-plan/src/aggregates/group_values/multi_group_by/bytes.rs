@@ -612,6 +612,7 @@ mod tests {
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let equal_to_results: Vec<bool> = equal_to_results.into();
 
         assert!(equal_to_results[0]);
         assert!(equal_to_results[1]);
@@ -638,6 +639,7 @@ mod tests {
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+        let equal_to_results: Vec<bool> = equal_to_results.into();
 
         assert!(equal_to_results[0]);
         assert!(equal_to_results[1]);

@@ -29,7 +29,7 @@ use criterion::{
 };
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
-use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupColumn;
+use datafusion_physical_plan::aggregates::group_values::multi_group_by::{FixedBitPackedMutableBuffer, GroupColumn};
 use rand::distr::{Bernoulli, Distribution};
 use std::hint::black_box;
 use std::sync::Arc;
@@ -279,7 +279,7 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
     rows: &[usize],
     input: &ArrayRef,
     equal_to_result_description: &str,
-    equal_to_results: Vec<bool>,
+    equal_to_results: FixedBitPackedMutableBuffer,
 ) {
     let id = BenchmarkId::new(
         function_name,
