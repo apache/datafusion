@@ -5692,6 +5692,23 @@ select c2, avg(c1), arrow_typeof(avg(c1)) from d_table GROUP BY c2 ORDER BY c2
 A 110.0045 Decimal128(14, 7)
 B -100.0045 Decimal128(14, 7)
 
+# aggregate_decimal_variance
+query RT
+select var_pop(c1), arrow_typeof(var_pop(c1)) from d_table
+----
+11025.9450285 Float64
+
+query RT
+select var(c1), arrow_typeof(var(c1)) from d_table
+----
+11606.257924736841 Float64
+
+query TRT
+select c2, var_pop(c1), arrow_typeof(var_pop(c1)) from d_table GROUP BY c2 ORDER BY c2
+----
+A 0.00000825 Float64
+B 0.00000825 Float64
+
 # aggregate_decimal_count_distinct
 query I
 select count(DISTINCT cast(c1 AS DECIMAL(10, 2))) from d_table
