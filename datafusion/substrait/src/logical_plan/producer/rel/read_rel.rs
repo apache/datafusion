@@ -241,3 +241,69 @@ pub fn from_values(
         }))),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logical_plan::producer::DefaultSubstraitProducer;
+    use crate::logical_plan::recursive::decode_recursive_scan_detail;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::catalog::cte_worktable::CteWorkTable;
+    use datafusion::catalog::default_table_source::DefaultTableSource;
+    use datafusion::common::DFSchema;
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::logical_expr::TableScan as DFTableScan;
+
+    #[test]
+    fn from_table_scan_sets_advanced_extension_for_cte_work_table(
+    ) -> datafusion::common::Result<()> {
+        // create a schema for the work-table
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+
+        // create a CteWorkTable provider and wrap as DefaultTableSource
+        let provider = Arc::new(CteWorkTable::new("nodes", Arc::clone(&schema)));
+        let source = Arc::new(DefaultTableSource::new(provider));
+
+        // create a TableScan using a bare table reference matching the provider name
+        // TryFrom<&Schema> returns Infallible; prefer converting from Arc<Schema>
+        let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+        let scan = DFTableScan {
+            table_name: datafusion::common::TableReference::bare("nodes"),
+            source: source,
+            projection: None,
+            projected_schema: Arc::new(df_schema),
+            filters: vec![],
+            fetch: None,
+        };
+
+        // create a producer and serialize the scan
+        let state = SessionStateBuilder::default().build();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
+        let rel = from_table_scan(&mut producer, &scan)?;
+
+        // validate Rel -> ReadRel advanced_extension has expected type_url and payload
+        match *rel {
+            Rel {
+                rel_type: Some(RelType::Read(ref read)),
+            } => {
+                let adv = read
+                    .advanced_extension
+                    .as_ref()
+                    .expect("expected advanced_extension for CteWorkTable");
+                let any = adv
+                    .enhancement
+                    .as_ref()
+                    .expect("expected enhancement in advanced_extension");
+                assert_eq!(any.type_url, RECURSIVE_SCAN_TYPE_URL.to_string());
+
+                // decode payload and ensure it contains the work-table name
+                let name = decode_recursive_scan_detail(&any.value)?;
+                assert_eq!(name, "nodes");
+            }
+            other => panic!("expected ReadRel, got: {other:?}"),
+        }
+
+        Ok(())
+    }
+}
