@@ -48,6 +48,7 @@ use crate::{df_result, rresult_return};
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_LogicalExtensionCodec {
+    /// Decode bytes into a table provider.
     try_decode_table_provider: unsafe extern "C" fn(
         &Self,
         buf: RSlice<u8>,
@@ -55,36 +56,43 @@ pub struct FFI_LogicalExtensionCodec {
         schema: WrappedSchema,
     ) -> FFIResult<FFI_TableProvider>,
 
+    /// Encode a table provider into bytes.
     try_encode_table_provider: unsafe extern "C" fn(
         &Self,
         table_ref: RStr,
         node: FFI_TableProvider,
     ) -> FFIResult<RVec<u8>>,
 
+    /// Decode bytes into a user defined scalar function.
     try_decode_udf: unsafe extern "C" fn(
         &Self,
         name: RStr,
         buf: RSlice<u8>,
     ) -> FFIResult<FFI_ScalarUDF>,
 
+    /// Encode a user defined scalar function into bytes.
     try_encode_udf:
         unsafe extern "C" fn(&Self, node: FFI_ScalarUDF) -> FFIResult<RVec<u8>>,
 
+    /// Decode bytes into a user defined aggregate function.
     try_decode_udaf: unsafe extern "C" fn(
         &Self,
         name: RStr,
         buf: RSlice<u8>,
     ) -> FFIResult<FFI_AggregateUDF>,
 
+    /// Encode a user defined aggregate function into bytes.
     try_encode_udaf:
         unsafe extern "C" fn(&Self, node: FFI_AggregateUDF) -> FFIResult<RVec<u8>>,
 
+    /// Decode bytes into a user defined window function.
     try_decode_udwf: unsafe extern "C" fn(
         &Self,
         name: RStr,
         buf: RSlice<u8>,
     ) -> FFIResult<FFI_WindowUDF>,
 
+    /// Encode a user defined window function into bytes.
     try_encode_udwf:
         unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> FFIResult<RVec<u8>>,
 

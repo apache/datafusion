@@ -43,42 +43,51 @@ use crate::{df_result, rresult_return};
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_PhysicalExtensionCodec {
+    /// Decode bytes into an execution plan.
     try_decode: unsafe extern "C" fn(
         &Self,
         buf: RSlice<u8>,
         inputs: RVec<FFI_ExecutionPlan>,
     ) -> FFIResult<FFI_ExecutionPlan>,
 
+    /// Encode an execution plan into bytes.
     try_encode:
         unsafe extern "C" fn(&Self, node: FFI_ExecutionPlan) -> FFIResult<RVec<u8>>,
 
+    /// Decode bytes into a user defined scalar function.
     try_decode_udf: unsafe extern "C" fn(
         &Self,
         name: RStr,
         buf: RSlice<u8>,
     ) -> FFIResult<FFI_ScalarUDF>,
 
+    /// Encode a user defined scalar function into bytes.
     try_encode_udf:
         unsafe extern "C" fn(&Self, node: FFI_ScalarUDF) -> FFIResult<RVec<u8>>,
 
+    /// Decode bytes into a user defined aggregate function.
     try_decode_udaf: unsafe extern "C" fn(
         &Self,
         name: RStr,
         buf: RSlice<u8>,
     ) -> FFIResult<FFI_AggregateUDF>,
 
+    /// Encode a user defined aggregate function into bytes.
     try_encode_udaf:
         unsafe extern "C" fn(&Self, node: FFI_AggregateUDF) -> FFIResult<RVec<u8>>,
 
+    /// Decode bytes into a user defined window function.
     try_decode_udwf: unsafe extern "C" fn(
         &Self,
         name: RStr,
         buf: RSlice<u8>,
     ) -> FFIResult<FFI_WindowUDF>,
 
+    /// Encode a user defined window function into bytes.
     try_encode_udwf:
         unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> FFIResult<RVec<u8>>,
 
+    /// Access the current [`TaskContext`].
     task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the execution plan. This should
