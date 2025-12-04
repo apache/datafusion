@@ -965,6 +965,13 @@ config_namespace! {
         /// record tables provided to the MemTable on creation.
         pub repartition_file_scans: bool, default = true
 
+        /// When set to true, files will be grouped by their Hive partition column values,
+        /// and the scan will declare Hash partitioning on those columns. This allows the
+        /// optimizer to skip hash repartitioning for aggregates and joins on partition columns.
+        ///
+        /// Note: This may reduce parallelism when many files share the same partition value.
+        pub preserve_file_partitioning: bool, default = false
+
         /// Should DataFusion repartition data using the partitions keys to execute window
         /// functions in parallel using the provided `target_partitions` level
         pub repartition_windows: bool, default = true

@@ -453,7 +453,8 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _, _) =
+            table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
@@ -488,7 +489,8 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _, _) =
+            table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
@@ -538,7 +540,8 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _, _) =
+            table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
         assert_eq!(file_list.len(), output_partitioning);
 
@@ -1307,7 +1310,8 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (file_list, _, _) =
+            table.list_files_for_scan(&ctx.state(), &[], None).await?;
         assert_eq!(file_list.len(), 1);
 
         let files = file_list[0].clone();
@@ -1458,7 +1462,8 @@ mod tests {
             Arc::new(NullStatsAdapterFactory {}),
         )?;
 
-        let (groups, stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (groups, stats, _) =
+            table.list_files_for_scan(&ctx.state(), &[], None).await?;
 
         assert_eq!(stats.column_statistics[0].null_count, DUMMY_NULL_COUNT);
         for g in groups {
@@ -1502,7 +1507,8 @@ mod tests {
         );
 
         // Verify that the default adapter handles basic schema compatibility
-        let (groups, _stats) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+        let (groups, _stats, _) =
+            table.list_files_for_scan(&ctx.state(), &[], None).await?;
         assert!(
             !groups.is_empty(),
             "Should list files successfully with default adapter"
