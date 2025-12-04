@@ -672,7 +672,7 @@ impl DataSource for FileScanConfig {
             Ok(Statistics::new_unknown(self.projected_schema()?.as_ref()))
         } else {
             // Return aggregate statistics across all partitions
-            Ok(self.projected_stats())
+            self.projected_stats()
         }
     }
 
@@ -799,26 +799,16 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_stats(&self) -> Statistics {
+    fn projected_stats(&self) -> Result<Statistics> {
         let statistics = self.statistics();
         let projection = self.file_source.projection();
         if let Some(projection) = &projection {
-            // TODO: correct byte size: https://github.com/apache/datafusion/issues/14936
-            match projection.project_statistics(
+            projection.project_statistics(
                 statistics.clone(),
                 self.file_source.table_schema().table_schema(),
-            ) {
-                Ok(proj_stats) => proj_stats,
-                Err(e) => {
-                    warn!("Failed to project statistics: {e}");
-                    #[cfg(not(debug_assertions))]
-                    return statistics;
-                    #[cfg(debug_assertions)]
-                    panic!("Failed to project statistics: {e}");
-                }
-            }
+            )
         } else {
-            statistics
+            Ok(statistics)
         }
     }
 
