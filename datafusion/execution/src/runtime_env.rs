@@ -31,7 +31,7 @@ use crate::{
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 #[cfg(feature = "parquet_encryption")]
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
-use datafusion_common::{config::ConfigEntry, Result};
+use datafusion_common::{Result, config::ConfigEntry};
 use object_store::ObjectStore;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -122,7 +122,7 @@ fn create_runtime_config_entries(
             key: "datafusion.runtime.metadata_cache_limit".to_string(),
             value: metadata_cache_limit,
             description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-        }
+        },
     ]
 }
 

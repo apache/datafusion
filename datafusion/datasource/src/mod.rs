@@ -159,6 +159,24 @@ impl PartitionedFile {
         .with_range(start, end)
     }
 
+    /// Size of the file to be scanned (taking into account the range, if present).
+    pub fn effective_size(&self) -> u64 {
+        if let Some(range) = &self.range {
+            (range.end - range.start) as u64
+        } else {
+            self.object_meta.size
+        }
+    }
+
+    /// Effective range of the file to be scanned.
+    pub fn range(&self) -> (u64, u64) {
+        if let Some(range) = &self.range {
+            (range.start as u64, range.end as u64)
+        } else {
+            (0, self.object_meta.size)
+        }
+    }
+
     /// Provide a hint to the size of the file metadata. If a hint is provided
     /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
     /// Without an appropriate hint, two read may be required to fetch the metadata.
