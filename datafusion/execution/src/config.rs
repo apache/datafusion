@@ -442,6 +442,12 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables sort pushdown optimization for Parquet files
+    pub fn with_parquet_enable_sort_pushdown(mut self, enabled: bool) -> Self {
+        self.options_mut().execution.parquet.enable_sort_pushdown = enabled;
+        self
+    }
+
     /// Enables or disables the collection of statistics after listing files
     pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
         self.options_mut().execution.collect_statistics = enabled;

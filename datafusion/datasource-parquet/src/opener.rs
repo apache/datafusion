@@ -115,6 +115,7 @@ pub(super) struct ParquetOpener {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
+    pub reverse_scan_inexact: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -168,6 +169,7 @@ impl FileOpener for ParquetOpener {
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
 
+        let reverse_scan_inexact = self.reverse_scan_inexact;
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
@@ -434,10 +436,90 @@ impl FileOpener for ParquetOpener {
             }
 
             let row_group_indexes = access_plan.row_group_indexes();
-            if let Some(row_selection) =
-                access_plan.into_overall_row_selection(rg_metadata)?
-            {
-                builder = builder.with_row_selection(row_selection);
+
+            // Extract row selection before potentially reversing
+            let row_selection_opt =
+                access_plan.into_overall_row_selection(rg_metadata)?;
+
+            if reverse_scan_inexact {
+                // Reverse the row groups
+                let reversed_indexes: Vec<_> =
+                    row_group_indexes.clone().into_iter().rev().collect();
+
+                // If we have a row selection, we need to rebuild it for the reversed order
+                if let Some(row_selection) = row_selection_opt {
+                    // Build a mapping of row group index to its row range in the file
+                    let mut rg_row_ranges: Vec<(usize, usize, usize)> = Vec::new(); // (rg_index, start_row, end_row)
+                    let mut current_row = 0;
+                    for (rg_idx, rg_meta) in rg_metadata.iter().enumerate() {
+                        let num_rows = rg_meta.num_rows() as usize;
+                        rg_row_ranges.push((rg_idx, current_row, current_row + num_rows));
+                        current_row += num_rows;
+                    }
+
+                    // Extract which rows are selected for each row group from the overall selection
+                    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+                    let mut rg_selections: std::collections::HashMap<
+                        usize,
+                        Vec<RowSelector>,
+                    > = std::collections::HashMap::new();
+
+                    // Parse the overall row selection to determine which rows in each row group are selected
+                    let mut current_file_row = 0;
+                    for selector in row_selection.iter() {
+                        let selector_end = current_file_row + selector.row_count;
+
+                        // Find which row groups this selector spans
+                        for (rg_idx, rg_start, rg_end) in rg_row_ranges.iter() {
+                            if current_file_row < *rg_end && selector_end > *rg_start {
+                                // This selector overlaps with this row group
+                                let overlap_start = current_file_row.max(*rg_start);
+                                let overlap_end = selector_end.min(*rg_end);
+                                let overlap_count = overlap_end - overlap_start;
+
+                                if overlap_count > 0 {
+                                    let entry = rg_selections.entry(*rg_idx).or_default();
+                                    if selector.skip {
+                                        entry.push(RowSelector::skip(overlap_count));
+                                    } else {
+                                        entry.push(RowSelector::select(overlap_count));
+                                    }
+                                }
+                            }
+                        }
+
+                        current_file_row = selector_end;
+                    }
+
+                    // Now rebuild the overall selection in reversed row group order
+                    let mut reversed_selectors = Vec::new();
+                    for &rg_idx in reversed_indexes.iter() {
+                        if let Some(selectors) = rg_selections.get(&rg_idx) {
+                            reversed_selectors.extend(selectors.iter().cloned());
+                        } else {
+                            // No specific selection for this row group means select all
+                            if let Some((_, start, end)) =
+                                rg_row_ranges.iter().find(|(idx, _, _)| *idx == rg_idx)
+                            {
+                                reversed_selectors.push(RowSelector::select(end - start));
+                            }
+                        }
+                    }
+
+                    if !reversed_selectors.is_empty() {
+                        builder = builder
+                            .with_row_selection(RowSelection::from(reversed_selectors));
+                    }
+                }
+
+                builder = builder.with_row_groups(reversed_indexes);
+            } else {
+                // Normal forward scan
+                if let Some(row_selection) = row_selection_opt {
+                    builder = builder.with_row_selection(row_selection);
+                }
+                builder = builder.with_row_groups(row_group_indexes);
             }
 
             if let Some(limit) = limit {
@@ -454,7 +536,6 @@ impl FileOpener for ParquetOpener {
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
-                .with_row_groups(row_group_indexes)
                 .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
@@ -764,6 +845,7 @@ fn should_enable_page_index(
 mod test {
     use std::sync::Arc;
 
+    use arrow::array::Array;
     use arrow::{
         compute::cast,
         datatypes::{DataType, Field, Schema, SchemaRef},
@@ -907,6 +989,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan_inexact: false,
             }
         };
 
@@ -981,6 +1064,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan_inexact: false,
             }
         };
 
@@ -1071,6 +1155,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan_inexact: false,
             }
         };
 
@@ -1164,6 +1249,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan_inexact: false,
             }
         };
 
@@ -1257,6 +1343,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_scan_inexact: false,
             }
         };
 
@@ -1408,6 +1495,7 @@ mod test {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             max_predicate_cache_size: None,
+            reverse_scan_inexact: false,
         };
 
         let predicate = logical2physical(&col("a").eq(lit(1u64)), &table_schema);
@@ -1427,5 +1515,336 @@ mod test {
         let metrics = opener.metrics.clone_inner();
         assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 2);
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_row_groups() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Create multiple batches to ensure multiple row groups
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let batch3 =
+            record_batch!(("a", Int32, vec![Some(7), Some(8), Some(9)])).unwrap();
+
+        // Write parquet file with multiple row groups
+        // Force small row groups by setting max_row_group_size
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(3) // Force each batch into its own row group
+            .build();
+
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut out, batch1.schema(), Some(props)).unwrap();
+            writer.write(&batch1).unwrap();
+            writer.write(&batch2).unwrap();
+            writer.write(&batch3).unwrap();
+            writer.finish().unwrap();
+        }
+        let data = out.into_inner().freeze();
+        let data_len = data.len();
+        store
+            .put(&Path::from("test.parquet"), data.into())
+            .await
+            .unwrap();
+
+        let schema = batch1.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 1024,
+            limit: None,
+            predicate: None,
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            force_filter_selections: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_scan_inexact: reverse_scan,
+        };
+
+        // Test normal scan (forward)
+        let opener = make_opener(false);
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let batches = collect_batches(stream).await;
+
+        // Collect all values in order
+        let mut forward_values = vec![];
+        for batch in &batches {
+            let array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .unwrap();
+            for i in 0..array.len() {
+                if !array.is_null(i) {
+                    forward_values.push(array.value(i));
+                }
+            }
+        }
+
+        // Test reverse scan
+        let opener = make_opener(true);
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let batches = collect_batches(stream).await;
+
+        // Collect all values in order
+        let mut reverse_values = vec![];
+        for batch in &batches {
+            let array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .unwrap();
+            for i in 0..array.len() {
+                if !array.is_null(i) {
+                    reverse_values.push(array.value(i));
+                }
+            }
+        }
+
+        // The forward scan should return data in the order written
+        assert_eq!(forward_values, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        // With reverse scan, row groups are reversed, so we expect:
+        // Row group 3 (7,8,9), then row group 2 (4,5,6), then row group 1 (1,2,3)
+        assert_eq!(reverse_values, vec![7, 8, 9, 4, 5, 6, 1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_single_row_group() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Create a single batch (single row group)
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 1024,
+            limit: None,
+            predicate: None,
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            force_filter_selections: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_scan_inexact: reverse_scan,
+        };
+
+        // With a single row group, forward and reverse should be the same
+        // (only the row group order is reversed, not the rows within)
+        let opener_forward = make_opener(false);
+        let stream_forward = opener_forward.open(file.clone()).unwrap().await.unwrap();
+        let batches_forward = collect_batches(stream_forward).await;
+
+        let opener_reverse = make_opener(true);
+        let stream_reverse = opener_reverse.open(file).unwrap().await.unwrap();
+        let batches_reverse = collect_batches(stream_reverse).await;
+
+        // Both should have the same data since there's only one row group
+        assert_eq!(batches_forward.len(), batches_reverse.len());
+        for (b1, b2) in batches_forward.iter().zip(batches_reverse.iter()) {
+            assert_eq!(b1.num_rows(), b2.num_rows());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_with_row_selection() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Create 3 batches with DIFFERENT selection patterns
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3), Some(4)]))
+                .unwrap(); // 4 rows
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(5), Some(6), Some(7), Some(8)]))
+                .unwrap(); // 4 rows
+        let batch3 =
+            record_batch!(("a", Int32, vec![Some(9), Some(10), Some(11), Some(12)]))
+                .unwrap(); // 4 rows
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(4)
+            .build();
+
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut out, batch1.schema(), Some(props)).unwrap();
+            writer.write(&batch1).unwrap();
+            writer.write(&batch2).unwrap();
+            writer.write(&batch3).unwrap();
+            writer.finish().unwrap();
+        }
+        let data = out.into_inner().freeze();
+        let data_len = data.len();
+        store
+            .put(&Path::from("test.parquet"), data.into())
+            .await
+            .unwrap();
+
+        let schema = batch1.schema();
+
+        use crate::ParquetAccessPlan;
+        use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+        let mut access_plan = ParquetAccessPlan::new_all(3);
+        // Row group 0: skip first 2, select last 2 (should get: 3, 4)
+        access_plan.scan_selection(
+            0,
+            RowSelection::from(vec![RowSelector::skip(2), RowSelector::select(2)]),
+        );
+        // Row group 1: select all (should get: 5, 6, 7, 8)
+        // Row group 2: select first 2, skip last 2 (should get: 9, 10)
+        access_plan.scan_selection(
+            2,
+            RowSelection::from(vec![RowSelector::select(2), RowSelector::skip(2)]),
+        );
+
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        )
+        .with_extensions(Arc::new(access_plan));
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: Arc::new([0]),
+            batch_size: 1024,
+            limit: None,
+            predicate: None,
+            logical_file_schema: schema.clone(),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            partition_fields: vec![],
+            pushdown_filters: false,
+            reorder_filters: false,
+            force_filter_selections: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            schema_adapter_factory: Arc::new(DefaultSchemaAdapterFactory),
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_scan_inexact: reverse_scan,
+        };
+
+        // Forward scan: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
+        let opener = make_opener(false);
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let batches = collect_batches(stream).await;
+
+        let mut forward_values = vec![];
+        for batch in &batches {
+            let array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .unwrap();
+            for i in 0..array.len() {
+                if !array.is_null(i) {
+                    forward_values.push(array.value(i));
+                }
+            }
+        }
+
+        // Forward scan should produce: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
+        assert_eq!(
+            forward_values,
+            vec![3, 4, 5, 6, 7, 8, 9, 10],
+            "Forward scan should select correct rows based on RowSelection"
+        );
+
+        // Reverse scan
+        // CORRECT behavior: reverse row groups AND their corresponding selections
+        // - RG2 is read first, WITH RG2's selection (select 2, skip 2) -> 9, 10 ✓
+        // - RG1 is read second, WITH RG1's selection (select all) -> 5, 6, 7, 8 ✓
+        // - RG0 is read third, WITH RG0's selection (skip 2, select 2) -> 3, 4 ✓
+        let opener = make_opener(true);
+        let stream = opener.open(file).unwrap().await.unwrap();
+        let batches = collect_batches(stream).await;
+
+        let mut reverse_values = vec![];
+        for batch in &batches {
+            let array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .unwrap();
+            for i in 0..array.len() {
+                if !array.is_null(i) {
+                    reverse_values.push(array.value(i));
+                }
+            }
+        }
+
+        // Correct expected result: row groups reversed but each keeps its own selection
+        // RG2 with its selection (9,10), RG1 with its selection (5,6,7,8), RG0 with its selection (3,4)
+        assert_eq!(
+            reverse_values,
+            vec![9, 10, 5, 6, 7, 8, 3, 4],
+            "Reverse scan should reverse row group order while maintaining correct RowSelection for each group"
+        );
     }
 }
