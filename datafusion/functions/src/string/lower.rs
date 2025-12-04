@@ -20,8 +20,8 @@ use std::any::Any;
 
 use crate::string::common::to_lower;
 use crate::utils::utf8_to_str_type;
-use datafusion_common::types::logical_string;
 use datafusion_common::Result;
+use datafusion_common::types::logical_string;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,

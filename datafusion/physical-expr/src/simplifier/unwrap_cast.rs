@@ -35,14 +35,14 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
-    tree_node::{Transformed, TreeNode},
     Result, ScalarValue,
+    tree_node::{Transformed, TreeNode},
 };
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 
-use crate::expressions::{lit, BinaryExpr, CastExpr, Literal, TryCastExpr};
 use crate::PhysicalExpr;
+use crate::expressions::{BinaryExpr, CastExpr, Literal, TryCastExpr, lit};
 
 /// Attempts to unwrap casts in comparison expressions.
 pub(crate) fn unwrap_cast_in_comparison(
@@ -50,10 +50,10 @@ pub(crate) fn unwrap_cast_in_comparison(
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     expr.transform_down(|e| {
-        if let Some(binary) = e.as_any().downcast_ref::<BinaryExpr>() {
-            if let Some(unwrapped) = try_unwrap_cast_binary(binary, schema)? {
-                return Ok(Transformed::yes(unwrapped));
-            }
+        if let Some(binary) = e.as_any().downcast_ref::<BinaryExpr>()
+            && let Some(unwrapped) = try_unwrap_cast_binary(binary, schema)?
+        {
+            return Ok(Transformed::yes(unwrapped));
         }
         Ok(Transformed::no(e))
     })
@@ -68,17 +68,15 @@ fn try_unwrap_cast_binary(
     if let (Some((inner_expr, _cast_type)), Some(literal)) = (
         extract_cast_info(binary.left()),
         binary.right().as_any().downcast_ref::<Literal>(),
-    ) {
-        if binary.op().supports_propagation() {
-            if let Some(unwrapped) = try_unwrap_cast_comparison(
-                Arc::clone(inner_expr),
-                literal.value(),
-                *binary.op(),
-                schema,
-            )? {
-                return Ok(Some(unwrapped));
-            }
-        }
+    ) && binary.op().supports_propagation()
+        && let Some(unwrapped) = try_unwrap_cast_comparison(
+            Arc::clone(inner_expr),
+            literal.value(),
+            *binary.op(),
+            schema,
+        )?
+    {
+        return Ok(Some(unwrapped));
     }
 
     // Case 2: literal op cast(right_expr)
@@ -87,17 +85,16 @@ fn try_unwrap_cast_binary(
         extract_cast_info(binary.right()),
     ) {
         // For literal op cast(expr), we need to swap the operator
-        if let Some(swapped_op) = binary.op().swap() {
-            if binary.op().supports_propagation() {
-                if let Some(unwrapped) = try_unwrap_cast_comparison(
-                    Arc::clone(inner_expr),
-                    literal.value(),
-                    swapped_op,
-                    schema,
-                )? {
-                    return Ok(Some(unwrapped));
-                }
-            }
+        if let Some(swapped_op) = binary.op().swap()
+            && binary.op().supports_propagation()
+            && let Some(unwrapped) = try_unwrap_cast_comparison(
+                Arc::clone(inner_expr),
+                literal.value(),
+                swapped_op,
+                schema,
+            )?
+        {
+            return Ok(Some(unwrapped));
         }
         // If the operator cannot be swapped, we skip this optimization case
         // but don't prevent other optimizations

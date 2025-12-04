@@ -23,7 +23,7 @@ use crate::equivalence::class::AcrossPartitions;
 use crate::{ConstExpr, PhysicalSortExpr};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Computes the union (in the sense of `UnionExec`) `EquivalenceProperties`
@@ -307,9 +307,9 @@ fn advance_if_matches_constant<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PhysicalExpr;
     use crate::equivalence::tests::{create_test_schema, parse_sort_expr};
     use crate::expressions::col;
-    use crate::PhysicalExpr;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;

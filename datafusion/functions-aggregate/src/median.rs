@@ -21,8 +21,8 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_integer, ArrowNumericType, BooleanArray, ListArray, PrimitiveArray,
-    PrimitiveBuilder,
+    ArrowNumericType, BooleanArray, ListArray, PrimitiveArray, PrimitiveBuilder,
+    downcast_integer,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -40,13 +40,13 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, DataFusionError, Result,
-    ScalarValue,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_datafusion_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
-    function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    function::AccumulatorArgs, utils::format_state_name,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
@@ -138,12 +138,14 @@ impl AggregateUDFImpl for Median {
             "median"
         };
 
-        Ok(vec![Field::new(
-            format_state_name(args.name, state_name),
-            DataType::List(Arc::new(field)),
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, state_name),
+                DataType::List(Arc::new(field)),
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

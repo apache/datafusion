@@ -34,12 +34,12 @@ use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, plan_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, plan_err,
 };
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TIMEZONE_WILDCARD, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -341,7 +341,9 @@ impl ScalarUDFImpl for DateTruncFunc {
                         )?,
                     }
                 } else {
-                    return exec_err!("second argument of `date_trunc` is an unsupported array type: {array_type}");
+                    return exec_err!(
+                        "second argument of `date_trunc` is an unsupported array type: {array_type}"
+                    );
                 }
             }
             _ => {
@@ -629,7 +631,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::datetime::date_trunc::{
-        date_trunc_coarse, DateTruncFunc, DateTruncGranularity,
+        DateTruncFunc, DateTruncGranularity, date_trunc_coarse,
     };
 
     use arrow::array::cast::as_primitive_array;
@@ -637,8 +639,8 @@ mod tests {
     use arrow::array::{Array, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     #[test]

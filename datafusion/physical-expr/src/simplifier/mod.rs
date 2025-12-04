@@ -19,12 +19,12 @@
 
 use arrow::datatypes::Schema;
 use datafusion_common::{
-    tree_node::{Transformed, TreeNode, TreeNodeRewriter},
     Result,
+    tree_node::{Transformed, TreeNode, TreeNodeRewriter},
 };
 use std::sync::Arc;
 
-use crate::{simplifier::not::simplify_not_expr, PhysicalExpr};
+use crate::{PhysicalExpr, simplifier::not::simplify_not_expr};
 
 pub mod not;
 pub mod unwrap_cast;
@@ -93,7 +93,7 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
 mod tests {
     use super::*;
     use crate::expressions::{
-        col, in_list, lit, BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr,
+        BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr, col, in_list, lit,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
@@ -137,8 +137,7 @@ mod tests {
     ) {
         let result = simplifier.simplify(Arc::clone(&input)).unwrap();
         assert_eq!(
-            &result,
-            &expected,
+            &result, &expected,
             "Simplification should transform:\n  input: {input}\n  to:    {expected}\n  got:   {result}"
         );
     }

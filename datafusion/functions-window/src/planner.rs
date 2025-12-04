@@ -19,11 +19,11 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
+    Expr,
     expr::{WindowFunction, WindowFunctionParams},
     expr_rewriter::NamePreserver,
     planner::{ExprPlanner, PlannerResult, RawWindowExpr},
     utils::COUNT_STAR_EXPANSION,
-    Expr,
 };
 
 #[derive(Debug)]

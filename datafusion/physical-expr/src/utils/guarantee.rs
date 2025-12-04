@@ -19,7 +19,7 @@
 //! constant.
 
 use crate::utils::split_disjunction;
-use crate::{split_conjunction, PhysicalExpr};
+use crate::{PhysicalExpr, split_conjunction};
 use datafusion_common::{Column, HashMap, ScalarValue};
 use datafusion_expr::Operator;
 use std::collections::HashSet;
@@ -550,7 +550,7 @@ mod test {
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_expr::expr_fn::*;
-    use datafusion_expr::{lit, Expr};
+    use datafusion_expr::{Expr, lit};
 
     use itertools::Itertools;
 

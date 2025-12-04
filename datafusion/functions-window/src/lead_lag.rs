@@ -22,7 +22,7 @@ use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, arrow_datafusion_err};
 use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
     Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,

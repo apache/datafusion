@@ -18,7 +18,7 @@
 use super::to_timestamp::ToTimestampSecondsFunc;
 use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

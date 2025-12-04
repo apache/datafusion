@@ -23,18 +23,18 @@ use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
-use arrow::array::{new_empty_array, ArrayRef, AsArray, StructArray};
+use arrow::array::{ArrayRef, AsArray, StructArray, new_empty_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
-use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
+use datafusion_common::utils::{SingleRowListArrayBuilder, get_row_at_idx};
 use datafusion_common::{
-    assert_or_internal_err, exec_err, not_impl_err, Result, ScalarValue,
+    Result, ScalarValue, assert_or_internal_err, exec_err, not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    lit, Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
-    Signature, SortExpr, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, ExprFunctionExt, ReversedUDAF,
+    Signature, SortExpr, Volatility, lit,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
@@ -146,7 +146,7 @@ impl AggregateUDFImpl for NthValueAgg {
                     "{} not supported for n: {}",
                     self.name(),
                     &acc_args.exprs[1]
-                )
+                );
             }
         };
 

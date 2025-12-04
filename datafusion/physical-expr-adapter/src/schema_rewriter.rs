@@ -22,14 +22,13 @@ use std::sync::Arc;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::{
-    exec_err,
+    Result, ScalarValue, exec_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
-    Result, ScalarValue,
 };
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::{
-    expressions::{self, CastExpr, Column},
     ScalarFunctionExpr,
+    expressions::{self, CastExpr, Column},
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -370,25 +369,26 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
         };
 
         // Check if the column exists in the physical schema
-        let physical_column_index =
-            match self.physical_file_schema.index_of(column.name()) {
-                Ok(index) => index,
-                Err(_) => {
-                    if !logical_field.is_nullable() {
-                        return exec_err!(
+        let physical_column_index = match self
+            .physical_file_schema
+            .index_of(column.name())
+        {
+            Ok(index) => index,
+            Err(_) => {
+                if !logical_field.is_nullable() {
+                    return exec_err!(
                         "Non-nullable column '{}' is missing from the physical schema",
                         column.name()
                     );
-                    }
-                    // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
-                    // TODO: do we need to sync this with what the `SchemaAdapter` actually does?
-                    // While the default implementation fills in nulls in theory a custom `SchemaAdapter` could do something else!
-                    // See https://github.com/apache/datafusion/issues/16527
-                    let null_value =
-                        ScalarValue::Null.cast_to(logical_field.data_type())?;
-                    return Ok(Transformed::yes(expressions::lit(null_value)));
                 }
-            };
+                // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` would do.
+                // TODO: do we need to sync this with what the `SchemaAdapter` actually does?
+                // While the default implementation fills in nulls in theory a custom `SchemaAdapter` could do something else!
+                // See https://github.com/apache/datafusion/issues/16527
+                let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
+                return Ok(Transformed::yes(expressions::lit(null_value)));
+            }
+        };
         let physical_field = self.physical_file_schema.field(physical_column_index);
 
         let column = match (
@@ -446,9 +446,9 @@ mod tests {
     use super::*;
     use arrow::array::{RecordBatch, RecordBatchOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion_common::{assert_contains, record_batch, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, assert_contains, record_batch};
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, lit, CastExpr, Column, Literal};
+    use datafusion_physical_expr::expressions::{CastExpr, Column, Literal, col, lit};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use itertools::Itertools;
     use std::sync::Arc;

@@ -16,14 +16,15 @@
 // under the License.
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::cast::as_int64_array;
 use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::cast::as_int64_array;
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -33,7 +34,6 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
-use DataType::{LargeUtf8, Utf8, Utf8View};
 
 #[user_doc(
     doc_section(label = "String Functions"),

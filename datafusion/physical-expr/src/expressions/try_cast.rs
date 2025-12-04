@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
@@ -155,8 +155,8 @@ mod tests {
     };
     use arrow::{
         array::{
-            Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-            Int8Array, TimestampNanosecondArray, UInt32Array,
+            Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+            Int64Array, TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
     };
