@@ -178,7 +178,7 @@ pub struct FileScanConfig {
     pub(crate) statistics: Statistics,
     /// When true, file_groups are organized by partition column values
     /// and output_partitioning will return Hash partitioning on partition columns.
-    /// This allows the optimizer to skip hash repartitioning for aggregates/joins
+    /// This allows the optimizer to skip hash repartitioning for aggregates and joins
     /// on partition columns.
     pub partitioned_by_file_group: bool,
 }
@@ -633,23 +633,16 @@ impl DataSource for FileScanConfig {
     /// the Hive partition columns, allowing the optimizer to skip hash repartitioning
     /// for aggregates and joins on those columns.
     ///
-    /// ## Tradeoffs
-    ///
-    /// Enabling partition-aware grouping (via `preserve_file_partitioning` config) has
-    /// a tradeoff between I/O parallelism and aggregation/join optimization:
-    ///
-    /// - **Benefit**: Eliminates `RepartitionExec` and `SortExec` for queries with
+    /// Tradeoffs
+    /// - Benefit: Eliminates `RepartitionExec` and `SortExec` for queries with
     ///   `GROUP BY` or `ORDER BY` on partition columns.
-    ///
-    /// - **Cost**: Files are grouped by partition values rather than split by byte
+    /// - Cost: Files are grouped by partition values rather than split by byte
     ///   ranges, which may reduce I/O parallelism when partition sizes are uneven.
     ///   For simple aggregations without `ORDER BY`, this cost may outweigh the benefit.
     ///
-    /// ## Follow-up Work
-    ///
-    /// Could allow byte-range splitting within partition-aware groups,
-    /// preserving I/O parallelism while maintaining partition semantics. This would
-    /// require changes to `FileGroupPartitioner` to respect partition boundaries.
+    /// Follow-up Work
+    /// - Idea: Could allow byte-range splitting within partition-aware groups,
+    ///   preserving I/O parallelism while maintaining partition semantics.
     fn output_partitioning(&self) -> Partitioning {
         if self.partitioned_by_file_group {
             let partition_cols = self.table_partition_cols();

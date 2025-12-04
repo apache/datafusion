@@ -17,29 +17,21 @@
 
 //! Benchmark for `preserve_file_partitioning` optimization.
 //!
-//! # Overview
-//!
 //! When enabled, this optimization declares Hive-partitioned tables as
 //! `Hash([partition_col])` partitioned, allowing the query optimizer to
 //! skip unnecessary repartitioning and sorting operations.
 //!
-//! # When This Optimization Helps
+//! When This Optimization Helps
+//! - Window functions: PARTITION BY on partition column eliminates RepartitionExec and SortExec
+//! - Aggregates with ORDER BY: GROUP BY partition column and ORDER BY eliminates post aggregate sort
 //!
-//! - **Window functions**: PARTITION BY on partition column eliminates RepartitionExec and SortExec
-//! - **Aggregates with ORDER BY**: GROUP BY partition column and ORDER BY eliminates post-aggregate sort
-//! - **High-cardinality partitions**: Many partition values leads more groups thus bigger shuffle savings
+//! When This Optimization Does NOT Help
+//! - GROUP BY non-partition columns: Required Hash distribution doesn't match declared partitioning
+//! - I/O Instensive Queries: Limits the parallilization at I/O level, benefits may not outweigh.
 //!
-//! # When This Optimization Does NOT Help
-//!
-//! - **GROUP BY non-partition columns**: Required Hash distribution doesn't match declared partitioning
-//! - **Low-cardinality with aggregates**: Partial aggregate pre-reduces data which makes the shuffle cheap
-//!
-//! # Usage
-//!
-//! ```bash
-//! BENCH_SIZE=small|medium|large cargo bench -p datafusion --bench preserve_file_partitioning
-//! SAVE_PLANS=1 cargo bench ...  # Save query plans to files
-//! ```
+//! Usage
+//! - BENCH_SIZE=small|medium|large cargo bench -p datafusion --bench preserve_file_partitioning
+//! - SAVE_PLANS=1 cargo bench ...  # Save query plans to files
 
 use arrow::array::{ArrayRef, Float64Array, StringArray, TimestampMillisecondArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -247,6 +239,30 @@ fn generate_dimension_table(base_dir: &Path, num_partitions: usize) {
     writer.close().unwrap();
 }
 
+struct BenchVariant {
+    name: &'static str,
+    preserve_file_partitioning: bool,
+    prefer_existing_sort: bool,
+}
+
+const BENCH_VARIANTS: [BenchVariant; 3] = [
+    BenchVariant {
+        name: "with_optimization",
+        preserve_file_partitioning: true,
+        prefer_existing_sort: false,
+    },
+    BenchVariant {
+        name: "prefer_existing_sort",
+        preserve_file_partitioning: false,
+        prefer_existing_sort: true,
+    },
+    BenchVariant {
+        name: "without_optimization",
+        preserve_file_partitioning: false,
+        prefer_existing_sort: false,
+    },
+];
+
 async fn save_plans(
     output_file: &Path,
     fact_path: &str,
@@ -258,12 +274,17 @@ async fn save_plans(
     let mut file = File::create(output_file).unwrap();
     writeln!(file, "Query: {query}\n").unwrap();
 
-    for (label, preserve) in
-        [("WITH optimization", true), ("WITHOUT optimization", false)]
-    {
+    for variant in &BENCH_VARIANTS {
         let session_config = SessionConfig::new()
             .with_target_partitions(target_partitions)
-            .set_bool("datafusion.optimizer.preserve_file_partitioning", preserve);
+            .set_bool(
+                "datafusion.optimizer.preserve_file_partitioning",
+                variant.preserve_file_partitioning,
+            )
+            .set_bool(
+                "datafusion.optimizer.prefer_existing_sort",
+                variant.prefer_existing_sort,
+            );
         let ctx = SessionContext::new_with_config(session_config);
 
         let mut fact_options = ParquetReadOptions {
@@ -295,7 +316,7 @@ async fn save_plans(
 
         let df = ctx.sql(query).await.unwrap();
         let plan = df.explain(false, false).unwrap().collect().await.unwrap();
-        writeln!(file, "=== {label} ===").unwrap();
+        writeln!(file, "=== {} ===", variant.name).unwrap();
         writeln!(file, "{}\n", pretty_format_batches(&plan).unwrap()).unwrap();
     }
 }
@@ -309,7 +330,7 @@ fn run_benchmark(
     dim_path: Option<&str>,
     target_partitions: usize,
     query: &str,
-    file_sort_order: Option<Vec<Vec<SortExpr>>>,
+    file_sort_order: &Option<Vec<Vec<SortExpr>>>,
 ) {
     if std::env::var("SAVE_PLANS").is_ok() {
         let output_path = format!("{name}_plans.txt");
@@ -326,112 +347,157 @@ fn run_benchmark(
 
     let mut group = c.benchmark_group(name);
 
-    // With optimization
-    let fact_path_owned = fact_path.to_string();
-    let dim_path_owned = dim_path.map(|s| s.to_string());
-    let sort_order = file_sort_order.clone();
-    let query_owned = query.to_string();
+    for variant in &BENCH_VARIANTS {
+        let fact_path_owned = fact_path.to_string();
+        let dim_path_owned = dim_path.map(|s| s.to_string());
+        let sort_order = file_sort_order.clone();
+        let query_owned = query.to_string();
+        let preserve_file_partitioning = variant.preserve_file_partitioning;
+        let prefer_existing_sort = variant.prefer_existing_sort;
 
-    group.bench_function("with_optimization", |b| {
-        b.to_async(rt).iter(|| {
-            let fact_path = fact_path_owned.clone();
-            let dim_path = dim_path_owned.clone();
-            let sort_order = sort_order.clone();
-            let query = query_owned.clone();
-            async move {
-                let session_config = SessionConfig::new()
-                    .with_target_partitions(target_partitions)
-                    .set_bool("datafusion.optimizer.preserve_file_partitioning", true);
-                let ctx = SessionContext::new_with_config(session_config);
+        group.bench_function(variant.name, |b| {
+            b.to_async(rt).iter(|| {
+                let fact_path = fact_path_owned.clone();
+                let dim_path = dim_path_owned.clone();
+                let sort_order = sort_order.clone();
+                let query = query_owned.clone();
+                async move {
+                    let session_config = SessionConfig::new()
+                        .with_target_partitions(target_partitions)
+                        .set_bool(
+                            "datafusion.optimizer.preserve_file_partitioning",
+                            preserve_file_partitioning,
+                        )
+                        .set_bool(
+                            "datafusion.optimizer.prefer_existing_sort",
+                            prefer_existing_sort,
+                        );
+                    let ctx = SessionContext::new_with_config(session_config);
 
-                let mut fact_options = ParquetReadOptions {
-                    table_partition_cols: vec![("f_dkey".to_string(), DataType::Utf8)],
-                    ..Default::default()
-                };
-                if let Some(ref order) = sort_order {
-                    fact_options.file_sort_order = order.clone();
-                }
-                ctx.register_parquet("fact", &fact_path, fact_options)
-                    .await
-                    .unwrap();
-
-                if let Some(ref dim) = dim_path {
-                    let dim_schema = Arc::new(Schema::new(vec![
-                        Field::new("d_dkey", DataType::Utf8, false),
-                        Field::new("env", DataType::Utf8, false),
-                        Field::new("service", DataType::Utf8, false),
-                        Field::new("host", DataType::Utf8, false),
-                    ]));
-                    let dim_options = ParquetReadOptions {
-                        schema: Some(&dim_schema),
+                    let mut fact_options = ParquetReadOptions {
+                        table_partition_cols: vec![(
+                            "f_dkey".to_string(),
+                            DataType::Utf8,
+                        )],
                         ..Default::default()
                     };
-                    ctx.register_parquet("dimension", dim, dim_options)
+                    if let Some(ref order) = sort_order {
+                        fact_options.file_sort_order = order.clone();
+                    }
+                    ctx.register_parquet("fact", &fact_path, fact_options)
                         .await
                         .unwrap();
+
+                    if let Some(ref dim) = dim_path {
+                        let dim_schema = Arc::new(Schema::new(vec![
+                            Field::new("d_dkey", DataType::Utf8, false),
+                            Field::new("env", DataType::Utf8, false),
+                            Field::new("service", DataType::Utf8, false),
+                            Field::new("host", DataType::Utf8, false),
+                        ]));
+                        let dim_options = ParquetReadOptions {
+                            schema: Some(&dim_schema),
+                            ..Default::default()
+                        };
+                        ctx.register_parquet("dimension", dim, dim_options)
+                            .await
+                            .unwrap();
+                    }
+
+                    let df = ctx.sql(&query).await.unwrap();
+                    df.collect().await.unwrap()
                 }
-
-                let df = ctx.sql(&query).await.unwrap();
-                df.collect().await.unwrap()
-            }
-        })
-    });
-
-    // Without optimization
-    let fact_path_owned = fact_path.to_string();
-    let dim_path_owned = dim_path.map(|s| s.to_string());
-    let sort_order = file_sort_order;
-    let query_owned = query.to_string();
-
-    group.bench_function("without_optimization", |b| {
-        b.to_async(rt).iter(|| {
-            let fact_path = fact_path_owned.clone();
-            let dim_path = dim_path_owned.clone();
-            let sort_order = sort_order.clone();
-            let query = query_owned.clone();
-            async move {
-                let session_config = SessionConfig::new()
-                    .with_target_partitions(target_partitions)
-                    .set_bool("datafusion.optimizer.preserve_file_partitioning", false);
-                let ctx = SessionContext::new_with_config(session_config);
-
-                let mut fact_options = ParquetReadOptions {
-                    table_partition_cols: vec![("f_dkey".to_string(), DataType::Utf8)],
-                    ..Default::default()
-                };
-                if let Some(ref order) = sort_order {
-                    fact_options.file_sort_order = order.clone();
-                }
-                ctx.register_parquet("fact", &fact_path, fact_options)
-                    .await
-                    .unwrap();
-
-                if let Some(ref dim) = dim_path {
-                    let dim_schema = Arc::new(Schema::new(vec![
-                        Field::new("d_dkey", DataType::Utf8, false),
-                        Field::new("env", DataType::Utf8, false),
-                        Field::new("service", DataType::Utf8, false),
-                        Field::new("host", DataType::Utf8, false),
-                    ]));
-                    let dim_options = ParquetReadOptions {
-                        schema: Some(&dim_schema),
-                        ..Default::default()
-                    };
-                    ctx.register_parquet("dimension", dim, dim_options)
-                        .await
-                        .unwrap();
-                }
-
-                let df = ctx.sql(&query).await.unwrap();
-                df.collect().await.unwrap()
-            }
-        })
-    });
+            })
+        });
+    }
 
     group.finish();
 }
 
-/// Aggregate on high-cardinality partitions - eliminates repartition + sort.
+/// Aggregate on high-cardinality partitions which eliminates repartition and sort.
+///
+/// Query: SELECT f_dkey, COUNT(*), SUM(value) FROM fact GROUP BY f_dkey ORDER BY f_dkey
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                          with_optimization                                              │
+/// │                                   (preserve_file_partitioning=true)                                     │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │  SortPreservingMergeExec  │ Sort Preserved                                                          │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     AggregateExec         │ No repartitioning needed                                                │
+/// │   │   (SinglePartitioned)     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     DataSourceExec        │ partitioning=Hash([f_dkey])                                             │
+/// │   │   file_groups={N groups}  │                                                                         │
+/// │   └───────────────────────────┘                                                                         │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                        prefer_existing_sort                                             │
+/// │                         (preserve_file_partitioning=false, prefer_existing_sort=true)                   │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │  SortPreservingMergeExec  │ Sort Preserved                                                          │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │                                                                         │
+/// │   │    (FinalPartitioned)     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     RepartitionExec       │ Hash shuffle with order preservation                                    │
+/// │   │  Hash([f_dkey], N)        │ Uses k-way merge to maintain sort, has overhead                         │
+/// │   │  preserve_order=true      │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │                                                                         │
+/// │   │        (Partial)          │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     DataSourceExec        │ partitioning=UnknownPartitioning                                        │
+/// │   └───────────────────────────┘                                                                         │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                       without_optimization                                              │
+/// │                        (preserve_file_partitioning=false, prefer_existing_sort=false)                   │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │  SortPreservingMergeExec  │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │ FinalPartitioned                                                        │
+/// │   │    (FinalPartitioned)     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │        SortExec           │ Must sort after shuffle                                                 │
+/// │   │    [f_dkey ASC]           │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     RepartitionExec       │ Hash shuffle destroys ordering                                          │
+/// │   │     Hash([f_dkey], N)     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │                                                                         │
+/// │   │        (Partial)          │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     DataSourceExec        │ partitioning=UnknownPartitioning                                                     │
+/// │   └───────────────────────────┘                                                                         │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 fn preserve_order_bench(
     c: &mut Criterion,
     rt: &Runtime,
@@ -453,11 +519,115 @@ fn preserve_order_bench(
         None,
         target_partitions,
         query,
-        Some(file_sort_order),
+        &Some(file_sort_order),
     );
 }
 
-/// Join + aggregate on partition column - demonstrates propagation through join.
+/// Join and aggregate on partition column which demonstrates propagation through join.
+///
+/// Query: SELECT f.f_dkey, MAX(d.env), ... FROM fact f JOIN dimension d ON f.f_dkey = d.d_dkey
+///        WHERE d.service = 'log' GROUP BY f.f_dkey ORDER BY f.f_dkey
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                          with_optimization                                              │
+/// │                                   (preserve_file_partitioning=true)                                     │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │  SortPreservingMergeExec  │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │ Hash partitioning propagates through join                               │
+/// │   │    (SinglePartitioned)    │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      HashJoinExec         │ Hash partitioning preserved on probe side                               │
+/// │   │     (CollectLeft)         │                                                                         │
+/// │   └──────────┬────────────────┘                                                                         │
+/// │              │                                                                                          │
+/// │       ┌──────┴──────┐                                                                                   │
+/// │       │             │                                                                                   │
+/// │   ┌───▼───┐    ┌────▼────────────────┐                                                                  │
+/// │   │ Dim   │    │   DataSourceExec    │  partitioning=Hash([f_dkey]), output_ordering=[f_dkey]           │
+/// │   │ Table │    │  (fact, N groups)   │                                                                  │
+/// │   └───────┘    └─────────────────────┘                                                                  │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                        prefer_existing_sort                                             │
+/// │                         (preserve_file_partitioning=false, prefer_existing_sort=true)                   │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │  SortPreservingMergeExec  │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │                                                                         │
+/// │   │    (FinalPartitioned)     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     RepartitionExec       │  Hash shuffle with order preservation                                   │
+/// │   │     preserve_order=true   │  Uses k-way merge to maintain sort, has overhead                        │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │                                                                         │
+/// │   │        (Partial)          │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      HashJoinExec         │                                                                         │
+/// │   │     (CollectLeft)         │                                                                         │
+/// │   └──────────┬────────────────┘                                                                         │
+/// │              │                                                                                          │
+/// │       ┌──────┴──────┐                                                                                   │
+/// │       │             │                                                                                   │
+/// │   ┌───▼───┐    ┌────▼────────────────┐                                                                  │
+/// │   │ Dim   │    │   DataSourceExec    │ partitioning=UnknownPartitioning, output_ordering=[f_dkey]       │
+/// │   │ Table │    │      (fact)         │                                                                  │
+/// │   └───────┘    └─────────────────────┘                                                                  │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                       without_optimization                                              │
+/// │                        (preserve_file_partitioning=false, prefer_existing_sort=false)                   │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │  SortPreservingMergeExec  │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │                                                                         │
+/// │   │    (FinalPartitioned)     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │        SortExec           │ Must sort after shuffle                                                 │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     RepartitionExec       │ Hash shuffle destroys ordering                                          │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      AggregateExec        │                                                                         │
+/// │   │        (Partial)          │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │      HashJoinExec         │                                                                         │
+/// │   │     (CollectLeft)         │                                                                         │
+/// │   └──────────┬────────────────┘                                                                         │
+/// │              │                                                                                          │
+/// │       ┌──────┴──────┐                                                                                   │
+/// │       │             │                                                                                   │
+/// │   ┌───▼───┐    ┌────▼────────────────┐                                                                  │
+/// │   │ Dim   │    │   DataSourceExec    │ partitioning=UnknownPartitioning, output_ordering=[f_dkey]       │
+/// │   │ Table │    │      (fact)         │                                                                  │
+/// │   └───────┘    └─────────────────────┘                                                                  │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 fn preserve_order_join_bench(
     c: &mut Criterion,
     rt: &Runtime,
@@ -482,11 +652,86 @@ fn preserve_order_join_bench(
         Some(dim_path),
         target_partitions,
         query,
-        Some(file_sort_order),
+        &Some(file_sort_order),
     );
 }
 
-/// Window function with LIMIT - demonstrates pf preserving sorted data.
+/// Window function with LIMIT which demonstrates partition and sort elimination.
+///
+/// Query: SELECT f_dkey, timestamp, value,
+///               ROW_NUMBER() OVER (PARTITION BY f_dkey ORDER BY timestamp) as rn
+///        FROM fact LIMIT 1000
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                          with_optimization                                              │
+/// │                                   (preserve_file_partitioning=true)                                     │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │       GlobalLimitExec     │                                                                         │
+/// │   │        (LIMIT 1000)       │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │   BoundedWindowAggExec    │ No repaartition needed                                                  │
+/// │   │  PARTITION BY f_dkey      │                                                                         │
+/// │   │  ORDER BY timestamp       │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     DataSourceExec        │ partitioning=Hash([f_dkey]), output_ordering=[f_dkey, timestamp]        │
+/// │   │   file_groups={N groups}  │                                                                         │
+/// │   └───────────────────────────┘                                                                         │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                        prefer_existing_sort                                             │
+/// │                         (preserve_file_partitioning=false, prefer_existing_sort=true)                   │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │       GlobalLimitExec     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │   BoundedWindowAggExec    │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     RepartitionExec       │ Hash shuffle with order preservation                                    │
+/// │   │  Hash([f_dkey], N)        │ Uses k-way merge to maintain sort, has overhead                         │
+/// │   │  preserve_order=true      │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     DataSourceExec        │ partitioning=UnknownPartitioning, output_ordering=[f_dkey, timestamp]   │
+/// │   └───────────────────────────┘                                                                         │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+///
+/// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+/// │                                       without_optimization                                              │
+/// │                        (preserve_file_partitioning=false, prefer_existing_sort=false)                   │
+/// │                                                                                                         │
+/// │   ┌───────────────────────────┐                                                                         │
+/// │   │       GlobalLimitExec     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │   BoundedWindowAggExec    │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │        SortExec           │ Must sort after shuffle                                                 │
+/// │   │  [f_dkey, timestamp]      │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     RepartitionExec       │ Hash shuffle destroys ordering                                          │
+/// │   │     Hash([f_dkey], N)     │                                                                         │
+/// │   └─────────────┬─────────────┘                                                                         │
+/// │                 │                                                                                       │
+/// │   ┌─────────────▼─────────────┐                                                                         │
+/// │   │     DataSourceExec        │ partitioning=UnknownPartitioning, output_ordering=[f_dkey, timestamp]   │
+/// │   └───────────────────────────┘                                                                         │
+/// └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 fn preserve_order_window_bench(
     c: &mut Criterion,
     rt: &Runtime,
@@ -511,7 +756,7 @@ fn preserve_order_window_bench(
         None,
         target_partitions,
         query,
-        Some(file_sort_order),
+        &Some(file_sort_order),
     );
 }
 

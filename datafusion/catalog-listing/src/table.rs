@@ -665,13 +665,11 @@ impl ListingTable {
         // FileScanConfig to declare Hash partitioning. This enables the optimizer to skip
         // hash repartitioning for aggregates and joins on partition columns.
         //
-        // ## Tradeoff: I/O Parallelism vs. Partition Semantics
-        //
+        // Tradeoff: I/O Parallelism vs. Partition Semantics
         // - `group_by_partition_values`: Groups files by partition values. All files for a
-        //   partition value stay together, enabling Hash partitioning declaration. However,
-        //   this may reduce I/O parallelism when partition sizes are uneven since files
-        //   cannot be split by byte ranges across groups.
-        //
+        //   partition value stay together, enabling Hash partitioning declaration. May reduce
+        //   I/O parallelism when partition sizes are uneven since files cannot be split by
+        //   byte ranges across groups.
         // - `split_files`: Distributes files evenly by count (and allows byte-range splitting
         //   by the physical optimizer), maximizing I/O parallelism but losing partition semantics.
         let preserve_file_partitioning =

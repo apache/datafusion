@@ -19,7 +19,7 @@
 # Tests for preserve_file_partitioning optimization
 #
 # Data Model:
-# - Fact table: Hive-partitioned by f_dkey, sorted by (f_dkey, timestamp)
+# - Fact table: Hive-partitioned by f_dkey, sorted by f_dkey, timestamp
 #   Schema: timestamp TIMESTAMP, value FLOAT64, partition column: f_dkey STRING
 #
 # - Dimension table: Single file for CollectLeft joins
@@ -28,7 +28,7 @@
 # Key benefits demonstrated:
 # - Eliminates RepartitionExec for aggregates/joins/windows on partition columns
 # - Eliminates SortExec when data is already sorted by partition + order columns
-# - Uses SinglePartitioned aggregation mode (simpler, faster)
+# - Uses SinglePartitioned aggregation mode
 ##########
 
 ##########
@@ -167,13 +167,13 @@ PARTITIONED BY (f_dkey STRING)
 WITH ORDER (f_dkey ASC, timestamp ASC)
 LOCATION 'test_files/scratch/preserve_file_partitioning/fact/';
 
-# Dimension table for join tests
+# Dimension table (for join tests)
 statement ok
 CREATE EXTERNAL TABLE dimension_table (d_dkey STRING, env STRING, service STRING, host STRING)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/preserve_file_partitioning/dimension/';
 
-# High-cardinality fact table (5 partitions > 3 target_partitions)
+# 'High'-cardinality fact table (5 partitions > 3 target_partitions)
 statement ok
 CREATE EXTERNAL TABLE high_cardinality_table (timestamp TIMESTAMP, value DOUBLE)
 STORED AS PARQUET

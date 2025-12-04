@@ -969,7 +969,8 @@ config_namespace! {
         /// and the scan will declare Hash partitioning on those columns. This allows the
         /// optimizer to skip hash repartitioning for aggregates and joins on partition columns.
         ///
-        /// Note: This may reduce parallelism when many files share the same partition value.
+        /// Note: This may reduce parallelism when many files share the same partition value since file
+        /// scans will be grouped by the partition column values.
         pub preserve_file_partitioning: bool, default = false
 
         /// Should DataFusion repartition data using the partitions keys to execute window

@@ -465,7 +465,7 @@ impl FileGroup {
         chunks
     }
 
-    /// Groups files by their partition values, ensuring all files with identical
+    /// Groups files by their partition values, ensuring all files with same
     /// partition values are in the same group.
     pub fn group_by_partition_values(self, target_partitions: usize) -> Vec<FileGroup> {
         if self.is_empty() || target_partitions == 0 {
