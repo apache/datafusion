@@ -1229,27 +1229,22 @@ data_sorted_clickbench() {
 
     echo "Sorting hits_0.parquet by EventTime (this takes ~10 seconds)..."
 
-    # Ensure virtual environment exists and has pyarrow
+    # Ensure virtual environment exists with pyarrow
     if [ ! -d "$VIRTUAL_ENV" ]; then
-        echo "Creating virtual environment at $VIRTUAL_ENV..."
-        python3 -m venv "$VIRTUAL_ENV"
+        echo "Virtual environment not found. Creating it now..."
+        setup_venv
     fi
 
-    # Activate virtual environment
-    source "$VIRTUAL_ENV/bin/activate"
-
-    # Check and install pyarrow if needed
-    if ! python3 -c "import pyarrow" 2>/dev/null; then
-        echo "Installing pyarrow (this may take a minute)..."
-        pip install --quiet pyarrow
+    # Check if pyarrow is installed
+    if ! PATH=$VIRTUAL_ENV/bin:$PATH python3 -c "import pyarrow" 2>/dev/null; then
+        echo "pyarrow not found in virtual environment. Installing requirements..."
+        setup_venv
     fi
 
     # Use the standalone Python script to sort
-    python3 "${SCRIPT_DIR}"/sort_clickbench.py "${ORIGINAL_FILE}" "${SORTED_FILE}"
+    # Use PATH to ensure we use the venv's python
+    PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/sort_clickbench.py "${ORIGINAL_FILE}" "${SORTED_FILE}"
     local result=$?
-
-    # Deactivate virtual environment
-    deactivate
 
     if [ $result -eq 0 ]; then
         echo "✓ Successfully created sorted ClickBench dataset"

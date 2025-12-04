@@ -40,7 +40,6 @@ def sort_clickbench_data(
         output_path: str,
         row_group_size: int = 64 * 1024,  # 64k rows default
         compression: str = 'zstd',
-        compression_level: int = 3,
         verify: bool = True
 ):
     """Sort parquet file by EventTime column with optimized settings."""
@@ -100,8 +99,6 @@ def sort_clickbench_data(
             coerce_timestamps='us',  # Use microsecond precision
             # Batch size for writing
             write_batch_size=min(row_group_size, 1024 * 64),
-            # Enable compression for all columns
-            compression_level=compression_level,  # Use default compression level
         )
 
         # Report results
@@ -204,14 +201,8 @@ Examples:
     parser.add_argument(
         '--compression',
         choices=['snappy', 'gzip', 'brotli', 'lz4', 'zstd', 'none'],
-        default='zstd',
+        default='none',
         help='Compression codec (default: zstd)'
-    )
-    parser.add_argument(
-        '--compression-level',
-        type=int,
-        default=3,
-        help='Compression level (default: 3 for zstd)'
     )
     parser.add_argument(
         '--no-verify',
@@ -240,7 +231,6 @@ Examples:
         args.output,
         row_group_size=args.row_group_size,
         compression=args.compression,
-        compression_level=args.compression_level,
         verify=not args.no_verify
     )
 

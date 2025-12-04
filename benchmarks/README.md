@@ -804,3 +804,40 @@ Getting results...
 cancelling thread
 done dropping runtime in 83.531417ms
 ```
+
+## Sorted Data Benchmarks
+
+### Data Sorted ClickBench
+
+Benchmark for queries on pre-sorted data to test sort order optimization.
+
+This benchmark uses a subset of the ClickBench dataset (hits_0.parquet, ~150MB) that has been pre-sorted by the EventTime column. The queries are designed to test DataFusion's performance when the data is already sorted.
+
+The benchmark includes queries that:
+- Scan pre-sorted data with ORDER BY clauses that match the sort order
+- Test reverse scans on sorted data
+- Verify the performance result
+
+#### Generating Sorted Data
+
+The sorted dataset is automatically generated from the ClickBench partitioned dataset:
+
+```bash
+./bench.sh data data_sorted_clickbench
+```
+
+This command will:
+1. Download the ClickBench partitioned dataset if not present
+2. Create a virtual environment and install required dependencies (including pyarrow)
+3. Sort hits_0.parquet by EventTime in ascending order
+4. Save the sorted file as hits_0_sorted.parquet (~200MB)
+
+**Note**: The script automatically sets up the Python environment and dependencies. You don't need to manually run `./bench.sh venv` first.
+
+#### Running the Benchmark
+
+```bash
+./bench.sh run data_sorted_clickbench
+```
+
+This runs queries against the pre-sorted dataset with the `--sorted-by EventTime` flag, which informs DataFusion that the data is pre-sorted, allowing it to optimize away redundant sort operations.
