@@ -18,9 +18,11 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::common::Result;
+use datafusion::config::{ConfigOptions, TableParquetOptions};
 use datafusion::datasource::listing::PartitionedFile;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
@@ -29,8 +31,9 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::logical_expr::{col, lit};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::SessionContext;
 use datafusion_common::config::CsvOptions;
+use datafusion_common::record_batch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{ColumnStatistics, ScalarValue};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -48,22 +51,33 @@ use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::{
-    filter_pushdown::FilterPushdown, OptimizerContext, PhysicalOptimizerRule,
-};
-use datafusion_physical_plan::filter::FilterExec;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 
 async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &str) {
+    write_batches_to_parquet(&[batch], store, path).await;
+}
+
+/// Write RecordBatches to a Parquet file with each batch in its own row group.
+async fn write_batches_to_parquet(
+    batches: &[RecordBatch],
+    store: Arc<dyn ObjectStore>,
+    path: &str,
+) -> usize {
     let mut out = BytesMut::new().writer();
     {
-        let mut writer = ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
-        writer.write(&batch).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(&mut out, batches[0].schema(), None).unwrap();
+        for batch in batches {
+            writer.write(batch).unwrap();
+            writer.flush().unwrap();
+        }
         writer.finish().unwrap();
     }
     let data = out.into_inner().freeze();
+    let file_size = data.len();
     store.put(&Path::from(path), data.into()).await.unwrap();
+    file_size
 }
 
 /// A schema adapter factory that transforms column names to uppercase
@@ -224,49 +238,99 @@ impl PhysicalExprAdapter for UppercasePhysicalExprAdapter {
     }
 }
 
-fn push_down_filters(
-    plan: Arc<dyn ExecutionPlan>,
-    filter: &Expr,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let filter_expr = logical2physical(filter, &plan.schema());
-    let plan = Arc::new(FilterExec::try_new(filter_expr, plan)?);
-    let cfg = SessionConfig::new()
-        .set_str("datafusion.execution.parquet.pushdown_filters", "true");
-    let optimizer_context = OptimizerContext::new(cfg);
-    let optimizer = FilterPushdown::new();
-    optimizer.optimize_plan(plan, &optimizer_context)
+#[derive(Clone)]
+struct ParquetTestCase {
+    table_schema: TableSchema,
+    batches: Vec<RecordBatch>,
+    predicate: Option<Expr>,
+    projection: Option<ProjectionExprs>,
+    push_down_filters: bool,
+}
+
+impl ParquetTestCase {
+    fn new(table_schema: TableSchema, batches: Vec<RecordBatch>) -> Self {
+        Self {
+            table_schema,
+            batches,
+            predicate: None,
+            projection: None,
+            push_down_filters: true,
+        }
+    }
+
+    fn push_down_filters(mut self, pushdown_filters: bool) -> Self {
+        self.push_down_filters = pushdown_filters;
+        self
+    }
+
+    fn with_predicate(mut self, predicate: Expr) -> Self {
+        self.predicate = Some(predicate);
+        self
+    }
+
+    fn with_projection(mut self, projection: ProjectionExprs) -> Self {
+        self.projection = Some(projection);
+        self
+    }
+
+    async fn execute(self) -> Result<Vec<RecordBatch>> {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+        let path = "test.parquet";
+        let file_size =
+            write_batches_to_parquet(&self.batches, store.clone(), path).await;
+
+        let ctx = SessionContext::new();
+        ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+        let mut table_options = TableParquetOptions::default();
+        // controlled via ConfigOptions flag; ParquetSources ORs them so if either is true then pushdown is enabled
+        table_options.global.pushdown_filters = false;
+        let mut file_source = Arc::new(
+            ParquetSource::new(self.table_schema.table_schema().clone())
+                .with_table_parquet_options(table_options),
+        ) as Arc<dyn FileSource>;
+
+        if let Some(projection) = self.projection {
+            file_source = file_source.try_pushdown_projection(&projection)?.unwrap();
+        }
+
+        if let Some(predicate) = &self.predicate {
+            let filter_expr =
+                logical2physical(predicate, self.table_schema.table_schema());
+            let mut config = ConfigOptions::default();
+            config.execution.parquet.pushdown_filters = self.push_down_filters;
+            let result = file_source.try_pushdown_filters(vec![filter_expr], &config)?;
+            file_source = result.updated_node.unwrap();
+        }
+
+        let config = FileScanConfigBuilder::new(store_url.clone(), file_source)
+            .with_file(PartitionedFile::new(path, file_size as u64)) // size 0 for test
+            .with_expr_adapter(None)
+            .build();
+
+        let exec = DataSourceExec::from_data_source(config);
+        let task_ctx = ctx.task_ctx();
+        let stream = exec.execute(0, task_ctx)?;
+        datafusion::physical_plan::common::collect(stream).await
+    }
 }
 
 /// Test reading and filtering a Parquet file where the table schema is flipped (c, b, a) vs. the physical file schema (a, b, c)
-#[cfg(feature = "parquet")]
 #[tokio::test]
+#[cfg(feature = "parquet")]
 async fn test_parquet_flipped_projection() -> Result<()> {
-    // Create test data
-    let batch = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Float64, false),
-        ])),
-        vec![
-            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
-            Arc::new(arrow::array::StringArray::from(vec!["x", "y", "z"])),
-            Arc::new(arrow::array::Float64Array::from(vec![1.1, 2.2, 3.3])),
-        ],
+    // Create test data with columns (a, b, c) - the file schema
+    let batch1 = record_batch!(
+        ("a", Int32, vec![1, 2]),
+        ("b", Utf8, vec!["x", "y"]),
+        ("c", Float64, vec![1.1, 2.2])
     )?;
-
-    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
-    let path = "flipped.parquet";
-    write_parquet(batch.clone(), store.clone(), path).await;
-
-    // Get the actual file size from the object store
-    let object_meta = store.head(&Path::from(path)).await?;
-    let file_size = object_meta.size;
-
-    // Create a session context and register the object store
-    let ctx = SessionContext::new();
-    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+    let batch2 = record_batch!(
+        ("a", Int32, vec![3]),
+        ("b", Utf8, vec!["z"]),
+        ("c", Float64, vec![3.3])
+    )?;
 
     // Create a table schema with flipped column order (c, b, a)
     let table_schema = Arc::new(Schema::new(vec![
@@ -274,25 +338,12 @@ async fn test_parquet_flipped_projection() -> Result<()> {
         Field::new("b", DataType::Utf8, true),
         Field::new("a", DataType::Int32, false),
     ]));
+    let table_schema = TableSchema::from_file_schema(table_schema);
 
-    // Create a ParquetSource with the table schema
-    let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
+    let test_case = ParquetTestCase::new(table_schema.clone(), vec![batch1, batch2]);
 
-    // Use PhysicalExprAdapterFactory to map flipped columns
-    let config = FileScanConfigBuilder::new(store_url.clone(), file_source)
-        .with_file(PartitionedFile::new(path, file_size))
-        .with_expr_adapter(None)
-        .build();
-
-    // Create a data source executor
-    let exec = DataSourceExec::from_data_source(config);
-
-    // Collect results
-    let task_ctx = ctx.task_ctx();
-    let stream = exec.execute(0, task_ctx)?;
-    let batches = datafusion::physical_plan::common::collect(stream).await?;
-    // There should be one batch
-    assert_eq!(batches.len(), 1);
+    // Test reading with flipped schema
+    let batches = test_case.clone().execute().await?;
     #[rustfmt::skip]
     let expected = [
         "+-----+---+---+",
@@ -305,24 +356,13 @@ async fn test_parquet_flipped_projection() -> Result<()> {
     ];
     assert_batches_eq!(expected, &batches);
 
-    // And now with a projection applied that selects (`b`, `a`)
-    let projection = ProjectionExprs::from_indices(&[1, 2], &table_schema);
-    let source = Arc::new(ParquetSource::new(table_schema.clone()))
-        .try_pushdown_projection(&projection)
-        .unwrap()
-        .unwrap();
-    let config = FileScanConfigBuilder::new(store_url, source)
-        .with_file(PartitionedFile::new(path, file_size))
-        .with_expr_adapter(None)
-        .build();
-    // Create a data source executor
-    let exec = DataSourceExec::from_data_source(config);
-    // Collect results
-    let task_ctx = ctx.task_ctx();
-    let stream = exec.execute(0, task_ctx.clone())?;
-    let batches = datafusion::physical_plan::common::collect(stream).await?;
-    // There should be one batch
-    assert_eq!(batches.len(), 1);
+    // Test with a projection that selects (b, a)
+    let projection = ProjectionExprs::from_indices(&[1, 2], table_schema.table_schema());
+    let batches = test_case
+        .clone()
+        .with_projection(projection.clone())
+        .execute()
+        .await?;
     #[rustfmt::skip]
     let expected = [
         "+---+---+",
@@ -335,16 +375,17 @@ async fn test_parquet_flipped_projection() -> Result<()> {
     ];
     assert_batches_eq!(expected, &batches);
 
-    // And with a filter on `b`, `a`
+    // Test with a filter on b, a
     // a = 1 or b != 'foo' and a = 3 -> matches [{a=1,b=x},{b=z,a=3}]
     let filter = col("a")
         .eq(lit(1))
         .or(col("b").not_eq(lit("foo")).and(col("a").eq(lit(3))));
-    let exec = push_down_filters(exec, &filter).unwrap();
-    let stream = exec.execute(0, task_ctx)?;
-    let batches = datafusion::physical_plan::common::collect(stream).await?;
-    // There should be one batch
-    assert_eq!(batches.len(), 1);
+    let batches = test_case
+        .clone()
+        .with_projection(projection.clone())
+        .with_predicate(filter.clone())
+        .execute()
+        .await?;
     #[rustfmt::skip]
     let expected = [
         "+---+---+",
@@ -356,64 +397,86 @@ async fn test_parquet_flipped_projection() -> Result<()> {
     ];
     assert_batches_eq!(expected, &batches);
 
+    // Test with only statistics-based filter pushdown (no row-level filtering)
+    // Since we have 2 row groups and the filter matches rows in both, stats pruning alone won't filter any
+    let batches = test_case
+        .clone()
+        .with_projection(projection)
+        .with_predicate(filter)
+        .push_down_filters(false)
+        .execute()
+        .await?;
+    #[rustfmt::skip]
+    let expected = [
+        "+---+---+",
+        "| b | a |",
+        "+---+---+",
+        "| x | 1 |",
+        "| y | 2 |",
+        "| z | 3 |",
+        "+---+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // Test with a filter that can prune via statistics: a > 10 (no rows match)
+    let filter = col("a").gt(lit(10));
+    let batches = test_case
+        .clone()
+        .with_predicate(filter)
+        .push_down_filters(false)
+        .execute()
+        .await?;
+    // Stats show a has max=3, so a > 10 prunes all row groups
+    assert_eq!(batches.len(), 0);
+
+    // With a filter that matches only the first row group: a < 3
+    let filter = col("a").lt(lit(3));
+    let batches = test_case
+        .clone()
+        .with_predicate(filter)
+        .push_down_filters(false)
+        .execute()
+        .await?;
+    #[rustfmt::skip]
+    let expected = [
+        "+-----+---+---+",
+        "| c   | b | a |",
+        "+-----+---+---+",
+        "| 1.1 | x | 1 |",
+        "| 2.2 | y | 2 |",
+        "+-----+---+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
     Ok(())
 }
 
 /// Test reading a Parquet file that is missing a column specified in the table schema, which should get filled in with nulls by default.
 /// We test with the file having columns (a, c) and the table schema having (a, b, c)
-#[cfg(feature = "parquet")]
 #[tokio::test]
+#[cfg(feature = "parquet")]
 async fn test_parquet_missing_column() -> Result<()> {
-    // Create test data with columns (a, c)
-    let batch = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("c", DataType::Float64, false),
-        ])),
-        vec![
-            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
-            Arc::new(arrow::array::Float64Array::from(vec![1.1, 2.2, 3.3])),
-        ],
-    )?;
-
-    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
-    let path = "missing_column.parquet";
-    write_parquet(batch.clone(), store.clone(), path).await;
-
-    // Get the actual file size from the object store
-    let object_meta = store.head(&Path::from(path)).await?;
-    let file_size = object_meta.size;
-
-    // Create a session context and register the object store
-    let ctx = SessionContext::new();
-    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+    // Create test data with columns (a, c) as 2 batches
+    // | a | c   |
+    // |---|-----|
+    // | 1 | 1.1 |
+    // | 2 | 2.2 |
+    // | ~ | ~~~ |
+    // | 3 | 3.3 |
+    let batch1 = record_batch!(("a", Int32, vec![1, 2]), ("c", Float64, vec![1.1, 2.2]))?;
+    let batch2 = record_batch!(("a", Int32, vec![3]), ("c", Float64, vec![3.3]))?;
 
     // Create a table schema with an extra column 'b' (a, b, c)
-    let table_schema = Arc::new(Schema::new(vec![
+    let logical_file_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, false),
         Field::new("b", DataType::Utf8, true),
         Field::new("c", DataType::Float64, false),
     ]));
+    let table_schema = TableSchema::from_file_schema(logical_file_schema.clone());
 
-    // Create a ParquetSource with the table schema
-    let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
+    let test_case = ParquetTestCase::new(table_schema.clone(), vec![batch1, batch2]);
 
-    // Use PhysicalExprAdapterFactory to handle missing column
-    let config = FileScanConfigBuilder::new(store_url.clone(), file_source)
-        .with_file(PartitionedFile::new(path, file_size))
-        .with_expr_adapter(None)
-        .build();
-
-    // Create a data source executor
-    let exec = DataSourceExec::from_data_source(config);
-
-    // Collect results
-    let task_ctx = ctx.task_ctx();
-    let stream = exec.execute(0, task_ctx)?;
-    let batches = datafusion::physical_plan::common::collect(stream).await?;
-    // There should be one batch
-    assert_eq!(batches.len(), 1);
+    let batches = test_case.clone().execute().await?;
     #[rustfmt::skip]
     let expected = [
         "+---+---+-----+",
@@ -427,23 +490,13 @@ async fn test_parquet_missing_column() -> Result<()> {
     assert_batches_eq!(expected, &batches);
 
     // And with a projection applied that selects (`c, `a`, `b`)
-    let projection = ProjectionExprs::from_indices(&[2, 0, 1], &table_schema);
-    let source = Arc::new(ParquetSource::new(table_schema.clone()))
-        .try_pushdown_projection(&projection)
-        .unwrap()
-        .unwrap();
-    let config = FileScanConfigBuilder::new(store_url, source)
-        .with_file(PartitionedFile::new(path, file_size))
-        .with_expr_adapter(None)
-        .build();
-    // Create a data source executor
-    let exec = DataSourceExec::from_data_source(config);
-    // Collect results
-    let task_ctx = ctx.task_ctx();
-    let stream = exec.execute(0, task_ctx.clone())?;
-    let batches = datafusion::physical_plan::common::collect(stream).await?;
-    // There should be one batch
-    assert_eq!(batches.len(), 1);
+    let projection =
+        ProjectionExprs::from_indices(&[2, 0, 1], table_schema.table_schema());
+    let batches = test_case
+        .clone()
+        .with_projection(projection)
+        .execute()
+        .await?;
     #[rustfmt::skip]
     let expected = [
         "+-----+---+---+",
@@ -461,35 +514,85 @@ async fn test_parquet_missing_column() -> Result<()> {
     let filter = col("a")
         .eq(lit(1))
         .or(col("b").is_null().and(col("a").eq(lit(3))));
-    let exec = push_down_filters(exec, &filter).unwrap();
-    let stream = exec.execute(0, task_ctx.clone())?;
-    let batches = datafusion::physical_plan::common::collect(stream).await?;
-    // There should be one batch
-    assert_eq!(batches.len(), 1);
+    let batches = test_case
+        .clone()
+        .with_predicate(filter.clone())
+        .execute()
+        .await?;
     #[rustfmt::skip]
     let expected = [
-        "+-----+---+---+",
-        "| c   | a | b |",
-        "+-----+---+---+",
-        "| 1.1 | 1 |   |",
-        "| 3.3 | 3 |   |",
-        "+-----+---+---+",
+        "+---+---+-----+",
+        "| a | b | c   |",
+        "+---+---+-----+",
+        "| 1 |   | 1.1 |",
+        "| 3 |   | 3.3 |",
+        "+---+---+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    // With only statistics-based filter pushdown
+    let batches = test_case
+        .clone()
+        .with_predicate(filter)
+        .push_down_filters(false)
+        .execute()
+        .await?;
+    #[rustfmt::skip]
+    let expected = [
+        "+---+---+-----+",
+        "| a | b | c   |",
+        "+---+---+-----+",
+        "| 1 |   | 1.1 |",
+        "| 2 |   | 2.2 |",
+        "| 3 |   | 3.3 |",
+        "+---+---+-----+",
     ];
     assert_batches_eq!(expected, &batches);
 
     // Filter `b is not null or a = 24` doesn't match any rows
     let filter = col("b").is_not_null().or(col("a").eq(lit(24)));
-    let exec = push_down_filters(exec, &filter).unwrap();
-    let stream = exec.execute(0, task_ctx)?;
-    let batches = datafusion::physical_plan::common::collect(stream).await?;
+    let batches = test_case
+        .clone()
+        .with_predicate(filter.clone())
+        .execute()
+        .await?;
+    // There should be zero batches
+    assert_eq!(batches.len(), 0);
+    // With only statistics-based filter pushdown
+    let batches = test_case
+        .clone()
+        .with_predicate(filter)
+        .push_down_filters(false)
+        .execute()
+        .await?;
+    // There will be data: the filter is (null) is not null or a = 24.
+    // Statistics pruning doesn't handle `null is not null` so it resolves to `true or a = 24` -> `true` so no row groups are pruned
+    #[rustfmt::skip]
+    let expected = [
+        "+---+---+-----+",
+        "| a | b | c   |",
+        "+---+---+-----+",
+        "| 1 |   | 1.1 |",
+        "| 2 |   | 2.2 |",
+        "| 3 |   | 3.3 |",
+        "+---+---+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    // On the other hand the filter `b = 'foo' and a = 24` should prune all data even with only statistics-based pushdown
+    let filter = col("b").eq(lit("foo")).and(col("a").eq(lit(24)));
+    let batches = test_case
+        .clone()
+        .with_predicate(filter)
+        .push_down_filters(false)
+        .execute()
+        .await?;
     // There should be zero batches
     assert_eq!(batches.len(), 0);
 
     Ok(())
 }
 
-#[cfg(feature = "parquet")]
 #[tokio::test]
+#[cfg(feature = "parquet")]
 async fn test_parquet_integration_with_physical_expr_adapter() -> Result<()> {
     // Create test data
     let batch = RecordBatch::try_new(
