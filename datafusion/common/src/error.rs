@@ -171,6 +171,10 @@ pub enum DataFusionError {
     /// to multiple receivers. For example, when the source of a repartition
     /// errors and the error is propagated to multiple consumers.
     Shared(Arc<DataFusionError>),
+    /// An error that originated during a foreign function interface call.
+    /// Transferring errors across the FFI boundary is difficult, so the original
+    /// error will be converted to a string.
+    Ffi(String),
 }
 
 #[macro_export]
@@ -413,6 +417,7 @@ impl Error for DataFusionError {
             // can't be executed.
             DataFusionError::Collection(errs) => errs.first().map(|e| e as &dyn Error),
             DataFusionError::Shared(e) => Some(e.as_ref()),
+            DataFusionError::Ffi(_) => None,
         }
     }
 }
@@ -544,6 +549,7 @@ impl DataFusionError {
                 errs.first().expect("cannot construct DataFusionError::Collection with 0 errors, but got one such case").error_prefix()
             }
             DataFusionError::Shared(_) => "",
+            DataFusionError::Ffi(_) => "FFI error: ",
         }
     }
 
@@ -596,6 +602,7 @@ impl DataFusionError {
                 .expect("cannot construct DataFusionError::Collection with 0 errors")
                 .message(),
             DataFusionError::Shared(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Ffi(ref desc) => Cow::Owned(desc.to_string()),
         }
     }
 
@@ -964,6 +971,9 @@ make_error!(substrait_err, substrait_datafusion_err, Substrait);
 // Exposes a macro to create `DataFusionError::ResourcesExhausted` with optional backtrace
 make_error!(resources_err, resources_datafusion_err, ResourcesExhausted);
 
+// Exposes a macro to create `DataFusionError::Ffi` with optional backtrace
+make_error!(ffi_err, ffi_datafusion_err, Ffi);
+
 // Exposes a macro to create `DataFusionError::SQL` with optional backtrace
 #[macro_export]
 macro_rules! sql_datafusion_err {
@@ -1233,6 +1243,7 @@ mod test {
     // To pass the test the environment variable RUST_BACKTRACE should be set to 1 to enforce backtrace
     #[cfg(feature = "backtrace")]
     #[test]
+    #[expect(clippy::unnecessary_literal_unwrap)]
     fn test_enabled_backtrace() {
         match std::env::var("RUST_BACKTRACE") {
             Ok(val) if val == "1" => {}
