@@ -1435,7 +1435,7 @@ struct PerPartitionStream {
 }
 
 impl PerPartitionStream {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn new(
         schema: SchemaRef,
         receiver: DistributionReceiver<MaybeBatch>,
@@ -1574,10 +1574,16 @@ impl Stream for PerPartitionStream {
                         }
                         Poll::Ready(None) => {
                             completed = true;
-                            coalescer.finish()?;
+                            if let Err(err) = coalescer.finish() {
+                                poll = Poll::Ready(Some(Err(err)));
+                                break;
+                            }
                         }
                         Poll::Ready(Some(Ok(batch))) => {
-                            coalescer.push_batch(batch)?;
+                            if let Err(err) = coalescer.push_batch(batch) {
+                                poll = Poll::Ready(Some(Err(err)));
+                                break;
+                            }
                         }
                         Poll::Ready(Some(err)) => {
                             poll = Poll::Ready(Some(err));
