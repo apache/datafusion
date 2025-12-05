@@ -41,7 +41,7 @@ pub struct RewriteSetComparison;
 impl RewriteSetComparison {
     #[allow(missing_docs)]
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 
     fn rewrite_plan(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -156,7 +156,7 @@ fn to_outer_reference(expr: Expr, outer_schema: &DFSchema) -> Result<Expr> {
         Expr::Column(col) => {
             let field = outer_schema.field_from_column(&col)?;
             Ok(Transformed::yes(Expr::OuterReferenceColumn(
-                field.clone(),
+                Arc::clone(field),
                 col,
             )))
         }

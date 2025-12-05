@@ -599,7 +599,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 SQLExpr::Subquery(subquery) => self.parse_set_comparison_subquery(
                     *left,
                     *subquery,
-                    compare_op,
+                    &compare_op,
                     SetQuantifier::Any,
                     schema,
                     planner_context,
@@ -616,7 +616,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 SQLExpr::Subquery(subquery) => self.parse_set_comparison_subquery(
                     *left,
                     *subquery,
-                    compare_op,
+                    &compare_op,
                     SetQuantifier::All,
                     schema,
                     planner_context,

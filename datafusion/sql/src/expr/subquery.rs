@@ -167,7 +167,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         left_expr: SQLExpr,
         subquery: Query,
-        compare_op: BinaryOperator,
+        compare_op: &BinaryOperator,
         quantifier: SetQuantifier,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -205,7 +205,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 outer_ref_columns,
                 spans,
             },
-            self.parse_sql_binary_op(&compare_op)?,
+            self.parse_sql_binary_op(compare_op)?,
             quantifier,
         )))
     }

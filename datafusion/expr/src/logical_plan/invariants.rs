@@ -231,19 +231,19 @@ pub fn check_subquery_expr(
                 );
             }
         }
-        if let Expr::SetComparison(set_comparison) = expr {
-            if set_comparison.subquery.subquery.schema().fields().len() > 1 {
-                return plan_err!(
-                    "Set comparison subquery should only return one column, but found {}: {}",
-                    set_comparison.subquery.subquery.schema().fields().len(),
-                    set_comparison
-                        .subquery
-                        .subquery
-                        .schema()
-                        .field_names()
-                        .join(", ")
-                );
-            }
+        if let Expr::SetComparison(set_comparison) = expr
+            && set_comparison.subquery.subquery.schema().fields().len() > 1
+        {
+            return plan_err!(
+                "Set comparison subquery should only return one column, but found {}: {}",
+                set_comparison.subquery.subquery.schema().fields().len(),
+                set_comparison
+                    .subquery
+                    .subquery
+                    .schema()
+                    .field_names()
+                    .join(", ")
+            );
         }
         match outer_plan {
             LogicalPlan::Projection(_)
