@@ -40,7 +40,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -189,6 +189,24 @@ pub trait DataSource: Send + Sync + Debug {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to create a new DataSource that produces data in the specified sort order.
+    ///
+    /// # Arguments
+    /// * `order` - The desired output ordering
+    ///
+    /// # Returns
+    /// * `Ok(Some(source))` - Created a source that satisfies the ordering
+    /// * `Ok(None)` - Cannot optimize for this ordering
+    /// * `Err(e)` - Error occurred
+    ///
+    /// Default implementation returns `Ok(None)`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        Ok(None)
     }
 }
 
@@ -358,6 +376,19 @@ impl ExecutionPlan for DataSourceExec {
                 filters: res.filters,
                 updated_node: None,
             }),
+        }
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.data_source.try_pushdown_sort(order)? {
+            Some(new_data_source) => {
+                let new_exec = self.clone().with_data_source(new_data_source);
+                Ok(Some(Arc::new(new_exec)))
+            }
+            None => Ok(None),
         }
     }
 }

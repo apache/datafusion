@@ -532,6 +532,7 @@ message ParquetOptions {
   bool schema_force_view_types = 28; // default = false
   bool binary_as_string = 29; // default = false
   bool skip_arrow_metadata = 30; // default = false
+  bool enable_sort_pushdown = 34; // default = true
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;

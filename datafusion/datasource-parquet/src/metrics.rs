@@ -76,6 +76,13 @@ pub struct ParquetFileMetrics {
     /// number of rows that were stored in the cache after evaluating predicates
     /// reused for the output.
     pub predicate_cache_records: Count,
+
+    /// Number of row groups reversed during reverse scan optimization
+    pub row_groups_reversed: Count,
+    /// Number of batches reversed within row groups
+    pub batches_reversed: Count,
+    /// Total time spent reversing batches
+    pub reverse_time: Time,
 }
 
 impl ParquetFileMetrics {
@@ -162,6 +169,20 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .counter("predicate_cache_records", partition);
 
+        // Reverse scan metrics
+        let row_groups_reversed = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
+            .counter("row_groups_reversed", partition);
+
+        let batches_reversed = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("batches_reversed", partition);
+
+        let reverse_time = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .subset_time("reverse_time", partition);
+
         Self {
             files_ranges_pruned_statistics,
             predicate_evaluation_errors,
@@ -179,6 +200,9 @@ impl ParquetFileMetrics {
             scan_efficiency_ratio,
             predicate_cache_inner_records,
             predicate_cache_records,
+            row_groups_reversed,
+            batches_reversed,
+            reverse_time,
         }
     }
 }
