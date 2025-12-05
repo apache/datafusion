@@ -407,6 +407,10 @@ impl ProjectionExprs {
     ///
     /// Use [`column_indices()`](Self::column_indices) instead if the projection may contain
     /// non-column expressions or if you need a deduplicated sorted list.
+    #[deprecated(
+        since = "53.0.0",
+        note = "Use column_indices() instead. This method will be removed in 58.0.0."
+    )]
     pub fn ordered_column_indices(&self) -> Vec<usize> {
         self.exprs
             .iter()
