@@ -1149,10 +1149,7 @@ fn ordered_column_indices_from_projection(
     projection
         .expr_iter()
         .map(|e| {
-            let index = e
-                .as_any()
-                .downcast_ref::<datafusion_physical_expr::expressions::Column>()?
-                .index();
+            let index = e.as_any().downcast_ref::<Column>()?.index();
             Some(index)
         })
         .collect::<Option<Vec<usize>>>()
