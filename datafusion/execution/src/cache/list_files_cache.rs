@@ -246,7 +246,7 @@ impl DefaultListFilesCacheState {
 impl ListFilesCache for DefaultListFilesCache {
     fn cache_limit(&self) -> usize {
         let state = self.state.lock().unwrap();
-        dbg!(state.memory_limit)
+        state.memory_limit
     }
 
     fn cache_ttl(&self) -> Option<Duration> {

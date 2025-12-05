@@ -161,11 +161,10 @@ impl CacheManager {
         let list_files_cache = config
             .list_files_cache
             .as_ref()
-            .and_then(|c| {
+            .inspect(|c| {
                 // the cache memory limit or ttl might have changed, ensure they are updated
                 c.update_cache_limit(config.list_files_cache_limit);
                 c.update_cache_ttl(config.list_files_cache_ttl);
-                Some(c)
             })
             .map(Arc::clone);
 
