@@ -811,7 +811,7 @@ done dropping runtime in 83.531417ms
 
 Benchmark for queries on pre-sorted data to test sort order optimization.
 
-This benchmark uses a subset of the ClickBench dataset (hits_0.parquet, ~150MB) that has been pre-sorted by the EventTime column. The queries are designed to test DataFusion's performance when the data is already sorted.
+This benchmark uses a subset of the ClickBench dataset (hits_0.parquet, ~150MB) that has been pre-sorted by the EventTime column. The queries are designed to test DataFusion's performance when the data is already sorted as is common in timeseries workloads. 
 
 The benchmark includes queries that:
 - Scan pre-sorted data with ORDER BY clauses that match the sort order
