@@ -394,7 +394,7 @@ impl RuntimeEnvBuilder {
     }
 
     /// Specifies the duration entries in the object list cache will be considered valid.
-    pub fn with_object_list_cache_ttl(mut self, ttl: Duration) -> Self {
+    pub fn with_object_list_cache_ttl(mut self, ttl: Option<Duration>) -> Self {
         self.cache_manager = self.cache_manager.with_list_files_cache_ttl(ttl);
         self
     }

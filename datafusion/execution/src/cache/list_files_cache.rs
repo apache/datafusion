@@ -110,7 +110,10 @@ fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
 }
 
 /// The default memory limit for the [`DefaultListFilesCache`]
-pub(super) const DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT: usize = 1024 * 1024; // 1MiB
+pub const DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT: usize = 1024 * 1024; // 1MiB
+
+/// The default cache TTL for the [`DefaultListFilesCache`]
+pub const DEFAULT_LIST_FILES_CACHE_TTL: Option<Duration> = None; // Infinite
 
 /// Handles the inner state of the [`DefaultListFilesCache`] struct.
 pub struct DefaultListFilesCacheState {
@@ -126,7 +129,7 @@ impl Default for DefaultListFilesCacheState {
             lru_queue: LruQueue::new(),
             memory_limit: DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
             memory_used: 0,
-            ttl: None,
+            ttl: DEFAULT_LIST_FILES_CACHE_TTL,
         }
     }
 }
@@ -243,7 +246,7 @@ impl DefaultListFilesCacheState {
 impl ListFilesCache for DefaultListFilesCache {
     fn cache_limit(&self) -> usize {
         let state = self.state.lock().unwrap();
-        state.memory_limit
+        dbg!(state.memory_limit)
     }
 
     fn cache_ttl(&self) -> Option<Duration> {
@@ -254,6 +257,12 @@ impl ListFilesCache for DefaultListFilesCache {
     fn update_cache_limit(&self, limit: usize) {
         let mut state = self.state.lock().unwrap();
         state.memory_limit = limit;
+        state.evict_entries();
+    }
+
+    fn update_cache_ttl(&self, ttl: Option<Duration>) {
+        let mut state = self.state.lock().unwrap();
+        state.ttl = ttl;
         state.evict_entries();
     }
 }
