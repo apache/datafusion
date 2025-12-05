@@ -1263,80 +1263,6 @@ mod tests {
     }
 
     #[test]
-    fn test_projected_file_schema_with_partition_col() {
-        let schema = aggr_test_schema();
-        let partition_cols = vec![
-            (
-                "part1".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-            (
-                "part2".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-        ];
-
-        // Projected file schema for config with projection including partition column
-        let config = config_for_projection(
-            schema.clone(),
-            Some(vec![0, 3, 5, schema.fields().len()]),
-            Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols),
-        );
-        let projection = projected_file_schema(&config);
-
-        // Assert partition column filtered out in projected file schema
-        let expected_columns = vec!["c1", "c4", "c6"];
-        let actual_columns = projection
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
-        assert_eq!(expected_columns, actual_columns);
-    }
-
-    /// Projects only file schema, ignoring partition columns
-    fn projected_file_schema(config: &FileScanConfig) -> SchemaRef {
-        let file_schema = config.file_source.table_schema().file_schema();
-        if let Some(projection) = config.file_source().projection() {
-            Arc::new(
-                projection
-                    .project_schema(file_schema)
-                    .expect("failed to project file schema"),
-            )
-        } else {
-            Arc::clone(file_schema)
-        }
-    }
-
-    #[test]
-    fn test_projected_file_schema_without_projection() {
-        let schema = aggr_test_schema();
-        let partition_cols = vec![
-            (
-                "part1".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-            (
-                "part2".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-        ];
-
-        // Projected file schema for config without projection
-        let config = config_for_projection(
-            schema.clone(),
-            None,
-            Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols),
-        );
-        let projection = projected_file_schema(&config);
-
-        // Assert projected file schema is equal to file schema
-        assert_eq!(projection.fields(), schema.fields());
-    }
-
-    #[test]
     fn test_split_groups_by_statistics() -> Result<()> {
         use chrono::TimeZone;
         use datafusion_common::DFSchema;
@@ -1660,14 +1586,6 @@ mod tests {
         .unwrap()
         .with_statistics(statistics)
         .build()
-    }
-
-    /// Convert partition columns from Vec<String DataType> to Vec<Field>
-    fn to_partition_cols(table_partition_cols: Vec<(String, DataType)>) -> Vec<Field> {
-        table_partition_cols
-            .iter()
-            .map(|(name, dtype)| Field::new(name, dtype.clone(), false))
-            .collect::<Vec<_>>()
     }
 
     #[test]
