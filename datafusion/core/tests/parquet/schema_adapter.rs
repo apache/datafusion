@@ -17,8 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{record_batch, RecordBatch, RecordBatchOptions};
-use arrow::compute::{cast_with_options, CastOptions};
+use arrow::array::{record_batch, RecordBatch};
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
@@ -29,14 +28,8 @@ use datafusion::datasource::listing::{
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;
-use datafusion_common::{ColumnStatistics, ScalarValue};
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_datasource::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
-};
+use datafusion_common::ScalarValue;
 use datafusion_datasource::ListingTableUrl;
-use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions::{self, Column};
 use datafusion_physical_expr::PhysicalExpr;
@@ -44,7 +37,6 @@ use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
 };
-use itertools::Itertools;
 use object_store::{memory::InMemory, path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 
@@ -59,98 +51,10 @@ async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &s
     store.put(&Path::from(path), data.into()).await.unwrap();
 }
 
-#[derive(Debug)]
-struct CustomSchemaAdapterFactory;
-
-impl SchemaAdapterFactory for CustomSchemaAdapterFactory {
-    fn create(
-        &self,
-        projected_table_schema: SchemaRef,
-        _table_schema: SchemaRef,
-    ) -> Box<dyn SchemaAdapter> {
-        Box::new(CustomSchemaAdapter {
-            logical_file_schema: projected_table_schema,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct CustomSchemaAdapter {
-    logical_file_schema: SchemaRef,
-}
-
-impl SchemaAdapter for CustomSchemaAdapter {
-    fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
-        for (idx, field) in file_schema.fields().iter().enumerate() {
-            if field.name() == self.logical_file_schema.field(index).name() {
-                return Some(idx);
-            }
-        }
-        None
-    }
-
-    fn map_schema(
-        &self,
-        file_schema: &Schema,
-    ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let projection = (0..file_schema.fields().len()).collect_vec();
-        Ok((
-            Arc::new(CustomSchemaMapper {
-                logical_file_schema: Arc::clone(&self.logical_file_schema),
-            }),
-            projection,
-        ))
-    }
-}
-
-#[derive(Debug)]
-struct CustomSchemaMapper {
-    logical_file_schema: SchemaRef,
-}
-
-impl SchemaMapper for CustomSchemaMapper {
-    fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let mut output_columns =
-            Vec::with_capacity(self.logical_file_schema.fields().len());
-        for field in self.logical_file_schema.fields() {
-            if let Some(array) = batch.column_by_name(field.name()) {
-                output_columns.push(cast_with_options(
-                    array,
-                    field.data_type(),
-                    &CastOptions::default(),
-                )?);
-            } else {
-                // Create a new array with the default value for the field type
-                let default_value = match field.data_type() {
-                    DataType::Int64 => ScalarValue::Int64(Some(0)),
-                    DataType::Utf8 => ScalarValue::Utf8(Some("a".to_string())),
-                    _ => unimplemented!("Unsupported data type: {}", field.data_type()),
-                };
-                output_columns
-                    .push(default_value.to_array_of_size(batch.num_rows()).unwrap());
-            }
-        }
-        let batch = RecordBatch::try_new_with_options(
-            Arc::clone(&self.logical_file_schema),
-            output_columns,
-            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
-        )
-        .unwrap();
-        Ok(batch)
-    }
-
-    fn map_column_statistics(
-        &self,
-        _file_col_statistics: &[ColumnStatistics],
-    ) -> Result<Vec<ColumnStatistics>> {
-        Ok(vec![
-            ColumnStatistics::new_unknown();
-            self.logical_file_schema.fields().len()
-        ])
-    }
-}
-
-// Implement a custom PhysicalExprAdapterFactory that fills in missing columns with the default value for the field type
+// Implement a custom PhysicalExprAdapterFactory that fills in missing columns with
+// the default value for the field type:
+// - Int64 columns are filled with `1`
+// - Utf8 columns are filled with `'b'`
 #[derive(Debug)]
 struct CustomPhysicalExprAdapterFactory;
 
@@ -264,13 +168,13 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
     );
     assert!(!ctx.state().config().collect_statistics());
 
+    // Test with DefaultPhysicalExprAdapterFactory - missing columns are filled with NULL
     let listing_table_config =
         ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
             .infer_options(&ctx.state())
             .await
             .unwrap()
             .with_schema(table_schema.clone())
-            .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory))
             .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
 
     let table = ListingTable::try_new(listing_table_config).unwrap();
@@ -293,36 +197,9 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
     ];
     assert_batches_eq!(expected, &batches);
 
-    // Test using a custom schema adapter and no explicit physical expr adapter
-    // This should use the custom schema adapter both for projections and predicate pushdown
-    let listing_table_config =
-        ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
-            .infer_options(&ctx.state())
-            .await
-            .unwrap()
-            .with_schema(table_schema.clone())
-            .with_schema_adapter_factory(Arc::new(CustomSchemaAdapterFactory));
-    let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.deregister_table("t").unwrap();
-    ctx.register_table("t", Arc::new(table)).unwrap();
-    let batches = ctx
-        .sql("SELECT c2, c1 FROM t WHERE c1 = 2 AND c2 = 'a'")
-        .await
-        .unwrap()
-        .collect()
-        .await
-        .unwrap();
-    let expected = [
-        "+----+----+",
-        "| c2 | c1 |",
-        "+----+----+",
-        "| a  | 2  |",
-        "+----+----+",
-    ];
-    assert_batches_eq!(expected, &batches);
-
-    // Do the same test but with a custom physical expr adapter
-    // Now the default schema adapter will be used for projections, but the custom physical expr adapter will be used for predicate pushdown
+    // Test with a custom physical expr adapter
+    // PhysicalExprAdapterFactory now handles both predicates AND projections
+    // CustomPhysicalExprAdapterFactory fills missing columns with 'b' for Utf8
     let listing_table_config =
         ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
             .infer_options(&ctx.state())
@@ -340,208 +217,119 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
         .collect()
         .await
         .unwrap();
+    // With CustomPhysicalExprAdapterFactory, missing column c2 is filled with 'b'
+    // in both the predicate (c2 = 'b' becomes 'b' = 'b' -> true) and the projection
     let expected = [
         "+----+----+",
         "| c2 | c1 |",
         "+----+----+",
-        "|    | 2  |",
+        "| b  | 2  |",
         "+----+----+",
     ];
     assert_batches_eq!(expected, &batches);
+}
 
-    // If we use both then the custom physical expr adapter will be used for predicate pushdown and the custom schema adapter will be used for projections
+/// Test demonstrating how to implement a custom PhysicalExprAdapterFactory
+/// that fills missing columns with non-null default values.
+///
+/// This is the recommended migration path for users who previously used
+/// SchemaAdapterFactory to fill missing columns with default values.
+/// Instead of transforming batches after reading (SchemaAdapter::map_batch),
+/// the PhysicalExprAdapterFactory rewrites expressions to use literals for
+/// missing columns, achieving the same result more efficiently.
+#[tokio::test]
+async fn test_physical_expr_adapter_with_non_null_defaults() {
+    // File only has c1 column
+    let batch = record_batch!(("c1", Int32, [10, 20, 30])).unwrap();
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+    write_parquet(batch, store.clone(), "defaults_test.parquet").await;
+
+    // Table schema has additional columns c2 (Utf8) and c3 (Int64) that don't exist in file
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int64, false), // type differs from file (Int32 vs Int64)
+        Field::new("c2", DataType::Utf8, true),   // missing from file
+        Field::new("c3", DataType::Int64, true),  // missing from file
+    ]));
+
+    let mut cfg = SessionConfig::new()
+        .with_collect_statistics(false)
+        .with_parquet_pruning(false);
+    cfg.options_mut().execution.parquet.pushdown_filters = true;
+    let ctx = SessionContext::new_with_config(cfg);
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+    // CustomPhysicalExprAdapterFactory fills:
+    // - missing Utf8 columns with 'b'
+    // - missing Int64 columns with 1
     let listing_table_config =
         ListingTableConfig::new(ListingTableUrl::parse("memory:///").unwrap())
             .infer_options(&ctx.state())
             .await
             .unwrap()
             .with_schema(table_schema.clone())
-            .with_schema_adapter_factory(Arc::new(CustomSchemaAdapterFactory))
             .with_expr_adapter_factory(Arc::new(CustomPhysicalExprAdapterFactory));
+
     let table = ListingTable::try_new(listing_table_config).unwrap();
-    ctx.deregister_table("t").unwrap();
     ctx.register_table("t", Arc::new(table)).unwrap();
+
+    // Query all columns - missing columns should have default values
     let batches = ctx
-        .sql("SELECT c2, c1 FROM t WHERE c1 = 2 AND c2 = 'b'")
+        .sql("SELECT c1, c2, c3 FROM t ORDER BY c1")
         .await
         .unwrap()
         .collect()
         .await
         .unwrap();
+
+    // c1 is cast from Int32 to Int64, c2 defaults to 'b', c3 defaults to 1
     let expected = [
-        "+----+----+",
-        "| c2 | c1 |",
-        "+----+----+",
-        "| a  | 2  |",
-        "+----+----+",
+        "+----+----+----+",
+        "| c1 | c2 | c3 |",
+        "+----+----+----+",
+        "| 10 | b  | 1  |",
+        "| 20 | b  | 1  |",
+        "| 30 | b  | 1  |",
+        "+----+----+----+",
     ];
     assert_batches_eq!(expected, &batches);
-}
 
-/// A test schema adapter factory that adds prefix to column names
-#[derive(Debug)]
-struct PrefixAdapterFactory {
-    prefix: String,
-}
+    // Verify predicates work with default values
+    // c3 = 1 should match all rows since default is 1
+    let batches = ctx
+        .sql("SELECT c1 FROM t WHERE c3 = 1 ORDER BY c1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
 
-impl SchemaAdapterFactory for PrefixAdapterFactory {
-    fn create(
-        &self,
-        projected_table_schema: SchemaRef,
-        _table_schema: SchemaRef,
-    ) -> Box<dyn SchemaAdapter> {
-        Box::new(PrefixAdapter {
-            input_schema: projected_table_schema,
-            prefix: self.prefix.clone(),
-        })
-    }
-}
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| 10 |",
+        "| 20 |",
+        "| 30 |",
+        "+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
 
-/// A test schema adapter that adds prefix to column names
-#[derive(Debug)]
-struct PrefixAdapter {
-    input_schema: SchemaRef,
-    prefix: String,
-}
+    // c3 = 999 should match no rows
+    let batches = ctx
+        .sql("SELECT c1 FROM t WHERE c3 = 999")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
 
-impl SchemaAdapter for PrefixAdapter {
-    fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
-        let field = self.input_schema.field(index);
-        file_schema.fields.find(field.name()).map(|(i, _)| i)
-    }
-
-    fn map_schema(
-        &self,
-        file_schema: &Schema,
-    ) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        let mut projection = Vec::with_capacity(file_schema.fields().len());
-        for (file_idx, file_field) in file_schema.fields().iter().enumerate() {
-            if self.input_schema.fields().find(file_field.name()).is_some() {
-                projection.push(file_idx);
-            }
-        }
-
-        // Create a schema mapper that adds a prefix to column names
-        #[derive(Debug)]
-        struct PrefixSchemaMapping {
-            // Keep only the prefix field which is actually used in the implementation
-            prefix: String,
-        }
-
-        impl SchemaMapper for PrefixSchemaMapping {
-            fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-                // Create a new schema with prefixed field names
-                let prefixed_fields: Vec<Field> = batch
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| {
-                        Field::new(
-                            format!("{}{}", self.prefix, field.name()),
-                            field.data_type().clone(),
-                            field.is_nullable(),
-                        )
-                    })
-                    .collect();
-                let prefixed_schema = Arc::new(Schema::new(prefixed_fields));
-
-                // Create a new batch with the prefixed schema but the same data
-                let options = RecordBatchOptions::default();
-                RecordBatch::try_new_with_options(
-                    prefixed_schema,
-                    batch.columns().to_vec(),
-                    &options,
-                )
-                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
-            }
-
-            fn map_column_statistics(
-                &self,
-                stats: &[ColumnStatistics],
-            ) -> Result<Vec<ColumnStatistics>> {
-                // For testing, just return the input statistics
-                Ok(stats.to_vec())
-            }
-        }
-
-        Ok((
-            Arc::new(PrefixSchemaMapping {
-                prefix: self.prefix.clone(),
-            }),
-            projection,
-        ))
-    }
-}
-
-#[test]
-fn test_apply_schema_adapter_with_factory() {
-    // Create a schema
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-    ]));
-
-    // Create a parquet source
-    let source = ParquetSource::new(schema.clone());
-
-    // Create a file scan config with source that has a schema adapter factory
-    let factory = Arc::new(PrefixAdapterFactory {
-        prefix: "test_".to_string(),
-    });
-
-    let file_source = source.clone().with_schema_adapter_factory(factory).unwrap();
-
-    let config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .build();
-
-    // Apply schema adapter to a new source
-    let result_source = source.apply_schema_adapter(&config).unwrap();
-
-    // Verify the adapter was applied
-    assert!(result_source.schema_adapter_factory().is_some());
-
-    // Create adapter and test it produces expected schema
-    let adapter_factory = result_source.schema_adapter_factory().unwrap();
-    let adapter = adapter_factory.create(schema.clone(), schema.clone());
-
-    // Create a dummy batch to test the schema mapping
-    let dummy_batch = RecordBatch::new_empty(schema.clone());
-
-    // Get the file schema (which is the same as the table schema in this test)
-    let (mapper, _) = adapter.map_schema(&schema).unwrap();
-
-    // Apply the mapping to get the output schema
-    let mapped_batch = mapper.map_batch(dummy_batch).unwrap();
-    let output_schema = mapped_batch.schema();
-
-    // Check the column names have the prefix
-    assert_eq!(output_schema.field(0).name(), "test_id");
-    assert_eq!(output_schema.field(1).name(), "test_name");
-}
-
-#[test]
-fn test_apply_schema_adapter_without_factory() {
-    // Create a schema
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, true),
-    ]));
-
-    // Create a parquet source
-    let source = ParquetSource::new(schema.clone());
-
-    // Convert to Arc<dyn FileSource>
-    let file_source: Arc<dyn FileSource> = Arc::new(source.clone());
-
-    // Create a file scan config without a schema adapter factory
-    let config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .build();
-
-    // Apply schema adapter function - should pass through the source unchanged
-    let result_source = source.apply_schema_adapter(&config).unwrap();
-
-    // Verify no adapter was applied
-    assert!(result_source.schema_adapter_factory().is_none());
+    #[rustfmt::skip]
+    let expected = [
+        "++",
+        "++",
+    ];
+    assert_batches_eq!(expected, &batches);
 }
