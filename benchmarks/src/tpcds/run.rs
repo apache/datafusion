@@ -74,7 +74,7 @@ pub const TPCDS_TABLES: &[&str] = &[
 /// Get the SQL statements from the specified query file
 pub fn get_query_sql(base_query_path: &str, query: usize) -> Result<Vec<String>> {
     if query > 0 && query < 100 {
-        let filename = format!("{base_query_path}/q{query}.sql");
+        let filename = format!("{base_query_path}/{query}.sql");
         let mut errors = vec![];
         match fs::read_to_string(&filename) {
             Ok(contents) => {

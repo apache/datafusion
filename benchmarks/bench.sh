@@ -690,7 +690,7 @@ run_tpcds() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpcds benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "${SCRIPT_DIR}/queries/tpcds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the compile profile benchmark helper
