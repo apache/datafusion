@@ -61,6 +61,7 @@ log = { workspace = true }
 recursive = { workspace = true, optional = true }
 regex = { workspace = true }
 sqlparser = { workspace = true }
+datafusion-functions-nested = { workspace = true, features = ["sql"] }
 
 [dev-dependencies]
 ctor = { workspace = true }

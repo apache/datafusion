@@ -40,6 +40,7 @@ use datafusion_expr::{
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_functions_nested::expr_fn::array_has;
 
 mod binary_op;
 mod function;
@@ -605,7 +606,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                 ),
                 _ => {
-                    not_impl_err!("ANY/SOME only supports subquery comparison currently")
+                    if compare_op != BinaryOperator::Eq {
+                        plan_err!(
+                            "Unsupported AnyOp: '{compare_op}', only '=' is supported"
+                        )
+                    } else {
+                        let left_expr =
+                            self.sql_to_expr(*left, schema, planner_context)?;
+                        let right_expr =
+                            self.sql_to_expr(*right, schema, planner_context)?;
+                        Ok(array_has(right_expr, left_expr))
+                    }
                 }
             },
             SQLExpr::AllOp {

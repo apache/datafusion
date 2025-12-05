@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Rewrite `SetComparison` subqueries (e.g. `= ANY`, `> ALL`) into
-//! boolean expressions built from `EXISTS` subqueries that capture SQL
-//! three-valued logic.
+//! Optimizer rule rewriting `SetComparison` subqueries (e.g. `= ANY`,
+//! `> ALL`) into boolean expressions built from `EXISTS` subqueries
+//! that capture SQL three-valued logic.
 
-use super::AnalyzerRule;
-use datafusion_common::config::ConfigOptions;
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{plan_datafusion_err, DFSchema, ExprSchema, Result, ScalarValue};
+use datafusion_common::ExprSchema;
+use datafusion_common::{plan_datafusion_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::logical_plan::Subquery;
@@ -52,14 +52,17 @@ impl RewriteSetComparison {
     }
 }
 
-impl AnalyzerRule for RewriteSetComparison {
+impl OptimizerRule for RewriteSetComparison {
     fn name(&self) -> &str {
         "rewrite_set_comparison"
     }
 
-    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
         plan.transform_up_with_subqueries(|plan| self.rewrite_plan(plan))
-            .map(|t| t.data)
     }
 }
 
