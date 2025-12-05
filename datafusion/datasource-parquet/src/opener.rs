@@ -65,8 +65,8 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 pub(super) struct ParquetOpener {
     /// Execution partition index
     pub partition_index: usize,
-    /// Column indexes in `table_schema` needed by the query
-    pub projection: Arc<[usize]>,
+    /// Projection to apply on top of the table schema (i.e. can reference partition columns).
+    pub projection: ProjectionExprs,
     /// Target number of rows in each output RecordBatch
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
@@ -139,7 +139,7 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
-        let projection = Arc::clone(&self.projection);
+        let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
         let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let partition_fields = self.partition_fields.clone();
@@ -314,8 +314,6 @@ impl FileOpener for ParquetOpener {
                 reader_metadata,
             );
 
-            let mut projection =
-                ProjectionExprs::from_indices(&projection, &logical_file_schema);
             if let Some(expr_adapter_factory) = expr_adapter_factory {
                 let adapter = expr_adapter_factory
                     .create(
@@ -789,7 +787,8 @@ mod test {
     use datafusion_datasource::{file_stream::FileOpener, PartitionedFile};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical, PhysicalExpr,
+        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
+        projection::ProjectionExprs, PhysicalExpr,
     };
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -873,7 +872,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0, 1]),
+                projection: ProjectionExprs::from_indices(&[0, 1], &schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -942,7 +941,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &table_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1031,7 +1030,8 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &table_schema),
+
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1123,7 +1123,8 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &table_schema),
+
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1215,7 +1216,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &table_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
