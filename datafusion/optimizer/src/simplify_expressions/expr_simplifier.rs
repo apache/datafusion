@@ -52,6 +52,10 @@ use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
+use crate::simplify_expressions::udf_preimage::{
+    is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary,
+    preimage_in_comparison_for_binary,
+};
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
@@ -1958,6 +1962,41 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     list: right_exprs,
                     negated,
                 }))
+            }
+
+            // =======================================
+            // preimage_in_comparison
+            // =======================================
+            //
+            // For case:
+            // date_part(expr as 'YEAR') op literal
+            //
+            // Background:
+            // Datasources such as Parquet can prune partitions using simple predicates,
+            // but they cannot do so for complex expressions.
+            // For a complex predicate like `date_part('YEAR', c1) < 2000`, pruning is not possible.
+            // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary(
+                    info, &left, op, &right,
+                ) =>
+            {
+                preimage_in_comparison_for_binary(info, *left, *right, op)?
+            }
+            // literal op date_part(literal, expression)
+            // -->
+            // date_part(literal, expression) op_swap literal
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary(
+                    info, &right, op, &left,
+                ) && op.swap().is_some() =>
+            {
+                preimage_in_comparison_for_binary(
+                    info,
+                    *right,
+                    *left,
+                    op.swap().unwrap(),
+                )?
             }
 
             // no additional rewrites possible

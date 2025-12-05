@@ -23,6 +23,7 @@ mod inlist_simplifier;
 mod regex;
 pub mod simplify_exprs;
 mod simplify_predicates;
+mod udf_preimage;
 mod unwrap_cast;
 mod utils;
 

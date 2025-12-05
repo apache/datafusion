@@ -696,6 +696,33 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
+    /// Attempts to convert a literal value to in interval of the corresponding datatype
+    /// of a column expression so that a **preimage** can be computed for
+    /// pruning comparison predicates.
+    ///
+    /// This is used during predicate-pushdown optimization
+    /// (see `datafusion-optimizer-udf_preimage::preimage_in_comparison_for_binary`)
+    ///
+    /// Currently is only implemented by:
+    /// - `date_part(YEAR, expr)`
+    ///
+    /// # Arguments:
+    /// * `lit_value`:  The literal `&ScalarValue` used in comparison
+    /// * `target_type`: The datatype of the column expression inside the function
+    ///
+    /// # Returns
+    ///
+    /// Returns an `Interval` of the appropriate target type if a
+    /// preimage cast is supported for the given function/operator combination;
+    /// otherwise returns `None`.
+    fn preimage(
+        &self,
+        _lit_value: &ScalarValue,
+        _target_type: &DataType,
+    ) -> Option<Interval> {
+        None
+    }
+
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered.
     ///
@@ -924,6 +951,14 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
+    }
+
+    fn preimage(
+        &self,
+        lit_value: &ScalarValue,
+        target_type: &DataType,
+    ) -> Option<Interval> {
+        self.inner.preimage(lit_value, target_type)
     }
 
     fn conditional_arguments<'a>(

@@ -27,6 +27,7 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use chrono::{Datelike, NaiveDate};
 use datafusion_common::types::{logical_date, NativeType};
 
 use datafusion_common::{
@@ -41,6 +42,7 @@ use datafusion_common::{
     utils::take_function_args,
     Result, ScalarValue,
 };
+use datafusion_expr::interval_arithmetic;
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -231,6 +233,33 @@ impl ScalarUDFImpl for DatePartFunc {
         })
     }
 
+    // Only casting the year is supported since pruning other IntervalUnit is not possible
+    // date_part(col, YEAR) = 2024 => col >= '2024-01-01' and col < '2025-01-01'
+    // But for anything less than YEAR simplifying is not possible without specifying the bigger interval
+    // date_part(col, MONTH) = 1 => col = '2023-01-01' or col = '2024-01-01' or ... or col = '3000-01-01'
+    fn preimage(
+        &self,
+        lit_value: &ScalarValue,
+        target_type: &DataType,
+    ) -> Option<interval_arithmetic::Interval> {
+        let year = match lit_value {
+            ScalarValue::Int32(Some(y)) => *y,
+            _ => return None,
+        };
+        // Can only extract year from Date32/64 and Timestamp
+        match target_type {
+            Date32 | Date64 | Timestamp(_, _) => {}
+            _ => return None,
+        };
+
+        let start_time = NaiveDate::from_ymd_opt(year, 1, 1)?;
+        let end_time = start_time.with_year(year + 1)?;
+        let lower = date_to_scalar(start_time, target_type)?;
+        let upper = date_to_scalar(end_time, target_type)?;
+
+        interval_arithmetic::Interval::try_new(lower, upper).ok()
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -238,6 +267,44 @@ impl ScalarUDFImpl for DatePartFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
+    let scalar = match target_type {
+        Date32 => {
+            let days = date
+                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
+                .num_days() as i32;
+            ScalarValue::Date32(Some(days))
+        }
+        Date64 => {
+            let milis = date
+                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
+                .num_milliseconds();
+            ScalarValue::Date64(Some(milis))
+        }
+        Timestamp(unit, tz) => {
+            let days = date
+                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
+                .num_days();
+            match unit {
+                Second => ScalarValue::TimestampSecond(Some(days * 86_400), tz.clone()),
+                Millisecond => {
+                    ScalarValue::TimestampMillisecond(Some(days * 86_400_000), tz.clone())
+                }
+                Microsecond => ScalarValue::TimestampMicrosecond(
+                    Some(days * 86_400_000_000),
+                    tz.clone(),
+                ),
+                Nanosecond => ScalarValue::TimestampNanosecond(
+                    Some(days * 86_400_000_000_000),
+                    tz.clone(),
+                ),
+            }
+        }
+        _ => return None,
+    };
+    Some(scalar)
 }
 
 fn is_epoch(part: &str) -> bool {
