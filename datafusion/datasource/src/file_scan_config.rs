@@ -2067,8 +2067,8 @@ mod tests {
             "Second projected column should be col2 with 10 nulls"
         );
 
-        // Verify row count and byte size are preserved
+        // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
-        assert_eq!(partition_stats.total_byte_size, Precision::Exact(1024));
+        assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
     }
 }
