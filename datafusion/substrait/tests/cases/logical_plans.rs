@@ -22,7 +22,7 @@ mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use insta::assert_snapshot;
 
@@ -175,6 +175,53 @@ mod tests {
                       TableScan: B
                 SubqueryAlias: right
                   TableScan: C
+            "#
+            );
+        });
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn alias_all_expressions_flag() -> Result<()> {
+        // Test that when the substrait_alias_all_expressions flag is set,
+        // all expressions (not just literals) are aliased with UUIDs
+
+        // Use the same test plan that can demonstrate the behavior
+        let proto_plan =
+            read_json("tests/testdata/test_plans/disambiguate_literals_with_same_name.substrait.json");
+
+        // Create a context with the flag enabled
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .execution
+            .substrait_alias_all_expressions = true;
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new_with_config(config), &proto_plan)?;
+
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        // With the flag enabled, all expressions should be aliased with UUIDs
+        let mut settings = insta::Settings::clone_current();
+        settings.add_filter(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            "[UUID]",
+        );
+        settings.bind(|| {
+            assert_snapshot!(
+                plan,
+                @r#"
+            Projection: [UUID] AS [UUID] AS A, [UUID] AS [UUID] AS C, C.D AS [UUID] AS D, Utf8(NULL) AS [UUID] AS E
+              Left Join: [UUID] = C.A
+                Union
+                  Projection: A.A AS [UUID], Utf8(NULL) AS [UUID]
+                    TableScan: A
+                  Projection: B.A AS [UUID], CAST(B.C AS Utf8) AS [UUID]
+                    TableScan: B
+                TableScan: C
             "#
             );
         });

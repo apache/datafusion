@@ -164,6 +164,12 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     fn get_extensions(&self) -> &Extensions;
     fn get_function_registry(&self) -> &impl FunctionRegistry;
 
+    /// Get a flag indicating whether all expressions should be aliased with UUIDs
+    /// during Substrait conversion
+    fn alias_all_expressions(&self) -> bool {
+        false
+    }
+
     // Relation Methods
     // There is one method per Substrait relation to allow for easy overriding of consumer behaviour.
     // These methods have default implementations calling the common handler code, to allow for users
@@ -463,6 +469,14 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 
     fn get_function_registry(&self) -> &impl FunctionRegistry {
         self.state
+    }
+
+    fn alias_all_expressions(&self) -> bool {
+        self.state
+            .config()
+            .options()
+            .execution
+            .substrait_alias_all_expressions
     }
 
     async fn consume_extension_leaf(
