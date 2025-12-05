@@ -819,10 +819,15 @@ The benchmark includes queries that:
 
 #### Generating Sorted Data
 
-The sorted dataset is automatically generated from the ClickBench partitioned dataset:
-
+The sorted dataset is automatically generated from the ClickBench partitioned dataset. You can configure the memory used during the sorting process with the `DATAFUSION_MEMORY_GB` environment variable. The default memory limit is 12GB.
 ```bash
 ./bench.sh data data_sorted_clickbench
+```
+
+To create the sorted dataset, for example with 16GB of memory, run:
+
+```bash
+DATAFUSION_MEMORY_GB=16 ./bench.sh data data_sorted_clickbench
 ```
 
 This command will:
