@@ -802,11 +802,9 @@ impl FileScanConfig {
     fn projected_stats(&self) -> Result<Statistics> {
         let statistics = self.statistics();
         let projection = self.file_source.projection();
+        let output_schema = self.projected_schema()?;
         if let Some(projection) = &projection {
-            projection.project_statistics(
-                statistics.clone(),
-                self.file_source.table_schema().table_schema(),
-            )
+            projection.project_statistics(statistics.clone(), &output_schema)
         } else {
             Ok(statistics)
         }

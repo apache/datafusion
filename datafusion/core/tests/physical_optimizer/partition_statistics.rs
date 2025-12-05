@@ -67,7 +67,7 @@ mod test {
     /// - Each partition has an "id" column (INT) with the following values:
     ///   - First partition: [3, 4]
     ///   - Second partition: [1, 2]
-    /// - Each row is 110 bytes in size
+    /// - Each row produces 8 bytes of statistics (4 bytes for Int32 id column × 2 rows)
     ///
     /// @param create_table_sql Optional parameter to set the create table SQL
     /// @param target_partition Optional parameter to set the target partitions
@@ -215,9 +215,9 @@ mod test {
             .map(|idx| scan.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         let expected_statistic_partition_1 =
-            create_partition_statistics(2, 110, 3, 4, true);
+            create_partition_statistics(2, 8, 3, 4, true);
         let expected_statistic_partition_2 =
-            create_partition_statistics(2, 110, 1, 2, true);
+            create_partition_statistics(2, 8, 1, 2, true);
         // Check the statistics of each partition
         assert_eq!(statistics.len(), 2);
         assert_eq!(statistics[0], expected_statistic_partition_1);
@@ -291,9 +291,9 @@ mod test {
             SortExec::new(ordering.into(), scan_2).with_preserve_partitioning(true),
         );
         let expected_statistic_partition_1 =
-            create_partition_statistics(2, 110, 3, 4, true);
+            create_partition_statistics(2, 8, 3, 4, true);
         let expected_statistic_partition_2 =
-            create_partition_statistics(2, 110, 1, 2, true);
+            create_partition_statistics(2, 8, 1, 2, true);
         let statistics = (0..sort_exec.output_partitioning().partition_count())
             .map(|idx| sort_exec.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
@@ -365,9 +365,9 @@ mod test {
         // Check that we have 4 partitions (2 from each scan)
         assert_eq!(statistics.len(), 4);
         let expected_statistic_partition_1 =
-            create_partition_statistics(2, 110, 3, 4, true);
+            create_partition_statistics(2, 8, 3, 4, true);
         let expected_statistic_partition_2 =
-            create_partition_statistics(2, 110, 1, 2, true);
+            create_partition_statistics(2, 8, 1, 2, true);
         // Verify first partition (from first scan)
         assert_eq!(statistics[0], expected_statistic_partition_1);
         // Verify second partition (from first scan)
@@ -461,7 +461,7 @@ mod test {
         // Check that we have 2 partitions
         assert_eq!(statistics.len(), 2);
         let mut expected_statistic_partition_1 =
-            create_partition_statistics(8, 7040, 1, 4, true);
+            create_partition_statistics(8, 512, 1, 4, true);
         expected_statistic_partition_1
             .column_statistics
             .push(ColumnStatistics {
@@ -472,7 +472,7 @@ mod test {
                 distinct_count: Precision::Absent,
             });
         let mut expected_statistic_partition_2 =
-            create_partition_statistics(8, 7040, 1, 4, true);
+            create_partition_statistics(8, 512, 1, 4, true);
         expected_statistic_partition_2
             .column_statistics
             .push(ColumnStatistics {
@@ -500,9 +500,9 @@ mod test {
         let coalesce_batches: Arc<dyn ExecutionPlan> =
             Arc::new(CoalesceBatchesExec::new(scan, 2));
         let expected_statistic_partition_1 =
-            create_partition_statistics(2, 110, 3, 4, true);
+            create_partition_statistics(2, 8, 3, 4, true);
         let expected_statistic_partition_2 =
-            create_partition_statistics(2, 110, 1, 2, true);
+            create_partition_statistics(2, 8, 1, 2, true);
         let statistics = (0..coalesce_batches.output_partitioning().partition_count())
             .map(|idx| coalesce_batches.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
@@ -573,8 +573,7 @@ mod test {
             .map(|idx| global_limit.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 1);
-        let expected_statistic_partition =
-            create_partition_statistics(2, 110, 3, 4, true);
+        let expected_statistic_partition = create_partition_statistics(2, 8, 3, 4, true);
         assert_eq!(statistics[0], expected_statistic_partition);
         Ok(())
     }
@@ -625,7 +624,7 @@ mod test {
 
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Inexact(110),
+            total_byte_size: Precision::Inexact(8),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
@@ -643,7 +642,7 @@ mod test {
 
         let expected_p1_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Inexact(110),
+            total_byte_size: Precision::Inexact(8),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
