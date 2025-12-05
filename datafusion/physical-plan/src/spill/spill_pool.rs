@@ -1184,6 +1184,7 @@ mod tests {
         }
 
         let events = Arc::new(Mutex::new(vec![]));
+        // Keep the synchronization comments close to the primitives used for coordination.
         // Start reader first (will pend)
         let reader_events = Arc::clone(&events);
         let reader_handle = SpawnedTask::spawn(async move {
@@ -1209,7 +1210,11 @@ mod tests {
         writer.push_batch(&batch)?;
 
         // Wait for the reader to finish the first read before allowing the
-        // second write. This avoids relying on timing assumptions.
+        // second write. This ensures deterministic ordering of events:
+        // 1. The reader starts and pends on the first `next()`
+        // 2. The first write wakes the reader
+        // 3. The reader processes the first batch and signals completion
+        // 4. The second write is issued, ensuring consistent event ordering
         first_read_done_rx.await.unwrap();
 
         // Write another batch
