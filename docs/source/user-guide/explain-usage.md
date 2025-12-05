@@ -183,7 +183,7 @@ LIMIT 5;
 +-------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type         | plan                                                                                                                                                                                                                                                                                                                                                           |
 +-------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| Plan with Metrics | SortPreservingMergeExec: [wid@0 ASC NULLS LAST,ip@1 DESC], fetch=5, metrics=[output_rows=5, elapsed_compute=2.375µs]                                                                                                                                                                                                                                           |
+| Plan with Metrics | SortPreervingMergeExec: [wid@0 ASC NULLS LAST,ip@1 DESC], fetch=5, metrics=[output_rows=5, elapsed_compute=2.375µs]                                                                                                                                                                                                                                           |
 |                   |   SortExec: TopK(fetch=5), expr=[wid@0 ASC NULLS LAST,ip@1 DESC], preserve_partitioning=[true], metrics=[output_rows=75, elapsed_compute=7.243038ms, row_replacements=482]                                                                                                                                                                                     |
 |                   |     ProjectionExec: expr=[WatchID@0 as wid, ClientIP@1 as ip], metrics=[output_rows=811821, elapsed_compute=66.25µs]                                                                                                                                                                                                                                           |
 |                   |         FilterExec: starts_with(URL@2, http://domcheloveplanet.ru/), metrics=[output_rows=811821, elapsed_compute=1.36923816s]                                                                                                                                                                                                                                 |
@@ -336,6 +336,27 @@ For this query, let's again read the plan from the bottom to the top:
 [partitioning]: https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html
 [topk]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.TopK.html
 [documentation on multi phase grouping]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.Accumulator.html#tymethod.state
+
+### NestedLoopJoinExec
+
+`NestedLoopJoinExec` is DataFusion’s build-probe join used for non-equijoins and other cases where hash/sort-merge joins cannot be applied. When running `EXPLAIN ANALYZE`, this operator now exposes the same runtime metrics as other joins, plus a **selectivity** metric that reports the ratio of output rows to input probe rows.
+
+Example `EXPLAIN ANALYZE` output fragment:
+
+
+Meaning of the key metrics:
+
+* `output_rows` — number of rows produced by the join.
+* `input_rows` — number of rows scanned on the probe side.
+* `build_input_rows` — number of rows consumed on the build (materialized) side.
+* `output_batches` — number of Arrow record batches emitted.
+* `elapsed_compute` — CPU time spent performing the join.
+* `selectivity` — **output_rows / input_rows**, useful for understanding how many probe rows match the join condition.
+
+Notes:
+* `selectivity` is especially helpful for diagnosing cases where many probe rows generate very few outputs.
+* No extra config is needed — metrics appear automatically under `EXPLAIN ANALYZE`.
+
 
 ### Data in this Example
 
