@@ -138,6 +138,85 @@ pub(crate) fn compare_nulls_to_packed(
 }
 
 
+/// Return (bit packed equal nullability, bit packed for both non-nulls)
+/// 
+/// the value in bits after length should not be used and is not gurrentee to any value 
+/// 
+/// so if comparing both:
+/// (F - null, T - valid)
+/// ```text
+/// [F, F, T, T, F]
+/// [F, T, T, F, F]
+/// ```
+/// 
+/// it will return bit packed for this:
+/// (F - unset, T - set)
+/// ```text
+/// [T, F, T, F, T] for equal nullability 
+/// [F, F, T, F, F] for both non nulls
+/// ```
+pub(crate) fn compare_fixed_nulls_to_packed(
+    length: usize,
+    lhs_rows: &[usize; 64],
+    lhs_nulls: &MaybeNullBufferBuilder,
+    rhs_rows: &[usize; 64],
+    rhs_nulls: Option<&NullBuffer>,
+) -> (u64, u64) {
+    let selected_self_nulls_packed  = if lhs_nulls.might_have_nulls() {
+        u64::collect_bool::<
+            // rest here doesn't matter as it should not be used
+            false,
+            _
+        >(
+            length,
+            |bit_idx| {
+                let lhs_row = if cfg!(debug_assertions) {
+                    lhs_rows[bit_idx]
+                } else {
+                    // SAFETY: indices are guaranteed to be in bounds
+                    unsafe {*lhs_rows.get_unchecked(bit_idx)}
+                };
+                
+                lhs_nulls.is_valid(lhs_row)
+            },
+        )
+    } else {
+        u64::MAX
+    };
+    
+    let selected_array_nulls_packed = if let Some(nulls) = rhs_nulls {
+        u64::collect_bool::<
+            // rest here doesn't matter as it should not be used
+            false,
+            _
+        >(
+            length,
+            |bit_idx| {
+                let rhs_row = if cfg!(debug_assertions) {
+                    rhs_rows[bit_idx]
+                } else {
+                    // SAFETY: indices are guaranteed to be in bounds
+                    unsafe {*rhs_rows.get_unchecked(bit_idx)}
+                };
+                
+                // TODO - should use here unchecked as well?
+                nulls.is_valid(rhs_row)
+            },
+        )
+    } else {
+        // all valid
+        u64::MAX
+    };
+    
+    (
+        // Equal nullability if both false or true, than this is true
+        !(selected_self_nulls_packed ^ selected_array_nulls_packed),
+        // For both valid,
+        selected_self_nulls_packed & selected_array_nulls_packed
+    )
+}
+
+
 
 /// Return u64 bit packed where a bit is set if (both are nulls) || (both are valid && values eq)
 /// 

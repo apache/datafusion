@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_group_by::helper::{CollectBool, combine_nullability_and_value_equal_bit_packed_u64, compare_nulls_to_packed};
+use crate::aggregates::group_values::multi_group_by::helper::{CollectBool, combine_nullability_and_value_equal_bit_packed_u64, compare_fixed_nulls_to_packed, compare_nulls_to_packed};
 use crate::aggregates::group_values::multi_group_by::{
     nulls_equal_to, FixedBitPackedMutableBuffer, GroupColumn, Nulls,
 };
@@ -59,12 +59,11 @@ where
         }
     }
 
-    fn get_bit_packed_u64_for_eq_values(
+    fn get_fixed_bit_packed_u64_for_eq_values(
         &self,
         length: usize,
-        offset: usize,
-        lhs_rows: &[usize],
-        rhs_rows: &[usize],
+        lhs_rows: &[usize; 64],
+        rhs_rows: &[usize; 64],
         array_values: &ScalarBuffer<T::Native>,
     ) -> u64 {
         u64::collect_bool::<
@@ -74,15 +73,14 @@ where
         >(
             length,
             |bit_idx| {
-                let current_index = offset + bit_idx;
                 let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
-                    (lhs_rows[current_index], rhs_rows[current_index])
+                    (lhs_rows[bit_idx], rhs_rows[bit_idx])
                 } else {
                     // SAFETY: indices are guaranteed to be in bounds
                     unsafe {
                         (
-                            *lhs_rows.get_unchecked(current_index),
-                            *rhs_rows.get_unchecked(current_index),
+                            *lhs_rows.get_unchecked(bit_idx),
+                            *rhs_rows.get_unchecked(bit_idx),
                         )
                     }
                 };
@@ -135,6 +133,9 @@ where
         // TODO - do not assume for byte aligned, added here just for POC
         let mut index = 0;
         let num_rows = lhs_rows.len();
+        
+        let mut scrach_left_64: [usize; 64] = [0; 64];
+        let mut scrach_right_64: [usize; 64] = [0; 64];
         apply_bitwise_unary_op(
             equal_to_results.0.as_slice_mut(),
             0,
@@ -148,14 +149,24 @@ where
                 
                 let length = num_rows - index;
                 
+                // Creating an array of size 64 to allow for optimization when building u64 bit packed from this 
+                let (lhs_rows_fixed, rhs_rows_fixed) = if length >= 64 {
+                    (lhs_rows[index..index + 64].try_into().unwrap(), rhs_rows[index..index + 64].try_into().unwrap())
+                } else {
+                    scrach_left_64[..length].copy_from_slice(&lhs_rows[index..]);
+                    scrach_right_64[..length].copy_from_slice(&rhs_rows[index..]);
+                    
+                    (&scrach_left_64, &scrach_right_64)
+                };
+                
+                
                 let (nullability_eq, both_valid) = if CHECK_NULLABILITY {
                     // TODO - rest here should be
-                    compare_nulls_to_packed(
+                    compare_fixed_nulls_to_packed(
                         length,
-                        index,
-                        lhs_rows,
+                        lhs_rows_fixed,
                         &self.nulls,
-                        rhs_rows,
+                        rhs_rows_fixed,
                         array.nulls()
                     )
                 } else {
@@ -181,11 +192,10 @@ where
                 // TODO - we can maybe get only from the first set bit until the last set bit
                 // and then update those gaps with false
                 // TODO - make sure not to override bits after `length`
-                let values_eq = self.get_bit_packed_u64_for_eq_values(
+                let values_eq = self.get_fixed_bit_packed_u64_for_eq_values(
                     length,
-                    index,
-                    lhs_rows,
-                    rhs_rows,
+                    lhs_rows_fixed,
+                    rhs_rows_fixed,
                     array_values,
                 );
                 
