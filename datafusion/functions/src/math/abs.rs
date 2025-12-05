@@ -50,6 +50,7 @@ macro_rules! make_abs_function {
     }};
 }
 
+#[macro_export]
 macro_rules! make_try_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |input: &ArrayRef| {
@@ -62,7 +63,8 @@ macro_rules! make_try_abs_function {
                         x
                     ))
                 })
-            })?;
+            })
+            .and_then(|v| Ok(v.with_data_type(input.data_type().clone())))?; // maintain decimal's precision and scale
             Ok(Arc::new(res) as ArrayRef)
         }
     }};
