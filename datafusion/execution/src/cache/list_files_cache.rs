@@ -565,6 +565,9 @@ mod tests {
     }
 
     #[test]
+    // Ignored due to flakiness in CI. See
+    // https://github.com/apache/datafusion/issues/19114
+    #[ignore]
     fn test_cache_with_ttl() {
         let ttl = Duration::from_millis(100);
         let cache = DefaultListFilesCache::new(10000, Some(ttl));
