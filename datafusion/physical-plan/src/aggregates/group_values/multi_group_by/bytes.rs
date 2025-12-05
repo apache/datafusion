@@ -107,7 +107,8 @@ where
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
-    ) where
+    ) -> usize
+    where
         B: ByteArrayType,
     {
         let array = array.as_bytes::<B>();
@@ -118,14 +119,22 @@ where
             equal_to_results.iter_mut(),
         );
 
+        let mut true_count = 0;
+
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to, don't need to check
             if !*equal_to_result {
                 continue;
             }
 
-            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            let result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+
+            *equal_to_result = result;
+
+            true_count += result as usize;
         }
+
+        true_count
     }
 
     fn vectorized_append_inner<B>(
@@ -276,7 +285,7 @@ where
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
-    ) {
+    ) -> usize {
         // Sanity array type
         match self.output_type {
             OutputType::Binary => {
@@ -289,7 +298,7 @@ where
                     array,
                     rhs_rows,
                     equal_to_results,
-                );
+                )
             }
             OutputType::Utf8 => {
                 debug_assert!(matches!(
@@ -301,7 +310,7 @@ where
                     array,
                     rhs_rows,
                     equal_to_results,
-                );
+                )
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }

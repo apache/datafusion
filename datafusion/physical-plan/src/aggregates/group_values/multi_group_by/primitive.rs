@@ -63,7 +63,7 @@ where
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
-    ) {
+    ) -> usize {
         assert!(
             !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()),
             "called with nullable input"
@@ -76,6 +76,7 @@ where
             equal_to_results.iter_mut(),
         );
 
+        let mut true_count = 0;
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
             let result = {
                 // Getting unchecked not only for bound checks but because the bound checks are
@@ -97,8 +98,14 @@ where
                 left.is_eq(right)
             };
 
-            *equal_to_result = result && *equal_to_result;
+            let result = result && *equal_to_result;
+            *equal_to_result = result;
+            if result {
+                true_count += 1;
+            }
         }
+
+        true_count
     }
 
     pub fn vectorized_equal_nullable(
@@ -107,7 +114,7 @@ where
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
-    ) {
+    ) -> usize {
         assert!(NULLABLE, "called with non-nullable input");
         let array = array.as_primitive::<T>();
 
@@ -116,6 +123,8 @@ where
             rhs_rows.iter(),
             equal_to_results.iter_mut(),
         );
+
+        let mut true_count = 0;
 
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to in previous column, don't need to check
@@ -128,12 +137,17 @@ where
             let input_null = array.is_null(rhs_row);
             if let Some(result) = nulls_equal_to(exist_null, input_null) {
                 *equal_to_result = result;
+                true_count += (result as usize);
                 continue;
             }
 
             // Otherwise, we need to check their values
-            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
+            let result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
+            *equal_to_result = result;
+            true_count += result as usize;
         }
+
+        true_count
     }
 }
 
@@ -177,16 +191,16 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
-    ) {
+    ) -> usize {
         if !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()) {
             self.vectorized_equal_to_non_nullable(
                 lhs_rows,
                 array,
                 rhs_rows,
                 equal_to_results,
-            );
+            )
         } else {
-            self.vectorized_equal_nullable(lhs_rows, array, rhs_rows, equal_to_results);
+            self.vectorized_equal_nullable(lhs_rows, array, rhs_rows, equal_to_results)
         }
     }
 

@@ -123,7 +123,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
-    ) {
+    ) -> usize {
         let array = array.as_byte_view::<B>();
 
         let iter = izip!(
@@ -132,14 +132,21 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             equal_to_results.iter_mut(),
         );
 
+        let mut true_count = 0;
+
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to, don't need to check
             if !*equal_to_result {
                 continue;
             }
 
-            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            let result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+
+            *equal_to_result = result;
+            true_count += result as usize;
         }
+
+        true_count
     }
 
     fn vectorized_append_inner(&mut self, array: &ArrayRef, rows: &[usize]) {
@@ -506,8 +513,8 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         array: &ArrayRef,
         rows: &[usize],
         equal_to_results: &mut [bool],
-    ) {
-        self.vectorized_equal_to_inner(group_indices, array, rows, equal_to_results);
+    ) -> usize {
+        self.vectorized_equal_to_inner(group_indices, array, rows, equal_to_results)
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
