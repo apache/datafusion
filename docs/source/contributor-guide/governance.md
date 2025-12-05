@@ -54,7 +54,7 @@ Notes:
 <!-- Begin Auto-Generated Committer List -->
 
 | Name                    | Apache ID        | github                                                  | Affiliation    | Role      |
-| ----------------------- | ---------------- |---------------------------------------------------------|----------------| --------- |
+| ----------------------- | ---------------- | ------------------------------------------------------- | -------------- | --------- |
 | Andrew Lamb             | alamb            | [alamb](https://github.com/alamb)                       | InfluxData     | PMC Chair |
 | Andrew Grove            | agrove           | [andygrove](https://github.com/andygrove)               | Apple          | PMC       |
 | Mustafa Akur            | akurmustafa      | [akurmustafa](https://github.com/akurmustafa)           | OHSU           | PMC       |
