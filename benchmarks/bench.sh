@@ -1220,7 +1220,7 @@ data_sorted_clickbench() {
     echo "Configuration:"
     echo "  Memory limit: ${MEMORY_LIMIT_GB}G"
     echo "  Row group size: 64K rows"
-    echo "  Compression: zstd"
+    echo "  Compression: uncompressed"
 
     if [ ! -f "${ORIGINAL_FILE}" ]; then
         echo "hits.parquet not found. Running data_clickbench_1 first..."
@@ -1245,8 +1245,8 @@ data_sorted_clickbench() {
 -- Memory and performance configuration
 SET datafusion.runtime.memory_limit = '${MEMORY_LIMIT_GB}G';
 SET datafusion.execution.spill_compression = 'uncompressed';
-SET datafusion.execution.sort_spill_reservation_bytes = 1048576; -- 1MB
-SET datafusion.execution.batch_size = 1024;
+SET datafusion.execution.sort_spill_reservation_bytes = 10485760; -- 10MB
+SET datafusion.execution.batch_size = 8192;
 SET datafusion.execution.target_partitions = 1;
 
 -- Parquet output configuration

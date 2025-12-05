@@ -173,7 +173,7 @@ impl RunOpt {
             let key = parts[0];
             let value = parts[1];
 
-            println!("Setting config: {} = {}", key, value);
+            println!("Setting config: {key} = {value}");
             config = config.set_str(key, value);
         }
 
@@ -199,12 +199,6 @@ impl RunOpt {
 
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
-
-        // Debug: print actual target_partitions being used
-        println!(
-            "📊 Session config target_partitions: {}",
-            ctx.state().config().target_partitions()
-        );
 
         self.register_hits(&ctx).await?;
 
