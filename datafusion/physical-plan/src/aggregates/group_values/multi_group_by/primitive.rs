@@ -137,7 +137,7 @@ where
             let input_null = array.is_null(rhs_row);
             if let Some(result) = nulls_equal_to(exist_null, input_null) {
                 *equal_to_result = result;
-                true_count += (result as usize);
+                true_count += result as usize;
                 continue;
             }
 
