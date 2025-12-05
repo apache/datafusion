@@ -694,7 +694,16 @@ that introduced these changes for more examples for how this was handled for the
 <span class="w"> </span>   .build();
 </pre></div>
 </div>
-<p><strong>Handling projections in <code class="docutils literal notranslate"><span class="pre">FileSource</span></code>:</strong></p>
+</section>
+<section id="schemaadapterfactory-fully-removed-from-parquet">
+<h3><code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> Fully Removed from Parquet<a class="headerlink" href="#schemaadapterfactory-fully-removed-from-parquet" title="Link to this heading">#</a></h3>
+<p>Following the deprecation announced in <a class="reference internal" href="#deprecating-schemaadapterfactory-and-schemaadapter">DataFusion 49.0.0</a>, <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> has been fully removed from Parquet scanning. This applies to both:</p>
+<ul class="simple">
+<li><p><strong>Predicate pushdown / row filtering</strong> (deprecated in 49.0.0)</p></li>
+<li><p><strong>Projections</strong> (newly removed in 52.0.0)</p></li>
+</ul>
+<p>If you were using a custom <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> for schema adaptation (e.g., default column values, type coercion), you should now implement <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> instead.</p>
+<p>See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs">default column values example</a> for how to implement a custom <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code>.</p>
 </section>
 <section id="physicaloptimizerrule-optimize-deprecated-in-favor-of-optimize-plan">
 <h3><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule::optimize</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">optimize_plan</span></code><a class="headerlink" href="#physicaloptimizerrule-optimize-deprecated-in-favor-of-optimize-plan" title="Link to this heading">#</a></h3>
@@ -2031,6 +2040,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-cacheaccessor-trait">API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ffi-crate-updates">FFI crate updates</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#projection-handling-moved-from-filescanconfig-to-filesource">Projection handling moved from FileScanConfig to FileSource</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#schemaadapterfactory-fully-removed-from-parquet"><code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> Fully Removed from Parquet</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physicaloptimizerrule-optimize-deprecated-in-favor-of-optimize-plan"><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule::optimize</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">optimize_plan</span></code></a></li>
 </ul>
 </li>
