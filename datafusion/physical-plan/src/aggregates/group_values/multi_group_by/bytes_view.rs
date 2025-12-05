@@ -146,10 +146,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                     return 0;
                 }
 
-                let result = u64::collect_bool(
-                    num_rows - index,
+                let result = u64::collect_bool::<
                     // Using rest true as we don't wanna change bits beyond num_rows
                     true,
+                    _
+                >(
+                    num_rows - index,
                     |bit_idx| {
                         if !eq.get_bit(bit_idx) {
                             return false;

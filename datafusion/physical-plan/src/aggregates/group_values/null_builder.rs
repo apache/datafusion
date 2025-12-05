@@ -35,14 +35,21 @@ impl MaybeNullBufferBuilder {
             nulls: NullBufferBuilder::new(0),
         }
     }
-
+    
     /// Return true if the row at index `row` is null
-    pub fn is_null(&self, row: usize) -> bool {
+    #[inline]
+    pub fn is_valid(&self, row: usize) -> bool {
         match self.nulls.as_slice() {
             // validity mask means a unset bit is NULL
-            Some(_) => !self.nulls.is_valid(row),
-            None => false,
+            Some(_) => self.nulls.is_valid(row),
+            None => true,
         }
+    }
+    
+    /// Return true if the row at index `row` is null
+    #[inline]
+    pub fn is_null(&self, row: usize) -> bool {
+        !self.is_valid(row)
     }
 
     /// Set the nullness of the next row to `is_null`

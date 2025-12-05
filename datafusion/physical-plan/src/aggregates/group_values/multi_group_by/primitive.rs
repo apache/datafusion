@@ -15,19 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, FixedBitPackedMutableBuffer, GroupColumn, Nulls};
+use crate::aggregates::group_values::multi_group_by::helper::{CollectBool, combine_nullability_and_value_equal_bit_packed_u64, compare_nulls_to_packed};
+use crate::aggregates::group_values::multi_group_by::{
+    nulls_equal_to, FixedBitPackedMutableBuffer, GroupColumn, Nulls,
+};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{ArrowNativeTypeOp, BooleanArray};
 use arrow::array::{cast::AsArray, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow::buffer::ScalarBuffer;
+use arrow::array::{ArrowNativeTypeOp, BooleanArray};
+use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
+use arrow::util::bit_util::{apply_bitwise_binary_op, apply_bitwise_unary_op};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
-use std::iter;
+use std::{iter, u64};
 use std::sync::Arc;
-use arrow::util::bit_util::{apply_bitwise_binary_op, apply_bitwise_unary_op};
-use crate::aggregates::group_values::multi_group_by::helper::CollectBool;
 
 /// An implementation of [`GroupColumn`] for primitive values
 ///
@@ -57,18 +59,72 @@ where
         }
     }
 
-    fn vectorized_equal_to_non_nullable(
+    fn get_bit_packed_u64_for_eq_values(
+        &self,
+        length: usize,
+        offset: usize,
+        lhs_rows: &[usize],
+        rhs_rows: &[usize],
+        array_values: &ScalarBuffer<T::Native>,
+    ) -> u64 {
+        u64::collect_bool::<
+            // Using rest true as we don't wanna change bits beyond num_rows
+            true,
+            _
+        >(
+            length,
+            |bit_idx| {
+                let current_index = offset + bit_idx;
+                let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
+                    (lhs_rows[current_index], rhs_rows[current_index])
+                } else {
+                    // SAFETY: indices are guaranteed to be in bounds
+                    unsafe {
+                        (
+                            *lhs_rows.get_unchecked(current_index),
+                            *rhs_rows.get_unchecked(current_index),
+                        )
+                    }
+                };
+
+                // Getting unchecked not only for bound checks but because the bound checks are
+                // what prevents auto-vectorization
+                let left = if cfg!(debug_assertions) {
+                    self.group_values[lhs_row]
+                } else {
+                    // SAFETY: indices are guaranteed to be in bounds
+                    unsafe { *self.group_values.get_unchecked(lhs_row) }
+                };
+                let right = if cfg!(debug_assertions) {
+                    array_values[rhs_row]
+                } else {
+                    // SAFETY: indices are guaranteed to be in bounds
+                    unsafe { *array_values.get_unchecked(rhs_row) }
+                };
+
+                // Always evaluate, to allow for auto-vectorization
+                left.is_eq(right)
+            },
+        )
+    }
+
+    // TODO - extract this function for other datatype impl
+    pub fn inner_vectorized_equal<const CHECK_NULLABILITY: bool>(
         &self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut FixedBitPackedMutableBuffer,
     ) {
-        assert!(
-            !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()),
-            "called with nullable input"
-        );
-        let array_values = array.as_primitive::<T>().values();
+        if !CHECK_NULLABILITY {
+            assert!(
+                (array.null_count() == 0 && !self.nulls.might_have_nulls()),
+                "CHECK_NULLABILITY is false for nullable called with nullable input"
+            );
+        }
+        
+        let array = array.as_primitive::<T>();
+        let array_values = array.values();
 
         assert_eq!(lhs_rows.len(), rhs_rows.len());
         assert_eq!(lhs_rows.len(), equal_to_results.len());
@@ -89,86 +145,60 @@ where
                     index += 64;
                     return 0;
                 }
+                
+                let length = num_rows - index;
+                
+                let (nullability_eq, both_valid) = if CHECK_NULLABILITY {
+                    // TODO - rest here should be
+                    compare_nulls_to_packed(
+                        length,
+                        index,
+                        lhs_rows,
+                        &self.nulls,
+                        rhs_rows,
+                        array.nulls()
+                    )
+                } else {
+                  (
+                      // nullability equal
+                      u64::MAX,
+                      // both valid
+                      u64::MAX
+                  )  
+                };
+                
+                if nullability_eq == 0 {
+                    index += 64;
+                    return 0
+                }
+                
+                // if all nullability match and they both nulls than its the same value
+                if nullability_eq == u64::MAX && both_valid == 0 {
+                    index += 64;
+                    return eq;
+                }
 
-                let result = u64::collect_bool(
-                    num_rows - index,
-                    // Using rest true as we don't wanna change bits beyond num_rows
-                    true,
-                    |bit_idx| {
-                        let current_index = index + bit_idx;
-                        let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
-                            (lhs_rows[current_index], rhs_rows[current_index])
-                        } else {
-                            // SAFETY: indices are guaranteed to be in bounds
-                            unsafe {
-                                (
-                                    *lhs_rows.get_unchecked(current_index),
-                                    *rhs_rows.get_unchecked(current_index),
-                                )
-                            }
-                        };
-
-                        // Getting unchecked not only for bound checks but because the bound checks are
-                        // what prevents auto-vectorization
-                        let left = if cfg!(debug_assertions) {
-                            self.group_values[lhs_row]
-                        } else {
-                            // SAFETY: indices are guaranteed to be in bounds
-                            unsafe { *self.group_values.get_unchecked(lhs_row) }
-                        };
-                        let right = if cfg!(debug_assertions) {
-                            array_values[rhs_row]
-                        } else {
-                            // SAFETY: indices are guaranteed to be in bounds
-                            unsafe { *array_values.get_unchecked(rhs_row) }
-                        };
-
-                        // Always evaluate, to allow for auto-vectorization
-                        left.is_eq(right)
-                    }
+                // TODO - we can maybe get only from the first set bit until the last set bit
+                // and then update those gaps with false
+                // TODO - make sure not to override bits after `length`
+                let values_eq = self.get_bit_packed_u64_for_eq_values(
+                    length,
+                    index,
+                    lhs_rows,
+                    rhs_rows,
+                    array_values,
+                );
+                
+                let result = combine_nullability_and_value_equal_bit_packed_u64(
+                    both_valid,
+                    nullability_eq,
+                    values_eq
                 );
 
                 index += 64;
                 eq & result
-            }
+            },
         );
-    }
-
-    pub fn vectorized_equal_nullable(
-        &self,
-        lhs_rows: &[usize],
-        array: &ArrayRef,
-        rhs_rows: &[usize],
-        equal_to_results: &mut FixedBitPackedMutableBuffer,
-    ) {
-        assert!(NULLABLE, "called with non-nullable input");
-        let array = array.as_primitive::<T>();
-
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-        );
-
-        for (index, (&lhs_row, &rhs_row)) in iter.enumerate() {
-            let equal_to_result = equal_to_results.0.get_bit(index);
-            // Has found not equal to in previous column, don't need to check
-            if !equal_to_result {
-                continue;
-            }
-
-            // Perf: skip null check (by short circuit) if input is not nullable
-            let exist_null = self.nulls.is_null(lhs_row);
-            let input_null = array.is_null(rhs_row);
-            if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                equal_to_results.0.set_bit(index, result);
-                continue;
-            }
-
-            // Otherwise, we need to check their values
-            equal_to_results.0.set_bit(index,
-                self.group_values[lhs_row].is_eq(array.value(rhs_row))
-            );
-        }
     }
 }
 
@@ -214,14 +244,14 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         equal_to_results: &mut FixedBitPackedMutableBuffer,
     ) {
         if !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()) {
-            self.vectorized_equal_to_non_nullable(
+            self.inner_vectorized_equal::<false>(
                 lhs_rows,
                 array,
                 rhs_rows,
                 equal_to_results,
             );
         } else {
-            self.vectorized_equal_nullable(lhs_rows, array, rhs_rows, equal_to_results);
+            self.inner_vectorized_equal::<true>(lhs_rows, array, rhs_rows, equal_to_results);
         }
     }
 
@@ -315,12 +345,12 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 mod tests {
     use std::sync::Arc;
 
+    use super::GroupColumn;
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
+    use crate::aggregates::group_values::multi_group_by::FixedBitPackedMutableBuffer;
     use arrow::array::{ArrayRef, Float32Array, Int64Array, NullBufferBuilder};
     use arrow::datatypes::{DataType, Float32Type, Int64Type};
     use itertools::Itertools;
-    use crate::aggregates::group_values::multi_group_by::FixedBitPackedMutableBuffer;
-    use super::GroupColumn;
 
     #[test]
     fn test_nullable_primitive_equal_to() {
@@ -332,16 +362,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results.set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
-            }
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut FixedBitPackedMutableBuffer| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -356,18 +388,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut FixedBitPackedMutableBuffer| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -459,16 +492,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results.set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
-            }
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut FixedBitPackedMutableBuffer| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_not_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -483,18 +518,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut FixedBitPackedMutableBuffer| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut FixedBitPackedMutableBuffer| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_not_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -559,7 +595,8 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(all_nulls_input_array.len());
+        let mut equal_to_results =
+            FixedBitPackedMutableBuffer::new_set(all_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
