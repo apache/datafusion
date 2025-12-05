@@ -407,6 +407,10 @@ impl ProjectionExprs {
     ///
     /// Use [`column_indices()`](Self::column_indices) instead if the projection may contain
     /// non-column expressions or if you need a deduplicated sorted list.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if any expression in the projection is not a simple column reference.
     #[deprecated(
         since = "53.0.0",
         note = "Use column_indices() instead. This method will be removed in 58.0.0."
