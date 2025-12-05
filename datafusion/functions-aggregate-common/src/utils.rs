@@ -24,10 +24,10 @@ use arrow::datatypes::{
     ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
 };
 use datafusion_common::cast::{as_list_array, as_primitive_array};
-use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::utils::SingleRowListArrayBuilder;
+use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, HashSet, Result, ScalarValue,
+    HashSet, Result, ScalarValue, exec_err, internal_datafusion_err,
 };
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -215,7 +215,9 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
                 // match up with Accumulator::state_fields
                 .with_data_type(self.data_type.clone()),
         );
-        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
+        Ok(vec![
+            SingleRowListArrayBuilder::new(arr).build_list_scalar(),
+        ])
     }
 
     /// Mirrors [`Accumulator::update_batch`].

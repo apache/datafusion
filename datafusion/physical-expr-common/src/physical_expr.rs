@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::utils::scatter;
 
-use arrow::array::{new_empty_array, ArrayRef, BooleanArray};
+use arrow::array::{ArrayRef, BooleanArray, new_empty_array};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
@@ -31,7 +31,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    assert_eq_or_internal_err, exec_err, not_impl_err, Result, ScalarValue,
+    Result, ScalarValue, assert_eq_or_internal_err, exec_err, not_impl_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -105,7 +105,10 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     ) -> Result<ColumnarValue> {
         let row_count = batch.num_rows();
         if row_count != selection.len() {
-            return exec_err!("Selection array length does not match batch row count: {} != {row_count}", selection.len());
+            return exec_err!(
+                "Selection array length does not match batch row count: {} != {row_count}",
+                selection.len()
+            );
         }
 
         let selection_count = selection.true_count();
@@ -783,44 +786,44 @@ mod test {
     #[test]
     pub fn test_evaluate_selection_with_non_empty_record_batch() {
         test_evaluate_selection(
-            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![true; 10]),
             &ColumnarValue::Array(Arc::new(Int64Array::from(vec![1; 10]))),
         );
     }
 
     #[test]
-    pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_false_selection(
-    ) {
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_false_selection()
+     {
         test_evaluate_selection_error(
-            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![false; 20]),
         );
     }
 
     #[test]
-    pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_true_selection(
-    ) {
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_larger_true_selection()
+     {
         test_evaluate_selection_error(
-            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![true; 20]),
         );
     }
 
     #[test]
-    pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_false_selection(
-    ) {
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_false_selection()
+     {
         test_evaluate_selection_error(
-            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![false; 5]),
         );
     }
 
     #[test]
-    pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_true_selection(
-    ) {
+    pub fn test_evaluate_selection_with_non_empty_record_batch_with_smaller_true_selection()
+     {
         test_evaluate_selection_error(
-            unsafe { &RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
+            &unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![true; 5]),
         );
     }

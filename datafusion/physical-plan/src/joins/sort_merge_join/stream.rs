@@ -533,7 +533,7 @@ pub(super) fn get_corrected_filter_mask(
                     // If the left row seen as true its needed to output it once
                     // To do that we mark all other matches for same row as null to avoid the output
                     if seen_true {
-                        #[allow(clippy::needless_range_loop)]
+                        #[expect(clippy::needless_range_loop)]
                         for j in first_row_idx..last_true_idx {
                             mask[j] = None;
                         }
@@ -748,7 +748,7 @@ impl Stream for SortMergeJoinStream {
 }
 
 impl SortMergeJoinStream {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         // Configured via `datafusion.execution.spill_compression`.
         spill_compression: SpillCompression,
@@ -1595,12 +1595,14 @@ impl SortMergeJoinStream {
                 &self.schema,
                 &[filtered_record_batch, null_joined_streamed_batch],
             )?;
-        } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
+        } else if matches!(
+            self.join_type,
+            JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+                | JoinType::RightSemi
+        ) {
             let output_column_indices = (0..left_columns_length).collect::<Vec<_>>();
-            filtered_record_batch =
-                filtered_record_batch.project(&output_column_indices)?;
-        } else if matches!(self.join_type, JoinType::RightAnti | JoinType::RightSemi) {
-            let output_column_indices = (0..right_columns_length).collect::<Vec<_>>();
             filtered_record_batch =
                 filtered_record_batch.project(&output_column_indices)?;
         } else if matches!(self.join_type, JoinType::Full)
