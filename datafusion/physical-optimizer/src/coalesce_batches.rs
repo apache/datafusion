@@ -27,7 +27,7 @@ use datafusion_common::error::Result;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
     async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
-    joins::HashJoinExec, repartition::RepartitionExec, ExecutionPlan,
+    repartition::RepartitionExec, ExecutionPlan,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -57,17 +57,15 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         let target_batch_size = config.execution.batch_size;
         plan.transform_up(|plan| {
             let plan_any = plan.as_any();
-            let wrap_in_coalesce = plan_any.downcast_ref::<HashJoinExec>().is_some()
-                // Don't need to add CoalesceBatchesExec after a round robin RepartitionExec
-                || plan_any
-                    .downcast_ref::<RepartitionExec>()
-                    .map(|repart_exec| {
-                        !matches!(
-                            repart_exec.partitioning().clone(),
-                            Partitioning::RoundRobinBatch(_)
-                        )
-                    })
-                    .unwrap_or(false);
+            let wrap_in_coalesce = plan_any
+                .downcast_ref::<RepartitionExec>()
+                .map(|repart_exec| {
+                    !matches!(
+                        repart_exec.partitioning().clone(),
+                        Partitioning::RoundRobinBatch(_)
+                    )
+                })
+                .unwrap_or(false);
 
             if wrap_in_coalesce {
                 Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(
