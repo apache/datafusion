@@ -17,14 +17,9 @@
 
 //! array function utils
 
-use std::sync::Arc;
+use arrow::datatypes::{DataType, Fields};
 
-use arrow::datatypes::{DataType, Field, Fields};
-
-use arrow::array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, Scalar, UInt32Array,
-};
-use arrow::buffer::OffsetBuffer;
+use arrow::array::{Array, ArrayRef, BooleanArray, Scalar, UInt32Array};
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
@@ -80,44 +75,6 @@ where
             result.map(ColumnarValue::Array)
         }
     }
-}
-
-pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
-    args: Vec<ArrayRef>,
-) -> Result<Vec<ArrayRef>> {
-    let args_ndim = args
-        .iter()
-        .map(|arg| datafusion_common::utils::list_ndims(arg.data_type()))
-        .collect::<Vec<_>>();
-    let max_ndim = args_ndim.iter().max().unwrap_or(&0);
-
-    // Align the dimensions of the arrays
-    let aligned_args: Result<Vec<ArrayRef>> = args
-        .into_iter()
-        .zip(args_ndim.iter())
-        .map(|(array, ndim)| {
-            if ndim < max_ndim {
-                let mut aligned_array = Arc::clone(&array);
-                for _ in 0..(max_ndim - ndim) {
-                    let data_type = aligned_array.data_type().to_owned();
-                    let array_lengths = vec![1; aligned_array.len()];
-                    let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
-
-                    aligned_array = Arc::new(GenericListArray::<O>::try_new(
-                        Arc::new(Field::new_list_field(data_type, true)),
-                        offsets,
-                        aligned_array,
-                        None,
-                    )?)
-                }
-                Ok(aligned_array)
-            } else {
-                Ok(Arc::clone(&array))
-            }
-        })
-        .collect();
-
-    aligned_args
 }
 
 /// Computes a BooleanArray indicating equality or inequality between elements in a list array and a specified element array.
@@ -265,62 +222,5 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
             }
         }
         _ => internal_err!("Expected a Map type, got {data_type}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::array::ListArray;
-    use arrow::datatypes::Int64Type;
-    use datafusion_common::utils::SingleRowListArrayBuilder;
-
-    /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
-    #[test]
-    fn test_align_array_dimensions() {
-        let array1d_1: ArrayRef =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), Some(3)]),
-                Some(vec![Some(4), Some(5)]),
-            ]));
-        let array1d_2: ArrayRef =
-            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
-                Some(vec![Some(6), Some(7), Some(8)]),
-            ]));
-
-        let array2d_1: ArrayRef = Arc::new(
-            SingleRowListArrayBuilder::new(Arc::clone(&array1d_1)).build_list_array(),
-        );
-        let array2d_2 = Arc::new(
-            SingleRowListArrayBuilder::new(Arc::clone(&array1d_2)).build_list_array(),
-        );
-
-        let res = align_array_dimensions::<i32>(vec![
-            array1d_1.to_owned(),
-            array2d_2.to_owned(),
-        ])
-        .unwrap();
-
-        let expected = as_list_array(&array2d_1).unwrap();
-        let expected_dim = datafusion_common::utils::list_ndims(array2d_1.data_type());
-        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
-        assert_eq!(
-            datafusion_common::utils::list_ndims(res[0].data_type()),
-            expected_dim
-        );
-
-        let array3d_1: ArrayRef =
-            Arc::new(SingleRowListArrayBuilder::new(array2d_1).build_list_array());
-        let array3d_2: ArrayRef =
-            Arc::new(SingleRowListArrayBuilder::new(array2d_2).build_list_array());
-        let res = align_array_dimensions::<i32>(vec![array1d_1, array3d_2]).unwrap();
-
-        let expected = as_list_array(&array3d_1).unwrap();
-        let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());
-        assert_ne!(as_list_array(&res[0]).unwrap(), expected);
-        assert_eq!(
-            datafusion_common::utils::list_ndims(res[0].data_type()),
-            expected_dim
-        );
     }
 }
