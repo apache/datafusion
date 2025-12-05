@@ -21,9 +21,9 @@ use std::{
 };
 
 use datafusion_common::instant::Instant;
-use object_store::{path::Path, ObjectMeta};
+use object_store::{ObjectMeta, path::Path};
 
-use crate::cache::{cache_manager::ListFilesCache, lru_queue::LruQueue, CacheAccessor};
+use crate::cache::{CacheAccessor, cache_manager::ListFilesCache, lru_queue::LruQueue};
 
 /// Default implementation of [`ListFilesCache`]
 ///
