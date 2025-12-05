@@ -372,6 +372,8 @@ pub enum Expr {
     Exists(Exists),
     /// IN subquery
     InSubquery(InSubquery),
+    /// Set comparison subquery (e.g. `= ANY`, `> ALL`)
+    SetComparison(SetComparison),
     /// Scalar subquery
     ScalarSubquery(Subquery),
     /// Represents a reference to all available fields in a specific schema,
@@ -1101,6 +1103,54 @@ impl Exists {
     }
 }
 
+/// Whether the set comparison uses `ANY`/`SOME` or `ALL`
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub enum SetQuantifier {
+    /// `ANY` (or `SOME`)
+    Any,
+    /// `ALL`
+    All,
+}
+
+impl Display for SetQuantifier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SetQuantifier::Any => write!(f, "ANY"),
+            SetQuantifier::All => write!(f, "ALL"),
+        }
+    }
+}
+
+/// Set comparison subquery (e.g. `= ANY`, `> ALL`)
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct SetComparison {
+    /// The expression to compare
+    pub expr: Box<Expr>,
+    /// Subquery that will produce a single column of data to compare against
+    pub subquery: Subquery,
+    /// Comparison operator (e.g. `=`, `>`, `<`)
+    pub op: Operator,
+    /// Quantifier (`ANY`/`ALL`)
+    pub quantifier: SetQuantifier,
+}
+
+impl SetComparison {
+    /// Create a new set comparison expression
+    pub fn new(
+        expr: Box<Expr>,
+        subquery: Subquery,
+        op: Operator,
+        quantifier: SetQuantifier,
+    ) -> Self {
+        Self {
+            expr,
+            subquery,
+            op,
+            quantifier,
+        }
+    }
+}
+
 /// InList expression
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct InList {
@@ -1503,6 +1553,7 @@ impl Expr {
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
             Expr::InSubquery(..) => "InSubquery",
+            Expr::SetComparison(..) => "SetComparison",
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
             Expr::Like { .. } => "Like",
@@ -2058,6 +2109,7 @@ impl Expr {
             | Expr::GroupingSet(..)
             | Expr::InList(..)
             | Expr::InSubquery(..)
+            | Expr::SetComparison(..)
             | Expr::IsFalse(..)
             | Expr::IsNotFalse(..)
             | Expr::IsNotNull(..)
@@ -2651,6 +2703,16 @@ impl HashNode for Expr {
                 subquery.hash(state);
                 negated.hash(state);
             }
+            Expr::SetComparison(SetComparison {
+                expr: _,
+                subquery,
+                op,
+                quantifier,
+            }) => {
+                subquery.hash(state);
+                op.hash(state);
+                quantifier.hash(state);
+            }
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(state);
             }
@@ -2841,6 +2903,12 @@ impl Display for SchemaDisplay<'_> {
                 write!(f, "NOT IN")
             }
             Expr::InSubquery(InSubquery { negated: false, .. }) => write!(f, "IN"),
+            Expr::SetComparison(SetComparison {
+                expr,
+                op,
+                quantifier,
+                ..
+            }) => write!(f, "{} {op} {quantifier}", SchemaDisplay(expr.as_ref())),
             Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SchemaDisplay(expr)),
             Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SchemaDisplay(expr)),
             Expr::IsNotTrue(expr) => {
@@ -3316,6 +3384,12 @@ impl Display for Expr {
                 subquery,
                 negated: false,
             }) => write!(f, "{expr} IN ({subquery:?})"),
+            Expr::SetComparison(SetComparison {
+                expr,
+                subquery,
+                op,
+                quantifier,
+            }) => write!(f, "{expr} {op} {quantifier} ({subquery:?})"),
             Expr::ScalarSubquery(subquery) => write!(f, "({subquery:?})"),
             Expr::BinaryExpr(expr) => write!(f, "{expr}"),
             Expr::ScalarFunction(fun) => {
