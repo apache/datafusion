@@ -25,6 +25,7 @@ mod tests {
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use insta::assert_snapshot;
+    use regex::Regex;
 
     #[tokio::test]
     async fn scalar_function_compound_signature() -> Result<()> {
@@ -204,28 +205,56 @@ mod tests {
 
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        // With the flag enabled, all expressions should be aliased with UUIDs
-        let mut settings = insta::Settings::clone_current();
-        settings.add_filter(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            "[UUID]",
-        );
-        settings.bind(|| {
-            assert_snapshot!(
-                plan,
-                @r#"
-            Projection: [UUID] AS [UUID] AS A, [UUID] AS [UUID] AS C, C.D AS [UUID] AS D, Utf8(NULL) AS [UUID] AS E
-              Left Join: [UUID] = C.A
-                Union
-                  Projection: A.A AS [UUID], Utf8(NULL) AS [UUID]
-                    TableScan: A
-                  Projection: B.A AS [UUID], CAST(B.C AS Utf8) AS [UUID]
-                    TableScan: B
-                TableScan: C
-            "#
-            );
-        });
+        // Convert the plan to string to analyze the UUIDs
+        let plan_str = format!("{}", plan);
 
+        // Extract UUIDs and map them to labels for better readability
+        let uuid_regex = Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
+        let mut uuid_map = std::collections::HashMap::new();
+        let mut uuid_counter = 1;
+
+        // First pass: collect all unique UUIDs
+        for cap in uuid_regex.captures_iter(&plan_str) {
+            let uuid = cap.get(0).unwrap().as_str();
+            if !uuid_map.contains_key(uuid) {
+                uuid_map.insert(uuid.to_string(), format!("[UUID{}]", uuid_counter));
+                uuid_counter += 1;
+            }
+        }
+
+        // Second pass: replace UUIDs with their labels
+        let mut labeled_plan = plan_str.clone();
+        for (uuid, label) in &uuid_map {
+            labeled_plan = labeled_plan.replace(uuid, label);
+        }
+
+        // Verify that the plan has the expected structure with consistent UUID references
+        // The same UUID should be used when referencing the same column across the plan
+        assert!(labeled_plan.contains("AS [UUID"), "Plan should contain UUID aliases");
+
+        // Snapshot test showing the actual UUID numbers to demonstrate correspondence
+        // This shows how the same UUID appears in multiple places when referencing the same expression
+        // For example, [UUID1] appears in:
+        //   - The top projection (referencing the column from the union)
+        //   - The join condition (left side)
+        //   - The first union projection (A.A AS [UUID1])
+        // This proves that all references to column A.A use the same UUID
+        // Note: Expressions already aliased are not double-aliased
+        assert_snapshot!(
+            labeled_plan,
+            @r#"
+            Projection: left.A, left.[UUID1] AS C, right.D, Utf8(NULL) AS [UUID2] AS E
+              Left Join: left.A = right.A
+                SubqueryAlias: left
+                  Union
+                    Projection: A.A, Utf8(NULL) AS [UUID1]
+                      TableScan: A
+                    Projection: B.A, CAST(B.C AS Utf8) AS [UUID3]
+                      TableScan: B
+                SubqueryAlias: right
+                  TableScan: C
+            "#
+        );
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
 

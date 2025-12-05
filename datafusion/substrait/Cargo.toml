@@ -47,6 +47,7 @@ substrait = { version = "0.62", features = ["serde"] }
 url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 uuid = { version = "1.17.0", features = ["v4"] }
+regex = "1.12.2"
 
 [dev-dependencies]
 datafusion = { workspace = true, features = ["nested_expressions", "unicode_expressions"] }

@@ -66,7 +66,12 @@ pub async fn from_project_rel(
             let maybe_apply_alias = if consumer.alias_all_expressions() {
                 // When the flag is set, alias all expressions with UUIDs to avoid any potential
                 // ambiguous column references across the entire plan
-                e.alias(uuid::Uuid::new_v4().to_string())
+                // However, don't double-alias expressions that are already aliased
+                match &e {
+                    Expr::Alias(_) => e, // Already aliased, don't alias again
+                    Expr::Column(_) => e,
+                    _ => e.alias(uuid::Uuid::new_v4().to_string()),
+                }
             } else {
                 // Original behavior: only alias literals
                 // Substrait plans are ordinal based, so they do not provide names for columns.
