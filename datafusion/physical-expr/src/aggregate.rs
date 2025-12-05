@@ -221,7 +221,7 @@ impl AggregateExprBuilder {
         )?;
 
         let return_field = fun.return_field(&input_exprs_fields)?;
-        let is_nullable = fun.is_nullable();
+        let is_nullable = return_field.is_nullable();
         let name = match alias {
             None => {
                 return internal_err!(
