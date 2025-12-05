@@ -240,6 +240,49 @@ impl ProjectionExprs {
         self.exprs.iter().map(|e| Arc::clone(&e.expr))
     }
 
+    /// Apply a fallible transformation to the [`PhysicalExpr`] of each projection.
+    ///
+    /// This method transforms the expression in each [`ProjectionExpr`] while preserving
+    /// the alias. This is useful for rewriting expressions, such as when adapting
+    /// expressions to a different schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_common::Result;
+    /// use datafusion_physical_expr::expressions::Column;
+    /// use datafusion_physical_expr::projection::ProjectionExprs;
+    /// use datafusion_physical_expr::PhysicalExpr;
+    ///
+    /// // Create a schema and projection
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Int32, false),
+    /// ]));
+    /// let projection = ProjectionExprs::from_indices(&[0, 1], &schema);
+    ///
+    /// // Transform each expression (this example just clones them)
+    /// let transformed = projection.try_map_exprs(|expr| Ok(expr))?;
+    /// assert_eq!(transformed.as_ref().len(), 2);
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
+    pub fn try_map_exprs<F>(self, mut f: F) -> Result<Self>
+    where
+        F: FnMut(Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>>,
+    {
+        let exprs = self
+            .exprs
+            .into_iter()
+            .map(|mut proj| {
+                proj.expr = f(proj.expr)?;
+                Ok(proj)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self::new(exprs))
+    }
+
     /// Apply another projection on top of this projection, returning the combined projection.
     /// For example, if this projection is `SELECT c@2 AS x, b@1 AS y, a@0 as z` and the other projection is `SELECT x@0 + 1 AS c1, y@1 + z@2 as c2`,
     /// we return a projection equivalent to `SELECT c@2 + 1 AS c1, b@1 + a@0 as c2`.

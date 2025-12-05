@@ -33,12 +33,12 @@ use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
 use datafusion_common::{Result, config::ConfigEntry};
 use object_store::ObjectStore;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::{
     fmt::{Debug, Formatter},
     num::NonZeroUsize,
 };
+use std::{path::PathBuf, time::Duration};
 use url::Url;
 
 #[derive(Clone)]
@@ -387,6 +387,18 @@ impl RuntimeEnvBuilder {
         self
     }
 
+    /// Specifies the memory limit for the object list cache, in bytes.
+    pub fn with_object_list_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_list_files_cache_limit(limit);
+        self
+    }
+
+    /// Specifies the duration entries in the object list cache will be considered valid.
+    pub fn with_object_list_cache_ttl(mut self, ttl: Duration) -> Self {
+        self.cache_manager = self.cache_manager.with_list_files_cache_ttl(ttl);
+        self
+    }
+
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
         let Self {
@@ -428,6 +440,10 @@ impl RuntimeEnvBuilder {
                 .cache_manager
                 .get_file_statistic_cache(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
+            list_files_cache_limit: runtime_env
+                .cache_manager
+                .get_list_files_cache_limit(),
+            list_files_cache_ttl: runtime_env.cache_manager.get_list_files_cache_ttl(),
             file_metadata_cache: Some(
                 runtime_env.cache_manager.get_file_metadata_cache(),
             ),
