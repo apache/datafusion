@@ -96,6 +96,10 @@ impl MaybeNullBufferBuilder {
         new_builder.truncate(n);
         new_builder.finish()
     }
+    
+    pub(crate) fn maybe_as_slice(&self) -> Option<&[u8]> {
+        self.nulls.as_slice()
+    }
 
     /// Returns true if this builder might have any nulls
     ///

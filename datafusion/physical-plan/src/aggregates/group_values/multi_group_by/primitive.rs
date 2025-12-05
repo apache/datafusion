@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregates::group_values::multi_group_by::helper::{CollectBool, combine_nullability_and_value_equal_bit_packed_u64, compare_fixed_nulls_to_packed, compare_nulls_to_packed};
+use crate::aggregates::group_values::multi_group_by::helper::{
+    combine_nullability_and_value_equal_bit_packed_u64, compare_fixed_nulls_to_packed,
+    compare_fixed_raw_nulls_to_packed, compare_nulls_to_packed, CollectBool,
+};
 use crate::aggregates::group_values::multi_group_by::{
     nulls_equal_to, FixedBitPackedMutableBuffer, GroupColumn, Nulls,
 };
@@ -28,8 +31,8 @@ use arrow::util::bit_util::{apply_bitwise_binary_op, apply_bitwise_unary_op};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
-use std::{iter, u64};
 use std::sync::Arc;
+use std::{iter, u64};
 
 /// An implementation of [`GroupColumn`] for primitive values
 ///
@@ -69,41 +72,38 @@ where
         u64::collect_bool::<
             // Using rest true as we don't wanna change bits beyond num_rows
             true,
-            _
-        >(
-            length,
-            |bit_idx| {
-                let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
-                    (lhs_rows[bit_idx], rhs_rows[bit_idx])
-                } else {
-                    // SAFETY: indices are guaranteed to be in bounds
-                    unsafe {
-                        (
-                            *lhs_rows.get_unchecked(bit_idx),
-                            *rhs_rows.get_unchecked(bit_idx),
-                        )
-                    }
-                };
+            _,
+        >(length, |bit_idx| {
+            let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
+                (lhs_rows[bit_idx], rhs_rows[bit_idx])
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe {
+                    (
+                        *lhs_rows.get_unchecked(bit_idx),
+                        *rhs_rows.get_unchecked(bit_idx),
+                    )
+                }
+            };
 
-                // Getting unchecked not only for bound checks but because the bound checks are
-                // what prevents auto-vectorization
-                let left = if cfg!(debug_assertions) {
-                    self.group_values[lhs_row]
-                } else {
-                    // SAFETY: indices are guaranteed to be in bounds
-                    unsafe { *self.group_values.get_unchecked(lhs_row) }
-                };
-                let right = if cfg!(debug_assertions) {
-                    array_values[rhs_row]
-                } else {
-                    // SAFETY: indices are guaranteed to be in bounds
-                    unsafe { *array_values.get_unchecked(rhs_row) }
-                };
+            // Getting unchecked not only for bound checks but because the bound checks are
+            // what prevents auto-vectorization
+            let left = if cfg!(debug_assertions) {
+                self.group_values[lhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *self.group_values.get_unchecked(lhs_row) }
+            };
+            let right = if cfg!(debug_assertions) {
+                array_values[rhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *array_values.get_unchecked(rhs_row) }
+            };
 
-                // Always evaluate, to allow for auto-vectorization
-                left.is_eq(right)
-            },
-        )
+            // Always evaluate, to allow for auto-vectorization
+            left.is_eq(right)
+        })
     }
 
     // TODO - extract this function for other datatype impl
@@ -120,7 +120,7 @@ where
                 "CHECK_NULLABILITY is false for nullable called with nullable input"
             );
         }
-        
+
         let array = array.as_primitive::<T>();
         let array_values = array.values();
 
@@ -133,7 +133,20 @@ where
         // TODO - do not assume for byte aligned, added here just for POC
         let mut index = 0;
         let num_rows = lhs_rows.len();
-        
+
+        let self_nulls_slice = if CHECK_NULLABILITY {
+            self.nulls.maybe_as_slice()
+        } else {
+            None
+        };
+        let array_nulls = if CHECK_NULLABILITY {
+            array
+                .nulls()
+                .map(|nulls| (nulls.offset(), nulls.inner().values()))
+        } else {
+            None
+        };
+
         let mut scrach_left_64: [usize; 64] = [0; 64];
         let mut scrach_right_64: [usize; 64] = [0; 64];
         apply_bitwise_unary_op(
@@ -146,43 +159,45 @@ where
                     index += 64;
                     return 0;
                 }
-                
+
                 let length = num_rows - index;
-                
-                // Creating an array of size 64 to allow for optimization when building u64 bit packed from this 
+
+                // Creating an array of size 64 to allow for optimization when building u64 bit packed from this
                 let (lhs_rows_fixed, rhs_rows_fixed) = if length >= 64 {
-                    (lhs_rows[index..index + 64].try_into().unwrap(), rhs_rows[index..index + 64].try_into().unwrap())
+                    (
+                        lhs_rows[index..index + 64].try_into().unwrap(),
+                        rhs_rows[index..index + 64].try_into().unwrap(),
+                    )
                 } else {
                     scrach_left_64[..length].copy_from_slice(&lhs_rows[index..]);
                     scrach_right_64[..length].copy_from_slice(&rhs_rows[index..]);
-                    
+
                     (&scrach_left_64, &scrach_right_64)
                 };
-                
-                
+
                 let (nullability_eq, both_valid) = if CHECK_NULLABILITY {
                     // TODO - rest here should be
-                    compare_fixed_nulls_to_packed(
+                    compare_fixed_raw_nulls_to_packed(
                         length,
                         lhs_rows_fixed,
-                        &self.nulls,
+                        self_nulls_slice,
                         rhs_rows_fixed,
-                        array.nulls()
+                        array_nulls,
                     )
                 } else {
-                  (
-                      // nullability equal
-                      u64::MAX,
-                      // both valid
-                      u64::MAX
-                  )  
+                    (
+                        // nullability equal
+                        u64::MAX,
+                        // both valid
+                        u64::MAX,
+                    )
                 };
-                
+
                 if nullability_eq == 0 {
                     index += 64;
-                    return 0
+                    return 0;
                 }
-                
+
                 // if all nullability match and they both nulls than its the same value
                 if nullability_eq == u64::MAX && both_valid == 0 {
                     index += 64;
@@ -198,12 +213,16 @@ where
                     rhs_rows_fixed,
                     array_values,
                 );
-                
-                let result = combine_nullability_and_value_equal_bit_packed_u64(
-                    both_valid,
-                    nullability_eq,
+
+                let result = if CHECK_NULLABILITY {
+                    combine_nullability_and_value_equal_bit_packed_u64(
+                        both_valid,
+                        nullability_eq,
+                        values_eq,
+                    )
+                } else {
                     values_eq
-                );
+                };
 
                 index += 64;
                 eq & result
@@ -261,7 +280,12 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 equal_to_results,
             );
         } else {
-            self.inner_vectorized_equal::<true>(lhs_rows, array, rhs_rows, equal_to_results);
+            self.inner_vectorized_equal::<true>(
+                lhs_rows,
+                array,
+                rhs_rows,
+                equal_to_results,
+            );
         }
     }
 
