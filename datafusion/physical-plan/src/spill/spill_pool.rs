@@ -1173,6 +1173,9 @@ mod tests {
     async fn test_reader_catches_up_to_writer() -> Result<()> {
         let (writer, mut reader) = create_spill_channel(1024 * 1024);
 
+        let (reader_waiting_tx, reader_waiting_rx) = tokio::sync::oneshot::channel();
+        let (first_read_done_tx, first_read_done_rx) = tokio::sync::oneshot::channel();
+
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum ReadWriteEvent {
             ReadStart,
@@ -1185,36 +1188,29 @@ mod tests {
         let reader_events = Arc::clone(&events);
         let reader_handle = SpawnedTask::spawn(async move {
             reader_events.lock().push(ReadWriteEvent::ReadStart);
+            let _ = reader_waiting_tx.send(());
             let result = reader.next().await.unwrap().unwrap();
             reader_events
                 .lock()
                 .push(ReadWriteEvent::Read(result.num_rows()));
+            let _ = first_read_done_tx.send(());
             let result = reader.next().await.unwrap().unwrap();
             reader_events
                 .lock()
                 .push(ReadWriteEvent::Read(result.num_rows()));
         });
 
-        // Give reader time to start pending
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        // Wait until the reader is pending on the first batch
+        reader_waiting_rx.await.unwrap();
 
         // Now write a batch (should wake the reader)
         let batch = create_test_batch(0, 5);
         events.lock().push(ReadWriteEvent::Write(batch.num_rows()));
         writer.push_batch(&batch)?;
 
-        // Wait for the reader to process
-        let processed = async {
-            loop {
-                if events.lock().len() >= 3 {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_micros(500)).await;
-            }
-        };
-        tokio::time::timeout(std::time::Duration::from_secs(1), processed)
-            .await
-            .unwrap();
+        // Wait for the reader to finish the first read before allowing the
+        // second write. This avoids relying on timing assumptions.
+        first_read_done_rx.await.unwrap();
 
         // Write another batch
         let batch = create_test_batch(5, 10);
