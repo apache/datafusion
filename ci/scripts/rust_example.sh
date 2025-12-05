@@ -22,6 +22,15 @@ set -e
 export CARGO_PROFILE_CI_OPT_LEVEL="s"
 export CARGO_PROFILE_CI_STRIP=true
 
+# Remove leftover files inside test_* directories inside datafusion-examples/
+EXAMPLES_ROOT="datafusion-examples"
+
+find "${EXAMPLES_ROOT}" -maxdepth 1 -type d -name "test_*" | while read -r test_dir; do
+    echo "Cleaning directory: $test_dir"
+    find "$test_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+done
+
+# Run the examples
 cd datafusion-examples/examples/
 cargo build --profile ci --examples
 
