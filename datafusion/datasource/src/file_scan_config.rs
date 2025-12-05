@@ -19,8 +19,6 @@
 //! file sources.
 
 use crate::file_groups::FileGroup;
-#[allow(unused_imports)]
-use crate::schema_adapter::SchemaAdapterFactory;
 use crate::{
     display::FileGroupsDisplay, file::FileSource,
     file_compression_type::FileCompressionType, file_stream::FileStream,
