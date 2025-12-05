@@ -3873,6 +3873,7 @@ mod test {
     }
 
     use super::*;
+    use crate::logical_plan::{EmptyRelation, LogicalPlan};
 
     #[test]
     fn test_display_wildcard() {
@@ -3961,6 +3962,28 @@ mod test {
             ),
             "* RENAME (c1 AS a1)"
         )
+    }
+
+    #[test]
+    fn test_display_set_comparison() {
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(DFSchema::empty()),
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let expr = Expr::SetComparison(SetComparison::new(
+            Box::new(Expr::Column(Column::from_name("a"))),
+            subquery,
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        assert_eq!(format!("{expr}"), "a > ANY (<subquery>)");
+        assert_eq!(format!("{}", expr.human_display()), "a > ANY (<subquery>)");
     }
 
     #[test]
