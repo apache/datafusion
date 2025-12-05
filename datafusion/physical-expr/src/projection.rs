@@ -1906,7 +1906,9 @@ pub(crate) mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
-            total_byte_size: Precision::Exact(23),
+            // Because there is a variable length Utf8 column we cannot calculate exact byte size after projection
+            // Thus we set it to Inexact (originally it was Exact(23))
+            total_byte_size: Precision::Inexact(23),
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
