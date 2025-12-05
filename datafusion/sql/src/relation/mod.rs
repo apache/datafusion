@@ -80,7 +80,10 @@ impl<'a, 'b, S: ContextProvider> RelationPlannerContext
 }
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
-    /// Create a `LogicalPlan` that scans the named relation
+    /// Create a `LogicalPlan` that scans the named relation.
+    ///
+    /// First tries any registered extension planners. If no extension handles
+    /// the relation, falls back to the default planner.
     fn create_relation(
         &self,
         relation: TableFactor,

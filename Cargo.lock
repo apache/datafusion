@@ -2207,6 +2207,7 @@ dependencies = [
  "datafusion-sql",
  "env_logger",
  "futures",
+ "insta",
  "log",
  "mimalloc",
  "nix",

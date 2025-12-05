@@ -36,6 +36,7 @@ use datafusion_expr::{
     Expr, UserDefinedLogicalNode,
 };
 use datafusion_sql::sqlparser::ast::TableFactor;
+use insta::assert_snapshot;
 
 /// This example demonstrates using custom relation planners to implement
 /// MATCH_RECOGNIZE-style pattern matching on event streams.
@@ -50,17 +51,14 @@ pub async fn match_recognize() -> Result<()> {
 
     println!("Custom Relation Planner: MATCH_RECOGNIZE Pattern Matching");
     println!("==========================================================\n");
+    println!("Note: This example demonstrates logical planning only.");
+    println!("Physical execution would require additional implementation.\n");
 
     // Example 1: Basic MATCH_RECOGNIZE with MEASURES and DEFINE clauses
     // Shows: How to use MATCH_RECOGNIZE to find patterns in event data with aggregations
     // Expected: Logical plan showing MiniMatchRecognize node with SUM and AVG measures
     // Note: This demonstrates the logical planning phase - actual execution would require physical implementation
-    // Actual (Logical Plan):
-    // Projection: t.price
-    //   SubqueryAlias: t
-    //     MiniMatchRecognize measures=[total_price := sum(price), avg_price := avg(price)] define=[a := price > Int64(10)]
-    //       EmptyRelation: rows=0
-    run_example(
+    let plan = run_example(
         &ctx,
         "Example 1: MATCH_RECOGNIZE with measures and definitions",
         r#"SELECT * FROM events 
@@ -72,29 +70,36 @@ pub async fn match_recognize() -> Result<()> {
            ) AS t"#,
     )
     .await?;
+    assert_snapshot!(plan, @r"
+    Projection: t.price
+      SubqueryAlias: t
+        MiniMatchRecognize measures=[total_price := sum(events.price), avg_price := avg(events.price)] define=[a := events.price > Int64(10)]
+          TableScan: events
+    ");
 
     // Example 2: Stock price pattern detection using MATCH_RECOGNIZE
     // Shows: How to detect patterns in financial data (e.g., stocks above threshold)
     // Expected: Logical plan showing MiniMatchRecognize with MIN, MAX, AVG measures on stock prices
     // Note: Uses real stock data (DDOG prices: 150, 155, 152, 158) to find patterns above 151.0
-    // Actual (Logical Plan):
-    // Projection: trends.column1, trends.column2
-    //   SubqueryAlias: trends
-    //     MiniMatchRecognize measures=[min_price := min(column2), max_price := max(column2), avg_price := avg(column2)] define=[high := column2 > Float64(151)]
-    //       Values: (Utf8("DDOG"), Float64(150)), (Utf8("DDOG"), Float64(155)), (Utf8("DDOG"), Float64(152)), (Utf8("DDOG"), Float64(158))
-    run_example(
+    let plan = run_example(
         &ctx,
         "Example 2: Detect stocks above threshold using MATCH_RECOGNIZE",
         r#"SELECT * FROM stock_prices 
            MATCH_RECOGNIZE (
-             MEASURES MIN(column2) AS min_price, 
-                      MAX(column2) AS max_price, 
-                      AVG(column2) AS avg_price 
+             MEASURES MIN(price) AS min_price, 
+                      MAX(price) AS max_price, 
+                      AVG(price) AS avg_price 
              PATTERN (HIGH) 
-             DEFINE HIGH AS column2 > 151.0
+             DEFINE HIGH AS price > 151.0
            ) AS trends"#,
     )
     .await?;
+    assert_snapshot!(plan, @r"
+    Projection: trends.symbol, trends.price
+      SubqueryAlias: trends
+        MiniMatchRecognize measures=[min_price := min(stock_prices.price), max_price := max(stock_prices.price), avg_price := avg(stock_prices.price)] define=[high := stock_prices.price > Float64(151)]
+          TableScan: stock_prices
+    ");
 
     Ok(())
 }
@@ -111,18 +116,18 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
         Arc::new(StringArray::from(vec!["DDOG", "DDOG", "DDOG", "DDOG"]));
     let price: ArrayRef = Arc::new(Float64Array::from(vec![150.0, 155.0, 152.0, 158.0]));
     let batch =
-        RecordBatch::try_from_iter(vec![("column1", symbol), ("column2", price)])?;
+        RecordBatch::try_from_iter(vec![("symbol", symbol), ("price", price)])?;
     ctx.register_batch("stock_prices", batch)?;
 
     Ok(())
 }
 
-async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<()> {
+async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<String> {
     println!("{title}:\n{sql}\n");
     let plan = ctx.sql(sql).await?.into_unoptimized_plan();
-    println!("Logical Plan:");
-    println!("{}\n", plan.display_indent());
-    Ok(())
+    let plan_str = plan.display_indent().to_string();
+    println!("Logical Plan:\n{plan_str}\n");
+    Ok(plan_str)
 }
 
 /// A custom logical plan node representing MATCH_RECOGNIZE operations

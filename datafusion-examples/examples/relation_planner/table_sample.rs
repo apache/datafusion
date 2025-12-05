@@ -74,6 +74,7 @@ use datafusion_expr::{
 use datafusion_sql::sqlparser::ast::{
     self, TableFactor, TableSampleMethod, TableSampleUnit,
 };
+use insta::assert_snapshot;
 
 /// This example demonstrates using custom relation planners to implement
 /// SQL TABLESAMPLE clause support.
@@ -93,146 +94,134 @@ pub async fn table_sample() -> Result<()> {
 
     println!("Custom Relation Planner: TABLESAMPLE Support");
     println!("============================================\n");
-    println!("Note: This shows logical planning for TABLESAMPLE.");
-    println!("Physical execution requires additional implementation.\n");
 
     // Example 1: Full table without any sampling (baseline)
     // Shows: Complete dataset with all 10 rows (1-10 with row_1 to row_10)
-    // Expected: 10 rows showing the full sample_data table
-    // Actual:
-    // +---------+---------+
-    // | column1 | column2 |
-    // +---------+---------+
-    // | 1       | row_1   |
-    // | 2       | row_2   |
-    // | 3       | row_3   |
-    // | 4       | row_4   |
-    // | 5       | row_5   |
-    // | 6       | row_6   |
-    // | 7       | row_7   |
-    // | 8       | row_8   |
-    // | 9       | row_9   |
-    // | 10      | row_10  |
-    // +---------+---------+
-    run_example(
+    let results = run_example(
         &ctx,
         "Example 1: Full table (no sampling)",
         "SELECT * FROM sample_data",
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +---------+---------+
+    | column1 | column2 |
+    +---------+---------+
+    | 1       | row_1   |
+    | 2       | row_2   |
+    | 3       | row_3   |
+    | 4       | row_4   |
+    | 5       | row_5   |
+    | 6       | row_6   |
+    | 7       | row_7   |
+    | 8       | row_8   |
+    | 9       | row_9   |
+    | 10      | row_10  |
+    +---------+---------+
+    ");
 
     // Example 2: TABLESAMPLE with BERNOULLI sampling at 30% probability
     // Shows: Random sampling where each row has 30% chance of being selected
-    // Expected: ~3 rows (varies due to randomness) from the 10-row dataset
-    // Actual:
-    // +---------+---------+
-    // | column1 | column2 |
-    // +---------+---------+
-    // | 4       | row_4   |
-    // | 6       | row_6   |
-    // | 9       | row_9   |
-    // +---------+---------+
-    run_example(
+    // Note: REPEATABLE(seed) ensures deterministic results for snapshot testing
+    let results = run_example(
         &ctx,
         "Example 2: TABLESAMPLE with percentage",
-        "SELECT * FROM sample_data TABLESAMPLE BERNOULLI(30 PERCENT)",
+        "SELECT * FROM sample_data TABLESAMPLE BERNOULLI(30 PERCENT) REPEATABLE(123)",
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +---------+---------+
+    | column1 | column2 |
+    +---------+---------+
+    | 1       | row_1   |
+    | 2       | row_2   |
+    | 7       | row_7   |
+    | 8       | row_8   |
+    +---------+---------+
+    ");
 
     // Example 3: TABLESAMPLE with fractional sampling (50% of data)
     // Shows: Random sampling using decimal fraction instead of percentage
-    // Expected: ~5 rows (varies due to randomness) from the 10-row dataset
-    // Actual:
-    // +---------+---------+
-    // | column1 | column2 |
-    // +---------+---------+
-    // | 3       | row_3   |
-    // | 4       | row_4   |
-    // | 5       | row_5   |
-    // +---------+---------+
-    run_example(
+    // Note: REPEATABLE(seed) ensures deterministic results for snapshot testing
+    let results = run_example(
         &ctx,
         "Example 3: TABLESAMPLE with fraction",
-        "SELECT * FROM sample_data TABLESAMPLE (0.5)",
+        "SELECT * FROM sample_data TABLESAMPLE (0.5) REPEATABLE(456)",
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +---------+---------+
+    | column1 | column2 |
+    +---------+---------+
+    | 2       | row_2   |
+    | 4       | row_4   |
+    | 8       | row_8   |
+    +---------+---------+
+    ");
 
-    // Example 4: TABLESAMPLE with REPEATABLE seed for reproducible results
-    // Shows: Deterministic sampling using a fixed seed for consistent results
-    // Expected: Same rows selected each time due to fixed seed (42)
-    // Actual:
-    // +---------+---------+
-    // | column1 | column2 |
-    // +---------+---------+
-    // | 5       | row_5   |
-    // | 9       | row_9   |
-    // | 10      | row_10  |
-    // +---------+---------+
-    run_example(
-        &ctx,
-        "Example 4: TABLESAMPLE with REPEATABLE seed",
-        "SELECT * FROM sample_data TABLESAMPLE (0.3) REPEATABLE(42)",
-    )
-    .await?;
-
-    // Example 5: TABLESAMPLE with exact row count limit
+    // Example 4: TABLESAMPLE with exact row count limit
     // Shows: Sampling by limiting to a specific number of rows (not probabilistic)
-    // Expected: Exactly 3 rows (first 3 rows from the dataset)
-    // Actual:
-    // +---------+---------+
-    // | column1 | column2 |
-    // +---------+---------+
-    // | 1       | row_1   |
-    // | 2       | row_2   |
-    // | 3       | row_3   |
-    // +---------+---------+
-    run_example(
+    let results = run_example(
         &ctx,
-        "Example 5: TABLESAMPLE with row count",
+        "Example 4: TABLESAMPLE with row count",
         "SELECT * FROM sample_data TABLESAMPLE (3 ROWS)",
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +---------+---------+
+    | column1 | column2 |
+    +---------+---------+
+    | 1       | row_1   |
+    | 2       | row_2   |
+    | 3       | row_3   |
+    +---------+---------+
+    ");
 
-    // Example 6: TABLESAMPLE combined with WHERE clause filtering
+    // Example 5: TABLESAMPLE combined with WHERE clause filtering
     // Shows: How sampling works with other query operations like filtering
-    // Expected: 3 rows where column1 > 2 (from the 5-row sample)
-    // Actual:
-    // +---------+---------+
-    // | column1 | column2 |
-    // +---------+---------+
-    // | 3       | row_3   |
-    // | 4       | row_4   |
-    // | 5       | row_5   |
-    // +---------+---------+
-    run_example(
+    let results = run_example(
         &ctx,
-        "Example 6: TABLESAMPLE with WHERE clause",
+        "Example 5: TABLESAMPLE with WHERE clause",
         r#"SELECT * FROM sample_data 
            TABLESAMPLE (5 ROWS) 
            WHERE column1 > 2"#,
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +---------+---------+
+    | column1 | column2 |
+    +---------+---------+
+    | 3       | row_3   |
+    | 4       | row_4   |
+    | 5       | row_5   |
+    +---------+---------+
+    ");
 
-    // Example 7: JOIN between two independently sampled tables
+    // Example 6: JOIN between two independently sampled tables
     // Shows: How sampling works in complex queries with multiple table references
-    // Expected: Rows where both sampled tables have matching column1 values
-    // Actual:
-    // +---------+---------+---------+---------+
-    // | column1 | column1 | column2 | column2 |
-    // +---------+---------+---------+---------+
-    // | 2       | 2       | row_2   | row_2   |
-    // | 8       | 8       | row_8   | row_8   |
-    // | 10      | 10      | row_10  | row_10  |
-    // +---------+---------+---------+---------+
-    run_example(
+    // Note: REPEATABLE(seed) ensures deterministic results for snapshot testing
+    let results = run_example(
         &ctx,
-        "Example 7: JOIN between two different TABLESAMPLE tables",
+        "Example 6: JOIN between two TABLESAMPLE tables",
         r#"SELECT t1.column1, t2.column1, t1.column2, t2.column2 
-           FROM sample_data t1 TABLESAMPLE (0.7) 
-           JOIN sample_data t2 TABLESAMPLE (0.7) 
+           FROM sample_data t1 TABLESAMPLE (0.7) REPEATABLE(789)
+           JOIN sample_data t2 TABLESAMPLE (0.7) REPEATABLE(789)
            ON t1.column1 = t2.column1"#,
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +---------+---------+---------+---------+
+    | column1 | column1 | column2 | column2 |
+    +---------+---------+---------+---------+
+    | 2       | 2       | row_2   | row_2   |
+    | 3       | 3       | row_3   | row_3   |
+    | 5       | 5       | row_5   | row_5   |
+    | 6       | 6       | row_6   | row_6   |
+    | 7       | 7       | row_7   | row_7   |
+    | 8       | 8       | row_8   | row_8   |
+    | 10      | 10      | row_10  | row_10  |
+    +---------+---------+---------+---------+
+    ");
 
     Ok(())
 }
@@ -253,12 +242,17 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
     Ok(())
 }
 
-async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<()> {
+async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<String> {
     println!("{title}:\n{sql}\n");
     let df = ctx.sql(sql).await?;
     println!("Logical Plan:\n{}\n", df.logical_plan().display_indent());
-    df.show().await?;
-    Ok(())
+
+    // Execute and capture results
+    let results = df.collect().await?;
+    let results = arrow::util::pretty::pretty_format_batches(&results)?.to_string();
+    println!("Results:\n{results}\n");
+
+    Ok(results)
 }
 
 /// Hashable and comparable f64 for sampling bounds
@@ -381,15 +375,13 @@ impl TableSampleExtensionPlanner {
         specific_node: &TableSamplePlanNode,
         physical_input: &Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SampleExec {
-            input: Arc::clone(physical_input),
-            lower_bound: 0.0,
-            upper_bound: specific_node.upper_bound.into(),
-            with_replacement: specific_node.with_replacement,
-            seed: specific_node.seed,
-            metrics: Default::default(),
-            cache: SampleExec::compute_properties(physical_input),
-        }))
+        Ok(Arc::new(SampleExec::try_new(
+            Arc::clone(physical_input),
+            specific_node.lower_bound.into(),
+            specific_node.upper_bound.into(),
+            specific_node.with_replacement,
+            specific_node.seed,
+        )?))
     }
 }
 

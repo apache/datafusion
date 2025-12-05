@@ -41,6 +41,7 @@ use datafusion_expr::{
     Expr,
 };
 use datafusion_sql::sqlparser::ast::TableFactor;
+use insta::assert_snapshot;
 
 /// This example demonstrates using custom relation planners to implement
 /// PIVOT and UNPIVOT operations for reshaping data.
@@ -61,64 +62,71 @@ pub async fn pivot_unpivot() -> Result<()> {
     // The PIVOT is rewritten to: SELECT region, SUM(CASE WHEN quarter = 'Q1' THEN amount END) as Q1,
     //                             SUM(CASE WHEN quarter = 'Q2' THEN amount END) as Q2
     //                             FROM quarterly_sales GROUP BY region
-    // Expected Output:
-    // +--------+------+------+
-    // | region | Q1   | Q2   |
-    // +--------+------+------+
-    // | North  | 1000 | 1500 |
-    // | South  | 1200 | 1300 |
-    // +--------+------+------+
-    run_example(
+    let results = run_example(
         &ctx,
         "Example 1: Basic PIVOT - Transform quarters from rows to columns",
         r#"SELECT * FROM quarterly_sales
            PIVOT (
              SUM(amount)
              FOR quarter IN ('Q1', 'Q2')
-           ) AS pivoted"#,
+           ) AS pivoted
+           ORDER BY region"#,
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +--------+------+------+
+    | region | Q1   | Q2   |
+    +--------+------+------+
+    | North  | 1000 | 1500 |
+    | South  | 1200 | 1300 |
+    +--------+------+------+
+    ");
 
     // Example 2: PIVOT with multiple aggregate functions
     // Shows: How to apply multiple aggregations (SUM and AVG) during pivot
-    // Expected: Logical plan showing MiniPivot with both SUM and AVG aggregates
-    // Actual (Logical Plan):
-    // Projection: pivoted.region, pivoted.Q1, pivoted.Q2
-    //   SubqueryAlias: pivoted
-    //     MiniPivot aggregate=[SUM(amount), AVG(amount)] value_column=[quarter] values=["Q1", "Q2"]
-    //       Values: (Utf8("North"), Utf8("Q1"), Int64(1000)), (Utf8("North"), Utf8("Q2"), Int64(1500)), ...
-    run_example(
+    let results = run_example(
         &ctx,
         "Example 2: PIVOT with multiple aggregates (SUM and AVG)",
         r#"SELECT * FROM quarterly_sales
            PIVOT (
              SUM(amount), AVG(amount)
              FOR quarter IN ('Q1', 'Q2')
-           ) AS pivoted"#,
+           ) AS pivoted
+           ORDER BY region"#,
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +--------+--------+--------+--------+--------+
+    | region | sum_Q1 | sum_Q2 | avg_Q1 | avg_Q2 |
+    +--------+--------+--------+--------+--------+
+    | North  | 1000   | 1500   | 1000.0 | 1500.0 |
+    | South  | 1200   | 1300   | 1200.0 | 1300.0 |
+    +--------+--------+--------+--------+--------+
+    ");
 
     // Example 3: PIVOT with additional grouping columns
     // Shows: How pivot works when there are multiple non-pivot columns
     // The region and product both appear in GROUP BY
-    // Expected Output:
-    // +--------+-----------+------+------+
-    // | region | product   | Q1   | Q2   |
-    // +--------+-----------+------+------+
-    // | North  | ProductA  | 500  |      |
-    // | North  | ProductB  | 500  |      |
-    // | South  | ProductA  |      | 650  |
-    // +--------+-----------+------+------+
-    run_example(
+    let results = run_example(
         &ctx,
         "Example 3: PIVOT with multiple grouping columns",
         r#"SELECT * FROM product_sales
            PIVOT (
              SUM(amount)
              FOR quarter IN ('Q1', 'Q2')
-           ) AS pivoted"#,
+           ) AS pivoted
+           ORDER BY region, product"#,
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +--------+----------+-----+-----+
+    | region | product  | Q1  | Q2  |
+    +--------+----------+-----+-----+
+    | North  | ProductA | 500 |     |
+    | North  | ProductB | 500 |     |
+    | South  | ProductA |     | 650 |
+    +--------+----------+-----+-----+
+    ");
 
     // Example 4: Basic UNPIVOT to transform columns back into rows
     // Shows: How to unpivot wide-format data into long format
@@ -126,49 +134,71 @@ pub async fn pivot_unpivot() -> Result<()> {
     //   SELECT region, 'q1_label' as quarter, q1 as sales FROM wide_sales
     //   UNION ALL
     //   SELECT region, 'q2_label' as quarter, q2 as sales FROM wide_sales
-    // Expected Output:
-    // +--------+----------+-------+
-    // | region | quarter  | sales |
-    // +--------+----------+-------+
-    // | North  | q1_label | 1000  |
-    // | South  | q1_label | 1200  |
-    // | North  | q2_label | 1500  |
-    // | South  | q2_label | 1300  |
-    // +--------+----------+-------+
-    run_example(
+    let results = run_example(
         &ctx,
         "Example 4: Basic UNPIVOT - Transform columns to rows",
         r#"SELECT * FROM wide_sales
            UNPIVOT (
              sales FOR quarter IN (q1 AS 'q1_label', q2 AS 'q2_label')
-           ) AS unpivoted"#,
+           ) AS unpivoted
+           ORDER BY quarter, region"#,
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +--------+----------+-------+
+    | region | quarter  | sales |
+    +--------+----------+-------+
+    | North  | q1_label | 1000  |
+    | South  | q1_label | 1200  |
+    | North  | q2_label | 1500  |
+    | South  | q2_label | 1300  |
+    +--------+----------+-------+
+    ");
 
     // Example 5: UNPIVOT with INCLUDE NULLS
     // Shows: How null handling works in UNPIVOT operations
     // With INCLUDE NULLS, the filter `sales IS NOT NULL` is NOT added
     // Expected: Same output as Example 4 (no nulls in this dataset anyway)
-    run_example(
+    let results = run_example(
         &ctx,
         "Example 5: UNPIVOT with INCLUDE NULLS",
         r#"SELECT * FROM wide_sales
            UNPIVOT INCLUDE NULLS (
              sales FOR quarter IN (q1 AS 'q1_label', q2 AS 'q2_label')
-           ) AS unpivoted"#,
+           ) AS unpivoted
+           ORDER BY quarter, region"#,
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +--------+----------+-------+
+    | region | quarter  | sales |
+    +--------+----------+-------+
+    | North  | q1_label | 1000  |
+    | South  | q1_label | 1200  |
+    | North  | q2_label | 1500  |
+    | South  | q2_label | 1300  |
+    +--------+----------+-------+
+    ");
 
     // Example 6: Simple PIVOT with projection
     // Shows: PIVOT works seamlessly with other SQL operations like projection
     // We can select specific columns after pivoting
-    run_example(
+    let results = run_example(
         &ctx,
         "Example 6: PIVOT with projection",
         r#"SELECT region FROM quarterly_sales
-           PIVOT (SUM(amount) FOR quarter IN ('Q1', 'Q2')) AS pivoted"#,
+           PIVOT (SUM(amount) FOR quarter IN ('Q1', 'Q2')) AS pivoted
+           ORDER BY region"#,
     )
     .await?;
+    assert_snapshot!(results, @r"
+    +--------+
+    | region |
+    +--------+
+    | North  |
+    | South  |
+    +--------+
+    ");
 
     Ok(())
 }
@@ -212,19 +242,19 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
     Ok(())
 }
 
-async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<()> {
+async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<String> {
     println!("{title}:\n{sql}\n");
     let df = ctx.sql(sql).await?;
 
     // Show the logical plan to demonstrate the rewrite
-    println!("Rewritten Logical Plan:");
-    println!("{}\n", df.logical_plan().display_indent());
+    println!("Rewritten Logical Plan:\n{}\n", df.logical_plan().display_indent());
 
-    // Execute and show results
-    println!("Results:");
-    df.show().await?;
-    println!();
-    Ok(())
+    // Execute and capture results
+    let results = df.collect().await?;
+    let results = arrow::util::pretty::pretty_format_batches(&results)?.to_string();
+    println!("Results:\n{results}\n");
+
+    Ok(results)
 }
 
 /// Helper function to extract column name from an expression

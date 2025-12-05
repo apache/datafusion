@@ -29,6 +29,14 @@
 //! - `match_recognize` — MATCH_RECOGNIZE pattern matching on event streams
 //! - `pivot_unpivot` — PIVOT and UNPIVOT operations for reshaping data
 //! - `table_sample` — TABLESAMPLE clause for sampling rows from tables
+//!
+//! ## Snapshot Testing
+//!
+//! These examples use [insta](https://insta.rs) for inline snapshot assertions.
+//! If query output changes, regenerate the snapshots with:
+//! ```bash
+//! INSTA_UPDATE=always cargo run --example relation_planner -- <subcommand>
+//! ```
 
 mod match_recognize;
 mod pivot_unpivot;
