@@ -49,6 +49,7 @@ avro = ["datafusion-datasource-avro", "datafusion-common/avro"]
 
 [dependencies]
 arrow = { workspace = true }
+async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
