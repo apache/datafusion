@@ -16,15 +16,15 @@
 // under the License.
 
 use arrow::array::BooleanArray;
-use arrow::array::{make_comparator, ArrayRef, Datum};
+use arrow::array::{ArrayRef, Datum, make_comparator};
 use arrow::buffer::NullBuffer;
 use arrow::compute::kernels::cmp::{
     distinct, eq, gt, gt_eq, lt, lt_eq, neq, not_distinct,
 };
-use arrow::compute::{ilike, like, nilike, nlike, SortOptions};
+use arrow::compute::{SortOptions, ilike, like, nilike, nlike};
 use arrow::error::ArrowError;
-use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::operator::Operator;
 use std::sync::Arc;

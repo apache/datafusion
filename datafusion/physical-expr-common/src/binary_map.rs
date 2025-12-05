@@ -20,10 +20,10 @@
 
 use ahash::RandomState;
 use arrow::array::{
-    cast::AsArray,
-    types::{ByteArrayType, GenericBinaryType, GenericStringType},
     Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
     NullBufferBuilder, OffsetSizeTrait,
+    cast::AsArray,
+    types::{ByteArrayType, GenericBinaryType, GenericStringType},
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;

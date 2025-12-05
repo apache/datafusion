@@ -27,15 +27,15 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::types::ArrowPrimitiveType;
 use arrow::array::ArrayRef;
 use arrow::array::PrimitiveArray;
+use arrow::array::types::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 
-use datafusion_common::cast::{as_list_array, as_primitive_array};
-use datafusion_common::utils::memory::estimate_memory_size;
-use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
+use datafusion_common::cast::{as_list_array, as_primitive_array};
+use datafusion_common::utils::SingleRowListArrayBuilder;
+use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_expr_common::accumulator::Accumulator;
 
 use crate::utils::GenericDistinctBuffer;
@@ -73,7 +73,9 @@ where
             PrimitiveArray::<T>::from_iter_values(self.values.iter().cloned())
                 .with_data_type(self.data_type.clone()),
         );
-        Ok(vec![SingleRowListArrayBuilder::new(arr).build_list_scalar()])
+        Ok(vec![
+            SingleRowListArrayBuilder::new(arr).build_list_scalar(),
+        ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion_common::Result<()> {
