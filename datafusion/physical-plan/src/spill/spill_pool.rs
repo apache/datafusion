@@ -384,28 +384,22 @@ impl Drop for SpillPoolWriter {
 /// // Create channel with 1MB file size limit
 /// let (writer, mut reader) = spill_pool::channel(1024 * 1024, spill_manager);
 ///
-/// // Spawn writer task to produce batches
-/// let write_handle = tokio::spawn(async move {
-///     for i in 0..5 {
-///         let array: ArrayRef = Arc::new(Int32Array::from(vec![i; 100]));
-///         let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
-///         writer.push_batch(&batch).unwrap();
-///     }
-///     // Writer dropped here, finalizing current file
-/// });
+/// // Write batches to the spill pool
+/// for i in 0..5 {
+///     let array: ArrayRef = Arc::new(Int32Array::from(vec![i; 100]));
+///     let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+///     writer.push_batch(&batch)?;
+/// }
+/// // Explicitly drop writer to finalize the spill file
+/// drop(writer);
 ///
-/// // Reader consumes batches in FIFO order (can run concurrently with writer)
+/// // Reader consumes batches in FIFO order
 /// let mut batches_read = 0;
 /// while let Some(result) = reader.next().await {
-///     let batch = result?;
+///     let _batch = result?;
 ///     batches_read += 1;
-///     // Process batch...
-///     if batches_read == 5 {
-///         break; // Got all expected batches
-///     }
 /// }
 ///
-/// write_handle.await.unwrap();
 /// assert_eq!(batches_read, 5);
 /// # Ok(())
 /// # }
