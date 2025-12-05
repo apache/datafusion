@@ -335,7 +335,6 @@ impl Statistics {
         match row_size {
             None => {
                 self.total_byte_size = self.total_byte_size.to_inexact();
-                return;
             }
             Some(size) => {
                 self.total_byte_size = self.num_rows.multiply(&Precision::Exact(size));
