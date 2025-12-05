@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::array::ArrayRef;
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::{Int32Type, StringViewType};
 use arrow::util::bench_util::{
     create_primitive_array, create_string_view_array_with_len,
@@ -118,7 +119,7 @@ fn bytes_bench(
         rows,
         input,
         "all_true",
-        vec![true; size],
+        &BooleanBuffer::new_set(size),
     );
     vectorized_equal_to(
         group,
@@ -127,10 +128,10 @@ fn bytes_bench(
         rows,
         input,
         "0.75 true",
-        {
+        &{
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.75).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            BooleanBuffer::from_iter((0..size).map(|_| d.sample(&mut rng)))
         },
     );
     vectorized_equal_to(
@@ -140,10 +141,10 @@ fn bytes_bench(
         rows,
         input,
         "0.5 true",
-        {
+        &{
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.5).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            BooleanBuffer::from_iter((0..size).map(|_| d.sample(&mut rng)))
         },
     );
     vectorized_equal_to(
@@ -153,10 +154,10 @@ fn bytes_bench(
         rows,
         input,
         "0.25 true",
-        {
+        &{
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.25).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            BooleanBuffer::from_iter((0..size).map(|_| d.sample(&mut rng)))
         },
     );
     // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
@@ -226,7 +227,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
         rows,
         &input,
         "all_true",
-        vec![true; size],
+        &BooleanBuffer::new_set(size),
     );
     vectorized_equal_to(
         group,
@@ -235,10 +236,10 @@ fn bench_single_primitive<const NULLABLE: bool>(
         rows,
         &input,
         "0.75 true",
-        {
+        &{
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.75).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            BooleanBuffer::from_iter((0..size).map(|_| d.sample(&mut rng)))
         },
     );
     vectorized_equal_to(
@@ -248,10 +249,10 @@ fn bench_single_primitive<const NULLABLE: bool>(
         rows,
         &input,
         "0.5 true",
-        {
+        &{
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.5).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            BooleanBuffer::from_iter((0..size).map(|_| d.sample(&mut rng)))
         },
     );
     vectorized_equal_to(
@@ -261,10 +262,10 @@ fn bench_single_primitive<const NULLABLE: bool>(
         rows,
         &input,
         "0.25 true",
-        {
+        &{
             let mut rng = seedable_rng();
             let d = Bernoulli::new(0.25).unwrap();
-            (0..size).map(|_| d.sample(&mut rng)).collect::<Vec<_>>()
+            BooleanBuffer::from_iter((0..size).map(|_| d.sample(&mut rng)))
         },
     );
     // Not adding 0 true case here as if we optimize for 0 true cases the caller should avoid calling this method at all
@@ -279,7 +280,7 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
     rows: &[usize],
     input: &ArrayRef,
     equal_to_result_description: &str,
-    equal_to_results: FixedBitPackedMutableBuffer,
+    equal_to_results: &BooleanBuffer,
 ) {
     let id = BenchmarkId::new(
         function_name,
@@ -291,7 +292,7 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
         b.iter(|| {
             // Cloning is a must as `vectorized_equal_to` will modify the input vec
             // and without cloning all benchmarks after the first one won't be meaningful
-            let mut equal_to_results = equal_to_results.clone();
+            let mut equal_to_results = FixedBitPackedMutableBuffer::from(equal_to_results);
             builder.vectorized_equal_to(rows, input, rows, &mut equal_to_results);
 
             // Make sure that the compiler does not optimize away the call

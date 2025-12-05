@@ -32,6 +32,7 @@ use crate::aggregates::group_values::multi_group_by::{
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, RecordBatch};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
@@ -53,7 +54,7 @@ use hashbrown::hash_table::HashTable;
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FixedBitPackedMutableBuffer(BooleanBufferBuilder);
 
 impl FixedBitPackedMutableBuffer {
@@ -73,6 +74,17 @@ impl FixedBitPackedMutableBuffer {
 
     pub(crate) fn iter(&self) -> BitIterator<'_> {
         BitIterator::new(self.0.as_slice(), 0, self.0.len())
+    }
+}
+
+impl From<&BooleanBuffer> for FixedBitPackedMutableBuffer {
+    fn from(value: &BooleanBuffer) -> Self {
+        FixedBitPackedMutableBuffer({
+            let mut mutable = BooleanBufferBuilder::new(0);
+            mutable.append_buffer(value);
+            
+            mutable
+        })
     }
 }
 
