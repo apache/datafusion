@@ -467,8 +467,14 @@ impl FileGroup {
 
     /// Groups files by their partition values, ensuring all files with same
     /// partition values are in the same group.
-    pub fn group_by_partition_values(self, target_partitions: usize) -> Vec<FileGroup> {
-        if self.is_empty() || target_partitions == 0 {
+    ///
+    /// Note: May return fewer groups than `max_target_partitions` when the
+    /// number of unique partition values is less than the target.
+    pub fn group_by_partition_values(
+        self,
+        max_target_partitions: usize,
+    ) -> Vec<FileGroup> {
+        if self.is_empty() || max_target_partitions == 0 {
             return vec![];
         }
 
@@ -486,29 +492,23 @@ impl FileGroup {
 
         let num_unique_partitions = partition_groups.len();
 
-        // Sort partition values for deterministic bucket assignment.
-        // HashMap iteration order is non-deterministic, so we must sort to ensure
-        // the same partition values always map to the same file groups across
-        // different query executions.
-        //
-        // Note: The decision to sort here is for determinism and not correctness.
+        // Sort for deterministic bucket assignment across query executions.
         let mut sorted_partitions: Vec<_> = partition_groups.into_iter().collect();
-        sorted_partitions.sort_by(|a, b| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)));
+        sorted_partitions
+            .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
 
-        if num_unique_partitions <= target_partitions {
+        if num_unique_partitions <= max_target_partitions {
             sorted_partitions
                 .into_iter()
                 .map(|(_, files)| FileGroup::new(files))
                 .collect()
         } else {
-            // Merge partition values into target_partitions buckets using round-robin.
-            // This guarantees all target_partitions buckets are filled when
-            // num_unique_partitions >= target_partitions.
+            // Merge into max_target_partitions buckets using round-robin.
             let mut target_groups: Vec<Vec<PartitionedFile>> =
-                vec![vec![]; target_partitions];
+                vec![vec![]; max_target_partitions];
 
             for (idx, (_, files)) in sorted_partitions.into_iter().enumerate() {
-                let bucket = idx % target_partitions;
+                let bucket = idx % max_target_partitions;
                 target_groups[bucket].extend(files);
             }
 

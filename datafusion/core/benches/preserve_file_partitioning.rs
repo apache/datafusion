@@ -27,7 +27,7 @@
 //!
 //! When This Optimization Does NOT Help
 //! - GROUP BY non-partition columns: Required Hash distribution doesn't match declared partitioning
-//! - I/O Instensive Queries: Limits the parallilization at I/O level, benefits may not outweigh.
+//! - I/O Intensive Queries: Limits the parallilization at I/O level, benefits may not outweigh.
 //!
 //! Usage
 //! - BENCH_SIZE=small|medium|large cargo bench -p datafusion --bench preserve_file_partitioning
@@ -241,24 +241,24 @@ fn generate_dimension_table(base_dir: &Path, num_partitions: usize) {
 
 struct BenchVariant {
     name: &'static str,
-    preserve_file_partitioning: bool,
+    preserve_file_partitioning: usize,
     prefer_existing_sort: bool,
 }
 
 const BENCH_VARIANTS: [BenchVariant; 3] = [
     BenchVariant {
         name: "with_optimization",
-        preserve_file_partitioning: true,
+        preserve_file_partitioning: 1,
         prefer_existing_sort: false,
     },
     BenchVariant {
         name: "prefer_existing_sort",
-        preserve_file_partitioning: false,
+        preserve_file_partitioning: 0,
         prefer_existing_sort: true,
     },
     BenchVariant {
         name: "without_optimization",
-        preserve_file_partitioning: false,
+        preserve_file_partitioning: 0,
         prefer_existing_sort: false,
     },
 ];
@@ -277,7 +277,7 @@ async fn save_plans(
     for variant in &BENCH_VARIANTS {
         let session_config = SessionConfig::new()
             .with_target_partitions(target_partitions)
-            .set_bool(
+            .set_usize(
                 "datafusion.optimizer.preserve_file_partitioning",
                 variant.preserve_file_partitioning,
             )
@@ -364,7 +364,7 @@ fn run_benchmark(
                 async move {
                     let session_config = SessionConfig::new()
                         .with_target_partitions(target_partitions)
-                        .set_bool(
+                        .set_usize(
                             "datafusion.optimizer.preserve_file_partitioning",
                             preserve_file_partitioning,
                         )
