@@ -100,9 +100,8 @@ use datafusion_physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr};
 
-use datafusion::physical_expr::async_scalar_function::AsyncFuncExpr;
-use datafusion::physical_plan::async_func::AsyncFuncExec;
-use datafusion::prelude::SessionContext;
+use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
+use datafusion_physical_plan::async_func::AsyncFuncExec;
 use prost::bytes::BufMut;
 use prost::Message;
 
@@ -254,13 +253,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             PhysicalPlanType::SortMergeJoin(sort_join) => {
                 self.try_into_sort_join(sort_join, ctx, extension_codec)
             }
-            PhysicalPlanType::AsyncFunc(async_func) => self
-                .try_into_async_func_physical_plan(
-                    async_func,
-                    ctx,
-                    runtime,
-                    extension_codec,
-                ),
+            PhysicalPlanType::AsyncFunc(async_func) => {
+                self.try_into_async_func_physical_plan(async_func, ctx, extension_codec)
+            }
         }
     }
 
@@ -1992,12 +1987,11 @@ impl protobuf::PhysicalPlanNode {
     fn try_into_async_func_physical_plan(
         &self,
         async_func: &protobuf::AsyncFuncExecNode,
-        ctx: &SessionContext,
-        runtime: &RuntimeEnv,
+        ctx: &TaskContext,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&async_func.input, ctx, runtime, extension_codec)?;
+            into_physical_plan(&async_func.input, ctx, extension_codec)?;
 
         let async_exprs = async_func
             .async_exprs
@@ -3517,7 +3511,6 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
 fn into_physical_plan(
     node: &Option<Box<protobuf::PhysicalPlanNode>>,
     ctx: &TaskContext,
-
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(field) = node {

@@ -2320,7 +2320,7 @@ async fn roundtrip_async_func_exec() -> Result<()> {
             &self,
             _buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
-            _registry: &dyn FunctionRegistry,
+            _ctx: &TaskContext,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             not_impl_err!(
                 "TestAsyncUDFPhysicalCodec should not be called to decode an extension"
