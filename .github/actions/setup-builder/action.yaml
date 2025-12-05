@@ -51,11 +51,6 @@ runs:
       run: |
         echo "Disk space before cleanup:"
         df -h 
-        # temporary: list disk usage before cleanup
-        du -hs /[^.]* || true
-        du -hs /usr/[^.]* || true
-        du -hs /usr/local/[^.]* || true
-        du -hs /__w/[^.]* || true
         apt-get clean
         # remove tool cache: about 8.5GB (github has host /opt/hostedtoolcache mounted as /__t)
         rm -rf /__t/* || true
