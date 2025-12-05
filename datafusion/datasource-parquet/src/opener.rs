@@ -477,7 +477,7 @@ impl FileOpener for ParquetOpener {
             let stream_schema = Arc::clone(stream.schema());
             // Check if we need to replace the schema to handle things like differing nullability or metadata.
             // See note below about file vs. output schema.
-            let replace_schema = stream_schema.eq(&output_schema);
+            let replace_schema = !stream_schema.eq(&output_schema);
 
             // Rebase column indices to match the narrowed stream schema.
             // The projection expressions have indices based on physical_file_schema,
