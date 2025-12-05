@@ -67,7 +67,7 @@ mod test {
     /// - Each partition has an "id" column (INT) with the following values:
     ///   - First partition: [3, 4]
     ///   - Second partition: [1, 2]
-    /// - Each row produces 8 bytes of statistics (4 bytes for Int32 id column × 2 rows)
+    /// - Each partition has 16 bytes total (Int32 id: 4 bytes × 2 rows + Date32 date: 4 bytes × 2 rows)
     ///
     /// @param create_table_sql Optional parameter to set the create table SQL
     /// @param target_partition Optional parameter to set the target partitions
@@ -215,9 +215,9 @@ mod test {
             .map(|idx| scan.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         let expected_statistic_partition_1 =
-            create_partition_statistics(2, 8, 3, 4, true);
+            create_partition_statistics(2, 16, 3, 4, true);
         let expected_statistic_partition_2 =
-            create_partition_statistics(2, 8, 1, 2, true);
+            create_partition_statistics(2, 16, 1, 2, true);
         // Check the statistics of each partition
         assert_eq!(statistics.len(), 2);
         assert_eq!(statistics[0], expected_statistic_partition_1);
@@ -291,9 +291,9 @@ mod test {
             SortExec::new(ordering.into(), scan_2).with_preserve_partitioning(true),
         );
         let expected_statistic_partition_1 =
-            create_partition_statistics(2, 8, 3, 4, true);
+            create_partition_statistics(2, 16, 3, 4, true);
         let expected_statistic_partition_2 =
-            create_partition_statistics(2, 8, 1, 2, true);
+            create_partition_statistics(2, 16, 1, 2, true);
         let statistics = (0..sort_exec.output_partitioning().partition_count())
             .map(|idx| sort_exec.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
@@ -365,9 +365,9 @@ mod test {
         // Check that we have 4 partitions (2 from each scan)
         assert_eq!(statistics.len(), 4);
         let expected_statistic_partition_1 =
-            create_partition_statistics(2, 8, 3, 4, true);
+            create_partition_statistics(2, 16, 3, 4, true);
         let expected_statistic_partition_2 =
-            create_partition_statistics(2, 8, 1, 2, true);
+            create_partition_statistics(2, 16, 1, 2, true);
         // Verify first partition (from first scan)
         assert_eq!(statistics[0], expected_statistic_partition_1);
         // Verify second partition (from first scan)
@@ -500,9 +500,9 @@ mod test {
         let coalesce_batches: Arc<dyn ExecutionPlan> =
             Arc::new(CoalesceBatchesExec::new(scan, 2));
         let expected_statistic_partition_1 =
-            create_partition_statistics(2, 8, 3, 4, true);
+            create_partition_statistics(2, 16, 3, 4, true);
         let expected_statistic_partition_2 =
-            create_partition_statistics(2, 8, 1, 2, true);
+            create_partition_statistics(2, 16, 1, 2, true);
         let statistics = (0..coalesce_batches.output_partitioning().partition_count())
             .map(|idx| coalesce_batches.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
@@ -573,7 +573,7 @@ mod test {
             .map(|idx| global_limit.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 1);
-        let expected_statistic_partition = create_partition_statistics(2, 8, 3, 4, true);
+        let expected_statistic_partition = create_partition_statistics(2, 16, 3, 4, true);
         assert_eq!(statistics[0], expected_statistic_partition);
         Ok(())
     }
@@ -624,7 +624,11 @@ mod test {
 
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Inexact(8),
+            // Each row produces 8 bytes of data:
+            // - id column: Int32 (4 bytes) × 2 rows = 8 bytes
+            // - id + 1 column: Int32 (4 bytes) × 2 rows = 8 bytes
+            // AggregateExec cannot yet derive byte sizes for the COUNT(c) column
+            total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
@@ -642,7 +646,11 @@ mod test {
 
         let expected_p1_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_byte_size: Precision::Inexact(8),
+            // Each row produces 8 bytes of data:
+            // - id column: Int32 (4 bytes) × 2 rows = 8 bytes
+            // - id + 1 column: Int32 (4 bytes) × 2 rows = 8 bytes
+            // AggregateExec cannot yet derive byte sizes for the COUNT(c) column
+            total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
                     null_count: Precision::Absent,
