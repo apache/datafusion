@@ -119,7 +119,6 @@ You can also invoke the helper directly if you need to customise arguments furth
 ./benchmarks/compile_profile.py --profiles dev release --data /path/to/tpch_sf1
 ```
 
-
 ## Benchmark with modified configurations
 
 ### Select join algorithm
@@ -299,7 +298,6 @@ This will produce output like:
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
-
 # Benchmark Runner
 
 The `dfbench` program contains subcommands to run the various
@@ -339,6 +337,7 @@ FLAGS:
 ```
 
 # Profiling Memory Stats for each benchmark query
+
 The `mem_profile` program wraps benchmark execution to measure memory usage statistics, such as peak RSS. It runs each benchmark query in a separate subprocess, capturing the child process’s stdout to print structured output.
 
 Subcommands supported by mem_profile are the subset of those in `dfbench`.
@@ -348,15 +347,18 @@ Before running benchmarks, `mem_profile` automatically compiles the benchmark bi
 
 Currently, `mem_profile` only supports `mimalloc` as the memory allocator, since it relies on `mimalloc`'s API to collect memory statistics.
 
-Because it runs the compiled binary directly from the target directory, make sure your working directory is the top-level datafusion/ directory, where the target/ is also located. 
+Because it runs the compiled binary directly from the target directory, make sure your working directory is the top-level datafusion/ directory, where the target/ is also located.
 
-The benchmark subcommand (e.g., `tpch`) and all following arguments are passed directly to `dfbench`. Be sure to specify `--bench-profile` before the benchmark subcommand. 
+The benchmark subcommand (e.g., `tpch`) and all following arguments are passed directly to `dfbench`. Be sure to specify `--bench-profile` before the benchmark subcommand.
 
-Example: 
+Example:
+
 ```shell
 datafusion$ cargo run --profile release-nonlto --bin mem_profile -- --bench-profile release-nonlto tpch --path benchmarks/data/tpch_sf1 --partitions 4 --format parquet
 ```
+
 Example Output:
+
 ```
 Query     Time (ms)     Peak RSS  Peak Commit  Major Page Faults
 ----------------------------------------------------------------
@@ -385,19 +387,21 @@ Query     Time (ms)     Peak RSS  Peak Commit  Major Page Faults
 ```
 
 ## Reported Metrics
+
 When running benchmarks, `mem_profile` collects several memory-related statistics using the mimalloc API:
 
-- Peak RSS (Resident Set Size): 
-The maximum amount of physical memory used by the process.
-This is a process-level metric collected via OS-specific mechanisms and is not mimalloc-specific.
+- Peak RSS (Resident Set Size):
+  The maximum amount of physical memory used by the process.
+  This is a process-level metric collected via OS-specific mechanisms and is not mimalloc-specific.
 
 - Peak Commit:
-The peak amount of memory committed by the allocator (i.e., total virtual memory reserved).
-This is mimalloc-specific. It gives a more allocator-aware view of memory usage than RSS.
+  The peak amount of memory committed by the allocator (i.e., total virtual memory reserved).
+  This is mimalloc-specific. It gives a more allocator-aware view of memory usage than RSS.
 
 - Major Page Faults:
-The number of major page faults triggered during execution.
-This metric is obtained from the operating system and is not mimalloc-specific.
+  The number of major page faults triggered during execution.
+  This metric is obtained from the operating system and is not mimalloc-specific.
+
 # Writing a new benchmark
 
 ## Creating or downloading data outside of the benchmark
@@ -609,6 +613,7 @@ DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/bench.sh run t
 ```
 
 More help
+
 ```shell
 cargo run --release --bin dfbench -- tpcds --help
 ```
