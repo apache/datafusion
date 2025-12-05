@@ -783,6 +783,7 @@ impl From<&Statistics> for protobuf::Statistics {
             num_rows: Some(protobuf::Precision::from(&s.num_rows)),
             total_byte_size: Some(protobuf::Precision::from(&s.total_byte_size)),
             column_stats,
+            total_rows: Some(protobuf::Precision::from(&s.total_rows)),
         }
     }
 }
@@ -795,6 +796,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
             sum_value: Some(protobuf::Precision::from(&s.sum_value)),
             null_count: Some(protobuf::Precision::from(&s.null_count)),
             distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
+            scan_byte_size: Some(protobuf::Precision::from(&s.scan_byte_size)),
         }
     }
 }

@@ -260,6 +260,7 @@ impl<'a> DFParquetMetadata<'a> {
             }
         }
         statistics.num_rows = Precision::Exact(num_rows);
+        statistics.total_rows = Precision::Exact(num_rows);
         statistics.total_byte_size = Precision::Exact(total_byte_size);
 
         let file_metadata = metadata.file_metadata();
@@ -272,6 +273,23 @@ impl<'a> DFParquetMetadata<'a> {
         {
             file_schema = merged;
         }
+
+        // Build mapping from parquet column name to index for byte size extraction
+        let parquet_col_name_to_idx: HashMap<String, usize> = file_metadata
+            .schema_descr()
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(idx, col)| (col.name().to_string(), idx))
+            .collect();
+
+        // Compute column byte sizes from parquet metadata (Arrow in-memory sizes)
+        let column_byte_sizes = compute_column_byte_sizes(
+            table_schema,
+            row_groups_metadata,
+            &parquet_col_name_to_idx,
+            num_rows,
+        );
 
         statistics.column_statistics = if has_statistics {
             let (mut max_accs, mut min_accs) = create_max_min_accs(table_schema);
@@ -319,13 +337,72 @@ impl<'a> DFParquetMetadata<'a> {
                 &mut min_accs,
                 &mut is_max_value_exact,
                 &mut is_min_value_exact,
+                &column_byte_sizes,
             )
         } else {
-            Statistics::unknown_column(table_schema)
+            // Even without statistics, we can still get column byte sizes
+            table_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(i, _)| ColumnStatistics {
+                    scan_byte_size: column_byte_sizes[i],
+                    ..ColumnStatistics::new_unknown()
+                })
+                .collect()
         };
 
         Ok(statistics)
     }
+}
+
+/// Compute byte sizes per column in Arrow format (in-memory size after reading)
+fn compute_column_byte_sizes(
+    table_schema: &Schema,
+    row_groups_metadata: &[RowGroupMetaData],
+    parquet_col_name_to_idx: &HashMap<String, usize>,
+    num_rows: usize,
+) -> Vec<Precision<usize>> {
+    table_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            compute_arrow_column_size(
+                field.data_type(),
+                field.name(),
+                row_groups_metadata,
+                parquet_col_name_to_idx,
+                num_rows,
+            )
+        })
+        .collect()
+}
+
+/// Compute the Arrow in-memory size for a single column
+fn compute_arrow_column_size(
+    data_type: &DataType,
+    field_name: &str,
+    row_groups_metadata: &[RowGroupMetaData],
+    parquet_col_name_to_idx: &HashMap<String, usize>,
+    num_rows: usize,
+) -> Precision<usize> {
+    // For primitive types with known fixed size, compute exact size
+    if let Some(byte_width) = data_type.primitive_width() {
+        return Precision::Exact(byte_width * num_rows);
+    }
+
+    // Use the uncompressed Parquet size as an estimate for other types
+    if let Some(&parquet_idx) = parquet_col_name_to_idx.get(field_name) {
+        let uncompressed_bytes: i64 = row_groups_metadata
+            .iter()
+            .filter_map(|rg| rg.columns().get(parquet_idx))
+            .map(|col| col.uncompressed_size())
+            .sum();
+        return Precision::Inexact(uncompressed_bytes as usize);
+    }
+
+    // Otherwise, we cannot determine the size
+    Precision::Absent
 }
 
 /// Min/max aggregation can take Dictionary encode input but always produces unpacked
@@ -367,6 +444,7 @@ fn get_col_stats(
     min_values: &mut [Option<MinAccumulator>],
     is_max_value_exact: &mut [Option<bool>],
     is_min_value_exact: &mut [Option<bool>],
+    column_byte_sizes: &[Precision<usize>],
 ) -> Vec<ColumnStatistics> {
     (0..schema.fields().len())
         .map(|i| {
@@ -400,6 +478,7 @@ fn get_col_stats(
                 min_value: min_value.unwrap_or(Precision::Absent),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                scan_byte_size: column_byte_sizes[i],
             }
         })
         .collect()

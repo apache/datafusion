@@ -1091,6 +1091,9 @@ impl serde::Serialize for ColumnStats {
         if self.distinct_count.is_some() {
             len += 1;
         }
+        if self.scan_byte_size.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ColumnStats", len)?;
         if let Some(v) = self.min_value.as_ref() {
             struct_ser.serialize_field("minValue", v)?;
@@ -1106,6 +1109,9 @@ impl serde::Serialize for ColumnStats {
         }
         if let Some(v) = self.distinct_count.as_ref() {
             struct_ser.serialize_field("distinctCount", v)?;
+        }
+        if let Some(v) = self.scan_byte_size.as_ref() {
+            struct_ser.serialize_field("scanByteSize", v)?;
         }
         struct_ser.end()
     }
@@ -1127,6 +1133,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             "nullCount",
             "distinct_count",
             "distinctCount",
+            "scan_byte_size",
+            "scanByteSize",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1136,6 +1144,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             SumValue,
             NullCount,
             DistinctCount,
+            ScanByteSize,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1162,6 +1171,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             "sumValue" | "sum_value" => Ok(GeneratedField::SumValue),
                             "nullCount" | "null_count" => Ok(GeneratedField::NullCount),
                             "distinctCount" | "distinct_count" => Ok(GeneratedField::DistinctCount),
+                            "scanByteSize" | "scan_byte_size" => Ok(GeneratedField::ScanByteSize),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1186,6 +1196,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                 let mut sum_value__ = None;
                 let mut null_count__ = None;
                 let mut distinct_count__ = None;
+                let mut scan_byte_size__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::MinValue => {
@@ -1218,6 +1229,12 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             }
                             distinct_count__ = map_.next_value()?;
                         }
+                        GeneratedField::ScanByteSize => {
+                            if scan_byte_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("scanByteSize"));
+                            }
+                            scan_byte_size__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ColumnStats {
@@ -1226,6 +1243,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                     sum_value: sum_value__,
                     null_count: null_count__,
                     distinct_count: distinct_count__,
+                    scan_byte_size: scan_byte_size__,
                 })
             }
         }
@@ -8211,6 +8229,9 @@ impl serde::Serialize for Statistics {
         if !self.column_stats.is_empty() {
             len += 1;
         }
+        if self.total_rows.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.Statistics", len)?;
         if let Some(v) = self.num_rows.as_ref() {
             struct_ser.serialize_field("numRows", v)?;
@@ -8220,6 +8241,9 @@ impl serde::Serialize for Statistics {
         }
         if !self.column_stats.is_empty() {
             struct_ser.serialize_field("columnStats", &self.column_stats)?;
+        }
+        if let Some(v) = self.total_rows.as_ref() {
+            struct_ser.serialize_field("totalRows", v)?;
         }
         struct_ser.end()
     }
@@ -8237,6 +8261,8 @@ impl<'de> serde::Deserialize<'de> for Statistics {
             "totalByteSize",
             "column_stats",
             "columnStats",
+            "total_rows",
+            "totalRows",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -8244,6 +8270,7 @@ impl<'de> serde::Deserialize<'de> for Statistics {
             NumRows,
             TotalByteSize,
             ColumnStats,
+            TotalRows,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -8268,6 +8295,7 @@ impl<'de> serde::Deserialize<'de> for Statistics {
                             "numRows" | "num_rows" => Ok(GeneratedField::NumRows),
                             "totalByteSize" | "total_byte_size" => Ok(GeneratedField::TotalByteSize),
                             "columnStats" | "column_stats" => Ok(GeneratedField::ColumnStats),
+                            "totalRows" | "total_rows" => Ok(GeneratedField::TotalRows),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8290,6 +8318,7 @@ impl<'de> serde::Deserialize<'de> for Statistics {
                 let mut num_rows__ = None;
                 let mut total_byte_size__ = None;
                 let mut column_stats__ = None;
+                let mut total_rows__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::NumRows => {
@@ -8310,12 +8339,19 @@ impl<'de> serde::Deserialize<'de> for Statistics {
                             }
                             column_stats__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::TotalRows => {
+                            if total_rows__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("totalRows"));
+                            }
+                            total_rows__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(Statistics {
                     num_rows: num_rows__,
                     total_byte_size: total_byte_size__,
                     column_stats: column_stats__.unwrap_or_default(),
+                    total_rows: total_rows__,
                 })
             }
         }

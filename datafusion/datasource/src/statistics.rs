@@ -367,12 +367,14 @@ pub async fn get_statistics_with_limit(
                         min_value: file_min,
                         sum_value: file_sum,
                         distinct_count: _,
+                        scan_byte_size: file_sbs,
                     } = file_col_stats;
 
                     col_stats.null_count = col_stats.null_count.add(file_nc);
                     col_stats.max_value = col_stats.max_value.max(file_max);
                     col_stats.min_value = col_stats.min_value.min(file_min);
                     col_stats.sum_value = col_stats.sum_value.add(file_sum);
+                    col_stats.scan_byte_size = col_stats.scan_byte_size.add(file_sbs);
                 }
 
                 // If the number of rows exceeds the limit, we can stop processing
@@ -390,6 +392,7 @@ pub async fn get_statistics_with_limit(
 
     let mut statistics = Statistics {
         num_rows,
+        total_rows: num_rows,
         total_byte_size,
         column_statistics: col_stats_set,
     };

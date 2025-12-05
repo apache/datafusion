@@ -58,6 +58,7 @@ use rstest::rstest;
 fn empty_statistics() -> Statistics {
     Statistics {
         num_rows: Precision::Absent,
+        total_rows: Precision::Absent,
         total_byte_size: Precision::Absent,
         column_statistics: vec![ColumnStatistics::new_unknown()],
     }
@@ -77,6 +78,7 @@ fn small_statistics() -> Statistics {
     let (threshold_num_rows, threshold_byte_size) = get_thresholds();
     Statistics {
         num_rows: Precision::Inexact(threshold_num_rows / 128),
+        total_rows: Precision::Absent,
         total_byte_size: Precision::Inexact(threshold_byte_size / 128),
         column_statistics: vec![ColumnStatistics::new_unknown()],
     }
@@ -87,6 +89,7 @@ fn big_statistics() -> Statistics {
     let (threshold_num_rows, threshold_byte_size) = get_thresholds();
     Statistics {
         num_rows: Precision::Inexact(threshold_num_rows * 2),
+        total_rows: Precision::Absent,
         total_byte_size: Precision::Inexact(threshold_byte_size * 2),
         column_statistics: vec![ColumnStatistics::new_unknown()],
     }
@@ -97,6 +100,7 @@ fn bigger_statistics() -> Statistics {
     let (threshold_num_rows, threshold_byte_size) = get_thresholds();
     Statistics {
         num_rows: Precision::Inexact(threshold_num_rows * 4),
+        total_rows: Precision::Absent,
         total_byte_size: Precision::Inexact(threshold_byte_size * 4),
         column_statistics: vec![ColumnStatistics::new_unknown()],
     }
@@ -180,6 +184,7 @@ fn create_nested_with_min_max() -> (
     let big = Arc::new(StatisticsExec::new(
         Statistics {
             num_rows: Precision::Inexact(100_000),
+            total_rows: Precision::Absent,
             column_statistics: create_column_stats(Some(0), Some(50_000), Some(50_000)),
             total_byte_size: Precision::Absent,
         },
@@ -189,6 +194,7 @@ fn create_nested_with_min_max() -> (
     let medium = Arc::new(StatisticsExec::new(
         Statistics {
             num_rows: Precision::Inexact(10_000),
+            total_rows: Precision::Absent,
             column_statistics: create_column_stats(Some(1000), Some(5000), Some(1000)),
             total_byte_size: Precision::Absent,
         },
@@ -198,6 +204,7 @@ fn create_nested_with_min_max() -> (
     let small = Arc::new(StatisticsExec::new(
         Statistics {
             num_rows: Precision::Inexact(1000),
+            total_rows: Precision::Absent,
             column_statistics: create_column_stats(Some(0), Some(100_000), Some(1000)),
             total_byte_size: Precision::Absent,
         },

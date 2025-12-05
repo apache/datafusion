@@ -117,6 +117,7 @@ impl TableProvider for StatisticsValidation {
         Ok(Arc::new(Self::new(
             Statistics {
                 num_rows: current_stat.num_rows,
+                total_rows: Precision::Absent,
                 column_statistics: proj_col_stats,
                 // TODO stats: knowing the type of the new columns we can guess the output size
                 total_byte_size: Precision::Absent,
@@ -206,6 +207,7 @@ fn fully_defined() -> (Statistics, Schema) {
     (
         Statistics {
             num_rows: Precision::Exact(13),
+            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent, // ignore byte size for now
             column_statistics: vec![
                 ColumnStatistics {
@@ -214,6 +216,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(-24))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(13),
@@ -221,6 +224,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-6783))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(5),
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         },
@@ -273,6 +277,7 @@ async fn sql_limit() -> Result<()> {
     assert_eq!(
         Statistics {
             num_rows: Precision::Exact(5),
+            total_rows: Precision::Absent,
             column_statistics: stats
                 .column_statistics
                 .iter()

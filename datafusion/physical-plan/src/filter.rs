@@ -238,6 +238,7 @@ impl FilterExec {
         );
         Ok(Statistics {
             num_rows,
+            total_rows: input_stats.total_rows,
             total_byte_size,
             column_statistics,
         })
@@ -647,6 +648,7 @@ fn collect_new_statistics(
                         min_value: Precision::Exact(ScalarValue::Null),
                         sum_value: Precision::Exact(ScalarValue::Null),
                         distinct_count: Precision::Exact(0),
+                        scan_byte_size: input_column_stats[idx].scan_byte_size,
                     };
                 };
                 let (lower, upper) = interval.into_bounds();
@@ -661,6 +663,7 @@ fn collect_new_statistics(
                     min_value,
                     sum_value: Precision::Absent,
                     distinct_count: distinct_count.to_inexact(),
+                    scan_byte_size: input_column_stats[idx].scan_byte_size,
                 }
             },
         )
@@ -946,6 +949,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(100),
+                total_rows: Precision::Absent,
                 total_byte_size: Precision::Inexact(100 * bytes_per_row),
                 column_statistics: vec![ColumnStatistics {
                     min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
@@ -990,6 +994,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(100),
+                total_rows: Precision::Absent,
                 column_statistics: vec![ColumnStatistics {
                     min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
                     max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
@@ -1040,6 +1045,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(100),
+                total_rows: Precision::Absent,
                 column_statistics: vec![
                     ColumnStatistics {
                         min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
@@ -1139,6 +1145,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(1000),
+                total_rows: Precision::Absent,
                 total_byte_size: Precision::Inexact(4000),
                 column_statistics: vec![
                     ColumnStatistics {
@@ -1257,6 +1264,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(1000),
+                total_rows: Precision::Absent,
                 total_byte_size: Precision::Inexact(4000),
                 column_statistics: vec![
                     ColumnStatistics {
@@ -1312,6 +1320,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(1000),
+                total_rows: Precision::Absent,
                 total_byte_size: Precision::Inexact(4000),
                 column_statistics: vec![
                     ColumnStatistics {
@@ -1357,6 +1366,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Null),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     min_value: Precision::Exact(ScalarValue::Null),
@@ -1364,6 +1374,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Null),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
             ]
         );
@@ -1380,6 +1391,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(1000),
+                total_rows: Precision::Absent,
                 total_byte_size: Precision::Inexact(4000),
                 column_statistics: vec![
                     ColumnStatistics {
@@ -1458,6 +1470,7 @@ mod tests {
 
         let expected_filter_statistics = Statistics {
             num_rows: Precision::Absent,
+            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics {
                 null_count: Precision::Absent,
@@ -1465,6 +1478,7 @@ mod tests {
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                scan_byte_size: Precision::Absent,
             }],
         };
 
@@ -1521,6 +1535,7 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(1000),
+                total_rows: Precision::Absent,
                 total_byte_size: Precision::Inexact(4000),
                 column_statistics: vec![ColumnStatistics {
                     ..Default::default()

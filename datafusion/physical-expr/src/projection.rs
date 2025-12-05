@@ -1766,6 +1766,7 @@ pub(crate) mod tests {
     fn get_stats() -> Statistics {
         Statistics {
             num_rows: Precision::Exact(5),
+            total_rows: Precision::Exact(5),
             total_byte_size: Precision::Exact(23),
             column_statistics: vec![
                 ColumnStatistics {
@@ -1774,6 +1775,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -1781,6 +1783,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -1788,6 +1791,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         }
@@ -1820,6 +1824,7 @@ pub(crate) mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
+            total_rows: Precision::Exact(5),
             total_byte_size: Precision::Exact(23),
             column_statistics: vec![
                 ColumnStatistics {
@@ -1828,6 +1833,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -1835,6 +1841,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -1862,6 +1869,7 @@ pub(crate) mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
+            total_rows: Precision::Exact(5),
             total_byte_size: Precision::Exact(60),
             column_statistics: vec![
                 ColumnStatistics {
@@ -1870,6 +1878,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -1877,6 +1886,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         };

@@ -663,6 +663,7 @@ impl DataSource for FileScanConfig {
 
                     return Ok(Statistics {
                         num_rows: stat.num_rows,
+                        total_rows: stat.total_rows,
                         total_byte_size: stat.total_byte_size,
                         column_statistics: table_cols_stats,
                     });
@@ -817,6 +818,7 @@ impl FileScanConfig {
 
         Statistics {
             num_rows: statistics.num_rows,
+            total_rows: statistics.total_rows,
             // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
             total_byte_size: statistics.total_byte_size,
             column_statistics: table_cols_stats,
@@ -1620,6 +1622,7 @@ mod tests {
                     range: None,
                     statistics: Some(Arc::new(Statistics {
                         num_rows: Precision::Absent,
+                        total_rows: Precision::Absent,
                         total_byte_size: Precision::Absent,
                         column_statistics: file
                             .statistics
@@ -2091,6 +2094,7 @@ mod tests {
         // Create statistics for all 4 columns
         let file_group_stats = Statistics {
             num_rows: Precision::Exact(100),
+            total_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(1024),
             column_statistics: vec![
                 ColumnStatistics {

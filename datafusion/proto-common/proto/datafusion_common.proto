@@ -609,6 +609,7 @@ message Statistics {
   Precision num_rows = 1;
   Precision total_byte_size = 2;
   repeated ColumnStats column_stats = 3;
+  Precision total_rows = 4;
 }
 
 message ColumnStats {
@@ -617,4 +618,5 @@ message ColumnStats {
   Precision sum_value = 5;
   Precision null_count = 3;
   Precision distinct_count = 4;
+  Precision scan_byte_size = 6;
 }

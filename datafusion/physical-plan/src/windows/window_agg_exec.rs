@@ -172,6 +172,7 @@ impl WindowAggExec {
         }
         Ok(Statistics {
             num_rows: input_stat.num_rows,
+            total_rows: input_stat.total_rows,
             column_statistics,
             total_byte_size: Precision::Absent,
         })

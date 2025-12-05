@@ -956,6 +956,7 @@ mod tests {
             values.partition_statistics(None)?,
             Statistics {
                 num_rows: Precision::Exact(rows),
+                total_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important
                 column_statistics: vec![ColumnStatistics {
                     null_count: Precision::Exact(rows), // there are only nulls
@@ -963,6 +964,7 @@ mod tests {
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
+                    scan_byte_size: Precision::Absent,
                 },],
             }
         );
