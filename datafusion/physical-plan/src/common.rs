@@ -173,6 +173,7 @@ pub fn compute_record_batch_statistics(
 
     Statistics {
         num_rows: Precision::Exact(nb_rows),
+        total_rows: Precision::Exact(nb_rows),
         total_byte_size: Precision::Exact(total_byte_size),
         column_statistics,
     }
@@ -254,6 +255,7 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(3),
+            total_rows: Precision::Exact(3),
             total_byte_size: Precision::Exact(byte_size),
             column_statistics: vec![
                 ColumnStatistics {
@@ -262,6 +264,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -269,6 +272,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -295,6 +299,7 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(6),
+            total_rows: Precision::Exact(6),
             total_byte_size: Precision::Exact(byte_size),
             column_statistics: vec![ColumnStatistics {
                 distinct_count: Precision::Absent,
@@ -302,6 +307,7 @@ mod tests {
                 min_value: Precision::Absent,
                 sum_value: Precision::Absent,
                 null_count: Precision::Exact(3),
+                scan_byte_size: Precision::Absent,
             }],
         };
 

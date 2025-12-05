@@ -449,6 +449,7 @@ fn stats_cartesian_product(
                 })
                 .map(|row_count| s.sum_value.multiply(&row_count))
                 .unwrap_or(Precision::Absent),
+            scan_byte_size: Precision::Absent,
         })
         .chain(right_col_stats.into_iter().map(|s| {
             ColumnStatistics {
@@ -467,12 +468,14 @@ fn stats_cartesian_product(
                     })
                     .map(|row_count| s.sum_value.multiply(&row_count))
                     .unwrap_or(Precision::Absent),
+                scan_byte_size: Precision::Absent,
             }
         }))
         .collect();
 
     Statistics {
         num_rows,
+        total_rows: Precision::Absent,
         total_byte_size,
         column_statistics: cross_join_stats,
     }
@@ -696,6 +699,7 @@ mod tests {
 
         let left = Statistics {
             num_rows: Precision::Exact(left_row_count),
+            total_rows: Precision::Exact(left_row_count),
             total_byte_size: Precision::Exact(left_bytes),
             column_statistics: vec![
                 ColumnStatistics {
@@ -704,6 +708,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -711,12 +716,14 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         };
 
         let right = Statistics {
             num_rows: Precision::Exact(right_row_count),
+            total_rows: Precision::Exact(right_row_count),
             total_byte_size: Precision::Exact(right_bytes),
             column_statistics: vec![ColumnStatistics {
                 distinct_count: Precision::Exact(3),
@@ -724,6 +731,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
+                scan_byte_size: Precision::Absent,
             }],
         };
 
@@ -731,6 +739,7 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(left_row_count * right_row_count),
+            total_rows: Precision::Absent,
             total_byte_size: Precision::Exact(2 * left_bytes * right_bytes),
             column_statistics: vec![
                 ColumnStatistics {
@@ -741,6 +750,7 @@ mod tests {
                         42 * right_row_count as i64,
                     ))),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -748,6 +758,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3 * right_row_count),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
@@ -757,6 +768,7 @@ mod tests {
                         20 * left_row_count as i64,
                     ))),
                     null_count: Precision::Exact(2 * left_row_count),
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -770,6 +782,7 @@ mod tests {
 
         let left = Statistics {
             num_rows: Precision::Exact(left_row_count),
+            total_rows: Precision::Exact(left_row_count),
             total_byte_size: Precision::Exact(23),
             column_statistics: vec![
                 ColumnStatistics {
@@ -778,6 +791,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -785,12 +799,14 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         };
 
         let right = Statistics {
             num_rows: Precision::Absent,
+            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics {
                 distinct_count: Precision::Exact(3),
@@ -798,6 +814,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
+                scan_byte_size: Precision::Absent,
             }],
         };
 
@@ -805,6 +822,7 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Absent,
+            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![
                 ColumnStatistics {
@@ -813,6 +831,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Absent, // we don't know the row count on the right
                     null_count: Precision::Absent, // we don't know the row count on the right
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -820,6 +839,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent, // we don't know the row count on the right
+                    scan_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
@@ -829,6 +849,7 @@ mod tests {
                         20 * left_row_count as i64,
                     ))),
                     null_count: Precision::Exact(2 * left_row_count),
+                    scan_byte_size: Precision::Absent,
                 },
             ],
         };

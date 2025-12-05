@@ -425,6 +425,7 @@ pub(crate) fn estimate_join_statistics(
     };
     Ok(Statistics {
         num_rows,
+        total_rows: Precision::Absent,
         total_byte_size: Precision::Absent,
         column_statistics,
     })
@@ -461,11 +462,13 @@ fn estimate_join_cardinality(
             let ij_cardinality = estimate_inner_join_cardinality(
                 Statistics {
                     num_rows: left_stats.num_rows,
+                    total_rows: Precision::Absent,
                     total_byte_size: Precision::Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
                     num_rows: right_stats.num_rows,
+                    total_rows: Precision::Absent,
                     total_byte_size: Precision::Absent,
                     column_statistics: right_col_stats,
                 },
@@ -2067,6 +2070,7 @@ mod tests {
                 num_rows.map(Inexact)
             }
             .unwrap_or(Absent),
+            total_rows: Absent,
             column_statistics: column_stats,
             total_byte_size: Absent,
         }
@@ -2084,6 +2088,7 @@ mod tests {
             max_value: max.map(ScalarValue::from),
             sum_value: Absent,
             null_count,
+            scan_byte_size: Absent,
         }
     }
 
@@ -2268,11 +2273,13 @@ mod tests {
                 estimate_inner_join_cardinality(
                     Statistics {
                         num_rows: Inexact(left_num_rows),
+                        total_rows: Absent,
                         total_byte_size: Absent,
                         column_statistics: left_col_stats.clone(),
                     },
                     Statistics {
                         num_rows: Inexact(right_num_rows),
+                        total_rows: Absent,
                         total_byte_size: Absent,
                         column_statistics: right_col_stats.clone(),
                     },
@@ -2323,11 +2330,13 @@ mod tests {
             estimate_inner_join_cardinality(
                 Statistics {
                     num_rows: Inexact(400),
+                    total_rows: Absent,
                     total_byte_size: Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
                     num_rows: Inexact(400),
+                    total_rows: Absent,
                     total_byte_size: Absent,
                     column_statistics: right_col_stats,
                 },
@@ -2357,11 +2366,13 @@ mod tests {
             estimate_inner_join_cardinality(
                 Statistics {
                     num_rows: Inexact(100),
+                    total_rows: Absent,
                     total_byte_size: Absent,
                     column_statistics: left_col_stats,
                 },
                 Statistics {
                     num_rows: Inexact(100),
+                    total_rows: Absent,
                     total_byte_size: Absent,
                     column_statistics: right_col_stats,
                 },
@@ -2615,11 +2626,13 @@ mod tests {
                 &join_type,
                 Statistics {
                     num_rows: Inexact(outer_num_rows),
+                    total_rows: Absent,
                     total_byte_size: Absent,
                     column_statistics: outer_col_stats,
                 },
                 Statistics {
                     num_rows: Inexact(inner_num_rows),
+                    total_rows: Absent,
                     total_byte_size: Absent,
                     column_statistics: inner_col_stats,
                 },
@@ -2649,11 +2662,13 @@ mod tests {
             &JoinType::LeftSemi,
             Statistics {
                 num_rows: Absent,
+                total_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
             Statistics {
                 num_rows: Exact(10),
+                total_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
@@ -2668,11 +2683,13 @@ mod tests {
             &JoinType::LeftSemi,
             Statistics {
                 num_rows: Inexact(500),
+                total_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
             Statistics {
                 num_rows: Absent,
+                total_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
@@ -2685,11 +2702,13 @@ mod tests {
             &JoinType::LeftSemi,
             Statistics {
                 num_rows: Absent,
+                total_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
             Statistics {
                 num_rows: Absent,
+                total_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats,
             },

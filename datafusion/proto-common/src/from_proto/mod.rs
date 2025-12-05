@@ -699,6 +699,11 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
             } else {
                 Precision::Absent
             },
+            scan_byte_size: if let Some(sbs) = &cs.scan_byte_size {
+                sbs.clone().into()
+            } else {
+                Precision::Absent
+            },
         }
     }
 }
@@ -827,6 +832,11 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
         Ok(Statistics {
             num_rows: if let Some(nr) = &s.num_rows {
                 nr.clone().into()
+            } else {
+                Precision::Absent
+            },
+            total_rows: if let Some(tr) = &s.total_rows {
+                tr.clone().into()
             } else {
                 Precision::Absent
             },

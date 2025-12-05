@@ -427,6 +427,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
             range: None,
             statistics: Some(Arc::new(Statistics {
                 num_rows: Precision::Exact(100),
+                total_rows: Precision::Exact(100),
                 total_byte_size: Precision::Exact(1000),
                 column_statistics: vec![ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -434,6 +435,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
+                    scan_byte_size: Precision::Absent,
                 }],
             })),
             extensions: None,

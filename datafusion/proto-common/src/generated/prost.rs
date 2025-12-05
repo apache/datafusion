@@ -917,6 +917,8 @@ pub struct Statistics {
     pub total_byte_size: ::core::option::Option<Precision>,
     #[prost(message, repeated, tag = "3")]
     pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
+    #[prost(message, optional, tag = "4")]
+    pub total_rows: ::core::option::Option<Precision>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ColumnStats {
@@ -930,6 +932,8 @@ pub struct ColumnStats {
     pub null_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "4")]
     pub distinct_count: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "6")]
+    pub scan_byte_size: ::core::option::Option<Precision>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

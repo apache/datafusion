@@ -190,6 +190,7 @@ impl ExecutionPlan for CustomExecutionPlan {
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();
         Ok(Statistics {
             num_rows: Precision::Exact(batch.num_rows()),
+            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: self
                 .projection

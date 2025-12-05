@@ -898,6 +898,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             )])])
             .with_statistics(Statistics {
                 num_rows: Precision::Inexact(100),
+                total_rows: Precision::Absent,
                 total_byte_size: Precision::Inexact(1024),
                 column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
                     vec![Field::new("col", DataType::Utf8, false)],
@@ -958,6 +959,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             )])])
             .with_statistics(Statistics {
                 num_rows: Precision::Inexact(100),
+                total_rows: Precision::Absent,
                 total_byte_size: Precision::Inexact(1024),
                 column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
                     vec![Field::new("col", DataType::Utf8, false)],
