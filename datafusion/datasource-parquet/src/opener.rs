@@ -147,8 +147,7 @@ impl FileOpener for ParquetOpener {
             .zip(self.partition_fields.iter())
             .map(|(value, field)| (field.name().as_str(), value))
             .collect::<HashMap<_, _>>();
-        let mut projection = self.projection.clone();
-        projection = projection.try_map_exprs(|expr| {
+        let mut projection = self.projection.clone().try_map_exprs(|expr| {
             replace_columns_with_literals(Arc::clone(&expr), &partition_values)
         })?;
         // Calculate the outptut schema after projection
