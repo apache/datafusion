@@ -102,6 +102,8 @@ use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, Wind
 
 use prost::bytes::BufMut;
 use prost::Message;
+use datafusion::physical_expr::async_scalar_function::AsyncFuncExpr;
+use datafusion::physical_plan::async_func::AsyncFuncExec;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -250,6 +252,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::SortMergeJoin(sort_join) => {
                 self.try_into_sort_join(sort_join, ctx, extension_codec)
+            }
+            PhysicalPlanType::AsyncFunc(async_func) => {
+                self.try_into_async_func_physical_plan(
+                    async_func,
+                    ctx,
+                    runtime,
+                    extension_codec,
+                )
             }
         }
     }
@@ -1972,6 +1982,39 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(CooperativeExec::new(input)))
     }
 
+    fn try_into_async_func_physical_plan(
+        &self,
+        async_func: &protobuf::AsyncFuncExecNode,
+        ctx: &SessionContext,
+        runtime: &RuntimeEnv,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> =
+            into_physical_plan(&async_func.input, ctx, runtime, extension_codec)?;
+
+        let async_exprs = async_func
+            .async_exprs
+            .iter()
+            .zip(async_func.async_expr_names.iter())
+            .map(|(expr, name)| {
+                let physical_expr = parse_physical_expr(
+                    expr,
+                    ctx,
+                    input.schema().as_ref(),
+                    extension_codec,
+                )?;
+
+                Ok(Arc::new(AsyncFuncExpr::try_new(
+                    name.clone(),
+                    physical_expr,
+                    input.schema().as_ref(),
+                )?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
+    }
+
     fn try_from_explain_exec(
         exec: &ExplainExec,
         _extension_codec: &dyn PhysicalExtensionCodec,
@@ -3221,6 +3264,34 @@ impl protobuf::PhysicalPlanNode {
         }
 
         Ok(None)
+    }
+
+    fn try_from_async_func_exec(
+        exec: &AsyncFuncExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+            exec.input(),
+            extension_codec,
+        )?;
+
+        let mut async_exprs = vec![];
+        let mut async_expr_names = vec![];
+
+        for async_expr in exec.async_exprs() {
+            async_exprs.push(serialize_physical_expr(&async_expr.func, extension_codec)?);
+            async_expr_names.push(async_expr.name.clone())
+        }
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::AsyncFunc(Box::new(
+                protobuf::AsyncFuncExecNode {
+                    input: Some(Box::new(input)),
+                    async_exprs,
+                    async_expr_names,
+                },
+            ))),
+        })
     }
 }
 

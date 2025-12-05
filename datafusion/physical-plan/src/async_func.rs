@@ -100,6 +100,14 @@ impl AsyncFuncExec {
             input.boundedness(),
         ))
     }
+
+    pub fn async_exprs(&self) -> Vec<Arc<AsyncFuncExpr>> {
+        self.async_exprs.clone()
+    }
+
+    pub fn input(&self) -> Arc<dyn ExecutionPlan> {
+        Arc::clone(&self.input)
+    }
 }
 
 impl DisplayAs for AsyncFuncExec {
