@@ -361,12 +361,7 @@ impl Drop for SpillPoolWriter {
 ///
 /// # Example
 ///
-/// Note: This example uses `no_run` because it creates real temporary files on disk
-/// via `RuntimeEnv::default()`. Running this doctest in parallel with other tests
-/// during `cargo test` would exhaust the shared system temp directory, causing
-/// disk space errors in tests that also create spill files.
-///
-/// ```no_run
+/// ```
 /// use std::sync::Arc;
 /// use arrow::array::{ArrayRef, Int32Array};
 /// use arrow::datatypes::{DataType, Field, Schema};
@@ -389,33 +384,28 @@ impl Drop for SpillPoolWriter {
 /// // Create channel with 1MB file size limit
 /// let (writer, mut reader) = spill_pool::channel(1024 * 1024, spill_manager);
 ///
-/// // Spawn writer and reader concurrently; writer wakes reader via wakers
-/// let writer_task = tokio::spawn(async move {
+/// // Spawn writer task to produce batches
+/// let write_handle = tokio::spawn(async move {
 ///     for i in 0..5 {
 ///         let array: ArrayRef = Arc::new(Int32Array::from(vec![i; 100]));
 ///         let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
-///         writer.push_batch(&batch)?;
+///         writer.push_batch(&batch).unwrap();
 ///     }
-///     // Explicitly drop writer to finalize the spill file and wake the reader
-///     drop(writer);
-///     datafusion_common::Result::<()>::Ok(())
+///     // Writer dropped here, finalizing current file
 /// });
 ///
-/// let reader_task = tokio::spawn(async move {
-///     let mut batches_read = 0;
-///     while let Some(result) = reader.next().await {
-///         let _batch = result?;
-///         batches_read += 1;
+/// // Reader consumes batches in FIFO order (can run concurrently with writer)
+/// let mut batches_read = 0;
+/// while let Some(result) = reader.next().await {
+///     let batch = result?;
+///     batches_read += 1;
+///     // Process batch...
+///     if batches_read == 5 {
+///         break; // Got all expected batches
 ///     }
-///     datafusion_common::Result::<usize>::Ok(batches_read)
-/// });
+/// }
 ///
-/// let (writer_res, reader_res) = tokio::join!(writer_task, reader_task);
-/// writer_res
-///     .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))??;
-/// let batches_read = reader_res
-///     .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))??;
-///
+/// write_handle.await.unwrap();
 /// assert_eq!(batches_read, 5);
 /// # Ok(())
 /// # }
@@ -1183,9 +1173,6 @@ mod tests {
     async fn test_reader_catches_up_to_writer() -> Result<()> {
         let (writer, mut reader) = create_spill_channel(1024 * 1024);
 
-        let (reader_waiting_tx, reader_waiting_rx) = tokio::sync::oneshot::channel();
-        let (first_read_done_tx, first_read_done_rx) = tokio::sync::oneshot::channel();
-
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum ReadWriteEvent {
             ReadStart,
@@ -1194,46 +1181,40 @@ mod tests {
         }
 
         let events = Arc::new(Mutex::new(vec![]));
-        // Keep the synchronization comments close to the primitives used for coordination.
         // Start reader first (will pend)
         let reader_events = Arc::clone(&events);
         let reader_handle = SpawnedTask::spawn(async move {
             reader_events.lock().push(ReadWriteEvent::ReadStart);
-            reader_waiting_tx
-                .send(())
-                .expect("reader_waiting channel closed unexpectedly");
             let result = reader.next().await.unwrap().unwrap();
             reader_events
                 .lock()
                 .push(ReadWriteEvent::Read(result.num_rows()));
-            first_read_done_tx
-                .send(())
-                .expect("first_read_done channel closed unexpectedly");
             let result = reader.next().await.unwrap().unwrap();
             reader_events
                 .lock()
                 .push(ReadWriteEvent::Read(result.num_rows()));
         });
 
-        // Wait until the reader is pending on the first batch
-        reader_waiting_rx
-            .await
-            .expect("reader should signal when waiting");
+        // Give reader time to start pending
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
 
         // Now write a batch (should wake the reader)
         let batch = create_test_batch(0, 5);
         events.lock().push(ReadWriteEvent::Write(batch.num_rows()));
         writer.push_batch(&batch)?;
 
-        // Wait for the reader to finish the first read before allowing the
-        // second write. This ensures deterministic ordering of events:
-        // 1. The reader starts and pends on the first `next()`
-        // 2. The first write wakes the reader
-        // 3. The reader processes the first batch and signals completion
-        // 4. The second write is issued, ensuring consistent event ordering
-        first_read_done_rx
+        // Wait for the reader to process
+        let processed = async {
+            loop {
+                if events.lock().len() >= 3 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_micros(500)).await;
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(1), processed)
             .await
-            .expect("reader should signal when first read completes");
+            .unwrap();
 
         // Write another batch
         let batch = create_test_batch(5, 10);
