@@ -201,7 +201,10 @@ mod tests {
             .options_mut()
             .execution
             .substrait_alias_all_expressions = true;
-        let ctx = add_plan_schemas_to_ctx(SessionContext::new_with_config(config), &proto_plan)?;
+        let ctx = add_plan_schemas_to_ctx(
+            SessionContext::new_with_config(config),
+            &proto_plan,
+        )?;
 
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
@@ -209,7 +212,9 @@ mod tests {
         let plan_str = format!("{}", plan);
 
         // Extract UUIDs and map them to labels for better readability
-        let uuid_regex = Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
+        let uuid_regex =
+            Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+                .unwrap();
         let mut uuid_map = std::collections::HashMap::new();
         let mut uuid_counter = 1;
 
@@ -230,7 +235,10 @@ mod tests {
 
         // Verify that the plan has the expected structure with consistent UUID references
         // The same UUID should be used when referencing the same column across the plan
-        assert!(labeled_plan.contains("AS [UUID"), "Plan should contain UUID aliases");
+        assert!(
+            labeled_plan.contains("AS [UUID"),
+            "Plan should contain UUID aliases"
+        );
 
         // Snapshot test showing the actual UUID numbers to demonstrate correspondence
         // This shows how the same UUID appears in multiple places when referencing the same expression

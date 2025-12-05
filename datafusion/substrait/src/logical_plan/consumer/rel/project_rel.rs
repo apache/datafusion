@@ -84,7 +84,9 @@ pub async fn from_project_rel(
                 // project say before a join that it is deduplicated with respect to those columns.
                 // See: https://github.com/apache/datafusion/pull/17299
                 match e {
-                    lit @ Expr::Literal(_, _) => lit.alias(uuid::Uuid::new_v4().to_string()),
+                    lit @ Expr::Literal(_, _) => {
+                        lit.alias(uuid::Uuid::new_v4().to_string())
+                    }
                     _ => e,
                 }
             };
