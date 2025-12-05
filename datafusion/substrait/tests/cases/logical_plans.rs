@@ -209,7 +209,7 @@ mod tests {
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
         // Convert the plan to string to analyze the UUIDs
-        let plan_str = format!("{}", plan);
+        let plan_str = format!("{plan}");
 
         // Extract UUIDs and map them to labels for better readability
         let uuid_regex =
@@ -222,7 +222,7 @@ mod tests {
         for cap in uuid_regex.captures_iter(&plan_str) {
             let uuid = cap.get(0).unwrap().as_str();
             if !uuid_map.contains_key(uuid) {
-                uuid_map.insert(uuid.to_string(), format!("[UUID{}]", uuid_counter));
+                uuid_map.insert(uuid.to_string(), format!("[UUID{uuid_counter}]"));
                 uuid_counter += 1;
             }
         }
