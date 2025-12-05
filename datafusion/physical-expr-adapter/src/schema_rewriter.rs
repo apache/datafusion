@@ -50,13 +50,13 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 /// - `Result<Arc<dyn PhysicalExpr>>`: The rewritten physical expression with columns replaced by literals.
 pub fn replace_columns_with_literals(
     expr: Arc<dyn PhysicalExpr>,
-    replacements: &HashMap<&str, ScalarValue>,
+    replacements: &HashMap<&str, &ScalarValue>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.transform(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             if let Some(replacement_value) = replacements.get(column.name()) {
                 return Ok(Transformed::yes(expressions::lit(
-                    replacement_value.clone(),
+                    (*replacement_value).clone(),
                 )));
             }
         }
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn test_replace_columns_with_literals() -> Result<()> {
         let partition_value = ScalarValue::Utf8(Some("test_value".to_string()));
-        let replacements = HashMap::from([("partition_col", partition_value.clone())]);
+        let replacements = HashMap::from([("partition_col", &partition_value)]);
 
         let column_expr =
             Arc::new(Column::new("partition_col", 0)) as Arc<dyn PhysicalExpr>;
@@ -706,8 +706,8 @@ mod tests {
 
     #[test]
     fn test_replace_columns_with_literals_no_match() -> Result<()> {
-        let replacements =
-            HashMap::from([("other_col", ScalarValue::Utf8(Some("value".to_string())))]);
+        let value = ScalarValue::Utf8(Some("test_value".to_string()));
+        let replacements = HashMap::from([("other_col", &value)]);
 
         let column_expr =
             Arc::new(Column::new("partition_col", 0)) as Arc<dyn PhysicalExpr>;
@@ -721,10 +721,9 @@ mod tests {
 
     #[test]
     fn test_replace_columns_with_literals_nested_expr() -> Result<()> {
-        let replacements = HashMap::from([
-            ("a", ScalarValue::Int64(Some(10))),
-            ("b", ScalarValue::Int64(Some(20))),
-        ]);
+        let value_a = ScalarValue::Int64(Some(10));
+        let value_b = ScalarValue::Int64(Some(20));
+        let replacements = HashMap::from([("a", &value_a), ("b", &value_b)]);
 
         // Create expression: a + b
         let expr = Arc::new(expressions::BinaryExpr::new(

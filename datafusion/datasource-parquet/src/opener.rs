@@ -118,7 +118,7 @@ pub(super) struct ParquetOpener {
 }
 
 impl FileOpener for ParquetOpener {
-    fn open(&self, mut partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
+    fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let file_range = partitioned_file.range.clone();
         let extensions = partitioned_file.extensions.clone();
         let file_location = partitioned_file.object_meta.location.clone();
@@ -141,9 +141,9 @@ impl FileOpener for ParquetOpener {
         let batch_size = self.batch_size;
 
         // Get the projection, replacing partition columns with literals
-        let partition_values = partitioned_file.partition_values;
-        let partition_values = partition_values
-            .into_iter()
+        let partition_values = partitioned_file
+            .partition_values
+            .iter()
             .zip(self.partition_fields.iter())
             .map(|(value, field)| (field.name().as_str(), value))
             .collect::<HashMap<_, _>>();
