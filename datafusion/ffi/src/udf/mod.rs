@@ -305,24 +305,22 @@ impl Hash for ForeignScalarUDF {
     }
 }
 
-impl TryFrom<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
-    type Error = DataFusionError;
-
-    fn try_from(udf: &FFI_ScalarUDF) -> Result<Self, Self::Error> {
+impl From<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
+    fn from(udf: &FFI_ScalarUDF) -> Self {
         if (udf.library_marker_id)() == crate::get_library_marker_id() {
-            Ok(Arc::clone(udf.inner().inner()))
+            Arc::clone(udf.inner().inner())
         } else {
             let name = udf.name.to_owned().into();
             let signature = Signature::user_defined((&udf.volatility).into());
 
             let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
 
-            Ok(Arc::new(ForeignScalarUDF {
+            Arc::new(ForeignScalarUDF {
                 name,
                 udf: udf.clone(),
                 aliases,
                 signature,
-            }))
+            })
         }
     }
 }
@@ -440,7 +438,7 @@ mod tests {
         let mut local_udf: FFI_ScalarUDF = Arc::clone(&original_udf).into();
         local_udf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&local_udf).try_into()?;
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&local_udf).into();
 
         assert_eq!(original_udf.name(), foreign_udf.name());
 
@@ -456,12 +454,12 @@ mod tests {
         let mut ffi_udf = FFI_ScalarUDF::from(original_udf);
 
         // Verify local libraries can be downcast to their original
-        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).try_into()?;
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
         assert!(foreign_udf.as_any().downcast_ref::<AbsFunc>().is_some());
 
         // Verify different library markers generate foreign providers
         ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
-        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).try_into()?;
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
         assert!(foreign_udf
             .as_any()
             .downcast_ref::<ForeignScalarUDF>()

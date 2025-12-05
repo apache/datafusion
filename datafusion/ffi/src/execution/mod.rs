@@ -15,13 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
-// Make sure fast / cheap clones on Arc are explicit:
-// https://github.com/apache/datafusion/issues/11143
-#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
-#![deny(clippy::allow_attributes)]
+mod task_ctx;
+pub mod task_ctx_provider;
 
-pub mod file_format;
-pub mod source;
-
-pub use file_format::*;
+pub use task_ctx::FFI_TaskContext;
+pub use task_ctx_provider::FFI_TaskContextProvider;

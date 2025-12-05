@@ -1595,12 +1595,14 @@ impl SortMergeJoinStream {
                 &self.schema,
                 &[filtered_record_batch, null_joined_streamed_batch],
             )?;
-        } else if matches!(self.join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
+        } else if matches!(
+            self.join_type,
+            JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+                | JoinType::RightSemi
+        ) {
             let output_column_indices = (0..left_columns_length).collect::<Vec<_>>();
-            filtered_record_batch =
-                filtered_record_batch.project(&output_column_indices)?;
-        } else if matches!(self.join_type, JoinType::RightAnti | JoinType::RightSemi) {
-            let output_column_indices = (0..right_columns_length).collect::<Vec<_>>();
             filtered_record_batch =
                 filtered_record_batch.project(&output_column_indices)?;
         } else if matches!(self.join_type, JoinType::Full)

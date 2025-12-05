@@ -18,17 +18,17 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::cache::CacheAccessor;
 use crate::cache::cache_manager::{
     FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
 };
 use crate::cache::lru_queue::LruQueue;
-use crate::cache::CacheAccessor;
 
 use datafusion_common::Statistics;
 
 use dashmap::DashMap;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 /// Default implementation of [`FileStatisticsCache`]
 ///
@@ -88,7 +88,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     }
 
     fn remove(&self, k: &Path) -> Option<Arc<Statistics>> {
-        self.statistics.remove(k).map(|x| x.1 .1)
+        self.statistics.remove(k).map(|x| x.1.1)
     }
 
     fn contains_key(&self, k: &Path) -> bool {
@@ -104,71 +104,6 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     }
     fn name(&self) -> String {
         "DefaultFileStatisticsCache".to_string()
-    }
-}
-
-/// Default implementation of [`ListFilesCache`]
-///
-/// Collected files metadata for listing files.
-///
-/// Cache is not invalided until user calls [`Self::remove`] or [`Self::clear`].
-///
-/// [`ListFilesCache`]: crate::cache::cache_manager::ListFilesCache
-#[derive(Default)]
-pub struct DefaultListFilesCache {
-    statistics: DashMap<Path, Arc<Vec<ObjectMeta>>>,
-}
-
-impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
-    type Extra = ObjectMeta;
-
-    fn get(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.statistics.get(k).map(|x| Arc::clone(x.value()))
-    }
-
-    fn get_with_extra(
-        &self,
-        _k: &Path,
-        _e: &Self::Extra,
-    ) -> Option<Arc<Vec<ObjectMeta>>> {
-        panic!("Not supported DefaultListFilesCache get_with_extra")
-    }
-
-    fn put(
-        &self,
-        key: &Path,
-        value: Arc<Vec<ObjectMeta>>,
-    ) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.statistics.insert(key.clone(), value)
-    }
-
-    fn put_with_extra(
-        &self,
-        _key: &Path,
-        _value: Arc<Vec<ObjectMeta>>,
-        _e: &Self::Extra,
-    ) -> Option<Arc<Vec<ObjectMeta>>> {
-        panic!("Not supported DefaultListFilesCache put_with_extra")
-    }
-
-    fn remove(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.statistics.remove(k).map(|x| x.1)
-    }
-
-    fn contains_key(&self, k: &Path) -> bool {
-        self.statistics.contains_key(k)
-    }
-
-    fn len(&self) -> usize {
-        self.statistics.len()
-    }
-
-    fn clear(&self) {
-        self.statistics.clear()
-    }
-
-    fn name(&self) -> String {
-        "DefaultListFilesCache".to_string()
     }
 }
 
@@ -253,7 +188,7 @@ impl DefaultFilesMetadataCacheState {
     fn evict_entries(&mut self) {
         while self.memory_used > self.memory_limit {
             if let Some(removed) = self.lru_queue.pop() {
-                let metadata: Arc<dyn FileMetadata> = removed.1 .1;
+                let metadata: Arc<dyn FileMetadata> = removed.1.1;
                 self.memory_used -= metadata.memory_size();
             } else {
                 // cache is empty while memory_used > memory_limit, cannot happen
@@ -429,18 +364,18 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use crate::cache::CacheAccessor;
     use crate::cache::cache_manager::{
         FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
     };
     use crate::cache::cache_unit::{
-        DefaultFileStatisticsCache, DefaultFilesMetadataCache, DefaultListFilesCache,
+        DefaultFileStatisticsCache, DefaultFilesMetadataCache,
     };
-    use crate::cache::CacheAccessor;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use chrono::DateTime;
     use datafusion_common::Statistics;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     #[test]
     fn test_statistics_cache() {
@@ -484,28 +419,6 @@ mod tests {
         let mut meta2 = meta;
         meta2.location = Path::from("test2");
         assert!(cache.get_with_extra(&meta2.location, &meta2).is_none());
-    }
-
-    #[test]
-    fn test_list_file_cache() {
-        let meta = ObjectMeta {
-            location: Path::from("test"),
-            last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
-                .unwrap()
-                .into(),
-            size: 1024,
-            e_tag: None,
-            version: None,
-        };
-
-        let cache = DefaultListFilesCache::default();
-        assert!(cache.get(&meta.location).is_none());
-
-        cache.put(&meta.location, vec![meta.clone()].into());
-        assert_eq!(
-            cache.get(&meta.location).unwrap().first().unwrap().clone(),
-            meta.clone()
-        );
     }
 
     pub struct TestFileMetadata {

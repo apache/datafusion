@@ -15,29 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    ffi::c_void,
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
+use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
-    StableAbi,
-};
-use arrow::{
-    compute::SortOptions,
-    datatypes::{DataType, Schema, SchemaRef},
-};
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use abi_stable::StableAbi;
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::{Field, FieldRef};
-use datafusion::{
-    error::{DataFusionError, Result},
-    logical_expr::{
-        function::WindowUDFFieldArgs, type_coercion::functions::fields_with_window_udf,
-        LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
-    },
-    physical_expr::PhysicalExpr,
+use datafusion::error::Result;
+use datafusion::logical_expr::function::WindowUDFFieldArgs;
+use datafusion::logical_expr::type_coercion::functions::fields_with_window_udf;
+use datafusion::logical_expr::{
+    LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
 };
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::ffi_err;
 use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
@@ -48,16 +41,13 @@ mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
 
-use crate::util::FFIResult;
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    df_result, rresult, rresult_return,
-    util::{
-        rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
-        vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped,
-    },
-    volatility::FFI_Volatility,
+use crate::arrow_wrappers::WrappedSchema;
+use crate::util::{
+    rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
+    vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped, FFIResult,
 };
+use crate::volatility::FFI_Volatility;
+use crate::{df_result, rresult, rresult_return};
 
 /// A stable struct for sharing a [`WindowUDF`] across FFI boundaries.
 #[repr(C)]
@@ -280,24 +270,22 @@ impl Hash for ForeignWindowUDF {
     }
 }
 
-impl TryFrom<&FFI_WindowUDF> for Arc<dyn WindowUDFImpl> {
-    type Error = DataFusionError;
-
-    fn try_from(udf: &FFI_WindowUDF) -> Result<Self, Self::Error> {
+impl From<&FFI_WindowUDF> for Arc<dyn WindowUDFImpl> {
+    fn from(udf: &FFI_WindowUDF) -> Self {
         if (udf.library_marker_id)() == crate::get_library_marker_id() {
-            Ok(Arc::clone(unsafe { udf.inner().inner() }))
+            Arc::clone(unsafe { udf.inner().inner() })
         } else {
             let name = udf.name.to_owned().into();
             let signature = Signature::user_defined((&udf.volatility).into());
 
             let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
 
-            Ok(Arc::new(ForeignWindowUDF {
+            Arc::new(ForeignWindowUDF {
                 name,
                 udf: udf.clone(),
                 aliases,
                 signature,
-            }))
+            })
         }
     }
 }
@@ -400,16 +388,13 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{create_array, ArrayRef};
-    use datafusion::{
-        functions_window::lead_lag::{lag_udwf, WindowShift},
-        logical_expr::{col, expr::Sort, ExprFunctionExt, WindowUDF, WindowUDFImpl},
-        prelude::SessionContext,
-    };
+    use datafusion::functions_window::lead_lag::{lag_udwf, WindowShift};
+    use datafusion::logical_expr::expr::Sort;
+    use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
+    use datafusion::prelude::SessionContext;
 
-    use crate::{
-        tests::create_record_batch,
-        udwf::{FFI_WindowUDF, ForeignWindowUDF},
-    };
+    use crate::tests::create_record_batch;
+    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
 
     fn create_test_foreign_udwf(
         original_udwf: impl WindowUDFImpl + 'static,
@@ -419,7 +404,7 @@ mod tests {
         let mut local_udwf: FFI_WindowUDF = Arc::clone(&original_udwf).into();
         local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).into();
         Ok(WindowUDF::new_from_shared_impl(foreign_udwf))
     }
 
@@ -433,7 +418,7 @@ mod tests {
         local_udwf.library_marker_id = crate::mock_foreign_marker_id;
 
         // Convert back to native format
-        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).try_into()?;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&local_udwf).into();
         let foreign_udwf = WindowUDF::new_from_shared_impl(foreign_udwf);
 
         assert_eq!(original_name, foreign_udwf.name());
@@ -476,7 +461,7 @@ mod tests {
         let mut ffi_udwf = FFI_WindowUDF::from(original_udwf);
 
         // Verify local libraries can be downcast to their original
-        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).try_into()?;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
         assert!(foreign_udwf
             .as_any()
             .downcast_ref::<WindowShift>()
@@ -484,7 +469,7 @@ mod tests {
 
         // Verify different library markers generate foreign providers
         ffi_udwf.library_marker_id = crate::mock_foreign_marker_id;
-        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).try_into()?;
+        let foreign_udwf: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
         assert!(foreign_udwf
             .as_any()
             .downcast_ref::<ForeignWindowUDF>()

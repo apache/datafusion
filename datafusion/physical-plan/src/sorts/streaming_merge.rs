@@ -27,11 +27,11 @@ use crate::sorts::{
 use crate::{SendableRecordBatchStream, SpillManager};
 use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_common::human_readable_size;
 use datafusion_common::{assert_or_internal_err, internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{
-    human_readable_size, MemoryConsumer, MemoryPool, MemoryReservation,
-    UnboundedMemoryPool,
+    MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
