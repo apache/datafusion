@@ -100,7 +100,7 @@ clickbench_pushdown:    ClickBench queries against partitioned (100 files) parqu
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
 # Sorted Data Benchmarks (ORDER BY Optimization)
-data_sorted_clickbench:     ClickBench queries on pre-sorted data WITH sort order info (tests sort elimination optimization)
+data_sorted_clickbench:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
 
 # H2O.ai Benchmarks (Group By, Join, Window)
 h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
@@ -459,7 +459,7 @@ main() {
                 h2o_medium_window)
                     run_h2o_window "MEDIUM" "CSV" "window"
                     ;;
-                h2o_big_window) 
+                h2o_big_window)
                     run_h2o_window "BIG" "CSV" "window"
                     ;;
                 h2o_small_parquet)
@@ -1206,71 +1206,97 @@ compare_benchmarks() {
 
 }
 
-# Creates sorted ClickBench data from hits_0.parquet (partitioned dataset)
+# Creates sorted ClickBench data from hits.parquet (full dataset)
 # The data is sorted by EventTime in ascending order
-# Using hits_0.parquet (~150MB) instead of full hits.parquet (~14GB) for faster testing
+# Uses datafusion-cli to reduce dependencies
 data_sorted_clickbench() {
-    SORTED_FILE="${DATA_DIR}/hits_0_sorted.parquet"
-    ORIGINAL_FILE="${DATA_DIR}/hits_partitioned/hits_0.parquet"
+    SORTED_FILE="${DATA_DIR}/hits_sorted.parquet"
+    ORIGINAL_FILE="${DATA_DIR}/hits.parquet"
 
-    echo "Creating sorted ClickBench dataset from hits_0.parquet..."
+    # Default memory limit is 12GB, can be overridden with DATAFUSION_MEMORY_GB env var
+    MEMORY_LIMIT_GB=${DATAFUSION_MEMORY_GB:-12}
 
-    # Check if partitioned data exists
+    echo "Creating sorted ClickBench dataset from hits.parquet..."
+    echo "Configuration:"
+    echo "  Memory limit: ${MEMORY_LIMIT_GB}G"
+    echo "  Row group size: 64K rows"
+    echo "  Compression: zstd"
+
     if [ ! -f "${ORIGINAL_FILE}" ]; then
-        echo "hits_partitioned/hits_0.parquet not found. Running data_clickbench_partitioned first..."
-        data_clickbench_partitioned
+        echo "hits.parquet not found. Running data_clickbench_1 first..."
+        data_clickbench_1
     fi
 
-    # Check if sorted file already exists
     if [ -f "${SORTED_FILE}" ]; then
-        echo "Sorted hits_0.parquet already exists at ${SORTED_FILE}"
+        echo "Sorted hits.parquet already exists at ${SORTED_FILE}"
         return 0
     fi
 
-    echo "Sorting hits_0.parquet by EventTime (this takes ~10 seconds)..."
+    echo "Sorting hits.parquet by EventTime (this may take several minutes)..."
 
-    # Ensure virtual environment exists with pyarrow
-    if [ ! -d "$VIRTUAL_ENV" ]; then
-        echo "Virtual environment not found. Creating it now..."
-        setup_venv
-    fi
+    pushd "${DATAFUSION_DIR}" > /dev/null
+    echo "Building datafusion-cli..."
+    cargo build --release --bin datafusion-cli
+    DATAFUSION_CLI="${DATAFUSION_DIR}/target/release/datafusion-cli"
+    popd > /dev/null
 
-    # Check if pyarrow is installed
-    if ! PATH=$VIRTUAL_ENV/bin:$PATH python3 -c "import pyarrow" 2>/dev/null; then
-        echo "pyarrow not found in virtual environment. Installing requirements..."
-        setup_venv
-    fi
+    echo "Using datafusion-cli to create sorted parquet file..."
+    "${DATAFUSION_CLI}" << EOF
+-- Memory and performance configuration
+SET datafusion.runtime.memory_limit = '${MEMORY_LIMIT_GB}G';
+SET datafusion.execution.spill_compression = 'uncompressed';
+SET datafusion.execution.sort_spill_reservation_bytes = 1048576; -- 1MB
+SET datafusion.execution.batch_size = 1024;
+SET datafusion.execution.target_partitions = 1;
 
-    # Use the standalone Python script to sort
-    # Use PATH to ensure we use the venv's python
-    PATH=$VIRTUAL_ENV/bin:$PATH python3 "${SCRIPT_DIR}"/sort_clickbench.py "${ORIGINAL_FILE}" "${SORTED_FILE}"
+-- Parquet output configuration
+SET datafusion.execution.parquet.max_row_group_size = 65536;
+SET datafusion.execution.parquet.compression = 'uncompressed';
+
+-- Execute sort and write
+COPY (SELECT * FROM '${ORIGINAL_FILE}' ORDER BY "EventTime")
+TO '${SORTED_FILE}'
+STORED AS PARQUET;
+EOF
+
     local result=$?
 
     if [ $result -eq 0 ]; then
         echo "✓ Successfully created sorted ClickBench dataset"
+
+        INPUT_SIZE=$(stat -f%z "${ORIGINAL_FILE}" 2>/dev/null || stat -c%s "${ORIGINAL_FILE}" 2>/dev/null)
+        OUTPUT_SIZE=$(stat -f%z "${SORTED_FILE}" 2>/dev/null || stat -c%s "${SORTED_FILE}" 2>/dev/null)
+        INPUT_MB=$((INPUT_SIZE / 1024 / 1024))
+        OUTPUT_MB=$((OUTPUT_SIZE / 1024 / 1024))
+
+        echo "  Input:  ${INPUT_MB} MB"
+        echo "  Output: ${OUTPUT_MB} MB"
+
         return 0
     else
         echo "✗ Error: Failed to create sorted dataset"
+        echo "💡 Tip: Try increasing memory with: DATAFUSION_MEMORY_GB=16 ./bench.sh data data_sorted_clickbench"
         return 1
     fi
 }
 
-# Runs the sorted data benchmark (sorted only) with sort order information
+# Runs the sorted data benchmark with prefer_existing_sort configuration
 run_data_sorted_clickbench() {
     RESULTS_FILE="${RESULTS_DIR}/data_sorted_clickbench.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running sorted data benchmark (sorted only) with sort order optimization..."
+    echo "Running sorted data benchmark with prefer_existing_sort optimization..."
 
     # Ensure sorted data exists
     data_sorted_clickbench
 
-    # Run benchmark with --sorted-by parameter to inform DataFusion about the sort order
+    # Run benchmark with prefer_existing_sort configuration
+    # This allows DataFusion to optimize away redundant sorts while maintaining parallelism
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
         --iterations 5 \
-        --path "${DATA_DIR}/hits_0_sorted.parquet" \
+        --path "${DATA_DIR}/hits_sorted.parquet" \
         --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
         --sorted-by "EventTime" \
-        --sort-order "ASC" \
+        -c datafusion.optimizer.prefer_existing_sort=true \
         -o "${RESULTS_FILE}" \
         ${QUERY_ARG}
 }

@@ -81,16 +81,24 @@ pub struct RunOpt {
 
     /// Column name that the data is sorted by (e.g., "EventTime")
     /// If specified, DataFusion will be informed that the data has this sort order
-    /// using CREATE EXTERNAL TABLE with WITH ORDER clause
+    /// using CREATE EXTERNAL TABLE with WITH ORDER clause.
     ///
-    /// This is for `data_sorted_clickbench` benchmark's internal usage. If you want to specify
-    /// a different order, make sure the dataset is generated with the same sort order.
+    /// Recommended to use with: -c datafusion.optimizer.prefer_existing_sort=true
+    /// This allows DataFusion to optimize away redundant sorts while maintaining
+    /// multi-core parallelism for other operations.
     #[structopt(long = "sorted-by")]
     sorted_by: Option<String>,
 
     /// Sort order: ASC or DESC (default: ASC)
     #[structopt(long = "sort-order", default_value = "ASC")]
     sort_order: String,
+
+    /// Configuration options in the format key=value
+    /// Can be specified multiple times.
+    ///
+    /// Example: -c datafusion.optimizer.prefer_existing_sort=true
+    #[structopt(short = "c", long = "config")]
+    config_options: Vec<String>,
 }
 
 /// Get the SQL file path
@@ -139,15 +147,34 @@ impl RunOpt {
         // configure parquet options
         let mut config = self.common.config()?;
 
-        // CRITICAL: If sorted_by is specified, force target_partitions=1
-        // This ensures the file is not split into multiple partitions, we
-        // can get the pure performance benefit of sorted data to compare.
         if self.sorted_by.is_some() {
-            println!("⚠️  Overriding target_partitions=1 to preserve sort order");
-            println!(
-                "⚠️  (Because we want to get the pure performance benefit of sorted data to compare)"
-            );
-            config = config.with_target_partitions(1);
+            println!("ℹ️  Data is registered with sort order");
+
+            let has_prefer_sort = self
+                .config_options
+                .iter()
+                .any(|opt| opt.contains("prefer_existing_sort=true"));
+
+            if !has_prefer_sort {
+                println!("ℹ️  Consider using -c datafusion.optimizer.prefer_existing_sort=true");
+                println!("ℹ️  to optimize queries while maintaining parallelism");
+            }
+        }
+
+        // Apply user-provided configuration options
+        for config_opt in &self.config_options {
+            let parts: Vec<&str> = config_opt.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(exec_datafusion_err!(
+                    "Invalid config option format: '{}'. Expected 'key=value'",
+                    config_opt
+                ));
+            }
+            let key = parts[0];
+            let value = parts[1];
+
+            println!("Setting config: {} = {}", key, value);
+            config = config.set_str(key, value);
         }
 
         {

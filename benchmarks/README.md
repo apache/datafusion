@@ -810,8 +810,7 @@ done dropping runtime in 83.531417ms
 ### Data Sorted ClickBench
 
 Benchmark for queries on pre-sorted data to test sort order optimization.
-
-This benchmark uses a subset of the ClickBench dataset (hits_0.parquet, ~150MB) that has been pre-sorted by the EventTime column. The queries are designed to test DataFusion's performance when the data is already sorted as is common in timeseries workloads. 
+This benchmark uses a subset of the ClickBench dataset (hits.parquet, ~14GB) that has been pre-sorted by the EventTime column. The queries are designed to test DataFusion's performance when the data is already sorted as is common in timeseries workloads.
 
 The benchmark includes queries that:
 - Scan pre-sorted data with ORDER BY clauses that match the sort order
@@ -828,11 +827,8 @@ The sorted dataset is automatically generated from the ClickBench partitioned da
 
 This command will:
 1. Download the ClickBench partitioned dataset if not present
-2. Create a virtual environment and install required dependencies (including pyarrow)
-3. Sort hits_0.parquet by EventTime in ascending order
-4. Save the sorted file as hits_0_sorted.parquet (~200MB)
-
-**Note**: The script automatically sets up the Python environment and dependencies. You don't need to manually run `./bench.sh venv` first.
+2. Sort hits.parquet by EventTime in ascending order
+3. Save the sorted file as hits_sorted.parquet
 
 #### Running the Benchmark
 
