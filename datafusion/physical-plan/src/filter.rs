@@ -495,6 +495,7 @@ impl ExecutionPlan for FilterExec {
                 .into_iter()
                 .map(PushedDownPredicate::supported)
                 .collect();
+
             return Ok(FilterDescription::new().with_child(ChildFilterDescription {
                 parent_filters: filter_supports,
                 self_filters: vec![],
@@ -685,10 +686,12 @@ struct FilterExecStream {
 
 /// The metrics for `FilterExec`
 struct FilterExecMetrics {
-    // Common metrics for most operators
+    /// Common metrics for most operators
     baseline_metrics: BaselineMetrics,
-    // Selectivity of the filter, calculated as output_rows / input_rows
+    /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
+    // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
+    // or modifying metrics comments
 }
 
 impl FilterExecMetrics {

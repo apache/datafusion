@@ -29,7 +29,7 @@ use arrow::datatypes::Schema;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     assert_or_internal_err, internal_datafusion_err, internal_err, ColumnStatistics,
-    DataFusionError, Result, ScalarValue,
+    Result, ScalarValue,
 };
 use datafusion_expr::interval_arithmetic::{cardinality_ratio, Interval};
 

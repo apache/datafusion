@@ -31,9 +31,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, DataFusionError, Result,
-};
+use datafusion_common::{assert_eq_or_internal_err, internal_datafusion_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -42,7 +40,6 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 #[derive(Debug)]
 pub(super) struct ReservedBatches {
     batches: Vec<RecordBatch>,
-    #[allow(dead_code)]
     reservation: MemoryReservation,
 }
 

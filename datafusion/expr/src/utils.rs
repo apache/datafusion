@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::expr::{Alias, Sort, WildcardOptions, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
-    and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
+    BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator, and,
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature};
 
@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap,
-    Result, TableReference,
+    Column, DFSchema, DFSchemaRef, HashMap, Result, TableReference, internal_err,
+    plan_err,
 };
 
 #[cfg(not(feature = "sql"))]
@@ -66,6 +66,23 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     }
 }
 
+/// Internal helper that generates indices for powerset subsets using bitset iteration.
+/// Returns an iterator of index vectors, where each vector contains the indices
+/// of elements to include in that subset.
+fn powerset_indices(len: usize) -> impl Iterator<Item = Vec<usize>> {
+    (0..(1 << len)).map(move |mask| {
+        let mut indices = vec![];
+        let mut bitset = mask;
+        while bitset > 0 {
+            let rightmost: u64 = bitset & !(bitset - 1);
+            let idx = rightmost.trailing_zeros() as usize;
+            indices.push(idx);
+            bitset &= bitset - 1;
+        }
+        indices
+    })
+}
+
 /// The [power set] (or powerset) of a set S is the set of all subsets of S, \
 /// including the empty set and S itself.
 ///
@@ -83,33 +100,23 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 ///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
 ///
 /// [power set]: https://en.wikipedia.org/wiki/Power_set
-fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
+pub fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>> {
     if slice.len() >= 64 {
-        return Err("The size of the set must be less than 64.".into());
+        return plan_err!("The size of the set must be less than 64");
     }
 
-    let mut v = Vec::new();
-    for mask in 0..(1 << slice.len()) {
-        let mut ss = vec![];
-        let mut bitset = mask;
-        while bitset > 0 {
-            let rightmost: u64 = bitset & !(bitset - 1);
-            let idx = rightmost.trailing_zeros();
-            let item = slice.get(idx as usize).unwrap();
-            ss.push(item);
-            // zero the trailing bit
-            bitset &= bitset - 1;
-        }
-        v.push(ss);
-    }
-    Ok(v)
+    Ok(powerset_indices(slice.len())
+        .map(|indices| indices.iter().map(|&idx| &slice[idx]).collect())
+        .collect())
 }
 
 /// check the number of expressions contained in the grouping_set
 fn check_grouping_set_size_limit(size: usize) -> Result<()> {
     let max_grouping_set_size = 65535;
     if size > max_grouping_set_size {
-        return plan_err!("The number of group_expression in grouping_set exceeds the maximum limit {max_grouping_set_size}, found {size}");
+        return plan_err!(
+            "The number of group_expression in grouping_set exceeds the maximum limit {max_grouping_set_size}, found {size}"
+        );
     }
 
     Ok(())
@@ -119,7 +126,9 @@ fn check_grouping_set_size_limit(size: usize) -> Result<()> {
 fn check_grouping_sets_size_limit(size: usize) -> Result<()> {
     let max_grouping_sets_size = 4096;
     if size > max_grouping_sets_size {
-        return plan_err!("The number of grouping_set in grouping_sets exceeds the maximum limit {max_grouping_sets_size}, found {size}");
+        return plan_err!(
+            "The number of grouping_set in grouping_sets exceeds the maximum limit {max_grouping_sets_size}, found {size}"
+        );
     }
 
     Ok(())
@@ -207,8 +216,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     grouping_sets.iter().map(|e| e.iter().collect()).collect()
                 }
                 Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
-                    let grouping_sets = powerset(group_exprs)
-                        .map_err(|e| plan_datafusion_err!("{}", e))?;
+                    let grouping_sets = powerset(group_exprs)?;
                     check_grouping_sets_size_limit(grouping_sets.len())?;
                     grouping_sets
                 }
@@ -943,9 +951,11 @@ pub fn generate_signature_error_msg(
         .join("\n");
 
     format!(
-            "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
-            func_name, TypeSignature::join_types(input_expr_types, ", "), candidate_signatures
-        )
+        "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
+        func_name,
+        TypeSignature::join_types(input_expr_types, ", "),
+        candidate_signatures
+    )
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -1276,11 +1286,10 @@ pub fn collect_subquery_cols(
 mod tests {
     use super::*;
     use crate::{
-        col, cube,
+        Cast, ExprFunctionExt, WindowFunctionDefinition, col, cube,
         expr::WindowFunction,
         expr_vec_fmt, grouping_set, lit, rollup,
         test::function_stub::{max_udaf, min_udaf, sum_udaf},
-        Cast, ExprFunctionExt, WindowFunctionDefinition,
     };
     use arrow::datatypes::{UnionFields, UnionMode};
     use datafusion_expr_common::signature::{TypeSignature, Volatility};

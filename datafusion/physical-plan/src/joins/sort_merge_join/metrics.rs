@@ -23,7 +23,6 @@ use crate::metrics::{
 };
 
 /// Metrics for SortMergeJoinExec
-#[allow(dead_code)]
 pub(super) struct SortMergeJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
     join_time: Time,
@@ -41,7 +40,6 @@ pub(super) struct SortMergeJoinMetrics {
 }
 
 impl SortMergeJoinMetrics {
-    #[allow(dead_code)]
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
         let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
         let input_batches =

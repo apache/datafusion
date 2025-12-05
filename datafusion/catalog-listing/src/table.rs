@@ -504,7 +504,7 @@ impl TableProvider for ListingTable {
                     .with_file_groups(partitioned_file_lists)
                     .with_constraints(self.constraints.clone())
                     .with_statistics(statistics)
-                    .with_projection_indices(projection)
+                    .with_projection_indices(projection)?
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())
@@ -577,6 +577,11 @@ impl TableProvider for ListingTable {
         let file_group = file_list_stream.try_collect::<Vec<_>>().await?.into();
         let keep_partition_by_columns =
             state.config_options().execution.keep_partition_by_columns;
+
+        // Invalidate cache entries for this table if they exist
+        if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
+            let _ = lfc.remove(table_path.prefix());
+        }
 
         // Sink related option, apart from format
         let config = FileSinkConfig {

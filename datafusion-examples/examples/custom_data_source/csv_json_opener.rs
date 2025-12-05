@@ -64,22 +64,22 @@ async fn csv_opener() -> Result<()> {
         ..Default::default()
     };
 
-    let scan_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        Arc::new(CsvSource::new(Arc::clone(&schema)).with_csv_options(options.clone())),
-    )
-    .with_projection_indices(Some(vec![12, 0]))
-    .with_limit(Some(5))
-    .with_file(PartitionedFile::new(path.display().to_string(), 10))
-    .build();
-
-    let config = CsvSource::new(Arc::clone(&schema))
+    let source = CsvSource::new(Arc::clone(&schema))
         .with_csv_options(options)
         .with_comment(Some(b'#'))
-        .with_batch_size(8192)
-        .with_projection(&scan_config);
+        .with_batch_size(8192);
 
-    let opener = config.create_file_opener(object_store, &scan_config, 0);
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_projection_indices(Some(vec![12, 0]))?
+            .with_limit(Some(5))
+            .with_file(PartitionedFile::new(path.display().to_string(), 10))
+            .build();
+
+    let opener =
+        scan_config
+            .file_source()
+            .create_file_opener(object_store, &scan_config, 0)?;
 
     let mut result = vec![];
     let mut stream =
@@ -133,7 +133,7 @@ async fn json_opener() -> Result<()> {
         ObjectStoreUrl::local_filesystem(),
         Arc::new(JsonSource::new(schema)),
     )
-    .with_projection_indices(Some(vec![1, 0]))
+    .with_projection_indices(Some(vec![1, 0]))?
     .with_limit(Some(5))
     .with_file(PartitionedFile::new(path.to_string(), 10))
     .build();

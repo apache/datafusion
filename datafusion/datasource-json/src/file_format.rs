@@ -254,16 +254,10 @@ impl FileFormat for JsonFormat {
         _state: &dyn Session,
         conf: FileScanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let table_schema = TableSchema::new(
-            Arc::clone(conf.file_schema()),
-            conf.table_partition_cols().clone(),
-        );
-        let source = Arc::new(JsonSource::new(table_schema));
         let conf = FileScanConfigBuilder::from(conf)
             .with_file_compression_type(FileCompressionType::from(
                 self.options.compression,
             ))
-            .with_source(source)
             .build();
         Ok(DataSourceExec::from_data_source(conf))
     }

@@ -159,6 +159,11 @@ impl ProjectionExec {
         self.projector.projection().as_ref()
     }
 
+    /// The projection expressions as a [`ProjectionExprs`].
+    pub fn projection_expr(&self) -> &ProjectionExprs {
+        self.projector.projection()
+    }
+
     /// The input plan
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
@@ -300,9 +305,10 @@ impl ExecutionPlan for ProjectionExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
+        let output_schema = self.schema();
         self.projector
             .projection()
-            .project_statistics(input_stats, &self.input.schema())
+            .project_statistics(input_stats, &output_schema)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -780,10 +786,6 @@ pub fn update_join_on(
     hash_join_on: &[(PhysicalExprRef, PhysicalExprRef)],
     left_field_size: usize,
 ) -> Option<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
-    // TODO: Clippy wants the "map" call removed, but doing so generates
-    //       a compilation error. Remove the clippy directive once this
-    //       issue is fixed.
-    #[allow(clippy::map_identity)]
     let (left_idx, right_idx): (Vec<_>, Vec<_>) = hash_join_on
         .iter()
         .map(|(left, right)| (left, right))

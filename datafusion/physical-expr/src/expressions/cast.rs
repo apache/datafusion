@@ -740,6 +740,9 @@ mod tests {
         Ok(())
     }
 
+    // Tests for timestamp timezone casting have been moved to timestamps.slt
+    // See the "Casting between timestamp with and without timezone" section
+
     #[test]
     fn invalid_cast() {
         // Ensure a useful error happens at plan time if invalid casts are used

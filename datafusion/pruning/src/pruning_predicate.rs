@@ -40,9 +40,10 @@ use datafusion_common::{assert_eq_or_internal_err, Column, DFSchema};
 use datafusion_common::{
     internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
-    DataFusionError, ScalarValue,
+    ScalarValue,
 };
 use datafusion_expr_common::operator::Operator;
+use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
@@ -86,7 +87,7 @@ use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 /// example of how to use `PruningPredicate` to prune files based on min/max
 /// values.
 ///
-/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/pruning.rs
+/// [`pruning.rs` example in the `datafusion-examples`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/pruning.rs
 ///
 /// Given an expression like `x = 5` and statistics for 3 containers (Row
 /// Groups, files, etc) `A`, `B`, and `C`:
@@ -1104,6 +1105,20 @@ fn rewrite_expr_to_prunable(
             cast.cast_type().clone(),
             None,
         ));
+        Ok((left, op, right))
+    } else if let Some(cast_col) = column_expr_any.downcast_ref::<CastColumnExpr>() {
+        // `cast_column(col) op lit()` - same as CastExpr but uses CastColumnExpr
+        let arrow_schema = schema.as_arrow();
+        let from_type = cast_col.expr().data_type(arrow_schema)?;
+        let to_type = cast_col.target_field().data_type();
+        verify_support_type_for_prune(&from_type, to_type)?;
+        let (left, op, right) =
+            rewrite_expr_to_prunable(cast_col.expr(), op, scalar_expr, schema)?;
+        // Predicate pruning / statistics generally don't support struct columns yet.
+        // In the future we may want to support pruning on nested fields, in which case we probably need to
+        // do something more sophisticated here.
+        // But for now since we don't support pruning on nested fields, we can just cast to the target type directly.
+        let left = Arc::new(phys_expr::CastExpr::new(left, to_type.clone(), None));
         Ok((left, op, right))
     } else if let Some(try_cast) =
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()
