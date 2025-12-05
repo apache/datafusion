@@ -54,7 +54,7 @@ Notes:
 <!-- Begin Auto-Generated Committer List -->
 
 | Name                    | Apache ID        | github                                                  | Affiliation    | Role      |
-| ----------------------- | ---------------- | ------------------------------------------------------- | -------------- | --------- |
+| ----------------------- | ---------------- |---------------------------------------------------------|----------------| --------- |
 | Andrew Lamb             | alamb            | [alamb](https://github.com/alamb)                       | InfluxData     | PMC Chair |
 | Andrew Grove            | agrove           | [andygrove](https://github.com/andygrove)               | Apple          | PMC       |
 | Mustafa Akur            | akurmustafa      | [akurmustafa](https://github.com/akurmustafa)           | OHSU           | PMC       |
@@ -79,7 +79,7 @@ Notes:
 | Brent Gardner           | avantgardner     | [avantgardnerio](https://github.com/avantgardnerio)     | Coralogix      | Committer |
 | Dmitrii Blaginin        | blaginin         | [blaginin](https://github.com/blaginin)                 | SpiralDB       | Committer |
 | Piotr Findeisen         | findepi          | [findepi](https://github.com/findepi)                   | dbt Labs       | Committer |
-| Gabriel Musat           | gabotechs        |                                                         |                | Committer |
+| Gabriel Musat           | gabotechs        | [gabotechs](https://github.com/gabotechs)               | DataDog        | Committer |
 | Jax Liu                 | goldmedal        | [goldmedal](https://github.com/goldmedal)               | Canner         | Committer |
 | Huaxin Gao              | huaxingao        | [huaxingao](https://github.com/huaxingao)               |                | Committer |
 | Ifeanyi Ubah            | iffyio           | [iffyio](https://github.com/iffyio)                     | Validio        | Committer |
