@@ -51,7 +51,10 @@ async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &s
     store.put(&Path::from(path), data.into()).await.unwrap();
 }
 
-// Implement a custom PhysicalExprAdapterFactory that fills in missing columns with the default value for the field type
+// Implement a custom PhysicalExprAdapterFactory that fills in missing columns with
+// the default value for the field type:
+// - Int64 columns are filled with `1`
+// - Utf8 columns are filled with `'b'`
 #[derive(Debug)]
 struct CustomPhysicalExprAdapterFactory;
 
@@ -302,8 +305,15 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
         .await
         .unwrap();
 
+    #[rustfmt::skip]
     let expected = [
-        "+----+", "| c1 |", "+----+", "| 10 |", "| 20 |", "| 30 |", "+----+",
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| 10 |",
+        "| 20 |",
+        "| 30 |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &batches);
 
@@ -316,6 +326,10 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
         .await
         .unwrap();
 
-    let expected = ["++", "++"];
+    #[rustfmt::skip]
+    let expected = [
+        "++",
+        "++",
+    ];
     assert_batches_eq!(expected, &batches);
 }

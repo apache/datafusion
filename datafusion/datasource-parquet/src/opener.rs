@@ -26,7 +26,7 @@ use crate::{
 use arrow::array::RecordBatch;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
+use datafusion_physical_expr::utils::reassign_expr_columns;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -329,25 +329,9 @@ impl FileOpener for ParquetOpener {
                             .zip(partitioned_file.partition_values.clone())
                             .collect_vec(),
                     );
-                let projection_expressions = projection
-                    .as_ref()
-                    .iter()
-                    .cloned()
-                    .map(|mut proj| {
-                        proj.expr = adapter.rewrite(Arc::clone(&proj.expr))?;
-                        Ok(proj)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                projection = ProjectionExprs::new(projection_expressions);
+                projection = projection.try_map_exprs(|expr| adapter.rewrite(expr))?;
             }
-            let indices = projection
-                .as_ref()
-                .iter()
-                .flat_map(|p| collect_columns(&p.expr))
-                .map(|c| c.index())
-                .sorted_unstable()
-                .unique()
-                .collect_vec();
+            let indices = projection.column_indices();
 
             let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
 
@@ -491,16 +475,8 @@ impl FileOpener for ParquetOpener {
             // Rebase column indices to match the narrowed stream schema.
             // The projection expressions have indices based on physical_file_schema,
             // but the stream only contains the columns selected by the ProjectionMask.
-            let rebased_exprs = projection
-                .as_ref()
-                .iter()
-                .cloned()
-                .map(|mut proj| {
-                    proj.expr = reassign_expr_columns(proj.expr, &stream_schema)?;
-                    Ok(proj)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let projection = ProjectionExprs::new(rebased_exprs);
+            let projection = projection
+                .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
             let projector = projection.make_projector(&stream_schema)?;
 

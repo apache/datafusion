@@ -1257,7 +1257,7 @@ mod tests {
             ("c3", c3.clone()),
         ]);
 
-        // batch2: c3(date64), c2(int64), c1(string), c4(date64)
+        // batch2: c3(date64), c2(int64), c1(string)
         let batch2 = create_batch(vec![("c3", c4), ("c2", c2), ("c1", c1)]);
 
         let table_schema = Schema::new(vec![
