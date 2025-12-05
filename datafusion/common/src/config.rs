@@ -972,7 +972,7 @@ config_namespace! {
         ///
         /// Note: This may reduce parallelism at the I/O level if the number of distinct
         /// partitions is less than the target_partitions.
-        pub preserve_file_partitioning: usize, default = 0
+        pub preserve_file_partitions: usize, default = 0
 
         /// Should DataFusion repartition data using the partitions keys to execute window
         /// functions in parallel using the provided `target_partitions` level

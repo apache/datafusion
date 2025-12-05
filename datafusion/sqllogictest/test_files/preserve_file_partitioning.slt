@@ -16,7 +16,7 @@
 # under the License.
 
 ##########
-# Tests for preserve_file_partitioning optimization
+# Tests for preserve_file_partitions optimization
 #
 # Data Model:
 # - Fact table: Hive-partitioned by f_dkey, sorted by f_dkey, timestamp
@@ -186,7 +186,7 @@ LOCATION 'test_files/scratch/preserve_file_partitioning/high_cardinality/';
 ##########
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 0;
+set datafusion.optimizer.preserve_file_partitions = 0;
 
 query TT
 EXPLAIN SELECT f_dkey, count(*), sum(value) FROM fact_table GROUP BY f_dkey;
@@ -217,7 +217,7 @@ C 7 2017.6
 ##########
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 1;
+set datafusion.optimizer.preserve_file_partitions = 1;
 
 query TT
 EXPLAIN SELECT f_dkey, count(*), sum(value) FROM fact_table GROUP BY f_dkey;
@@ -245,7 +245,7 @@ C 7 2017.6
 ##########
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 0;
+set datafusion.optimizer.preserve_file_partitions = 0;
 
 query TT
 EXPLAIN SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_dkey ORDER BY f_dkey;
@@ -279,7 +279,7 @@ C 7 288.228571428571
 ##########
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 1;
+set datafusion.optimizer.preserve_file_partitions = 1;
 
 query TT
 EXPLAIN SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_dkey ORDER BY f_dkey;
@@ -308,7 +308,7 @@ C 7 288.228571428571
 ##########
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 0;
+set datafusion.optimizer.preserve_file_partitions = 0;
 
 query TT
 EXPLAIN SELECT f.f_dkey, MAX(d.env), MAX(d.service), count(*), sum(f.value)
@@ -365,7 +365,7 @@ C prod log 7 2017.6
 ##########
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 1;
+set datafusion.optimizer.preserve_file_partitions = 1;
 
 query TT
 EXPLAIN SELECT f.f_dkey, MAX(d.env), MAX(d.service), count(*), sum(f.value)
@@ -417,7 +417,7 @@ C prod log 7 2017.6
 ##########
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 0;
+set datafusion.optimizer.preserve_file_partitions = 0;
 
 query TT
 EXPLAIN SELECT f_dkey, timestamp, value,
@@ -459,7 +459,7 @@ C 2023-01-01T09:00:20 310.2 3
 ##########
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 1;
+set datafusion.optimizer.preserve_file_partitions = 1;
 
 query TT
 EXPLAIN SELECT f_dkey, timestamp, value,
@@ -500,7 +500,7 @@ C 2023-01-01T09:00:20 310.2 3
 
 # First verify results without optimization
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 0;
+set datafusion.optimizer.preserve_file_partitions = 0;
 
 query TIR rowsort
 SELECT f_dkey, count(*), sum(value)
@@ -515,7 +515,7 @@ E 1 500
 
 # Now with optimization - verify plan shows SinglePartitioned mode and no RepartitionExec
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 1;
+set datafusion.optimizer.preserve_file_partitions = 1;
 
 # Verify the plan uses SinglePartitioned mode with no RepartitionExec
 # The 5 partitions are merged into 3 file groups using round-robin assignment
@@ -551,14 +551,14 @@ SELECT sum(value) FROM high_cardinality_table;
 ##########
 # Test 10: Threshold higher than distinct partition count
 ##########
-# When preserve_file_partitioning threshold is higher than the number of distinct
+# When preserve_file_partitions threshold is higher than the number of distinct
 # partition values, the optimization should NOT apply and we fall back to split_files.
 # The high_cardinality_table has 5 distinct partition values (A, B, C, D, E).
 # Setting threshold to 10 means we need at least 10 distinct partitions to enable
 # Hash partitioning, so this should show RepartitionExec in the plan.
 
 statement ok
-set datafusion.optimizer.preserve_file_partitioning = 10;
+set datafusion.optimizer.preserve_file_partitions = 10;
 
 # Verify the plan falls back to regular aggregation with RepartitionExec
 query TT

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmark for `preserve_file_partitioning` optimization.
+//! Benchmark for `preserve_file_partitions` optimization.
 //!
 //! When enabled, this optimization declares Hive-partitioned tables as
 //! `Hash([partition_col])` partitioned, allowing the query optimizer to
@@ -30,7 +30,7 @@
 //! - I/O Intensive Queries: Limits the parallilization at I/O level, benefits may not outweigh.
 //!
 //! Usage
-//! - BENCH_SIZE=small|medium|large cargo bench -p datafusion --bench preserve_file_partitioning
+//! - BENCH_SIZE=small|medium|large cargo bench -p datafusion --bench preserve_file_partitions
 //! - SAVE_PLANS=1 cargo bench ...  # Save query plans to files
 
 use arrow::array::{ArrayRef, Float64Array, StringArray, TimestampMillisecondArray};
@@ -241,24 +241,24 @@ fn generate_dimension_table(base_dir: &Path, num_partitions: usize) {
 
 struct BenchVariant {
     name: &'static str,
-    preserve_file_partitioning: usize,
+    preserve_file_partitions: usize,
     prefer_existing_sort: bool,
 }
 
 const BENCH_VARIANTS: [BenchVariant; 3] = [
     BenchVariant {
         name: "with_optimization",
-        preserve_file_partitioning: 1,
+        preserve_file_partitions: 1,
         prefer_existing_sort: false,
     },
     BenchVariant {
         name: "prefer_existing_sort",
-        preserve_file_partitioning: 0,
+        preserve_file_partitions: 0,
         prefer_existing_sort: true,
     },
     BenchVariant {
         name: "without_optimization",
-        preserve_file_partitioning: 0,
+        preserve_file_partitions: 0,
         prefer_existing_sort: false,
     },
 ];
@@ -278,8 +278,8 @@ async fn save_plans(
         let session_config = SessionConfig::new()
             .with_target_partitions(target_partitions)
             .set_usize(
-                "datafusion.optimizer.preserve_file_partitioning",
-                variant.preserve_file_partitioning,
+                "datafusion.optimizer.preserve_file_partitions",
+                variant.preserve_file_partitions,
             )
             .set_bool(
                 "datafusion.optimizer.prefer_existing_sort",
@@ -352,7 +352,7 @@ fn run_benchmark(
         let dim_path_owned = dim_path.map(|s| s.to_string());
         let sort_order = file_sort_order.clone();
         let query_owned = query.to_string();
-        let preserve_file_partitioning = variant.preserve_file_partitioning;
+        let preserve_file_partitions = variant.preserve_file_partitions;
         let prefer_existing_sort = variant.prefer_existing_sort;
 
         group.bench_function(variant.name, |b| {
@@ -365,8 +365,8 @@ fn run_benchmark(
                     let session_config = SessionConfig::new()
                         .with_target_partitions(target_partitions)
                         .set_usize(
-                            "datafusion.optimizer.preserve_file_partitioning",
-                            preserve_file_partitioning,
+                            "datafusion.optimizer.preserve_file_partitions",
+                            preserve_file_partitions,
                         )
                         .set_bool(
                             "datafusion.optimizer.prefer_existing_sort",
@@ -420,7 +420,7 @@ fn run_benchmark(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                          with_optimization                                              │
-/// │                                   (preserve_file_partitioning=true)                                     │
+/// │                                   (preserve_file_partitions=enabled)                                    │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │  SortPreservingMergeExec  │ Sort Preserved                                                          │
@@ -439,7 +439,7 @@ fn run_benchmark(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                        prefer_existing_sort                                             │
-/// │                         (preserve_file_partitioning=false, prefer_existing_sort=true)                   │
+/// │                         (preserve_file_partitions=disabled, prefer_existing_sort=true)                  │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │  SortPreservingMergeExec  │ Sort Preserved                                                          │
@@ -468,7 +468,7 @@ fn run_benchmark(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                       without_optimization                                              │
-/// │                        (preserve_file_partitioning=false, prefer_existing_sort=false)                   │
+/// │                        (preserve_file_partitions=disabled, prefer_existing_sort=false)                  │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │  SortPreservingMergeExec  │                                                                         │
@@ -530,7 +530,7 @@ fn preserve_order_bench(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                          with_optimization                                              │
-/// │                                   (preserve_file_partitioning=true)                                     │
+/// │                                   (preserve_file_partitions=enabled)                                    │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │  SortPreservingMergeExec  │                                                                         │
@@ -556,7 +556,7 @@ fn preserve_order_bench(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                        prefer_existing_sort                                             │
-/// │                         (preserve_file_partitioning=false, prefer_existing_sort=true)                   │
+/// │                         (preserve_file_partitions=disabled, prefer_existing_sort=true)                  │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │  SortPreservingMergeExec  │                                                                         │
@@ -592,7 +592,7 @@ fn preserve_order_bench(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                       without_optimization                                              │
-/// │                        (preserve_file_partitioning=false, prefer_existing_sort=false)                   │
+/// │                        (preserve_file_partitions=disabled, prefer_existing_sort=false)                  │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │  SortPreservingMergeExec  │                                                                         │
@@ -664,7 +664,7 @@ fn preserve_order_join_bench(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                          with_optimization                                              │
-/// │                                   (preserve_file_partitioning=true)                                     │
+/// │                                   (preserve_file_partitions=enabled)                                    │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │       GlobalLimitExec     │                                                                         │
@@ -685,7 +685,7 @@ fn preserve_order_join_bench(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                        prefer_existing_sort                                             │
-/// │                         (preserve_file_partitioning=false, prefer_existing_sort=true)                   │
+/// │                         (preserve_file_partitions=disabled, prefer_existing_sort=true)                  │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │       GlobalLimitExec     │                                                                         │
@@ -708,7 +708,7 @@ fn preserve_order_join_bench(
 ///
 /// ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 /// │                                       without_optimization                                              │
-/// │                        (preserve_file_partitioning=false, prefer_existing_sort=false)                   │
+/// │                        (preserve_file_partitions=disabled, prefer_existing_sort=false)                  │
 /// │                                                                                                         │
 /// │   ┌───────────────────────────┐                                                                         │
 /// │   │       GlobalLimitExec     │                                                                         │

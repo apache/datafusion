@@ -683,7 +683,7 @@ impl ListingTable {
         // When enabled, files are grouped by their Hive partition column values, allowing
         // FileScanConfig to declare Hash partitioning. This enables the optimizer to skip
         // hash repartitioning for aggregates and joins on partition columns.
-        let threshold = ctx.config_options().optimizer.preserve_file_partitioning;
+        let threshold = ctx.config_options().optimizer.preserve_file_partitions;
 
         let (file_groups, grouped_by_partition) = if threshold > 0
             && !self.options.table_partition_cols.is_empty()
