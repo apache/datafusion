@@ -361,7 +361,12 @@ impl Drop for SpillPoolWriter {
 ///
 /// # Example
 ///
-/// ```
+/// Note: This example uses `no_run` because it creates real temporary files on disk
+/// via `RuntimeEnv::default()`. Running this doctest in parallel with other tests
+/// during `cargo test` would exhaust the shared system temp directory, causing
+/// disk space errors in tests that also create spill files.
+///
+/// ```no_run
 /// use std::sync::Arc;
 /// use arrow::array::{ArrayRef, Int32Array};
 /// use arrow::datatypes::{DataType, Field, Schema};
