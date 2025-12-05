@@ -172,17 +172,17 @@ DROP TABLE test_table;
 # Setup alltypes_plain table:
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain (
-  id INT NOT NULL,
-  bool_col BOOLEAN NOT NULL,
-  tinyint_col TINYINT NOT NULL,
-  smallint_col SMALLINT NOT NULL,
-  int_col INT NOT NULL,
-  bigint_col BIGINT NOT NULL,
-  float_col FLOAT NOT NULL,
-  double_col DOUBLE NOT NULL,
-  date_string_col BYTEA NOT NULL,
-  string_col VARCHAR NOT NULL,
-  timestamp_col TIMESTAMP NOT NULL,
+  id VARCHAR,
+  bool_col BOOLEAN,
+  tinyint_col TINYINT,
+  smallint_col SMALLINT,
+  int_col INT,
+  bigint_col BIGINT,
+  float_col FLOAT,
+  double_col DOUBLE,
+  date_string_col BYTEA,
+  string_col VARCHAR,
+  timestamp_col TIMESTAMP,
 )
 STORED AS PARQUET
 LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
