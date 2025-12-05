@@ -317,6 +317,54 @@ select ceil(100.1234, 1)
 query error DataFusion error: This feature is not implemented: CEIL with datetime is not supported
 select ceil(100.1234 to year)
 
+# ceil with decimal argument
+query RRRR
+select
+  ceil(arrow_cast(1.23,'Decimal128(10,2)')),
+  ceil(arrow_cast(-1.23,'Decimal128(10,2)')),
+  ceil(arrow_cast(123.00,'Decimal128(10,2)')),
+  ceil(arrow_cast(-123.00,'Decimal128(10,2)'));
+----
+2 -1 123 -123
+
+# ceil overflow with limited precision
+query error Decimal overflow while applying ceil
+select ceil(arrow_cast(9.23,'Decimal128(3,2)'));
+
+# ceil with decimal32 argument (ensure decimal output)
+query TTTTTTTT
+select
+  arrow_typeof(ceil(arrow_cast(9.01,'Decimal32(7,2)'))),
+  arrow_cast(ceil(arrow_cast(9.01,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast(-9.01,'Decimal32(7,2)'))),
+  arrow_cast(ceil(arrow_cast(-9.01,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast(10.00,'Decimal32(7,2)'))),
+  arrow_cast(ceil(arrow_cast(10.00,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast(-0.99,'Decimal32(7,2)'))),
+  arrow_cast(ceil(arrow_cast(-0.99,'Decimal32(7,2)')), 'Utf8');
+----
+Decimal32(7, 2) 10.00 Decimal32(7, 2) -9.00 Decimal32(7, 2) 10.00 Decimal32(7, 2) 0.00
+
+# ceil with decimal64 zero scale
+query TTTT
+select
+  arrow_typeof(ceil(arrow_cast(123456789,'Decimal64(18,0)'))),
+  arrow_cast(ceil(arrow_cast(123456789,'Decimal64(18,0)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast(-987654321,'Decimal64(18,0)'))),
+  arrow_cast(ceil(arrow_cast(-987654321,'Decimal64(18,0)')), 'Utf8');
+----
+Decimal64(18, 0) 123456789 Decimal64(18, 0) -987654321
+
+# ceil with decimal256 argument
+query TTTT
+select
+  arrow_typeof(ceil(arrow_cast('9999999999999999999999999999999999.01','Decimal256(38,2)'))),
+  arrow_cast(ceil(arrow_cast('9999999999999999999999999999999999.01','Decimal256(38,2)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast('-9999999999999999999999999999999999.01','Decimal256(38,2)'))),
+  arrow_cast(ceil(arrow_cast('-9999999999999999999999999999999999.01','Decimal256(38,2)')), 'Utf8');
+----
+Decimal256(38, 2) 10000000000000000000000000000000000.00 Decimal256(38, 2) -9999999999999999999999999999999999.00
+
 ## degrees
 
 # degrees scalar function
@@ -463,6 +511,54 @@ select floor(a, 1)
 # floor with datetime parameter ( not supported)
 query error DataFusion error: This feature is not implemented: FLOOR with datetime is not supported
 select floor(a to year)
+
+# floor with decimal argument
+query RRRR
+select
+  floor(arrow_cast(1.23,'Decimal128(10,2)')),
+  floor(arrow_cast(-1.23,'Decimal128(10,2)')),
+  floor(arrow_cast(123.00,'Decimal128(10,2)')),
+  floor(arrow_cast(-123.00,'Decimal128(10,2)'));
+----
+1 -2 123 -123
+
+# floor overflow with limited precision
+query error Decimal overflow while applying floor
+select floor(arrow_cast(-9.23,'Decimal128(3,2)'));
+
+# floor with decimal32 argument (ensure decimal output)
+query TTTTTTTT
+select
+  arrow_typeof(floor(arrow_cast(9.99,'Decimal32(7,2)'))),
+  arrow_cast(floor(arrow_cast(9.99,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast(-9.01,'Decimal32(7,2)'))),
+  arrow_cast(floor(arrow_cast(-9.01,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast(10.00,'Decimal32(7,2)'))),
+  arrow_cast(floor(arrow_cast(10.00,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast(-0.01,'Decimal32(7,2)'))),
+  arrow_cast(floor(arrow_cast(-0.01,'Decimal32(7,2)')), 'Utf8');
+----
+Decimal32(7, 2) 9.00 Decimal32(7, 2) -10.00 Decimal32(7, 2) 10.00 Decimal32(7, 2) -1.00
+
+# floor with decimal64 zero scale
+query TTTT
+select
+  arrow_typeof(floor(arrow_cast(123456789,'Decimal64(18,0)'))),
+  arrow_cast(floor(arrow_cast(123456789,'Decimal64(18,0)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast(-987654321,'Decimal64(18,0)'))),
+  arrow_cast(floor(arrow_cast(-987654321,'Decimal64(18,0)')), 'Utf8');
+----
+Decimal64(18, 0) 123456789 Decimal64(18, 0) -987654321
+
+# floor with decimal256 argument
+query TTTT
+select
+  arrow_typeof(floor(arrow_cast('9999999999999999999999999999999999.99','Decimal256(38,2)'))),
+  arrow_cast(floor(arrow_cast('9999999999999999999999999999999999.99','Decimal256(38,2)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast('-9999999999999999999999999999999999.99','Decimal256(38,2)'))),
+  arrow_cast(floor(arrow_cast('-9999999999999999999999999999999999.99','Decimal256(38,2)')), 'Utf8');
+----
+Decimal256(38, 2) 9999999999999999999999999999999999.00 Decimal256(38, 2) -10000000000000000000000000000000000.00
 
 ## ln
 
