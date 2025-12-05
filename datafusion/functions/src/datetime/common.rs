@@ -16,7 +16,7 @@
 // under the License.
 
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow::array::timezone::Tz;
 use arrow::array::{
@@ -42,6 +42,8 @@ use num_traits::{PrimInt, ToPrimitive};
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
+static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
+
 #[expect(unused)]
 /// Calls string_to_timestamp_nanos and converts the error type
 pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
@@ -52,7 +54,7 @@ pub(crate) fn string_to_timestamp_nanos_with_timezone(
     timezone: &Option<Tz>,
     s: &str,
 ) -> Result<i64> {
-    let tz = timezone.unwrap_or("UTC".parse()?);
+    let tz = timezone.unwrap_or(*UTC);
     let dt = string_to_datetime(&tz, s)?;
     let parsed = dt
         .timestamp_nanos_opt()
@@ -220,8 +222,7 @@ pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
-    let dt =
-        string_to_datetime_formatted(&timezone.unwrap_or("UTC".parse()?), s, format)?;
+    let dt = string_to_datetime_formatted(&timezone.unwrap_or(*UTC), s, format)?;
     let parsed = dt
         .timestamp_nanos_opt()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
