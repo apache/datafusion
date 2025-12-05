@@ -35,7 +35,7 @@
 //! These examples use [insta](https://insta.rs) for inline snapshot assertions.
 //! If query output changes, regenerate the snapshots with:
 //! ```bash
-//! INSTA_UPDATE=always cargo run --example relation_planner -- <subcommand>
+//! cargo insta test --example relation_planner --accept
 //! ```
 
 mod match_recognize;
@@ -105,4 +105,27 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Test wrappers that enable `cargo insta test --example relation_planner --accept`
+/// to regenerate inline snapshots. Without these, insta cannot run the examples
+/// in test mode since they only have `main()` functions.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_match_recognize() {
+        match_recognize::match_recognize().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_pivot_unpivot() {
+        pivot_unpivot::pivot_unpivot().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_table_sample() {
+        table_sample::table_sample().await.unwrap();
+    }
 }

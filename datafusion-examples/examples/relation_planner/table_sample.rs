@@ -15,13 +15,69 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This example demonstrates using custom relation planners to implement
-//! SQL TABLESAMPLE clause support.
+//! # TABLESAMPLE Example
 //!
-//! TABLESAMPLE allows sampling a fraction or number of rows from a table:
-//!   - `SELECT * FROM table TABLESAMPLE BERNOULLI(10)` - 10% sample
-//!   - `SELECT * FROM table TABLESAMPLE (100 ROWS)` - 100 rows
-//!   - `SELECT * FROM table TABLESAMPLE (10 PERCENT) REPEATABLE(42)` - Reproducible
+//! This example demonstrates implementing SQL `TABLESAMPLE` support using
+//! DataFusion's extensibility APIs.
+//!
+//! This is a working `TABLESAMPLE` implementation that can serve as a starting
+//! point for your own projects. It also works as a template for adding other
+//! custom SQL operators, covering the full pipeline from parsing to execution.
+//!
+//! It shows how to:
+//!
+//! 1. **Parse** TABLESAMPLE syntax via a custom [`RelationPlanner`]
+//! 2. **Plan** sampling as a custom logical node ([`TableSamplePlanNode`])
+//! 3. **Execute** sampling via a custom physical operator ([`SampleExec`])
+//!
+//! ## Supported Syntax
+//!
+//! ```sql
+//! -- Bernoulli sampling (each row has N% chance of selection)
+//! SELECT * FROM table TABLESAMPLE BERNOULLI(10 PERCENT)
+//!
+//! -- Fractional sampling (0.0 to 1.0)
+//! SELECT * FROM table TABLESAMPLE (0.1)
+//!
+//! -- Row count limit
+//! SELECT * FROM table TABLESAMPLE (100 ROWS)
+//!
+//! -- Reproducible sampling with a seed
+//! SELECT * FROM table TABLESAMPLE (10 PERCENT) REPEATABLE(42)
+//! ```
+//!
+//! ## Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                         SQL Query                               │
+//! │  SELECT * FROM t TABLESAMPLE BERNOULLI(10 PERCENT) REPEATABLE(1)│
+//! └─────────────────────────────────────────────────────────────────┘
+//!                                │
+//!                                ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                    TableSamplePlanner                           │
+//! │    (RelationPlanner: parses TABLESAMPLE, creates logical node)  │
+//! └─────────────────────────────────────────────────────────────────┘
+//!                                │
+//!                                ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                   TableSamplePlanNode                           │
+//! │         (UserDefinedLogicalNode: stores sampling params)        │
+//! └─────────────────────────────────────────────────────────────────┘
+//!                                │
+//!                                ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                TableSampleExtensionPlanner                      │
+//! │       (ExtensionPlanner: creates physical execution plan)       │
+//! └─────────────────────────────────────────────────────────────────┘
+//!                                │
+//!                                ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                        SampleExec                               │
+//! │    (ExecutionPlan: performs actual row sampling at runtime)     │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
 
 use std::{
     any::Any,
@@ -44,7 +100,6 @@ use futures::{
     stream::{Stream, StreamExt},
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use rand_distr::{Distribution, Poisson};
 use tonic::async_trait;
 
 use datafusion::{
@@ -76,30 +131,35 @@ use datafusion_sql::sqlparser::ast::{
 };
 use insta::assert_snapshot;
 
-/// This example demonstrates using custom relation planners to implement
-/// SQL TABLESAMPLE clause support.
+// ============================================================================
+// Example Entry Point
+// ============================================================================
+
+/// Runs the TABLESAMPLE examples demonstrating various sampling techniques.
 pub async fn table_sample() -> Result<()> {
+    // Build session with custom query planner for physical planning
     let state = SessionStateBuilder::new()
         .with_default_features()
-        .with_query_planner(Arc::new(TableSampleQueryPlanner {}))
+        .with_query_planner(Arc::new(TableSampleQueryPlanner))
         .build();
 
-    let ctx = SessionContext::new_with_state(state.clone());
+    let ctx = SessionContext::new_with_state(state);
 
-    // Register sample data table
+    // Register custom relation planner for logical planning
+    ctx.register_relation_planner(Arc::new(TableSamplePlanner))?;
     register_sample_data(&ctx)?;
 
-    // Register custom planner
-    ctx.register_relation_planner(Arc::new(TableSamplePlanner))?;
+    println!("TABLESAMPLE Example");
+    println!("===================\n");
 
-    println!("Custom Relation Planner: TABLESAMPLE Support");
-    println!("============================================\n");
+    run_examples(&ctx).await
+}
 
-    // Example 1: Full table without any sampling (baseline)
-    // Shows: Complete dataset with all 10 rows (1-10 with row_1 to row_10)
+async fn run_examples(ctx: &SessionContext) -> Result<()> {
+    // Example 1: Baseline - full table scan
     let results = run_example(
-        &ctx,
-        "Example 1: Full table (no sampling)",
+        ctx,
+        "Example 1: Full table (baseline)",
         "SELECT * FROM sample_data",
     )
     .await?;
@@ -120,12 +180,11 @@ pub async fn table_sample() -> Result<()> {
     +---------+---------+
     ");
 
-    // Example 2: TABLESAMPLE with BERNOULLI sampling at 30% probability
-    // Shows: Random sampling where each row has 30% chance of being selected
-    // Note: REPEATABLE(seed) ensures deterministic results for snapshot testing
+    // Example 2: Percentage-based Bernoulli sampling
+    // REPEATABLE(seed) ensures deterministic results for snapshot testing
     let results = run_example(
-        &ctx,
-        "Example 2: TABLESAMPLE with percentage",
+        ctx,
+        "Example 2: BERNOULLI percentage sampling",
         "SELECT * FROM sample_data TABLESAMPLE BERNOULLI(30 PERCENT) REPEATABLE(123)",
     )
     .await?;
@@ -140,12 +199,11 @@ pub async fn table_sample() -> Result<()> {
     +---------+---------+
     ");
 
-    // Example 3: TABLESAMPLE with fractional sampling (50% of data)
-    // Shows: Random sampling using decimal fraction instead of percentage
-    // Note: REPEATABLE(seed) ensures deterministic results for snapshot testing
+    // Example 3: Fractional sampling (0.0 to 1.0)
+    // REPEATABLE(seed) ensures deterministic results for snapshot testing
     let results = run_example(
-        &ctx,
-        "Example 3: TABLESAMPLE with fraction",
+        ctx,
+        "Example 3: Fractional sampling",
         "SELECT * FROM sample_data TABLESAMPLE (0.5) REPEATABLE(456)",
     )
     .await?;
@@ -159,11 +217,10 @@ pub async fn table_sample() -> Result<()> {
     +---------+---------+
     ");
 
-    // Example 4: TABLESAMPLE with exact row count limit
-    // Shows: Sampling by limiting to a specific number of rows (not probabilistic)
+    // Example 4: Row count limit (deterministic, no seed needed)
     let results = run_example(
-        &ctx,
-        "Example 4: TABLESAMPLE with row count",
+        ctx,
+        "Example 4: Row count limit",
         "SELECT * FROM sample_data TABLESAMPLE (3 ROWS)",
     )
     .await?;
@@ -177,14 +234,11 @@ pub async fn table_sample() -> Result<()> {
     +---------+---------+
     ");
 
-    // Example 5: TABLESAMPLE combined with WHERE clause filtering
-    // Shows: How sampling works with other query operations like filtering
+    // Example 5: Sampling combined with filtering
     let results = run_example(
-        &ctx,
-        "Example 5: TABLESAMPLE with WHERE clause",
-        r#"SELECT * FROM sample_data 
-           TABLESAMPLE (5 ROWS) 
-           WHERE column1 > 2"#,
+        ctx,
+        "Example 5: Sampling with WHERE clause",
+        "SELECT * FROM sample_data TABLESAMPLE (5 ROWS) WHERE column1 > 2",
     )
     .await?;
     assert_snapshot!(results, @r"
@@ -197,15 +251,14 @@ pub async fn table_sample() -> Result<()> {
     +---------+---------+
     ");
 
-    // Example 6: JOIN between two independently sampled tables
-    // Shows: How sampling works in complex queries with multiple table references
-    // Note: REPEATABLE(seed) ensures deterministic results for snapshot testing
+    // Example 6: Sampling in JOIN queries
+    // REPEATABLE(seed) ensures deterministic results for snapshot testing
     let results = run_example(
-        &ctx,
-        "Example 6: JOIN between two TABLESAMPLE tables",
-        r#"SELECT t1.column1, t2.column1, t1.column2, t2.column2 
+        ctx,
+        "Example 6: Sampling in JOINs",
+        r#"SELECT t1.column1, t2.column1, t1.column2, t2.column2
            FROM sample_data t1 TABLESAMPLE (0.7) REPEATABLE(789)
-           JOIN sample_data t2 TABLESAMPLE (0.7) REPEATABLE(789)
+           JOIN sample_data t2 TABLESAMPLE (0.7) REPEATABLE(123)
            ON t1.column1 = t2.column1"#,
     )
     .await?;
@@ -214,9 +267,7 @@ pub async fn table_sample() -> Result<()> {
     | column1 | column1 | column2 | column2 |
     +---------+---------+---------+---------+
     | 2       | 2       | row_2   | row_2   |
-    | 3       | 3       | row_3   | row_3   |
     | 5       | 5       | row_5   | row_5   |
-    | 6       | 6       | row_6   | row_6   |
     | 7       | 7       | row_7   | row_7   |
     | 8       | 8       | row_8   | row_8   |
     | 10      | 10      | row_10  | row_10  |
@@ -226,98 +277,242 @@ pub async fn table_sample() -> Result<()> {
     Ok(())
 }
 
-/// Register sample data table for the examples
-fn register_sample_data(ctx: &SessionContext) -> Result<()> {
-    // Create sample_data table with 10 rows: column1 (1-10), column2 (row_1 to row_10)
-    let column1: ArrayRef = Arc::new(Int32Array::from((1..=10).collect::<Vec<i32>>()));
-    let column2: ArrayRef = Arc::new(StringArray::from(
-        (1..=10)
-            .map(|i| format!("row_{i}"))
-            .collect::<Vec<String>>(),
-    ));
-    let batch =
-        RecordBatch::try_from_iter(vec![("column1", column1), ("column2", column2)])?;
-    ctx.register_batch("sample_data", batch)?;
-
-    Ok(())
-}
-
+/// Helper to run a single example query and capture results.
 async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<String> {
     println!("{title}:\n{sql}\n");
     let df = ctx.sql(sql).await?;
-    println!("Logical Plan:\n{}\n", df.logical_plan().display_indent());
+    println!("{}\n", df.logical_plan().display_indent());
 
-    // Execute and capture results
-    let results = df.collect().await?;
-    let results = arrow::util::pretty::pretty_format_batches(&results)?.to_string();
-    println!("Results:\n{results}\n");
+    let batches = df.collect().await?;
+    let results = arrow::util::pretty::pretty_format_batches(&batches)?.to_string();
+    println!("{results}\n");
 
     Ok(results)
 }
 
-/// Hashable and comparable f64 for sampling bounds
-#[derive(Debug, Clone, Copy, PartialOrd)]
-struct Bound(f64);
+/// Register test data: 10 rows with column1=1..10 and column2="row_1".."row_10"
+fn register_sample_data(ctx: &SessionContext) -> Result<()> {
+    let column1: ArrayRef = Arc::new(Int32Array::from((1..=10).collect::<Vec<i32>>()));
+    let column2: ArrayRef = Arc::new(StringArray::from(
+        (1..=10).map(|i| format!("row_{i}")).collect::<Vec<_>>(),
+    ));
+    let batch =
+        RecordBatch::try_from_iter(vec![("column1", column1), ("column2", column2)])?;
+    ctx.register_batch("sample_data", batch)?;
+    Ok(())
+}
 
-impl PartialEq for Bound {
-    fn eq(&self, other: &Self) -> bool {
-        (self.0 - other.0).abs() < f64::EPSILON
+// ============================================================================
+// Logical Planning: TableSamplePlanner + TableSamplePlanNode
+// ============================================================================
+
+/// Relation planner that intercepts `TABLESAMPLE` clauses in SQL and creates
+/// [`TableSamplePlanNode`] logical nodes.
+#[derive(Debug)]
+struct TableSamplePlanner;
+
+impl RelationPlanner for TableSamplePlanner {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning> {
+        // Only handle Table relations with TABLESAMPLE clause
+        let TableFactor::Table {
+            sample: Some(sample),
+            alias,
+            name,
+            args,
+            with_hints,
+            version,
+            with_ordinality,
+            partitions,
+            json_path,
+            index_hints,
+        } = relation
+        else {
+            return Ok(RelationPlanning::Original(relation));
+        };
+
+        // Extract sample spec (handles both before/after alias positions)
+        let sample = match sample {
+            ast::TableSampleKind::BeforeTableAlias(s)
+            | ast::TableSampleKind::AfterTableAlias(s) => s,
+        };
+
+        // Validate sampling method
+        if let Some(method) = &sample.name {
+            if *method != TableSampleMethod::Bernoulli
+                && *method != TableSampleMethod::Row
+            {
+                return not_impl_err!(
+                    "Sampling method {} is not supported (only BERNOULLI and ROW)",
+                    method
+                );
+            }
+        }
+
+        // Offset sampling (ClickHouse-style) not supported
+        if sample.offset.is_some() {
+            return not_impl_err!(
+                "TABLESAMPLE with OFFSET is not supported (requires total row count)"
+            );
+        }
+
+        // Parse optional REPEATABLE seed
+        let seed = sample
+            .seed
+            .map(|s| {
+                s.value.to_string().parse::<u64>().map_err(|_| {
+                    plan_datafusion_err!("REPEATABLE seed must be an integer")
+                })
+            })
+            .transpose()?;
+
+        // Plan the underlying table without the sample clause
+        let base_relation = TableFactor::Table {
+            sample: None,
+            alias: alias.clone(),
+            name,
+            args,
+            with_hints,
+            version,
+            with_ordinality,
+            partitions,
+            json_path,
+            index_hints,
+        };
+        let input = context.plan(base_relation)?;
+
+        // Handle bucket sampling (Hive-style: TABLESAMPLE(BUCKET x OUT OF y))
+        if let Some(bucket) = sample.bucket {
+            if bucket.on.is_some() {
+                return not_impl_err!(
+                    "TABLESAMPLE BUCKET with ON clause requires CLUSTERED BY table"
+                );
+            }
+            let bucket_num: u64 =
+                bucket.bucket.to_string().parse().map_err(|_| {
+                    plan_datafusion_err!("bucket number must be an integer")
+                })?;
+            let total: u64 =
+                bucket.total.to_string().parse().map_err(|_| {
+                    plan_datafusion_err!("bucket total must be an integer")
+                })?;
+
+            let fraction = bucket_num as f64 / total as f64;
+            let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
+            return Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)));
+        }
+
+        // Handle quantity-based sampling
+        let Some(quantity) = sample.quantity else {
+            return plan_err!(
+                "TABLESAMPLE requires a quantity (percentage, fraction, or row count)"
+            );
+        };
+
+        match quantity.unit {
+            // TABLESAMPLE (N ROWS) - exact row limit
+            Some(TableSampleUnit::Rows) => {
+                let rows = parse_quantity::<i64>(&quantity.value)?;
+                if rows < 0 {
+                    return plan_err!("row count must be non-negative, got {}", rows);
+                }
+                let plan = LogicalPlanBuilder::from(input)
+                    .limit(0, Some(rows as usize))?
+                    .build()?;
+                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+            }
+
+            // TABLESAMPLE (N PERCENT) - percentage sampling
+            Some(TableSampleUnit::Percent) => {
+                let percent = parse_quantity::<f64>(&quantity.value)?;
+                let fraction = percent / 100.0;
+                let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
+                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+            }
+
+            // TABLESAMPLE (N) - fraction if <1.0, row limit if >=1.0
+            None => {
+                let value = parse_quantity::<f64>(&quantity.value)?;
+                if value < 0.0 {
+                    return plan_err!("sample value must be non-negative, got {}", value);
+                }
+                let plan = if value >= 1.0 {
+                    // Interpret as row limit
+                    LogicalPlanBuilder::from(input)
+                        .limit(0, Some(value as usize))?
+                        .build()?
+                } else {
+                    // Interpret as fraction
+                    TableSamplePlanNode::new(input, value, seed).into_plan()
+                };
+                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+            }
+        }
     }
 }
 
-impl Eq for Bound {}
+/// Parse a SQL expression as a numeric value (supports basic arithmetic).
+fn parse_quantity<T>(expr: &ast::Expr) -> Result<T>
+where
+    T: FromStr + Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Div<Output = T>,
+{
+    eval_numeric_expr(expr)
+        .ok_or_else(|| plan_datafusion_err!("invalid numeric expression: {:?}", expr))
+}
 
-impl Hash for Bound {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash the bits of the f64
-        self.0.to_bits().hash(state);
+/// Recursively evaluate numeric SQL expressions.
+fn eval_numeric_expr<T>(expr: &ast::Expr) -> Option<T>
+where
+    T: FromStr + Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Div<Output = T>,
+{
+    match expr {
+        ast::Expr::Value(v) => match &v.value {
+            ast::Value::Number(n, _) => n.to_string().parse().ok(),
+            _ => None,
+        },
+        ast::Expr::BinaryOp { left, op, right } => {
+            let l = eval_numeric_expr::<T>(left)?;
+            let r = eval_numeric_expr::<T>(right)?;
+            match op {
+                ast::BinaryOperator::Plus => Some(l + r),
+                ast::BinaryOperator::Minus => Some(l - r),
+                ast::BinaryOperator::Multiply => Some(l * r),
+                ast::BinaryOperator::Divide => Some(l / r),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
-impl From<f64> for Bound {
-    fn from(value: f64) -> Self {
-        Self(value)
-    }
-}
-impl From<Bound> for f64 {
-    fn from(value: Bound) -> Self {
-        value.0
-    }
-}
-
-impl AsRef<f64> for Bound {
-    fn as_ref(&self) -> &f64 {
-        &self.0
-    }
-}
-
+/// Custom logical plan node representing a TABLESAMPLE operation.
+///
+/// Stores sampling parameters (bounds, seed) and wraps the input plan.
+/// Gets converted to [`SampleExec`] during physical planning.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, PartialOrd)]
 struct TableSamplePlanNode {
-    inner_plan: LogicalPlan,
-
-    lower_bound: Bound,
-    upper_bound: Bound,
-    with_replacement: bool,
+    input: LogicalPlan,
+    lower_bound: HashableF64,
+    upper_bound: HashableF64,
     seed: u64,
 }
 
 impl TableSamplePlanNode {
-    pub fn new(
-        input: LogicalPlan,
-        fraction: f64,
-        with_replacement: Option<bool>,
-        seed: Option<u64>,
-    ) -> Self {
-        TableSamplePlanNode {
-            inner_plan: input,
-            lower_bound: Bound::from(0.0),
-            upper_bound: Bound::from(fraction),
-            with_replacement: with_replacement.unwrap_or(false),
+    /// Create a new sampling node with the given fraction (0.0 to 1.0).
+    fn new(input: LogicalPlan, fraction: f64, seed: Option<u64>) -> Self {
+        Self {
+            input,
+            lower_bound: HashableF64(0.0),
+            upper_bound: HashableF64(fraction),
             seed: seed.unwrap_or_else(rand::random),
         }
     }
 
-    pub fn into_plan(self) -> LogicalPlan {
+    /// Wrap this node in a LogicalPlan::Extension.
+    fn into_plan(self) -> LogicalPlan {
         LogicalPlan::Extension(Extension {
             node: Arc::new(self),
         })
@@ -330,11 +525,11 @@ impl UserDefinedLogicalNodeCore for TableSamplePlanNode {
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![&self.inner_plan]
+        vec![&self.input]
     }
 
     fn schema(&self) -> &DFSchemaRef {
-        self.inner_plan.schema()
+        self.input.schema()
     }
 
     fn expressions(&self) -> Vec<Expr> {
@@ -342,306 +537,169 @@ impl UserDefinedLogicalNodeCore for TableSamplePlanNode {
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> fmt::Result {
-        f.write_fmt(format_args!(
-            "Sample: {:?} {:?} {:?}",
-            self.lower_bound, self.upper_bound, self.seed
-        ))
+        write!(
+            f,
+            "Sample: bounds=[{}, {}], seed={}",
+            self.lower_bound.0, self.upper_bound.0, self.seed
+        )
     }
 
     fn with_exprs_and_inputs(
         &self,
         _exprs: Vec<Expr>,
-        inputs: Vec<LogicalPlan>,
+        mut inputs: Vec<LogicalPlan>,
     ) -> Result<Self> {
-        let input = inputs
-            .first()
-            .ok_or(DataFusionError::Plan("Should have input".into()))?;
         Ok(Self {
-            inner_plan: input.clone(),
+            input: inputs.swap_remove(0),
             lower_bound: self.lower_bound,
             upper_bound: self.upper_bound,
-            with_replacement: self.with_replacement,
             seed: self.seed,
         })
     }
 }
 
-/// Execution planner with `SampleExec` for `TableSamplePlanNode`
-struct TableSampleExtensionPlanner {}
+/// Wrapper for f64 that implements Hash and Eq (required for LogicalPlan).
+#[derive(Debug, Clone, Copy, PartialOrd)]
+struct HashableF64(f64);
 
-impl TableSampleExtensionPlanner {
-    fn build_execution_plan(
-        &self,
-        specific_node: &TableSamplePlanNode,
-        physical_input: &Arc<dyn ExecutionPlan>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SampleExec::try_new(
-            Arc::clone(physical_input),
-            specific_node.lower_bound.into(),
-            specific_node.upper_bound.into(),
-            specific_node.with_replacement,
-            specific_node.seed,
-        )?))
+impl PartialEq for HashableF64 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
     }
 }
 
-#[async_trait]
-impl ExtensionPlanner for TableSampleExtensionPlanner {
-    /// Create a physical plan for an extension node
-    async fn plan_extension(
-        &self,
-        _planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
-        logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(specific_node) = node.as_any().downcast_ref::<TableSamplePlanNode>() {
-            println!("Extension planner plan_extension: {:?}", &logical_inputs);
-            assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
-            assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
+impl Eq for HashableF64 {}
 
-            let exec_plan =
-                self.build_execution_plan(specific_node, &physical_inputs[0])?;
-            Ok(Some(exec_plan))
-        } else {
-            Ok(None)
-        }
+impl Hash for HashableF64 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
     }
 }
 
-/// Query planner supporting a `TableSampleExtensionPlanner`
+// ============================================================================
+// Physical Planning: TableSampleQueryPlanner + TableSampleExtensionPlanner
+// ============================================================================
+
+/// Custom query planner that registers [`TableSampleExtensionPlanner`] to
+/// convert [`TableSamplePlanNode`] into [`SampleExec`].
 #[derive(Debug)]
-struct TableSampleQueryPlanner {}
+struct TableSampleQueryPlanner;
 
 #[async_trait]
 impl QueryPlanner for TableSampleQueryPlanner {
-    /// Given a `LogicalPlan` created from above, create an
-    /// `ExecutionPlan` suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Additional extension for table sample node
-        let physical_planner =
-            DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-                TableSampleExtensionPlanner {},
-            )]);
-        // Delegate most work of physical planning to the default physical planner
-        physical_planner
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            TableSampleExtensionPlanner,
+        )]);
+        planner
             .create_physical_plan(logical_plan, session_state)
             .await
     }
 }
 
-/// Physical plan implementation
-trait Sampler: Send + Sync {
-    fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch>;
-}
+/// Extension planner that converts [`TableSamplePlanNode`] to [`SampleExec`].
+struct TableSampleExtensionPlanner;
 
-struct BernoulliSampler {
-    lower_bound: f64,
-    upper_bound: f64,
-    rng: StdRng,
-}
+#[async_trait]
+impl ExtensionPlanner for TableSampleExtensionPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let Some(sample_node) = node.as_any().downcast_ref::<TableSamplePlanNode>()
+        else {
+            return Ok(None);
+        };
 
-impl BernoulliSampler {
-    fn new(lower_bound: f64, upper_bound: f64, seed: u64) -> Self {
-        Self {
-            lower_bound,
-            upper_bound,
-            rng: StdRng::seed_from_u64(seed),
-        }
+        let exec = SampleExec::try_new(
+            Arc::clone(&physical_inputs[0]),
+            sample_node.lower_bound.0,
+            sample_node.upper_bound.0,
+            sample_node.seed,
+        )?;
+        Ok(Some(Arc::new(exec)))
     }
 }
 
-impl Sampler for BernoulliSampler {
-    fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-        if self.upper_bound <= self.lower_bound {
-            return Ok(RecordBatch::new_empty(batch.schema()));
-        }
+// ============================================================================
+// Physical Execution: SampleExec + BernoulliSampler
+// ============================================================================
 
-        let mut indices = Vec::new();
-
-        for i in 0..batch.num_rows() {
-            let rnd: f64 = self.rng.random();
-
-            if rnd >= self.lower_bound && rnd < self.upper_bound {
-                indices.push(i as u32);
-            }
-        }
-
-        if indices.is_empty() {
-            return Ok(RecordBatch::new_empty(batch.schema()));
-        }
-        let indices = UInt32Array::from(indices);
-        compute::take_record_batch(batch, &indices).map_err(|e| e.into())
-    }
-}
-
-struct PoissonSampler {
-    ratio: f64,
-    poisson: Poisson<f64>,
-    rng: StdRng,
-}
-
-impl PoissonSampler {
-    fn try_new(ratio: f64, seed: u64) -> Result<Self> {
-        let poisson = Poisson::new(ratio).map_err(|e| plan_datafusion_err!("{}", e))?;
-        Ok(Self {
-            ratio,
-            poisson,
-            rng: StdRng::seed_from_u64(seed),
-        })
-    }
-}
-
-impl Sampler for PoissonSampler {
-    fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-        if self.ratio <= 0.0 {
-            return Ok(RecordBatch::new_empty(batch.schema()));
-        }
-
-        let mut indices = Vec::new();
-
-        for i in 0..batch.num_rows() {
-            let k = self.poisson.sample(&mut self.rng) as i32;
-            for _ in 0..k {
-                indices.push(i as u32);
-            }
-        }
-
-        if indices.is_empty() {
-            return Ok(RecordBatch::new_empty(batch.schema()));
-        }
-
-        let indices = UInt32Array::from(indices);
-        compute::take_record_batch(batch, &indices).map_err(|e| e.into())
-    }
-}
-
-/// SampleExec samples rows from its input based on a sampling method.
-/// This is used to implement SQL `SAMPLE` clause.
+/// Physical execution plan that samples rows from its input using Bernoulli sampling.
+///
+/// Each row is independently selected with probability `(upper_bound - lower_bound)`
+/// and appears at most once.
 #[derive(Debug, Clone)]
 pub struct SampleExec {
-    /// The input plan
     input: Arc<dyn ExecutionPlan>,
-    /// The lower bound of the sampling ratio
     lower_bound: f64,
-    /// The upper bound of the sampling ratio
     upper_bound: f64,
-    /// Whether to sample with replacement
-    with_replacement: bool,
-    /// Random seed for reproducible sampling
     seed: u64,
-    /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Properties equivalence properties, partitioning, etc.
     cache: PlanProperties,
 }
 
 impl SampleExec {
-    /// Create a new SampleExec with a custom sampling method
+    /// Create a new SampleExec with Bernoulli sampling (without replacement).
+    ///
+    /// # Arguments
+    /// * `input` - The input execution plan
+    /// * `lower_bound` - Lower bound of sampling range (typically 0.0)
+    /// * `upper_bound` - Upper bound of sampling range (0.0 to 1.0)
+    /// * `seed` - Random seed for reproducible sampling
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
         lower_bound: f64,
         upper_bound: f64,
-        with_replacement: bool,
         seed: u64,
     ) -> Result<Self> {
         if lower_bound < 0.0 || upper_bound > 1.0 || lower_bound > upper_bound {
             return internal_err!(
-                "Sampling bounds must be between 0.0 and 1.0, and lower_bound <= upper_bound, got [{}, {}]",
-                lower_bound, upper_bound
+                "Sampling bounds must satisfy 0.0 <= lower <= upper <= 1.0, got [{}, {}]",
+                lower_bound,
+                upper_bound
             );
         }
 
-        let cache = Self::compute_properties(&input);
+        let cache = PlanProperties::new(
+            EquivalenceProperties::new(input.schema()),
+            input.properties().partitioning.clone(),
+            input.properties().emission_type,
+            input.properties().boundedness,
+        );
 
         Ok(Self {
             input,
             lower_bound,
             upper_bound,
-            with_replacement,
             seed,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
     }
 
-    fn create_sampler(&self, partition: usize) -> Result<Box<dyn Sampler>> {
-        if self.with_replacement {
-            Ok(Box::new(PoissonSampler::try_new(
-                self.upper_bound - self.lower_bound,
-                self.seed + partition as u64,
-            )?))
-        } else {
-            Ok(Box::new(BernoulliSampler::new(
-                self.lower_bound,
-                self.upper_bound,
-                self.seed + partition as u64,
-            )))
-        }
-    }
-
-    /// Whether to sample with replacement
-    #[allow(dead_code)]
-    pub fn with_replacement(&self) -> bool {
-        self.with_replacement
-    }
-
-    /// The lower bound of the sampling ratio
-    #[allow(dead_code)]
-    pub fn lower_bound(&self) -> f64 {
-        self.lower_bound
-    }
-
-    /// The upper bound of the sampling ratio
-    #[allow(dead_code)]
-    pub fn upper_bound(&self) -> f64 {
-        self.upper_bound
-    }
-
-    /// The random seed
-    #[allow(dead_code)]
-    pub fn seed(&self) -> u64 {
-        self.seed
-    }
-
-    /// The input plan
-    #[allow(dead_code)]
-    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.input
-    }
-
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
-        input
-            .properties()
-            .clone()
-            .with_eq_properties(EquivalenceProperties::new(input.schema()))
+    /// Create a sampler for the given partition.
+    fn create_sampler(&self, partition: usize) -> BernoulliSampler {
+        let seed = self.seed.wrapping_add(partition as u64);
+        BernoulliSampler::new(self.lower_bound, self.upper_bound, seed)
     }
 }
 
 impl DisplayAs for SampleExec {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(
-                    f,
-                    "SampleExec: lower_bound={}, upper_bound={}, with_replacement={}, seed={}",
-                    self.lower_bound, self.upper_bound, self.with_replacement, self.seed
-                )
-            }
-            DisplayFormatType::TreeRender => {
-                write!(
-                    f,
-                    "SampleExec: lower_bound={}, upper_bound={}, with_replacement={}, seed={}",
-                    self.lower_bound, self.upper_bound, self.with_replacement, self.seed
-                )
-            }
-        }
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "SampleExec: bounds=[{}, {}], seed={}",
+            self.lower_bound, self.upper_bound, self.seed
+        )
     }
 }
 
@@ -659,7 +717,8 @@ impl ExecutionPlan for SampleExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![false] // Sampling does not maintain input order
+        // Sampling preserves row order (rows are filtered, not reordered)
+        vec![true]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -668,13 +727,12 @@ impl ExecutionPlan for SampleExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SampleExec::try_new(
-            Arc::clone(&children[0]),
+        Ok(Arc::new(Self::try_new(
+            children.swap_remove(0),
             self.lower_bound,
             self.upper_bound,
-            self.with_replacement,
             self.seed,
         )?))
     }
@@ -684,13 +742,10 @@ impl ExecutionPlan for SampleExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input_stream = self.input.execute(partition, context)?;
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-
-        Ok(Box::pin(SampleExecStream {
-            input: input_stream,
-            sampler: self.create_sampler(partition)?,
-            baseline_metrics,
+        Ok(Box::pin(SampleStream {
+            input: self.input.execute(partition, context)?,
+            sampler: self.create_sampler(partition),
+            metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
     }
 
@@ -699,36 +754,72 @@ impl ExecutionPlan for SampleExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let input_stats = self.input.partition_statistics(partition)?;
-
-        // Apply sampling ratio to statistics
-        let mut stats = input_stats;
+        let mut stats = self.input.partition_statistics(partition)?;
         let ratio = self.upper_bound - self.lower_bound;
 
+        // Scale statistics by sampling ratio (inexact due to randomness)
         stats.num_rows = stats
             .num_rows
-            .map(|nr| (nr as f64 * ratio) as usize)
+            .map(|n| (n as f64 * ratio) as usize)
             .to_inexact();
         stats.total_byte_size = stats
             .total_byte_size
-            .map(|tb| (tb as f64 * ratio) as usize)
+            .map(|n| (n as f64 * ratio) as usize)
             .to_inexact();
 
         Ok(stats)
     }
 }
 
-/// Stream for the SampleExec operator
-struct SampleExecStream {
-    /// The input stream
-    input: SendableRecordBatchStream,
-    /// The sampling method
-    sampler: Box<dyn Sampler>,
-    /// Runtime metrics recording
-    baseline_metrics: BaselineMetrics,
+/// Bernoulli sampler: includes each row with probability `(upper - lower)`.
+/// This is sampling **without replacement** - each row appears at most once.
+struct BernoulliSampler {
+    lower_bound: f64,
+    upper_bound: f64,
+    rng: StdRng,
 }
 
-impl Stream for SampleExecStream {
+impl BernoulliSampler {
+    fn new(lower_bound: f64, upper_bound: f64, seed: u64) -> Self {
+        Self {
+            lower_bound,
+            upper_bound,
+            rng: StdRng::seed_from_u64(seed),
+        }
+    }
+
+    fn sample(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let range = self.upper_bound - self.lower_bound;
+        if range <= 0.0 {
+            return Ok(RecordBatch::new_empty(batch.schema()));
+        }
+
+        // Select rows where random value falls in [lower, upper)
+        let indices: Vec<u32> = (0..batch.num_rows())
+            .filter(|_| {
+                let r: f64 = self.rng.random();
+                r >= self.lower_bound && r < self.upper_bound
+            })
+            .map(|i| i as u32)
+            .collect();
+
+        if indices.is_empty() {
+            return Ok(RecordBatch::new_empty(batch.schema()));
+        }
+
+        compute::take_record_batch(batch, &UInt32Array::from(indices))
+            .map_err(DataFusionError::from)
+    }
+}
+
+/// Stream adapter that applies sampling to each batch.
+struct SampleStream {
+    input: SendableRecordBatchStream,
+    sampler: BernoulliSampler,
+    metrics: BaselineMetrics,
+}
+
+impl Stream for SampleStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -737,11 +828,10 @@ impl Stream for SampleExecStream {
     ) -> Poll<Option<Self::Item>> {
         match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
-                let start = self.baseline_metrics.elapsed_compute().clone();
+                let elapsed = self.metrics.elapsed_compute().clone();
+                let _timer = elapsed.timer();
                 let result = self.sampler.sample(&batch);
-                let result = result.record_output(&self.baseline_metrics);
-                let _timer = start.timer();
-                Poll::Ready(Some(result))
+                Poll::Ready(Some(result.record_output(&self.metrics)))
             }
             Some(Err(e)) => Poll::Ready(Some(Err(e))),
             None => Poll::Ready(None),
@@ -749,213 +839,8 @@ impl Stream for SampleExecStream {
     }
 }
 
-impl RecordBatchStream for SampleExecStream {
+impl RecordBatchStream for SampleStream {
     fn schema(&self) -> SchemaRef {
         self.input.schema()
-    }
-}
-
-/// Helper to evaluate numeric SQL expressions
-fn evaluate_number<
-    T: FromStr + Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Div<Output = T>,
->(
-    expr: &ast::Expr,
-) -> Option<T> {
-    match expr {
-        ast::Expr::BinaryOp { left, op, right } => {
-            let left = evaluate_number::<T>(left);
-            let right = evaluate_number::<T>(right);
-            match (left, right) {
-                (Some(left), Some(right)) => match op {
-                    ast::BinaryOperator::Plus => Some(left + right),
-                    ast::BinaryOperator::Minus => Some(left - right),
-                    ast::BinaryOperator::Multiply => Some(left * right),
-                    ast::BinaryOperator::Divide => Some(left / right),
-                    _ => None,
-                },
-                _ => None,
-            }
-        }
-        ast::Expr::Value(value) => match &value.value {
-            ast::Value::Number(value, _) => {
-                let value = value.to_string();
-                let Ok(value) = value.parse::<T>() else {
-                    return None;
-                };
-                Some(value)
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Custom relation planner that handles TABLESAMPLE clauses
-#[derive(Debug)]
-struct TableSamplePlanner;
-
-impl RelationPlanner for TableSamplePlanner {
-    fn plan_relation(
-        &self,
-        relation: TableFactor,
-        context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
-        match relation {
-            TableFactor::Table {
-                sample: Some(sample),
-                alias,
-                name,
-                args,
-                with_hints,
-                version,
-                with_ordinality,
-                partitions,
-                json_path,
-                index_hints,
-            } => {
-                println!("[TableSamplePlanner] Processing TABLESAMPLE clause");
-
-                let sample = match sample {
-                    ast::TableSampleKind::BeforeTableAlias(sample) => sample,
-                    ast::TableSampleKind::AfterTableAlias(sample) => sample,
-                };
-                if let Some(name) = &sample.name {
-                    if *name != TableSampleMethod::Bernoulli
-                        && *name != TableSampleMethod::Row
-                    {
-                        // Postgres-style sample. Not supported because DataFusion does not have a concept of pages like PostgreSQL.
-                        return not_impl_err!("{} is not supported yet", name);
-                    }
-                }
-                if sample.offset.is_some() {
-                    // Clickhouse-style sample. Not supported because it requires knowing the total data size.
-                    return not_impl_err!("Offset sample is not supported yet");
-                }
-
-                let seed = sample
-                    .seed
-                    .map(|seed| {
-                        let Ok(seed) = seed.value.to_string().parse::<u64>() else {
-                            return plan_err!("seed must be a number: {}", seed.value);
-                        };
-                        Ok(seed)
-                    })
-                    .transpose()?;
-
-                let sampleless_relation = TableFactor::Table {
-                    sample: None,
-                    alias: alias.clone(),
-                    name: name.clone(),
-                    args: args.clone(),
-                    with_hints: with_hints.clone(),
-                    version: version.clone(),
-                    with_ordinality,
-                    partitions: partitions.clone(),
-                    json_path: json_path.clone(),
-                    index_hints: index_hints.clone(),
-                };
-                let input = context.plan(sampleless_relation)?;
-
-                if let Some(bucket) = sample.bucket {
-                    if bucket.on.is_some() {
-                        // Hive-style sample, only used when the Hive table is defined with CLUSTERED BY
-                        return not_impl_err!(
-                            "Bucket sample with ON is not supported yet"
-                        );
-                    }
-
-                    let Ok(bucket_num) = bucket.bucket.to_string().parse::<u64>() else {
-                        return plan_err!("bucket must be a number");
-                    };
-
-                    let Ok(total_num) = bucket.total.to_string().parse::<u64>() else {
-                        return plan_err!("total must be a number");
-                    };
-                    let value = bucket_num as f64 / total_num as f64;
-                    let plan =
-                        TableSamplePlanNode::new(input, value, None, seed).into_plan();
-                    return Ok(RelationPlanning::Planned(PlannedRelation::new(
-                        plan, alias,
-                    )));
-                }
-                if let Some(quantity) = sample.quantity {
-                    return match quantity.unit {
-                        Some(TableSampleUnit::Rows) => {
-                            let value = evaluate_number::<i64>(&quantity.value);
-                            if value.is_none() {
-                                return plan_err!(
-                                    "quantity must be a number: {:?}",
-                                    quantity.value
-                                );
-                            }
-                            let value = value.unwrap();
-                            if value < 0 {
-                                return plan_err!(
-                                    "quantity must be a non-negative number: {:?}",
-                                    quantity.value
-                                );
-                            }
-                            Ok(RelationPlanning::Planned(PlannedRelation::new(
-                                LogicalPlanBuilder::from(input)
-                                    .limit(0, Some(value as usize))?
-                                    .build()?,
-                                alias,
-                            )))
-                        }
-                        Some(TableSampleUnit::Percent) => {
-                            let value = evaluate_number::<f64>(&quantity.value);
-                            if value.is_none() {
-                                return plan_err!(
-                                    "quantity must be a number: {:?}",
-                                    quantity.value
-                                );
-                            }
-                            let value = value.unwrap() / 100.0;
-                            let plan = TableSamplePlanNode::new(input, value, None, seed)
-                                .into_plan();
-                            Ok(RelationPlanning::Planned(PlannedRelation::new(
-                                plan, alias,
-                            )))
-                        }
-                        None => {
-                            // Clickhouse-style sample
-                            let value = evaluate_number::<f64>(&quantity.value);
-                            if value.is_none() {
-                                return plan_err!(
-                                    "quantity must be a valid number: {:?}",
-                                    quantity.value
-                                );
-                            }
-                            let value = value.unwrap();
-                            if value < 0.0 {
-                                return plan_err!(
-                                    "quantity must be a non-negative number: {:?}",
-                                    quantity.value
-                                );
-                            }
-                            if value >= 1.0 {
-                                // If value is larger than 1, it is a row limit
-                                Ok(RelationPlanning::Planned(PlannedRelation::new(
-                                    LogicalPlanBuilder::from(input)
-                                        .limit(0, Some(value as usize))?
-                                        .build()?,
-                                    alias,
-                                )))
-                            } else {
-                                // If value is between 0.0 and 1.0, it is a fraction
-                                let plan =
-                                    TableSamplePlanNode::new(input, value, None, seed)
-                                        .into_plan();
-                                Ok(RelationPlanning::Planned(PlannedRelation::new(
-                                    plan, alias,
-                                )))
-                            }
-                        }
-                    };
-                }
-                plan_err!("Cannot plan sample SQL")
-            }
-            other => Ok(RelationPlanning::Original(other)),
-        }
     }
 }

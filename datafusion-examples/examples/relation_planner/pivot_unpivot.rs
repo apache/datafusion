@@ -15,61 +15,94 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This example demonstrates using custom relation planners to implement
-//! PIVOT and UNPIVOT operations for reshaping data.
+//! # PIVOT and UNPIVOT Example
 //!
-//! PIVOT transforms rows into columns (wide format), while UNPIVOT does the
-//! reverse, transforming columns into rows (long format). This example shows
-//! how to use custom planners to implement these SQL clauses by rewriting them
-//! into equivalent standard SQL operations:
+//! This example demonstrates implementing SQL `PIVOT` and `UNPIVOT` operations
+//! using a custom [`RelationPlanner`]. Unlike the other examples that create
+//! custom logical/physical nodes, this example shows how to **rewrite** SQL
+//! constructs into equivalent standard SQL operations:
 //!
-//! - PIVOT is rewritten to GROUP BY with CASE expressions
-//! - UNPIVOT is rewritten to UNION ALL of projections
+//! ## Supported Syntax
+//!
+//! ```sql
+//! -- PIVOT: Transform rows into columns
+//! SELECT * FROM sales
+//!   PIVOT (SUM(amount) FOR quarter IN ('Q1', 'Q2', 'Q3', 'Q4'))
+//!
+//! -- UNPIVOT: Transform columns into rows
+//! SELECT * FROM wide_table
+//!   UNPIVOT (value FOR name IN (col1, col2, col3))
+//! ```
+//!
+//! ## Rewrite Strategy
+//!
+//! **PIVOT** is rewritten to `GROUP BY` with `CASE` expressions:
+//! ```sql
+//! -- Original:
+//! SELECT * FROM sales PIVOT (SUM(amount) FOR quarter IN ('Q1', 'Q2'))
+//!
+//! -- Rewritten to:
+//! SELECT region,
+//!        SUM(CASE quarter WHEN 'Q1' THEN amount END) AS Q1,
+//!        SUM(CASE quarter WHEN 'Q2' THEN amount END) AS Q2
+//! FROM sales
+//! GROUP BY region
+//! ```
+//!
+//! **UNPIVOT** is rewritten to `UNION ALL` of projections:
+//! ```sql
+//! -- Original:
+//! SELECT * FROM wide UNPIVOT (sales FOR quarter IN (q1, q2))
+//!
+//! -- Rewritten to:
+//! SELECT region, 'q1' AS quarter, q1 AS sales FROM wide
+//! UNION ALL
+//! SELECT region, 'q2' AS quarter, q2 AS sales FROM wide
+//! ```
 
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{plan_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{
-    case, lit,
+    case, col, lit,
     logical_plan::builder::LogicalPlanBuilder,
     planner::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
     Expr,
 };
-use datafusion_sql::sqlparser::ast::TableFactor;
+use datafusion_sql::sqlparser::ast::{NullInclusion, PivotValueSource, TableFactor};
 use insta::assert_snapshot;
 
-/// This example demonstrates using custom relation planners to implement
-/// PIVOT and UNPIVOT operations for reshaping data.
+// ============================================================================
+// Example Entry Point
+// ============================================================================
+
+/// Runs the PIVOT/UNPIVOT examples demonstrating data reshaping operations.
 pub async fn pivot_unpivot() -> Result<()> {
     let ctx = SessionContext::new();
-
-    // Register sample data tables
+    ctx.register_relation_planner(Arc::new(PivotUnpivotPlanner))?;
     register_sample_data(&ctx)?;
 
-    // Register custom planner
-    ctx.register_relation_planner(Arc::new(PivotUnpivotPlanner))?;
+    println!("PIVOT and UNPIVOT Example");
+    println!("=========================\n");
 
-    println!("Custom Relation Planner: PIVOT and UNPIVOT Operations");
-    println!("======================================================\n");
+    run_examples(&ctx).await
+}
 
-    // Example 1: Basic PIVOT to transform monthly sales data from rows to columns
-    // Shows: How to pivot sales data so each quarter becomes a column
-    // The PIVOT is rewritten to: SELECT region, SUM(CASE WHEN quarter = 'Q1' THEN amount END) as Q1,
-    //                             SUM(CASE WHEN quarter = 'Q2' THEN amount END) as Q2
-    //                             FROM quarterly_sales GROUP BY region
+async fn run_examples(ctx: &SessionContext) -> Result<()> {
+    // ----- PIVOT Examples -----
+
+    // Example 1: Basic PIVOT
+    // Transforms: (region, quarter, amount) → (region, Q1, Q2)
     let results = run_example(
-        &ctx,
-        "Example 1: Basic PIVOT - Transform quarters from rows to columns",
+        ctx,
+        "Example 1: Basic PIVOT",
         r#"SELECT * FROM quarterly_sales
-           PIVOT (
-             SUM(amount)
-             FOR quarter IN ('Q1', 'Q2')
-           ) AS pivoted
+           PIVOT (SUM(amount) FOR quarter IN ('Q1', 'Q2')) AS p
            ORDER BY region"#,
     )
     .await?;
@@ -82,16 +115,13 @@ pub async fn pivot_unpivot() -> Result<()> {
     +--------+------+------+
     ");
 
-    // Example 2: PIVOT with multiple aggregate functions
-    // Shows: How to apply multiple aggregations (SUM and AVG) during pivot
+    // Example 2: PIVOT with multiple aggregates
+    // Creates columns for each (aggregate, value) combination
     let results = run_example(
-        &ctx,
-        "Example 2: PIVOT with multiple aggregates (SUM and AVG)",
+        ctx,
+        "Example 2: PIVOT with multiple aggregates",
         r#"SELECT * FROM quarterly_sales
-           PIVOT (
-             SUM(amount), AVG(amount)
-             FOR quarter IN ('Q1', 'Q2')
-           ) AS pivoted
+           PIVOT (SUM(amount), AVG(amount) FOR quarter IN ('Q1', 'Q2')) AS p
            ORDER BY region"#,
     )
     .await?;
@@ -104,17 +134,13 @@ pub async fn pivot_unpivot() -> Result<()> {
     +--------+--------+--------+--------+--------+
     ");
 
-    // Example 3: PIVOT with additional grouping columns
-    // Shows: How pivot works when there are multiple non-pivot columns
-    // The region and product both appear in GROUP BY
+    // Example 3: PIVOT with multiple grouping columns
+    // Non-pivot, non-aggregate columns become GROUP BY columns
     let results = run_example(
-        &ctx,
+        ctx,
         "Example 3: PIVOT with multiple grouping columns",
         r#"SELECT * FROM product_sales
-           PIVOT (
-             SUM(amount)
-             FOR quarter IN ('Q1', 'Q2')
-           ) AS pivoted
+           PIVOT (SUM(amount) FOR quarter IN ('Q1', 'Q2')) AS p
            ORDER BY region, product"#,
     )
     .await?;
@@ -128,66 +154,58 @@ pub async fn pivot_unpivot() -> Result<()> {
     +--------+----------+-----+-----+
     ");
 
-    // Example 4: Basic UNPIVOT to transform columns back into rows
-    // Shows: How to unpivot wide-format data into long format
-    // The UNPIVOT is rewritten to:
-    //   SELECT region, 'q1_label' as quarter, q1 as sales FROM wide_sales
-    //   UNION ALL
-    //   SELECT region, 'q2_label' as quarter, q2 as sales FROM wide_sales
+    // ----- UNPIVOT Examples -----
+
+    // Example 4: Basic UNPIVOT
+    // Transforms: (region, q1, q2) → (region, quarter, sales)
     let results = run_example(
-        &ctx,
-        "Example 4: Basic UNPIVOT - Transform columns to rows",
+        ctx,
+        "Example 4: Basic UNPIVOT",
         r#"SELECT * FROM wide_sales
-           UNPIVOT (
-             sales FOR quarter IN (q1 AS 'q1_label', q2 AS 'q2_label')
-           ) AS unpivoted
+           UNPIVOT (sales FOR quarter IN (q1 AS 'Q1', q2 AS 'Q2')) AS u
            ORDER BY quarter, region"#,
     )
     .await?;
     assert_snapshot!(results, @r"
-    +--------+----------+-------+
-    | region | quarter  | sales |
-    +--------+----------+-------+
-    | North  | q1_label | 1000  |
-    | South  | q1_label | 1200  |
-    | North  | q2_label | 1500  |
-    | South  | q2_label | 1300  |
-    +--------+----------+-------+
+    +--------+---------+-------+
+    | region | quarter | sales |
+    +--------+---------+-------+
+    | North  | Q1      | 1000  |
+    | South  | Q1      | 1200  |
+    | North  | Q2      | 1500  |
+    | South  | Q2      | 1300  |
+    +--------+---------+-------+
     ");
 
     // Example 5: UNPIVOT with INCLUDE NULLS
-    // Shows: How null handling works in UNPIVOT operations
-    // With INCLUDE NULLS, the filter `sales IS NOT NULL` is NOT added
-    // Expected: Same output as Example 4 (no nulls in this dataset anyway)
+    // By default, UNPIVOT excludes rows where the value column is NULL.
+    // INCLUDE NULLS keeps them (same result here since no NULLs in data).
     let results = run_example(
-        &ctx,
-        "Example 5: UNPIVOT with INCLUDE NULLS",
+        ctx,
+        "Example 5: UNPIVOT INCLUDE NULLS",
         r#"SELECT * FROM wide_sales
-           UNPIVOT INCLUDE NULLS (
-             sales FOR quarter IN (q1 AS 'q1_label', q2 AS 'q2_label')
-           ) AS unpivoted
+           UNPIVOT INCLUDE NULLS (sales FOR quarter IN (q1 AS 'Q1', q2 AS 'Q2')) AS u
            ORDER BY quarter, region"#,
     )
     .await?;
     assert_snapshot!(results, @r"
-    +--------+----------+-------+
-    | region | quarter  | sales |
-    +--------+----------+-------+
-    | North  | q1_label | 1000  |
-    | South  | q1_label | 1200  |
-    | North  | q2_label | 1500  |
-    | South  | q2_label | 1300  |
-    +--------+----------+-------+
+    +--------+---------+-------+
+    | region | quarter | sales |
+    +--------+---------+-------+
+    | North  | Q1      | 1000  |
+    | South  | Q1      | 1200  |
+    | North  | Q2      | 1500  |
+    | South  | Q2      | 1300  |
+    +--------+---------+-------+
     ");
 
-    // Example 6: Simple PIVOT with projection
-    // Shows: PIVOT works seamlessly with other SQL operations like projection
-    // We can select specific columns after pivoting
+    // Example 6: PIVOT with column projection
+    // Standard SQL operations work seamlessly after PIVOT
     let results = run_example(
-        &ctx,
+        ctx,
         "Example 6: PIVOT with projection",
         r#"SELECT region FROM quarterly_sales
-           PIVOT (SUM(amount) FOR quarter IN ('Q1', 'Q2')) AS pivoted
+           PIVOT (SUM(amount) FOR quarter IN ('Q1', 'Q2')) AS p
            ORDER BY region"#,
     )
     .await?;
@@ -203,69 +221,82 @@ pub async fn pivot_unpivot() -> Result<()> {
     Ok(())
 }
 
-/// Register sample data tables for the examples
-fn register_sample_data(ctx: &SessionContext) -> Result<()> {
-    // Create quarterly_sales table: region, quarter, amount
-    let region: ArrayRef =
-        Arc::new(StringArray::from(vec!["North", "North", "South", "South"]));
-    let quarter: ArrayRef = Arc::new(StringArray::from(vec!["Q1", "Q2", "Q1", "Q2"]));
-    let amount: ArrayRef = Arc::new(Int64Array::from(vec![1000, 1500, 1200, 1300]));
-    let batch = RecordBatch::try_from_iter(vec![
-        ("region", region),
-        ("quarter", quarter),
-        ("amount", amount),
-    ])?;
-    ctx.register_batch("quarterly_sales", batch)?;
-
-    // Create product_sales table: region, quarter, product, amount
-    let region: ArrayRef = Arc::new(StringArray::from(vec!["North", "North", "South"]));
-    let quarter: ArrayRef = Arc::new(StringArray::from(vec!["Q1", "Q1", "Q2"]));
-    let product: ArrayRef =
-        Arc::new(StringArray::from(vec!["ProductA", "ProductB", "ProductA"]));
-    let amount: ArrayRef = Arc::new(Int64Array::from(vec![500, 500, 650]));
-    let batch = RecordBatch::try_from_iter(vec![
-        ("region", region),
-        ("quarter", quarter),
-        ("product", product),
-        ("amount", amount),
-    ])?;
-    ctx.register_batch("product_sales", batch)?;
-
-    // Create wide_sales table: region, q1, q2
-    let region: ArrayRef = Arc::new(StringArray::from(vec!["North", "South"]));
-    let q1: ArrayRef = Arc::new(Int64Array::from(vec![1000, 1200]));
-    let q2: ArrayRef = Arc::new(Int64Array::from(vec![1500, 1300]));
-    let batch =
-        RecordBatch::try_from_iter(vec![("region", region), ("q1", q1), ("q2", q2)])?;
-    ctx.register_batch("wide_sales", batch)?;
-
-    Ok(())
-}
-
+/// Helper to run a single example query and capture results.
 async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<String> {
     println!("{title}:\n{sql}\n");
     let df = ctx.sql(sql).await?;
+    println!("{}\n", df.logical_plan().display_indent());
 
-    // Show the logical plan to demonstrate the rewrite
-    println!("Rewritten Logical Plan:\n{}\n", df.logical_plan().display_indent());
-
-    // Execute and capture results
-    let results = df.collect().await?;
-    let results = arrow::util::pretty::pretty_format_batches(&results)?.to_string();
-    println!("Results:\n{results}\n");
+    let batches = df.collect().await?;
+    let results = arrow::util::pretty::pretty_format_batches(&batches)?.to_string();
+    println!("{results}\n");
 
     Ok(results)
 }
 
-/// Helper function to extract column name from an expression
-fn get_column_name(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::Column(col) => Some(col.name.clone()),
-        _ => None,
-    }
+/// Register test data tables.
+fn register_sample_data(ctx: &SessionContext) -> Result<()> {
+    // quarterly_sales: normalized sales data (region, quarter, amount)
+    ctx.register_batch(
+        "quarterly_sales",
+        RecordBatch::try_from_iter(vec![
+            (
+                "region",
+                Arc::new(StringArray::from(vec!["North", "North", "South", "South"]))
+                    as ArrayRef,
+            ),
+            (
+                "quarter",
+                Arc::new(StringArray::from(vec!["Q1", "Q2", "Q1", "Q2"])),
+            ),
+            (
+                "amount",
+                Arc::new(Int64Array::from(vec![1000, 1500, 1200, 1300])),
+            ),
+        ])?,
+    )?;
+
+    // product_sales: sales with additional grouping dimension
+    ctx.register_batch(
+        "product_sales",
+        RecordBatch::try_from_iter(vec![
+            (
+                "region",
+                Arc::new(StringArray::from(vec!["North", "North", "South"])) as ArrayRef,
+            ),
+            (
+                "quarter",
+                Arc::new(StringArray::from(vec!["Q1", "Q1", "Q2"])),
+            ),
+            (
+                "product",
+                Arc::new(StringArray::from(vec!["ProductA", "ProductB", "ProductA"])),
+            ),
+            ("amount", Arc::new(Int64Array::from(vec![500, 500, 650]))),
+        ])?,
+    )?;
+
+    // wide_sales: denormalized/wide format (for UNPIVOT)
+    ctx.register_batch(
+        "wide_sales",
+        RecordBatch::try_from_iter(vec![
+            (
+                "region",
+                Arc::new(StringArray::from(vec!["North", "South"])) as ArrayRef,
+            ),
+            ("q1", Arc::new(Int64Array::from(vec![1000, 1200]))),
+            ("q2", Arc::new(Int64Array::from(vec![1500, 1300]))),
+        ])?,
+    )?;
+
+    Ok(())
 }
 
-/// Custom planner that handles PIVOT and UNPIVOT table factor syntax
+// ============================================================================
+// Relation Planner: PivotUnpivotPlanner
+// ============================================================================
+
+/// Relation planner that rewrites PIVOT and UNPIVOT into standard SQL.
 #[derive(Debug)]
 struct PivotUnpivotPlanner;
 
@@ -273,10 +304,9 @@ impl RelationPlanner for PivotUnpivotPlanner {
     fn plan_relation(
         &self,
         relation: TableFactor,
-        context: &mut dyn RelationPlannerContext,
+        ctx: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
         match relation {
-            // Handle PIVOT operations
             TableFactor::Pivot {
                 table,
                 aggregate_functions,
@@ -284,167 +314,15 @@ impl RelationPlanner for PivotUnpivotPlanner {
                 value_source,
                 alias,
                 ..
-            } => {
-                println!("[PivotUnpivotPlanner] Processing PIVOT clause");
+            } => plan_pivot(
+                ctx,
+                *table,
+                &aggregate_functions,
+                &value_column,
+                value_source,
+                alias,
+            ),
 
-                // Plan the input table
-                let input = context.plan(*table)?;
-                let input_schema = input.schema().clone();
-                println!(
-                    "[PivotUnpivotPlanner] Input schema has {} fields",
-                    input_schema.fields().len()
-                );
-
-                // Process aggregate functions
-                let aggregates = aggregate_functions
-                    .iter()
-                    .map(|agg| {
-                        let expr = context
-                            .sql_to_expr(agg.expr.clone(), input_schema.as_ref())?;
-                        Ok(expr)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                // Get the pivot column (should be a single column for simple case)
-                if value_column.len() != 1 {
-                    return Err(DataFusionError::Plan(
-                        "Only single-column pivot supported in this example".into(),
-                    ));
-                }
-                let pivot_col = context
-                    .sql_to_expr(value_column[0].clone(), input_schema.as_ref())?;
-                let pivot_col_name = get_column_name(&pivot_col).ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "Pivot column must be a column reference".into(),
-                    )
-                })?;
-
-                // Process pivot values
-                use datafusion_sql::sqlparser::ast::PivotValueSource;
-                let pivot_values = match value_source {
-                    PivotValueSource::List(list) => list
-                        .iter()
-                        .map(|item| {
-                            let alias = item
-                                .alias
-                                .as_ref()
-                                .map(|id| context.normalize_ident(id.clone()));
-                            let expr = context
-                                .sql_to_expr(item.expr.clone(), input_schema.as_ref())?;
-                            Ok((alias, expr))
-                        })
-                        .collect::<Result<Vec<_>>>()?,
-                    _ => {
-                        return Err(DataFusionError::Plan(
-                            "Dynamic pivot (ANY/Subquery) not supported in this example"
-                                .into(),
-                        ));
-                    }
-                };
-
-                // Build the rewritten plan: GROUP BY with CASE expressions
-                // For each aggregate and each pivot value, create: aggregate(CASE WHEN pivot_col = value THEN agg_input END)
-
-                let mut pivot_exprs = Vec::new();
-
-                // Determine grouping columns (all non-pivot columns, excluding aggregate inputs)
-                // Collect aggregate input column names
-                let agg_input_cols: Vec<String> = aggregates
-                    .iter()
-                    .filter_map(|agg| {
-                        if let Expr::AggregateFunction(agg_fn) = agg {
-                            agg_fn.params.args.first().and_then(get_column_name)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                let mut group_by_cols = Vec::new();
-                for field in input_schema.fields() {
-                    let field_name = field.name();
-                    // Include in GROUP BY if it's not the pivot column and not an aggregate input
-                    if field_name != &pivot_col_name
-                        && !agg_input_cols.contains(field_name)
-                    {
-                        group_by_cols.push(col(field_name));
-                    }
-                }
-
-                // Create CASE expressions for each (aggregate, pivot_value) pair
-                for agg_func in &aggregates {
-                    for (alias_opt, pivot_value) in &pivot_values {
-                        // Get the input to the aggregate function
-                        let agg_input = if let Expr::AggregateFunction(agg_fn) = agg_func
-                        {
-                            if agg_fn.params.args.len() == 1 {
-                                agg_fn.params.args[0].clone()
-                            } else {
-                                return Err(DataFusionError::Plan(
-                                    "Only single-argument aggregates supported in this example".into(),
-                                ));
-                            }
-                        } else {
-                            return Err(DataFusionError::Plan(
-                                "Expected aggregate function".into(),
-                            ));
-                        };
-
-                        // Create: CASE WHEN pivot_col = pivot_value THEN agg_input END
-                        let case_expr = case(col(&pivot_col_name))
-                            .when(pivot_value.clone(), agg_input)
-                            .end()?;
-
-                        // Wrap in aggregate function
-                        let pivoted_expr =
-                            if let Expr::AggregateFunction(agg_fn) = agg_func {
-                                agg_fn.func.call(vec![case_expr])
-                            } else {
-                                return Err(DataFusionError::Plan(
-                                    "Expected aggregate function".into(),
-                                ));
-                            };
-
-                        // Determine the column alias
-                        let value_part = alias_opt.clone().unwrap_or_else(|| {
-                            if let Expr::Literal(ScalarValue::Utf8(Some(s)), _) =
-                                pivot_value
-                            {
-                                s.clone()
-                            } else if let Expr::Literal(lit, _) = pivot_value {
-                                format!("{lit}")
-                            } else {
-                                format!("{pivot_value}")
-                            }
-                        });
-
-                        // If there are multiple aggregates, prefix with function name
-                        let col_alias = if aggregates.len() > 1 {
-                            let agg_name =
-                                if let Expr::AggregateFunction(agg_fn) = agg_func {
-                                    agg_fn.func.name()
-                                } else {
-                                    "agg"
-                                };
-                            format!("{agg_name}_{value_part}")
-                        } else {
-                            value_part
-                        };
-
-                        pivot_exprs.push(pivoted_expr.alias(col_alias));
-                    }
-                }
-
-                // Build the final plan: GROUP BY with aggregations
-                let plan = LogicalPlanBuilder::from(input)
-                    .aggregate(group_by_cols, pivot_exprs)?
-                    .build()?;
-
-                println!("[PivotUnpivotPlanner] Successfully rewrote PIVOT to GROUP BY with CASE");
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
-            }
-
-            // Handle UNPIVOT operations
             TableFactor::Unpivot {
                 table,
                 value,
@@ -452,122 +330,239 @@ impl RelationPlanner for PivotUnpivotPlanner {
                 columns,
                 null_inclusion,
                 alias,
-            } => {
-                println!("[PivotUnpivotPlanner] Processing UNPIVOT clause");
-
-                // Plan the input table
-                let input = context.plan(*table)?;
-                let input_schema = input.schema().clone();
-                println!(
-                    "[PivotUnpivotPlanner] Input schema has {} fields",
-                    input_schema.fields().len()
-                );
-
-                // Get output column names
-                let value_col_name = format!("{value}");
-                let name_col_name = context.normalize_ident(name.clone());
-                println!(
-                    "[PivotUnpivotPlanner] Value column name (output): {value_col_name}"
-                );
-                println!(
-                    "[PivotUnpivotPlanner] Name column name (output): {name_col_name}"
-                );
-
-                // Process columns to unpivot
-                let unpivot_cols = columns
-                    .iter()
-                    .map(|col| {
-                        let label = col
-                            .alias
-                            .as_ref()
-                            .map(|id| context.normalize_ident(id.clone()))
-                            .unwrap_or_else(|| format!("{}", col.expr));
-
-                        let expr = context
-                            .sql_to_expr(col.expr.clone(), input_schema.as_ref())?;
-                        let col_name = get_column_name(&expr)
-                            .ok_or_else(|| DataFusionError::Plan("Unpivot column must be a column reference".into()))?;
-
-                        println!(
-                            "[PivotUnpivotPlanner] Will unpivot column '{col_name}' with label '{label}'"
-                        );
-
-                        Ok((col_name, label))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                // Determine which columns to keep (not being unpivoted)
-                let keep_cols: Vec<String> = input_schema
-                    .fields()
-                    .iter()
-                    .filter_map(|field| {
-                        let field_name = field.name();
-                        if !unpivot_cols.iter().any(|(col, _)| col == field_name) {
-                            Some(field_name.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                // Build UNION ALL of projections
-                // For each unpivot column, create: SELECT keep_cols..., 'label' as name_col, col as value_col FROM input
-                let mut union_inputs = Vec::new();
-                for (col_name, label) in &unpivot_cols {
-                    let mut projection = Vec::new();
-
-                    // Add all columns we're keeping
-                    for keep_col in &keep_cols {
-                        projection.push(col(keep_col));
-                    }
-
-                    // Add the name column (constant label)
-                    projection.push(lit(label.clone()).alias(&name_col_name));
-
-                    // Add the value column (the column being unpivoted)
-                    projection.push(col(col_name).alias(&value_col_name));
-
-                    let projected = LogicalPlanBuilder::from(input.clone())
-                        .project(projection)?
-                        .build()?;
-
-                    union_inputs.push(projected);
-                }
-
-                // Build UNION ALL
-                if union_inputs.is_empty() {
-                    return Err(DataFusionError::Plan(
-                        "UNPIVOT requires at least one column".into(),
-                    ));
-                }
-
-                let mut union_iter = union_inputs.into_iter();
-                let mut plan = union_iter.next().unwrap();
-                for union_input in union_iter {
-                    plan = LogicalPlanBuilder::from(plan)
-                        .union(LogicalPlanBuilder::from(union_input).build()?)?
-                        .build()?;
-                }
-
-                // Handle EXCLUDE NULLS (default) by filtering out nulls
-                if null_inclusion.is_none()
-                    || matches!(
-                        null_inclusion,
-                        Some(datafusion_sql::sqlparser::ast::NullInclusion::ExcludeNulls)
-                    )
-                {
-                    plan = LogicalPlanBuilder::from(plan)
-                        .filter(col(&value_col_name).is_not_null())?
-                        .build()?;
-                }
-
-                println!(
-                    "[PivotUnpivotPlanner] Successfully rewrote UNPIVOT to UNION ALL"
-                );
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
-            }
+            } => plan_unpivot(
+                ctx,
+                *table,
+                &value,
+                name,
+                &columns,
+                null_inclusion.as_ref(),
+                alias,
+            ),
 
             other => Ok(RelationPlanning::Original(other)),
         }
+    }
+}
+
+// ============================================================================
+// PIVOT Implementation
+// ============================================================================
+
+/// Rewrite PIVOT to GROUP BY with CASE expressions.
+fn plan_pivot(
+    ctx: &mut dyn RelationPlannerContext,
+    table: TableFactor,
+    aggregate_functions: &[datafusion_sql::sqlparser::ast::ExprWithAlias],
+    value_column: &[datafusion_sql::sqlparser::ast::Expr],
+    value_source: PivotValueSource,
+    alias: Option<datafusion_sql::sqlparser::ast::TableAlias>,
+) -> Result<RelationPlanning> {
+    // Plan the input table
+    let input = ctx.plan(table)?;
+    let schema = input.schema();
+
+    // Parse aggregate functions
+    let aggregates: Vec<Expr> = aggregate_functions
+        .iter()
+        .map(|agg| ctx.sql_to_expr(agg.expr.clone(), schema.as_ref()))
+        .collect::<Result<_>>()?;
+
+    // Get the pivot column (only single-column pivot supported)
+    if value_column.len() != 1 {
+        return Err(plan_datafusion_err!(
+            "Only single-column PIVOT is supported"
+        ));
+    }
+    let pivot_col = ctx.sql_to_expr(value_column[0].clone(), schema.as_ref())?;
+    let pivot_col_name = extract_column_name(&pivot_col)?;
+
+    // Parse pivot values
+    let pivot_values = match value_source {
+        PivotValueSource::List(list) => list
+            .iter()
+            .map(|item| {
+                let alias = item
+                    .alias
+                    .as_ref()
+                    .map(|id| ctx.normalize_ident(id.clone()));
+                let expr = ctx.sql_to_expr(item.expr.clone(), schema.as_ref())?;
+                Ok((alias, expr))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        _ => {
+            return Err(plan_datafusion_err!(
+                "Dynamic PIVOT (ANY/Subquery) is not supported"
+            ));
+        }
+    };
+
+    // Determine GROUP BY columns (non-pivot, non-aggregate columns)
+    let agg_input_cols: Vec<&str> = aggregates
+        .iter()
+        .filter_map(|agg| {
+            if let Expr::AggregateFunction(f) = agg {
+                f.params.args.first().and_then(|e| {
+                    if let Expr::Column(c) = e {
+                        Some(c.name.as_str())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let group_by_cols: Vec<Expr> = schema
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .filter(|name| *name != pivot_col_name.as_str() && !agg_input_cols.contains(name))
+        .map(col)
+        .collect();
+
+    // Build CASE expressions for each (aggregate, pivot_value) pair
+    let mut pivot_exprs = Vec::new();
+    for agg in &aggregates {
+        let Expr::AggregateFunction(agg_fn) = agg else {
+            continue;
+        };
+        let Some(agg_input) = agg_fn.params.args.first().cloned() else {
+            continue;
+        };
+
+        for (value_alias, pivot_value) in &pivot_values {
+            // CASE pivot_col WHEN pivot_value THEN agg_input END
+            let case_expr = case(col(&pivot_col_name))
+                .when(pivot_value.clone(), agg_input.clone())
+                .end()?;
+
+            // Wrap in aggregate function
+            let pivoted = agg_fn.func.call(vec![case_expr]);
+
+            // Determine column alias
+            let value_str = value_alias
+                .clone()
+                .unwrap_or_else(|| expr_to_string(pivot_value));
+            let col_alias = if aggregates.len() > 1 {
+                format!("{}_{}", agg_fn.func.name(), value_str)
+            } else {
+                value_str
+            };
+
+            pivot_exprs.push(pivoted.alias(col_alias));
+        }
+    }
+
+    let plan = LogicalPlanBuilder::from(input)
+        .aggregate(group_by_cols, pivot_exprs)?
+        .build()?;
+
+    Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+}
+
+// ============================================================================
+// UNPIVOT Implementation
+// ============================================================================
+
+/// Rewrite UNPIVOT to UNION ALL of projections.
+fn plan_unpivot(
+    ctx: &mut dyn RelationPlannerContext,
+    table: TableFactor,
+    value: &datafusion_sql::sqlparser::ast::Expr,
+    name: datafusion_sql::sqlparser::ast::Ident,
+    columns: &[datafusion_sql::sqlparser::ast::ExprWithAlias],
+    null_inclusion: Option<&NullInclusion>,
+    alias: Option<datafusion_sql::sqlparser::ast::TableAlias>,
+) -> Result<RelationPlanning> {
+    // Plan the input table
+    let input = ctx.plan(table)?;
+    let schema = input.schema();
+
+    // Output column names
+    let value_col_name = value.to_string();
+    let name_col_name = ctx.normalize_ident(name);
+
+    // Parse columns to unpivot: (source_column, label)
+    let unpivot_cols: Vec<(String, String)> = columns
+        .iter()
+        .map(|c| {
+            let label = c
+                .alias
+                .as_ref()
+                .map(|id| ctx.normalize_ident(id.clone()))
+                .unwrap_or_else(|| c.expr.to_string());
+            let expr = ctx.sql_to_expr(c.expr.clone(), schema.as_ref())?;
+            let col_name = extract_column_name(&expr)?;
+            Ok((col_name.to_string(), label))
+        })
+        .collect::<Result<_>>()?;
+
+    // Columns to preserve (not being unpivoted)
+    let keep_cols: Vec<&str> = schema
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .filter(|name| !unpivot_cols.iter().any(|(c, _)| c == *name))
+        .collect();
+
+    // Build UNION ALL: one SELECT per unpivot column
+    if unpivot_cols.is_empty() {
+        return Err(plan_datafusion_err!("UNPIVOT requires at least one column"));
+    }
+
+    let mut union_inputs: Vec<_> = unpivot_cols
+        .iter()
+        .map(|(col_name, label)| {
+            let mut projection: Vec<Expr> = keep_cols.iter().map(|c| col(*c)).collect();
+            projection.push(lit(label.clone()).alias(&name_col_name));
+            projection.push(col(col_name).alias(&value_col_name));
+
+            LogicalPlanBuilder::from(input.clone())
+                .project(projection)?
+                .build()
+        })
+        .collect::<Result<_>>()?;
+
+    // Combine with UNION ALL
+    let mut plan = union_inputs.remove(0);
+    for branch in union_inputs {
+        plan = LogicalPlanBuilder::from(plan).union(branch)?.build()?;
+    }
+
+    // Apply EXCLUDE NULLS filter (default behavior)
+    let exclude_nulls = null_inclusion.is_none()
+        || matches!(null_inclusion, Some(&NullInclusion::ExcludeNulls));
+    if exclude_nulls {
+        plan = LogicalPlanBuilder::from(plan)
+            .filter(col(&value_col_name).is_not_null())?
+            .build()?;
+    }
+
+    Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Extract column name from an expression.
+fn extract_column_name(expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::Column(c) => Ok(c.name.clone()),
+        _ => Err(plan_datafusion_err!(
+            "Expected column reference, got {expr}"
+        )),
+    }
+}
+
+/// Convert an expression to a string for use as column alias.
+fn expr_to_string(expr: &Expr) -> String {
+    match expr {
+        Expr::Literal(ScalarValue::Utf8(Some(s)), _) => s.clone(),
+        Expr::Literal(v, _) => v.to_string(),
+        other => other.to_string(),
     }
 }

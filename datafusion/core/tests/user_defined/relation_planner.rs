@@ -41,6 +41,11 @@ use insta::assert_snapshot;
 // only for tests. In real applications a `RelationPlanner` would typically
 // construct richer logical plans tailored to external systems or custom
 // semantics rather than hard-coded in-memory tables.
+//
+// For more realistic examples, see `datafusion-examples/examples/relation_planner/`:
+// - `table_sample.rs`: Full TABLESAMPLE implementation (parsing → execution)
+// - `pivot_unpivot.rs`: PIVOT/UNPIVOT via SQL rewriting
+// - `match_recognize.rs`: MATCH_RECOGNIZE logical planning
 
 /// Helper to build simple static values-backed virtual tables used by the
 /// example planners below.

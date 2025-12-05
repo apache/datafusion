@@ -59,7 +59,6 @@ mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "http"] }
 prost = { workspace = true }
 rand = { workspace = true }
-rand_distr = "0.5"
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }

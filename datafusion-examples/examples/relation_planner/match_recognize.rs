@@ -15,19 +15,67 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This example demonstrates using custom relation planners to implement
-//! MATCH_RECOGNIZE-style pattern matching on event streams.
+//! # MATCH_RECOGNIZE Example
 //!
-//! MATCH_RECOGNIZE is a SQL extension for pattern matching on ordered data,
-//! similar to regular expressions but for relational data. This example shows
-//! how to use custom planners to implement new SQL syntax.
+//! This example demonstrates implementing SQL `MATCH_RECOGNIZE` pattern matching
+//! using a custom [`RelationPlanner`]. Unlike the [`pivot_unpivot`] example that
+//! rewrites SQL to standard operations, this example creates a **custom logical
+//! plan node** (`MiniMatchRecognizeNode`) to represent the operation.
+//!
+//! ## Supported Syntax
+//!
+//! ```sql
+//! SELECT * FROM events
+//!   MATCH_RECOGNIZE (
+//!     PARTITION BY region
+//!     MEASURES SUM(price) AS total, AVG(price) AS average
+//!     PATTERN (A B+ C)
+//!     DEFINE
+//!       A AS price < 100,
+//!       B AS price BETWEEN 100 AND 200,
+//!       C AS price > 200
+//!   ) AS matches
+//! ```
+//!
+//! ## Architecture
+//!
+//! This example demonstrates **logical planning only**. Physical execution would
+//! require implementing an [`ExecutionPlan`] (see the [`table_sample`] example
+//! for a complete implementation with physical planning).
+//!
+//! ```text
+//! SQL Query
+//!     │
+//!     ▼
+//! ┌─────────────────────────────────────┐
+//! │ MatchRecognizePlanner               │
+//! │ (RelationPlanner trait)             │
+//! │                                     │
+//! │ • Parses MATCH_RECOGNIZE syntax     │
+//! │ • Creates MiniMatchRecognizeNode    │
+//! │ • Converts SQL exprs to DataFusion  │
+//! └─────────────────────────────────────┘
+//!     │
+//!     ▼
+//! ┌─────────────────────────────────────┐
+//! │ MiniMatchRecognizeNode              │
+//! │ (UserDefinedLogicalNode)            │
+//! │                                     │
+//! │ • measures: [(alias, expr), ...]    │
+//! │ • definitions: [(symbol, expr), ...]│
+//! └─────────────────────────────────────┘
+//! ```
+//!
+//! [`pivot_unpivot`]: super::pivot_unpivot
+//! [`table_sample`]: super::table_sample
+//! [`ExecutionPlan`]: datafusion::physical_plan::ExecutionPlan
 
 use std::{any::Any, cmp::Ordering, hash::Hasher, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
-use datafusion_common::{DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::{
     logical_plan::{Extension, InvariantLevel, LogicalPlan},
     planner::{
@@ -38,58 +86,59 @@ use datafusion_expr::{
 use datafusion_sql::sqlparser::ast::TableFactor;
 use insta::assert_snapshot;
 
-/// This example demonstrates using custom relation planners to implement
-/// MATCH_RECOGNIZE-style pattern matching on event streams.
+// ============================================================================
+// Example Entry Point
+// ============================================================================
+
+/// Runs the MATCH_RECOGNIZE examples demonstrating pattern matching on event streams.
+///
+/// Note: This example demonstrates **logical planning only**. Physical execution
+/// would require additional implementation of an [`ExecutionPlan`].
 pub async fn match_recognize() -> Result<()> {
     let ctx = SessionContext::new();
-
-    // Register sample data tables
+    ctx.register_relation_planner(Arc::new(MatchRecognizePlanner))?;
     register_sample_data(&ctx)?;
 
-    // Register custom planner
-    ctx.register_relation_planner(Arc::new(MatchRecognizePlanner))?;
+    println!("MATCH_RECOGNIZE Example (Logical Planning Only)");
+    println!("================================================\n");
 
-    println!("Custom Relation Planner: MATCH_RECOGNIZE Pattern Matching");
-    println!("==========================================================\n");
-    println!("Note: This example demonstrates logical planning only.");
-    println!("Physical execution would require additional implementation.\n");
+    run_examples(&ctx).await
+}
 
-    // Example 1: Basic MATCH_RECOGNIZE with MEASURES and DEFINE clauses
-    // Shows: How to use MATCH_RECOGNIZE to find patterns in event data with aggregations
-    // Expected: Logical plan showing MiniMatchRecognize node with SUM and AVG measures
-    // Note: This demonstrates the logical planning phase - actual execution would require physical implementation
+async fn run_examples(ctx: &SessionContext) -> Result<()> {
+    // Example 1: Basic MATCH_RECOGNIZE with MEASURES and DEFINE
+    // Demonstrates: Aggregate measures over matched rows
     let plan = run_example(
-        &ctx,
-        "Example 1: MATCH_RECOGNIZE with measures and definitions",
-        r#"SELECT * FROM events 
+        ctx,
+        "Example 1: MATCH_RECOGNIZE with aggregations",
+        r#"SELECT * FROM events
            MATCH_RECOGNIZE (
-             PARTITION BY 1 
-             MEASURES SUM(price) AS total_price, AVG(price) AS avg_price 
-             PATTERN (A) 
+             PARTITION BY 1
+             MEASURES SUM(price) AS total_price, AVG(price) AS avg_price
+             PATTERN (A)
              DEFINE A AS price > 10
-           ) AS t"#,
+           ) AS matches"#,
     )
     .await?;
     assert_snapshot!(plan, @r"
-    Projection: t.price
-      SubqueryAlias: t
+    Projection: matches.price
+      SubqueryAlias: matches
         MiniMatchRecognize measures=[total_price := sum(events.price), avg_price := avg(events.price)] define=[a := events.price > Int64(10)]
           TableScan: events
     ");
 
-    // Example 2: Stock price pattern detection using MATCH_RECOGNIZE
-    // Shows: How to detect patterns in financial data (e.g., stocks above threshold)
-    // Expected: Logical plan showing MiniMatchRecognize with MIN, MAX, AVG measures on stock prices
-    // Note: Uses real stock data (DDOG prices: 150, 155, 152, 158) to find patterns above 151.0
+    // Example 2: Stock price pattern detection
+    // Demonstrates: Real-world use case finding prices above threshold
     let plan = run_example(
-        &ctx,
-        "Example 2: Detect stocks above threshold using MATCH_RECOGNIZE",
-        r#"SELECT * FROM stock_prices 
+        ctx,
+        "Example 2: Detect high stock prices",
+        r#"SELECT * FROM stock_prices
            MATCH_RECOGNIZE (
-             MEASURES MIN(price) AS min_price, 
-                      MAX(price) AS max_price, 
-                      AVG(price) AS avg_price 
-             PATTERN (HIGH) 
+             MEASURES
+               MIN(price) AS min_price,
+               MAX(price) AS max_price,
+               AVG(price) AS avg_price
+             PATTERN (HIGH)
              DEFINE HIGH AS price > 151.0
            ) AS trends"#,
     )
@@ -104,38 +153,67 @@ pub async fn match_recognize() -> Result<()> {
     Ok(())
 }
 
-/// Register sample data tables for the examples
-fn register_sample_data(ctx: &SessionContext) -> Result<()> {
-    // Create events table with price column
-    let price: ArrayRef = Arc::new(Int32Array::from(vec![5, 12, 8, 15, 20]));
-    let batch = RecordBatch::try_from_iter(vec![("price", price)])?;
-    ctx.register_batch("events", batch)?;
-
-    // Create stock_prices table with symbol and price columns
-    let symbol: ArrayRef =
-        Arc::new(StringArray::from(vec!["DDOG", "DDOG", "DDOG", "DDOG"]));
-    let price: ArrayRef = Arc::new(Float64Array::from(vec![150.0, 155.0, 152.0, 158.0]));
-    let batch =
-        RecordBatch::try_from_iter(vec![("symbol", symbol), ("price", price)])?;
-    ctx.register_batch("stock_prices", batch)?;
-
-    Ok(())
-}
-
+/// Helper to run a single example query and display the logical plan.
 async fn run_example(ctx: &SessionContext, title: &str, sql: &str) -> Result<String> {
     println!("{title}:\n{sql}\n");
     let plan = ctx.sql(sql).await?.into_unoptimized_plan();
     let plan_str = plan.display_indent().to_string();
-    println!("Logical Plan:\n{plan_str}\n");
+    println!("{plan_str}\n");
     Ok(plan_str)
 }
 
-/// A custom logical plan node representing MATCH_RECOGNIZE operations
+/// Register test data tables.
+fn register_sample_data(ctx: &SessionContext) -> Result<()> {
+    // events: simple price series
+    ctx.register_batch(
+        "events",
+        RecordBatch::try_from_iter(vec![(
+            "price",
+            Arc::new(Int32Array::from(vec![5, 12, 8, 15, 20])) as ArrayRef,
+        )])?,
+    )?;
+
+    // stock_prices: realistic stock data
+    ctx.register_batch(
+        "stock_prices",
+        RecordBatch::try_from_iter(vec![
+            (
+                "symbol",
+                Arc::new(StringArray::from(vec!["DDOG", "DDOG", "DDOG", "DDOG"]))
+                    as ArrayRef,
+            ),
+            (
+                "price",
+                Arc::new(Float64Array::from(vec![150.0, 155.0, 152.0, 158.0])),
+            ),
+        ])?,
+    )?;
+
+    Ok(())
+}
+
+// ============================================================================
+// Logical Plan Node: MiniMatchRecognizeNode
+// ============================================================================
+
+/// A custom logical plan node representing MATCH_RECOGNIZE operations.
+///
+/// This is a simplified implementation that captures the essential structure:
+/// - `measures`: Aggregate expressions computed over matched rows
+/// - `definitions`: Symbol definitions (predicate expressions)
+///
+/// A production implementation would also include:
+/// - Pattern specification (regex-like pattern)
+/// - Partition and order by clauses
+/// - Output mode (ONE ROW PER MATCH, ALL ROWS PER MATCH)
+/// - After match skip strategy
 #[derive(Debug)]
 struct MiniMatchRecognizeNode {
     input: Arc<LogicalPlan>,
     schema: DFSchemaRef,
+    /// Measures: (alias, aggregate_expr)
     measures: Vec<(String, Expr)>,
+    /// Symbol definitions: (symbol_name, predicate_expr)
     definitions: Vec<(String, Expr)>,
 }
 
@@ -149,7 +227,7 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![self.input.as_ref()]
+        vec![&self.input]
     }
 
     fn schema(&self) -> &DFSchemaRef {
@@ -173,8 +251,8 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
 
         if !self.measures.is_empty() {
             write!(f, " measures=[")?;
-            for (idx, (alias, expr)) in self.measures.iter().enumerate() {
-                if idx > 0 {
+            for (i, (alias, expr)) in self.measures.iter().enumerate() {
+                if i > 0 {
                     write!(f, ", ")?;
                 }
                 write!(f, "{alias} := {expr}")?;
@@ -184,8 +262,8 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
 
         if !self.definitions.is_empty() {
             write!(f, " define=[")?;
-            for (idx, (symbol, expr)) in self.definitions.iter().enumerate() {
-                if idx > 0 {
+            for (i, (symbol, expr)) in self.definitions.iter().enumerate() {
+                if i > 0 {
                     write!(f, ", ")?;
                 }
                 write!(f, "{symbol} := {expr}")?;
@@ -201,36 +279,38 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
         exprs: Vec<Expr>,
         inputs: Vec<LogicalPlan>,
     ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
-        if exprs.len() != self.measures.len() + self.definitions.len() {
-            return Err(DataFusionError::Internal(
-                "MiniMatchRecognize received an unexpected expression count".into(),
+        let expected_len = self.measures.len() + self.definitions.len();
+        if exprs.len() != expected_len {
+            return Err(datafusion_common::plan_datafusion_err!(
+                "MiniMatchRecognize: expected {expected_len} expressions, got {}",
+                exprs.len()
             ));
         }
 
-        let (measure_exprs, definition_exprs) = exprs.split_at(self.measures.len());
+        let input = inputs.into_iter().next().ok_or_else(|| {
+            datafusion_common::plan_datafusion_err!(
+                "MiniMatchRecognize requires exactly one input"
+            )
+        })?;
 
-        let Some(first_input) = inputs.into_iter().next() else {
-            return Err(DataFusionError::Internal(
-                "MiniMatchRecognize requires a single input".into(),
-            ));
-        };
+        let (measure_exprs, definition_exprs) = exprs.split_at(self.measures.len());
 
         let measures = self
             .measures
             .iter()
-            .zip(measure_exprs.iter())
+            .zip(measure_exprs)
             .map(|((alias, _), expr)| (alias.clone(), expr.clone()))
             .collect();
 
         let definitions = self
             .definitions
             .iter()
-            .zip(definition_exprs.iter())
+            .zip(definition_exprs)
             .map(|((symbol, _), expr)| (symbol.clone(), expr.clone()))
             .collect();
 
         Ok(Arc::new(Self {
-            input: Arc::new(first_input),
+            input: Arc::new(input),
             schema: Arc::clone(&self.schema),
             measures,
             definitions,
@@ -244,15 +324,11 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
     }
 
     fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .map(|o| {
-                Arc::ptr_eq(&self.input, &o.input)
-                    && self.measures == o.measures
-                    && self.definitions == o.definitions
-            })
-            .unwrap_or(false)
+        other.as_any().downcast_ref::<Self>().is_some_and(|o| {
+            Arc::ptr_eq(&self.input, &o.input)
+                && self.measures == o.measures
+                && self.definitions == o.definitions
+        })
     }
 
     fn dyn_ord(&self, other: &dyn UserDefinedLogicalNode) -> Option<Ordering> {
@@ -264,7 +340,11 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
     }
 }
 
-/// Custom planner that handles MATCH_RECOGNIZE table factor syntax
+// ============================================================================
+// Relation Planner: MatchRecognizePlanner
+// ============================================================================
+
+/// Relation planner that creates `MiniMatchRecognizeNode` for MATCH_RECOGNIZE queries.
 #[derive(Debug)]
 struct MatchRecognizePlanner;
 
@@ -272,79 +352,55 @@ impl RelationPlanner for MatchRecognizePlanner {
     fn plan_relation(
         &self,
         relation: TableFactor,
-        context: &mut dyn RelationPlannerContext,
+        ctx: &mut dyn RelationPlannerContext,
     ) -> Result<RelationPlanning> {
-        if let TableFactor::MatchRecognize {
+        let TableFactor::MatchRecognize {
             table,
             measures,
             symbols,
             alias,
             ..
         } = relation
-        {
-            println!("[MatchRecognizePlanner] Processing MATCH_RECOGNIZE clause");
+        else {
+            return Ok(RelationPlanning::Original(relation));
+        };
 
-            // DEMONSTRATE context.plan(): Recursively plan the input table
-            println!("[MatchRecognizePlanner] Using context.plan() to plan input table");
-            let input = context.plan(*table)?;
-            let input_schema = input.schema().clone();
-            println!(
-                "[MatchRecognizePlanner] Input schema has {} fields",
-                input_schema.fields().len()
-            );
+        // Plan the input table
+        let input = ctx.plan(*table)?;
+        let schema = input.schema().clone();
 
-            // DEMONSTRATE normalize_ident() and sql_to_expr(): Process MEASURES
-            let planned_measures = measures
-                .iter()
-                .map(|measure| {
-                    // Normalize the measure alias
-                    let alias = context.normalize_ident(measure.alias.clone());
-                    println!("[MatchRecognizePlanner] Normalized measure alias: {alias}");
+        // Convert MEASURES: SQL expressions → DataFusion expressions
+        let planned_measures: Vec<(String, Expr)> = measures
+            .iter()
+            .map(|m| {
+                let alias = ctx.normalize_ident(m.alias.clone());
+                let expr = ctx.sql_to_expr(m.expr.clone(), schema.as_ref())?;
+                Ok((alias, expr))
+            })
+            .collect::<Result<_>>()?;
 
-                    // Convert SQL expression to DataFusion expression
-                    let expr = context
-                        .sql_to_expr(measure.expr.clone(), input_schema.as_ref())?;
-                    println!(
-                        "[MatchRecognizePlanner] Planned measure expression: {expr:?}"
-                    );
+        // Convert DEFINE: symbol definitions → DataFusion expressions
+        let planned_definitions: Vec<(String, Expr)> = symbols
+            .iter()
+            .map(|s| {
+                let name = ctx.normalize_ident(s.symbol.clone());
+                let expr = ctx.sql_to_expr(s.definition.clone(), schema.as_ref())?;
+                Ok((name, expr))
+            })
+            .collect::<Result<_>>()?;
 
-                    Ok((alias, expr))
-                })
-                .collect::<Result<Vec<_>>>()?;
+        // Create the custom node
+        let node = MiniMatchRecognizeNode {
+            input: Arc::new(input),
+            schema,
+            measures: planned_measures,
+            definitions: planned_definitions,
+        };
 
-            // DEMONSTRATE normalize_ident() and sql_to_expr(): Process DEFINE
-            let planned_definitions = symbols
-                .iter()
-                .map(|symbol| {
-                    // Normalize the symbol name
-                    let name = context.normalize_ident(symbol.symbol.clone());
-                    println!("[MatchRecognizePlanner] Normalized symbol: {name}");
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(node),
+        });
 
-                    // Convert SQL expression to DataFusion expression
-                    let expr = context
-                        .sql_to_expr(symbol.definition.clone(), input_schema.as_ref())?;
-                    println!("[MatchRecognizePlanner] Planned definition: {expr:?}");
-
-                    Ok((name, expr))
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            // Create the custom MATCH_RECOGNIZE node
-            let node = MiniMatchRecognizeNode {
-                schema: Arc::clone(&input_schema),
-                input: Arc::new(input),
-                measures: planned_measures,
-                definitions: planned_definitions,
-            };
-
-            let plan = LogicalPlan::Extension(Extension {
-                node: Arc::new(node),
-            });
-
-            println!("[MatchRecognizePlanner] Successfully created MATCH_RECOGNIZE plan");
-            return Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)));
-        }
-
-        Ok(RelationPlanning::Original(relation))
+        Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
     }
 }
