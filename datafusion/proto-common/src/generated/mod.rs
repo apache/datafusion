@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[allow(clippy::all)]
+#[expect(clippy::all)]
 #[rustfmt::skip]
 pub mod datafusion_proto_common {
     include!("prost.rs");
