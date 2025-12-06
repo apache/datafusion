@@ -395,7 +395,7 @@ impl NameTracker {
         &mut self,
         expr: Expr,
     ) -> datafusion::common::Result<Expr> {
-        match self.get_unique_name(expr.name_for_alias()?) {
+        match self.get_unique_name(expr.qualified_name().1) {
             (_, NameTrackerStatus::NeverSeen) => Ok(expr),
             (name, NameTrackerStatus::SeenBefore) => Ok(expr.alias(name)),
         }

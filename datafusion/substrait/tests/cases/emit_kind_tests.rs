@@ -58,7 +58,7 @@ mod tests {
         plan,
         // Note that duplicate references in the remap are aliased
         @r#"
-            Projection: DATA.B, DATA.A AS A1, DATA.A AS DATA.A__temp__0 AS A2
+            Projection: DATA.B, DATA.A AS A1, DATA.A AS A__temp__0 AS A2
               Filter: DATA.B = Int64(2)
                 TableScan: DATA
             "#

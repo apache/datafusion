@@ -184,6 +184,8 @@ pub fn create_col_from_scalar_expr(
             name,
         )),
         Expr::Column(col) => Ok(col.with_relation(subqry_alias.into())),
+        Expr::Cast(cast) => create_col_from_scalar_expr(&cast.expr, subqry_alias),
+        Expr::TryCast(try_cast) => create_col_from_scalar_expr(&try_cast.expr, subqry_alias),
         _ => {
             let scalar_column = scalar_expr.schema_name().to_string();
             Ok(Column::new(
