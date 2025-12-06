@@ -1549,7 +1549,7 @@ fn build_predicate_expression(
         let empty_schema = Arc::new(Schema::empty());
         let opts = RecordBatchOptions::default().with_row_count(Some(1));
         let empty_batch = RecordBatch::try_new_with_options(empty_schema, vec![], &opts)
-            .expect("shoudl not fail");
+            .expect("should not fail");
         if let Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result)))) =
             expr.evaluate(&empty_batch)
         {
