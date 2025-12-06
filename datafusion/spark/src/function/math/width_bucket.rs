@@ -62,9 +62,7 @@ impl SparkWidthBucket {
         let numeric = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_float64()),
             vec![
-                TypeSignatureClass::Integer,
-                TypeSignatureClass::Float,
-                TypeSignatureClass::Decimal,
+                TypeSignatureClass::Numeric,
             ],
             NativeType::Float64,
         );
@@ -93,10 +91,10 @@ impl SparkWidthBucket {
             Immutable,
         )
         .with_parameter_names(vec![
-            "expr".to_string(),
-            "min".to_string(),
-            "max".to_string(),
-            "num_buckets".to_string(),
+            "expr",
+            "min",
+            "max",
+            "num_buckets",
         ])
         .expect("valid parameter names");
         Self {
