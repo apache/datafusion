@@ -191,18 +191,15 @@ impl FileOpener for ParquetOpener {
             // we can end the stream early.
             let mut file_pruner = predicate
                 .as_ref()
-                .filter_map(|p| {
-                    is_dynamic_physical_expr(p).then(|| {
-                        FilePruner::try_new(
-                            Arc::clone(p),
-                            &logical_file_schema,
-                            &partitioned_file,
-                            predicate_creation_errors.clone(),
-                        )
-                    })
-                })
-                .transpose()?
-                .flatten();
+                .filter(|p| is_dynamic_physical_expr(p))
+                .and_then(|p| {
+                    FilePruner::try_new(
+                        Arc::clone(p),
+                        &logical_file_schema,
+                        &partitioned_file,
+                        predicate_creation_errors.clone(),
+                    )
+                });
 
             if let Some(file_pruner) = &mut file_pruner {
                 if file_pruner.should_prune()? {

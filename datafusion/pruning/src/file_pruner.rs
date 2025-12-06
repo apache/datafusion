@@ -54,14 +54,13 @@ impl FilePruner {
         partitioned_file: PartitionedFile,
         predicate_creation_errors: Count,
     ) -> Result<Self> {
-        // Call try_new and return an error if no statistics are available
-        let pruner = Self::try_new(
+        Self::try_new(
             predicate,
             logical_file_schema,
             &partitioned_file,
             predicate_creation_errors,
-        )?;
-        pruner.ok_or_else(|| {
+        )
+        .ok_or_else(|| {
             internal_datafusion_err!(
                 "FilePruner::new called on a file without statistics: {:?}",
                 partitioned_file
@@ -76,19 +75,17 @@ impl FilePruner {
         file_schema: &SchemaRef,
         partitioned_file: &PartitionedFile,
         predicate_creation_errors: Count,
-    ) -> Result<Option<Self>> {
-        let Some(file_stats) = &partitioned_file.statistics else {
-            return Ok(None);
-        };
+    ) -> Option<Self> {
+        let file_stats = partitioned_file.statistics.as_ref()?;
         let file_stats_pruning =
             PrunableStatistics::new(vec![file_stats.clone()], Arc::clone(file_schema));
-        Ok(Some(Self {
+        Some(Self {
             predicate_generation: None,
             predicate,
             file_schema: Arc::clone(file_schema),
             file_stats_pruning,
             predicate_creation_errors,
-        }))
+        })
     }
 
     pub fn should_prune(&mut self) -> Result<bool> {
