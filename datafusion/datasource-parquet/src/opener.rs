@@ -1012,7 +1012,7 @@ mod test {
         let constants = constant_columns_from_stats(Some(&statistics), &schema);
         assert_eq!(constants.len(), 1);
         assert_eq!(constants.get(&0), Some(&ScalarValue::from(5i32)));
-        assert!(constants.get(&1).is_none());
+        assert!(!constants.contains_key(&1));
     }
 
     #[test]
