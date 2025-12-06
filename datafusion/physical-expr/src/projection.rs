@@ -217,6 +217,13 @@ impl ProjectionExprs {
         Self::from_iter(projection_exprs)
     }
 
+    /// Create a [`ProjectionExpr`] from a schema, projecting all columns in order.
+    /// This is equivalent to calling `from_indices` with all column indices in order.
+    pub fn from_schema(schema: &Schema) -> Self {
+        let indices: Vec<usize> = (0..schema.fields().len()).collect();
+        Self::from_indices(&indices, schema)
+    }
+
     /// Returns an iterator over the projection expressions
     pub fn iter(&self) -> impl Iterator<Item = &ProjectionExpr> {
         self.exprs.iter()

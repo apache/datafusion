@@ -196,14 +196,4 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
         })
         .data()
     }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(Self {
-            inner: self.inner.with_partition_values(partition_values),
-            ..self.clone()
-        })
-    }
 }
