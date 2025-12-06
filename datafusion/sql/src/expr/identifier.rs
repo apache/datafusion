@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::FieldRef;
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
     assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, Result, Span, TableReference,
@@ -39,13 +40,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if id.value.starts_with('@') {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
-            let ty = self
+            let field = self
                 .context_provider
-                .get_variable_type(&var_names)
+                .get_variable_field(&var_names)
+                .or_else(|| {
+                    self.context_provider
+                        .get_variable_type(&var_names)
+                        .map(|ty| ty.into_nullable_field_ref())
+                })
                 .ok_or_else(|| {
                     plan_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
-            Ok(Expr::ScalarVariable(ty, var_names))
+            Ok(Expr::ScalarVariable(field, var_names))
         } else {
             // Don't use `col()` here because it will try to
             // interpret names with '.' as if they were
@@ -111,13 +117,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .into_iter()
                 .map(|id| self.ident_normalizer.normalize(id))
                 .collect();
-            let ty = self
+            let field = self
                 .context_provider
-                .get_variable_type(&var_names)
+                .get_variable_field(&var_names)
+                .or_else(|| {
+                    self.context_provider
+                        .get_variable_type(&var_names)
+                        .map(|ty| ty.into_nullable_field_ref())
+                })
                 .ok_or_else(|| {
                     exec_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
-            Ok(Expr::ScalarVariable(ty, var_names))
+            Ok(Expr::ScalarVariable(field, var_names))
         } else {
             let ids = ids
                 .into_iter()
