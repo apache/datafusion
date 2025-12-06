@@ -2843,36 +2843,16 @@ mod tests {
             .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
 
         // (1 + 2) > 0 is always true
-        prune_with_expr(
-            (lit(1) + lit(2)).gt(lit(0)),
-            &schema,
-            &statistics,
-            &[true],
-        );
+        prune_with_expr((lit(1) + lit(2)).gt(lit(0)), &schema, &statistics, &[true]);
 
         // (1 + 2) < 0 is always false
-        prune_with_expr(
-            (lit(1) + lit(2)).lt(lit(0)),
-            &schema,
-            &statistics,
-            &[false],
-        );
+        prune_with_expr((lit(1) + lit(2)).lt(lit(0)), &schema, &statistics, &[false]);
 
         // Nested AND of literals: true AND false = false
-        prune_with_expr(
-            lit(true).and(lit(false)),
-            &schema,
-            &statistics,
-            &[false],
-        );
+        prune_with_expr(lit(true).and(lit(false)), &schema, &statistics, &[false]);
 
         // Nested OR of literals: true OR false = true
-        prune_with_expr(
-            lit(true).or(lit(false)),
-            &schema,
-            &statistics,
-            &[true],
-        );
+        prune_with_expr(lit(true).or(lit(false)), &schema, &statistics, &[true]);
 
         // Complex nested: (1 < 2) AND (3 > 1) = true AND true = true
         prune_with_expr(
