@@ -42,7 +42,7 @@ use arrow::{datatypes::SchemaRef, json};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -55,6 +55,8 @@ pub struct JsonOpener {
     projected_schema: SchemaRef,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+    metrics: ExecutionPlanMetricsSet,
+    partition_index: usize,
 }
 
 impl JsonOpener {
@@ -70,6 +72,8 @@ impl JsonOpener {
             projected_schema,
             file_compression_type,
             object_store,
+            metrics: ExecutionPlanMetricsSet::new(),
+            partition_index: 0,
         }
     }
 }
@@ -109,7 +113,7 @@ impl FileSource for JsonSource {
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
-        _partition: usize,
+        partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         // Get the projected file schema for JsonOpener
         let file_schema = self.table_schema.file_schema();
@@ -123,6 +127,8 @@ impl FileSource for JsonSource {
             projected_schema,
             file_compression_type: base_config.file_compression_type,
             object_store,
+            metrics: self.metrics.clone(),
+            partition_index: partition,
         }) as Arc<dyn FileOpener>;
 
         // Wrap with ProjectionOpener
@@ -203,6 +209,7 @@ impl FileOpener for JsonOpener {
         let schema = Arc::clone(&self.projected_schema);
         let batch_size = self.batch_size;
         let file_compression_type = self.file_compression_type.to_owned();
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, self.partition_index);
 
         Ok(Box::pin(async move {
             let calculated_range =
@@ -239,11 +246,19 @@ impl FileOpener for JsonOpener {
                         }
                     };
 
-                    let reader = ReaderBuilder::new(schema)
+                    let mut reader = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
 
-                    Ok(futures::stream::iter(reader)
+                    let baseline_metrics = baseline_metrics.clone();
+                    let iterator = std::iter::from_fn(move || {
+                        let mut timer = baseline_metrics.elapsed_compute().timer();
+                        let result = reader.next();
+                        timer.stop();
+                        result
+                    });
+
+                    Ok(futures::stream::iter(iterator)
                         .map(|r| r.map_err(Into::into))
                         .boxed())
                 }
@@ -255,10 +270,17 @@ impl FileOpener for JsonOpener {
                         .build_decoder()?;
                     let input = file_compression_type.convert_stream(s.boxed())?.fuse();
 
-                    let stream = deserialize_stream(
+                    let mut stream = deserialize_stream(
                         input,
                         DecoderDeserializer::new(JsonDecoder::new(decoder)),
                     );
+                    let baseline_metrics = baseline_metrics.clone();
+                    let stream = futures::stream::poll_fn(move |cx| {
+                        let mut timer = baseline_metrics.elapsed_compute().timer();
+                        let poll = stream.poll_next_unpin(cx);
+                        timer.stop();
+                        poll
+                    });
                     Ok(stream.map_err(Into::into).boxed())
                 }
             }
