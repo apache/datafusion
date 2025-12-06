@@ -1244,6 +1244,9 @@ clickbench_sorted() {
     DATAFUSION_CLI="${DATAFUSION_DIR}/target/release/datafusion-cli"
     popd > /dev/null
 
+
+    START_TIME=$(date +%s)
+    echo "Start time: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "Using datafusion-cli to create sorted parquet file..."
     "${DATAFUSION_CLI}" << EOF
 -- Memory and performance configuration
@@ -1265,6 +1268,10 @@ EOF
 
     local result=$?
 
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    echo "End time: $(date '+%Y-%m-%d %H:%M:%S')"
+
     if [ $result -eq 0 ]; then
         echo "✓ Successfully created sorted ClickBench dataset"
 
@@ -1275,6 +1282,11 @@ EOF
 
         echo "  Input:  ${INPUT_MB} MB"
         echo "  Output: ${OUTPUT_MB} MB"
+
+        echo ""
+        echo "Time Statistics:"
+        echo "  Total duration: ${DURATION} seconds ($(printf '%02d:%02d:%02d' $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60))))"
+        echo "  Throughput: $((INPUT_MB / DURATION)) MB/s"
 
         return 0
     else
