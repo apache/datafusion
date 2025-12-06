@@ -21,6 +21,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::expr::NullTreatment;
+#[cfg(feature = "sql")]
+use crate::logical_plan::LogicalPlan;
 use crate::{
     AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -30,6 +32,8 @@ use datafusion_common::{
     DFSchema, Result, TableReference, config::ConfigOptions,
     file_options::file_type::FileType, not_impl_err,
 };
+#[cfg(feature = "sql")]
+use sqlparser::ast::{Expr as SQLExpr, Ident, ObjectName, TableAlias, TableFactor};
 
 /// Provides the `SQL` query planner meta-data about tables and
 /// functions referenced in SQL statements, without a direct dependency on the
@@ -80,6 +84,12 @@ pub trait ContextProvider {
 
     /// Return [`ExprPlanner`] extensions for planning expressions
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &[]
+    }
+
+    /// Return [`RelationPlanner`] extensions for planning table factors
+    #[cfg(feature = "sql")]
+    fn get_relation_planners(&self) -> &[Arc<dyn RelationPlanner>] {
         &[]
     }
 
@@ -322,6 +332,85 @@ pub enum PlannerResult<T> {
     Planned(Expr),
     /// The raw expression could not be planned, and is returned unmodified
     Original(T),
+}
+
+/// Result of planning a relation with [`RelationPlanner`]
+#[cfg(feature = "sql")]
+#[derive(Debug, Clone)]
+pub struct PlannedRelation {
+    /// The logical plan for the relation
+    pub plan: LogicalPlan,
+    /// Optional table alias for the relation
+    pub alias: Option<TableAlias>,
+}
+
+#[cfg(feature = "sql")]
+impl PlannedRelation {
+    /// Create a new `PlannedRelation` with the given plan and alias
+    pub fn new(plan: LogicalPlan, alias: Option<TableAlias>) -> Self {
+        Self { plan, alias }
+    }
+}
+
+/// Result of attempting to plan a relation with extension planners
+#[cfg(feature = "sql")]
+#[derive(Debug)]
+pub enum RelationPlanning {
+    /// The relation was successfully planned by an extension planner
+    Planned(PlannedRelation),
+    /// No extension planner handled the relation, return it for default processing
+    Original(TableFactor),
+}
+
+/// Customize planning SQL table factors to [`LogicalPlan`]s.
+#[cfg(feature = "sql")]
+pub trait RelationPlanner: Debug + Send + Sync {
+    /// Plan a table factor into a [`LogicalPlan`].
+    ///
+    /// Returning [`RelationPlanning::Planned`] short-circuits further planning and uses the
+    /// provided plan. Returning [`RelationPlanning::Original`] allows the next registered planner,
+    /// or DataFusion's default logic, to handle the relation.
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning>;
+}
+
+/// Provides utilities for relation planners to interact with DataFusion's SQL
+/// planner.
+///
+/// This trait provides SQL planning utilities specific to relation planning,
+/// such as converting SQL expressions to logical expressions and normalizing
+/// identifiers. It uses composition to provide access to session context via
+/// [`ContextProvider`].
+#[cfg(feature = "sql")]
+pub trait RelationPlannerContext {
+    /// Provides access to the underlying context provider for reading session
+    /// configuration, accessing tables, functions, and other metadata.
+    fn context_provider(&self) -> &dyn ContextProvider;
+
+    /// Plans the specified relation through the full planner pipeline, starting
+    /// from the first registered relation planner.
+    fn plan(&mut self, relation: TableFactor) -> Result<LogicalPlan>;
+
+    /// Converts a SQL expression into a logical expression using the current
+    /// planner context.
+    fn sql_to_expr(&mut self, expr: SQLExpr, schema: &DFSchema) -> Result<Expr>;
+
+    /// Converts a SQL expression into a logical expression without DataFusion
+    /// rewrites.
+    fn sql_expr_to_logical_expr(
+        &mut self,
+        expr: SQLExpr,
+        schema: &DFSchema,
+    ) -> Result<Expr>;
+
+    /// Normalizes an identifier according to session settings.
+    fn normalize_ident(&self, ident: Ident) -> String;
+
+    /// Normalizes a SQL object name into a [`TableReference`].
+    fn object_name_to_table_reference(&self, name: ObjectName) -> Result<TableReference>;
 }
 
 /// Customize planning SQL types to DataFusion (Arrow) types.
