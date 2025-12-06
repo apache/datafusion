@@ -24,6 +24,7 @@ use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -35,9 +36,13 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
-
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{
+    exec_err, ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
+};
 use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -61,6 +66,7 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+use std::collections::HashMap;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -214,6 +220,11 @@ impl FileOpener for ParquetOpener {
                 .get_file_decryption_properties(&file_location)
                 .await?;
 
+            let constant_columns = constant_columns_from_stats(
+                partitioned_file.statistics.as_deref(),
+                &logical_file_schema,
+            );
+
             // Prune this file using the file level statistics and partition values.
             // Since dynamic filters may have been updated since planning it is possible that we are able
             // to prune files now that we couldn't prune at planning time.
@@ -222,6 +233,15 @@ impl FileOpener for ParquetOpener {
             // We'll also check this after every record batch we read,
             // and if at some point we are able to prove we can prune the file using just the file level statistics
             // we can end the stream early.
+            if !constant_columns.is_empty() {
+                predicate = predicate
+                    .map(|expr| {
+                        rewrite_physical_expr_with_constants(expr, &constant_columns)
+                    })
+                    .transpose()?;
+                projection =
+                    rewrite_projection_with_constants(projection, &constant_columns)?;
+            }
             let mut file_pruner = predicate
                 .as_ref()
                 .filter(|p| {
@@ -580,6 +600,100 @@ fn copy_arrow_reader_metrics(
     }
 }
 
+type ConstantColumns = HashMap<usize, ScalarValue>;
+
+/// Extract constant column values from statistics, keyed by column index in the logical file schema.
+fn constant_columns_from_stats(
+    statistics: Option<&Statistics>,
+    file_schema: &SchemaRef,
+) -> ConstantColumns {
+    let mut constants = HashMap::new();
+    let Some(statistics) = statistics else {
+        return constants;
+    };
+
+    let num_rows = match statistics.num_rows {
+        Precision::Exact(num_rows) => Some(num_rows),
+        _ => None,
+    };
+
+    for (idx, column_stats) in statistics
+        .column_statistics
+        .iter()
+        .take(file_schema.fields().len())
+        .enumerate()
+    {
+        if let Some(value) = constant_value_from_stats(
+            column_stats,
+            num_rows,
+            file_schema.field(idx).data_type(),
+        ) {
+            constants.insert(idx, value);
+        }
+    }
+
+    constants
+}
+
+fn constant_value_from_stats(
+    column_stats: &ColumnStatistics,
+    num_rows: Option<usize>,
+    data_type: &DataType,
+) -> Option<ScalarValue> {
+    if let (Precision::Exact(min), Precision::Exact(max)) =
+        (&column_stats.min_value, &column_stats.max_value)
+    {
+        if min == max
+            && !min.is_null()
+            && matches!(column_stats.null_count, Precision::Exact(0))
+        {
+            return Some(min.clone());
+        }
+    }
+
+    if let (Some(num_rows), Precision::Exact(nulls)) =
+        (num_rows, &column_stats.null_count)
+    {
+        if *nulls == num_rows {
+            return ScalarValue::try_new_null(data_type).ok();
+        }
+    }
+
+    None
+}
+
+fn rewrite_projection_with_constants(
+    projection: ProjectionExprs,
+    constants: &ConstantColumns,
+) -> Result<ProjectionExprs> {
+    if constants.is_empty() {
+        return Ok(projection);
+    }
+
+    projection.try_map_exprs(|expr| rewrite_physical_expr_with_constants(expr, constants))
+}
+
+fn rewrite_physical_expr_with_constants(
+    expr: Arc<dyn PhysicalExpr>,
+    constants: &ConstantColumns,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    if constants.is_empty() {
+        return Ok(expr);
+    }
+
+    expr.transform(|current| {
+        if let Some(column) = current.as_any().downcast_ref::<Column>() {
+            if let Some(value) = constants.get(&column.index()) {
+                let literal = Arc::new(Literal::new(value.clone()));
+                return Ok(Transformed::yes(literal));
+            }
+        }
+        Ok(Transformed::no(current))
+    })
+    .data()
+    .map_err(DataFusionError::from)
+}
+
 /// Wraps an inner RecordBatchStream and a [`FilePruner`]
 ///
 /// This can terminate the scan early when some dynamic filters is updated after
@@ -840,7 +954,11 @@ fn should_enable_page_index(
 mod test {
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use super::{
+        constant_columns_from_stats, rewrite_physical_expr_with_constants,
+        rewrite_projection_with_constants, ConstantColumns,
+    };
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
         record_batch, stats::Precision, ColumnStatistics, DataFusionError, ScalarValue,
@@ -849,8 +967,10 @@ mod test {
     use datafusion_datasource::{file_stream::FileOpener, PartitionedFile, TableSchema};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
-        projection::ProjectionExprs, PhysicalExpr,
+        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        planner::logical2physical,
+        projection::ProjectionExprs,
+        PhysicalExpr,
     };
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -859,6 +979,86 @@ mod test {
     use parquet::arrow::ArrowWriter;
 
     use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
+
+    fn constant_int_stats() -> (Statistics, SchemaRef) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(3),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::from(5i32)),
+                    min_value: Precision::Exact(ScalarValue::from(5i32)),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                },
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+        (statistics, schema)
+    }
+
+    #[test]
+    fn extract_constant_columns_non_null() {
+        let (statistics, schema) = constant_int_stats();
+        let constants = constant_columns_from_stats(Some(&statistics), &schema);
+        assert_eq!(constants.len(), 1);
+        assert_eq!(constants.get(&0), Some(&ScalarValue::from(5i32)));
+        assert!(constants.get(&1).is_none());
+    }
+
+    #[test]
+    fn extract_constant_columns_all_null() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(2),
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+            }],
+        };
+
+        let constants = constant_columns_from_stats(Some(&statistics), &schema);
+        assert_eq!(
+            constants.get(&0),
+            Some(&ScalarValue::Utf8(None)),
+            "all-null column should be treated as constant null"
+        );
+    }
+
+    #[test]
+    fn rewrite_projection_to_literals() {
+        let (statistics, schema) = constant_int_stats();
+        let constants = constant_columns_from_stats(Some(&statistics), &schema);
+        let projection = ProjectionExprs::from_indices(&[0, 1], &schema);
+
+        let rewritten =
+            rewrite_projection_with_constants(projection, &constants).unwrap();
+        let exprs = rewritten.as_ref();
+        assert!(exprs[0].expr.as_any().downcast_ref::<Literal>().is_some());
+        assert!(exprs[1].expr.as_any().downcast_ref::<Column>().is_some());
+
+        // Only column `b` should remain in the projection mask
+        assert_eq!(rewritten.column_indices(), vec![1]);
+    }
+
+    #[test]
+    fn rewrite_physical_expr_literal() {
+        let mut constants = ConstantColumns::new();
+        constants.insert(0, ScalarValue::from(7i32));
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+        let rewritten = rewrite_physical_expr_with_constants(expr, &constants).unwrap();
+        assert!(rewritten.as_any().downcast_ref::<Literal>().is_some());
+    }
 
     async fn count_batches_and_rows(
         mut stream: std::pin::Pin<
