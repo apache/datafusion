@@ -156,7 +156,6 @@ impl FileOpener for ParquetOpener {
 
         let projection = Arc::clone(&self.projection);
         let logical_file_schema = Arc::clone(&self.logical_file_schema);
-        let partition_fields = self.partition_fields.clone();
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -192,17 +191,15 @@ impl FileOpener for ParquetOpener {
             // we can end the stream early.
             let mut file_pruner = predicate
                 .as_ref()
-                .map(|p| {
-                    Ok::<_, DataFusionError>(
-                        (is_dynamic_physical_expr(p) | partitioned_file.has_statistics())
-                            .then_some(FilePruner::new(
-                                Arc::clone(p),
-                                &logical_file_schema,
-                                partition_fields.clone(),
-                                partitioned_file.clone(),
-                                predicate_creation_errors.clone(),
-                            )?),
-                    )
+                .filter_map(|p| {
+                    is_dynamic_physical_expr(p).then(|| {
+                        FilePruner::try_new(
+                            Arc::clone(p),
+                            &logical_file_schema,
+                            &partitioned_file,
+                            predicate_creation_errors.clone(),
+                        )
+                    })
                 })
                 .transpose()?
                 .flatten();
