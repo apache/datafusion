@@ -2747,6 +2747,7 @@ dependencies = [
  "object_store",
  "pbjson-types",
  "prost",
+ "regex",
  "serde_json",
  "substrait",
  "tokio",

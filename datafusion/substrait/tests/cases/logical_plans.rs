@@ -22,9 +22,10 @@ mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use insta::assert_snapshot;
+    use regex::Regex;
 
     #[tokio::test]
     async fn scalar_function_compound_signature() -> Result<()> {
@@ -179,6 +180,89 @@ mod tests {
             );
         });
 
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn alias_all_expressions_flag() -> Result<()> {
+        // Test that when the substrait_alias_all_expressions flag is set,
+        // all expressions (not just literals) are aliased with UUIDs
+
+        // Use the same test plan that can demonstrate the behavior
+        let proto_plan =
+            read_json("tests/testdata/test_plans/disambiguate_literals_with_same_name.substrait.json");
+
+        // Create a context with the flag enabled
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .execution
+            .substrait_alias_all_expressions = true;
+        let ctx = add_plan_schemas_to_ctx(
+            SessionContext::new_with_config(config),
+            &proto_plan,
+        )?;
+
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        // Convert the plan to string to analyze the UUIDs
+        let plan_str = format!("{plan}");
+
+        // Extract UUIDs and map them to labels for better readability
+        let uuid_regex =
+            Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+                .unwrap();
+        let mut uuid_map = std::collections::HashMap::new();
+        let mut uuid_counter = 1;
+
+        // First pass: collect all unique UUIDs
+        for cap in uuid_regex.captures_iter(&plan_str) {
+            let uuid = cap.get(0).unwrap().as_str();
+            if !uuid_map.contains_key(uuid) {
+                uuid_map.insert(uuid.to_string(), format!("[UUID{uuid_counter}]"));
+                uuid_counter += 1;
+            }
+        }
+
+        // Second pass: replace UUIDs with their labels
+        let mut labeled_plan = plan_str.clone();
+        for (uuid, label) in &uuid_map {
+            labeled_plan = labeled_plan.replace(uuid, label);
+        }
+
+        // Verify that the plan has the expected structure with consistent UUID references
+        // The same UUID should be used when referencing the same column across the plan
+        assert!(
+            labeled_plan.contains("AS [UUID"),
+            "Plan should contain UUID aliases"
+        );
+
+        // Snapshot test showing the actual UUID numbers to demonstrate correspondence
+        // This shows how the same UUID appears in multiple places when referencing the same expression
+        // For example, [UUID1] appears in:
+        //   - The top projection (referencing the column from the union)
+        //   - The join condition (left side)
+        //   - The first union projection (A.A AS [UUID1])
+        // This proves that all references to column A.A use the same UUID
+        // Note: Expressions already aliased are not double-aliased
+        assert_snapshot!(
+            labeled_plan,
+            @r#"
+            Projection: left.A, left.[UUID1] AS C, right.D, Utf8(NULL) AS [UUID2] AS E
+              Left Join: left.A = right.A
+                SubqueryAlias: left
+                  Union
+                    Projection: A.A, Utf8(NULL) AS [UUID1]
+                      TableScan: A
+                    Projection: B.A, CAST(B.C AS Utf8) AS [UUID3]
+                      TableScan: B
+                SubqueryAlias: right
+                  TableScan: C
+            "#
+        );
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
 

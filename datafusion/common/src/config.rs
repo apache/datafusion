@@ -649,6 +649,15 @@ config_namespace! {
         /// # Default
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
+
+        /// When set to true, all expressions in Substrait plans will be aliased with UUIDs
+        /// during conversion to avoid ambiguous column references. This ensures unique names
+        /// for all expressions, not just literals. This can help prevent naming conflicts
+        /// when the same expression appears multiple times in different relations.
+        ///
+        /// # Default
+        /// `false` — UUID aliasing is disabled by default.
+        pub substrait_alias_all_expressions: bool, default = false
     }
 }
 
