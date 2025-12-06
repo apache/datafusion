@@ -423,6 +423,8 @@ datafusion.runtime.metadata_cache_limit 200M
 query T
 SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.runtime.%' ORDER BY name
 ----
+datafusion.runtime.list_files_cache_limit
+datafusion.runtime.list_files_cache_ttl
 datafusion.runtime.max_temp_directory_size
 datafusion.runtime.memory_limit
 datafusion.runtime.metadata_cache_limit
