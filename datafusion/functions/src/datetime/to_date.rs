@@ -16,18 +16,18 @@
 // under the License.
 
 use crate::datetime::common::*;
+use arrow::compute::cast_with_options;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
-use arrow::compute::cast_with_options;
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
@@ -161,18 +161,21 @@ impl ScalarUDFImpl for ToDateFunc {
                             &Date32,
                             &DEFAULT_CAST_OPTIONS,
                         )?))
-                    },
+                    }
                     ColumnarValue::Scalar(scalar) => {
-                        let sv = scalar.cast_to_with_options(&Int32, &DEFAULT_CAST_OPTIONS)?;
-                        Ok(ColumnarValue::Scalar(sv.cast_to_with_options(&Date32, &DEFAULT_CAST_OPTIONS)?))
+                        let sv =
+                            scalar.cast_to_with_options(&Int32, &DEFAULT_CAST_OPTIONS)?;
+                        Ok(ColumnarValue::Scalar(
+                            sv.cast_to_with_options(&Date32, &DEFAULT_CAST_OPTIONS)?,
+                        ))
                     }
                 }
-            },
+            }
             Float16 | Float32 | Float64 => {
                 // The only way this makes sense is to get the Int64 value of the float
                 // and then cast that to Date32.
                 args[0].cast_to(&Int64, None)?.cast_to(&Date32, None)
-            },
+            }
             Utf8View | LargeUtf8 | Utf8 => self.to_date(&args),
             other => {
                 exec_err!("Unsupported data type {} for function to_date", other)
