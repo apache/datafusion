@@ -236,7 +236,11 @@ impl FileOpener for ParquetOpener {
             if !constant_columns.is_empty() {
                 predicate = predicate
                     .map(|expr| {
-                        rewrite_physical_expr_with_constants(expr, &constant_columns)
+                        if is_dynamic_physical_expr(&expr) {
+                            Ok(expr)
+                        } else {
+                            rewrite_physical_expr_with_constants(expr, &constant_columns)
+                        }
                     })
                     .transpose()?;
                 projection =
