@@ -100,7 +100,7 @@ clickbench_pushdown:    ClickBench queries against partitioned (100 files) parqu
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
 # Sorted Data Benchmarks (ORDER BY Optimization)
-data_sorted_clickbench:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
+clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
 
 # H2O.ai Benchmarks (Group By, Join, Window)
 h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
@@ -321,8 +321,8 @@ main() {
                 compile_profile)
                     data_tpch "1" "parquet"
                     ;;
-                data_sorted_clickbench)
-                    data_sorted_clickbench
+                clickbench_sorted)
+                    clickbench_sorted
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -507,8 +507,8 @@ main() {
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
                     ;;
-                data_sorted_clickbench)
-                    run_data_sorted_clickbench
+                clickbench_sorted)
+                    run_clickbench_sorted
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -1213,7 +1213,7 @@ compare_benchmarks() {
 # Creates sorted ClickBench data from hits.parquet (full dataset)
 # The data is sorted by EventTime in ascending order
 # Uses datafusion-cli to reduce dependencies
-data_sorted_clickbench() {
+clickbench_sorted() {
     SORTED_FILE="${DATA_DIR}/hits_sorted.parquet"
     ORIGINAL_FILE="${DATA_DIR}/hits.parquet"
 
@@ -1279,19 +1279,19 @@ EOF
         return 0
     else
         echo "✗ Error: Failed to create sorted dataset"
-        echo "💡 Tip: Try increasing memory with: DATAFUSION_MEMORY_GB=16 ./bench.sh data data_sorted_clickbench"
+        echo "💡 Tip: Try increasing memory with: DATAFUSION_MEMORY_GB=16 ./bench.sh data clickbench_sorted"
         return 1
     fi
 }
 
 # Runs the sorted data benchmark with prefer_existing_sort configuration
-run_data_sorted_clickbench() {
-    RESULTS_FILE="${RESULTS_DIR}/data_sorted_clickbench.json"
+run_clickbench_sorted() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_sorted.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running sorted data benchmark with prefer_existing_sort optimization..."
 
     # Ensure sorted data exists
-    data_sorted_clickbench
+    clickbench_sorted
 
     # Run benchmark with prefer_existing_sort configuration
     # This allows DataFusion to optimize away redundant sorts while maintaining parallelism
