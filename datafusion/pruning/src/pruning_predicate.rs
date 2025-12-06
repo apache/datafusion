@@ -1545,8 +1545,11 @@ fn build_predicate_expression(
     // e.g., lit(1) = lit(2) should evaluate to false and prune all containers
     if left_columns.is_empty() && right_columns.is_empty() {
         // Both sides are constants - evaluate the expression directly
+        // Using an empty 1 row batch as input is the same approach taken by the logical expr const simplifier
         let empty_schema = Arc::new(Schema::empty());
-        let empty_batch = RecordBatch::new_empty(empty_schema);
+        let opts = RecordBatchOptions::default().with_row_count(Some(1));
+        let empty_batch = RecordBatch::try_new_with_options(empty_schema, vec![], &opts)
+            .expect("shoudl not fail");
         if let Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result)))) =
             expr.evaluate(&empty_batch)
         {
