@@ -99,6 +99,59 @@ async fn create_multi_file_csv_file() {
 }
 
 #[tokio::test]
+async fn multi_query_multi_file_csv_file() {
+    let test = Test::new().with_multi_file_csv().await;
+    assert_snapshot!(
+        test.query("select * from csv_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.0     | 0.0   | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00001 | 1e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00002 | 2e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - LIST prefix=data
+    - GET  (opts) path=data/file_0.csv
+    - GET  (opts) path=data/file_1.csv
+    - GET  (opts) path=data/file_2.csv
+    "
+    );
+
+    // the second query should re-use the cached LIST results and should not reissue LIST
+    assert_snapshot!(
+        test.query("select * from csv_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.0     | 0.0   | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00001 | 1e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00002 | 2e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 4
+    - LIST prefix=data
+    - GET  (opts) path=data/file_0.csv
+    - GET  (opts) path=data/file_1.csv
+    - GET  (opts) path=data/file_2.csv
+    "
+    );
+}
+
+#[tokio::test]
 async fn query_multi_csv_file() {
     let test = Test::new().with_multi_file_csv().await;
     assert_snapshot!(

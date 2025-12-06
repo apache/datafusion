@@ -120,8 +120,10 @@ unsafe extern "C" fn catalog_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_CatalogProviderList) {
+    debug_assert!(!provider.private_data.is_null());
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
     drop(private_data);
+    provider.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
