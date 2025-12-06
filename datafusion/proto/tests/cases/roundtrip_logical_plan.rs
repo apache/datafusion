@@ -549,6 +549,8 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     csv_format.timestamp_format = Some("HH:mm:ss.SSSSSS".to_string());
     csv_format.time_format = Some("HH:mm:ss".to_string());
     csv_format.null_value = Some("NIL".to_string());
+    csv_format.compression = CompressionTypeVariant::GZIP;
+    csv_format.compression_level = Some(6);
 
     let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new_with_options(
         csv_format.clone(),
@@ -593,7 +595,9 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
             assert_eq!(csv_format.datetime_format, csv_config.datetime_format);
             assert_eq!(csv_format.timestamp_format, csv_config.timestamp_format);
             assert_eq!(csv_format.time_format, csv_config.time_format);
-            assert_eq!(csv_format.null_value, csv_config.null_value)
+            assert_eq!(csv_format.null_value, csv_config.null_value);
+            assert_eq!(csv_format.compression, csv_config.compression);
+            assert_eq!(csv_format.compression_level, csv_config.compression_level);
         }
         _ => panic!(),
     }
