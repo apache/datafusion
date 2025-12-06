@@ -27,6 +27,8 @@ use arrow::array::RecordBatch;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr_adapter::replace_columns_with_literals;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -34,7 +36,7 @@ use std::task::{Context, Poll};
 use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -51,7 +53,6 @@ use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use itertools::Itertools;
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
@@ -139,10 +140,22 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
+        let mut predicate = {
+            let partition_values: HashMap<&str, &ScalarValue> = self
+                .partition_fields
+                .iter()
+                .zip(partitioned_file.partition_values.iter())
+                .map(|(field, value)| (field.name().as_str(), value))
+                .collect();
+
+            self.predicate
+                .clone()
+                .map(|p| replace_columns_with_literals(p, &partition_values))
+                .transpose()?
+        };
+
         let projection = Arc::clone(&self.projection);
-        let mut predicate = self.predicate.clone();
         let logical_file_schema = Arc::clone(&self.logical_file_schema);
-        let partition_fields = self.partition_fields.clone();
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -178,20 +191,17 @@ impl FileOpener for ParquetOpener {
             // we can end the stream early.
             let mut file_pruner = predicate
                 .as_ref()
-                .map(|p| {
-                    Ok::<_, DataFusionError>(
-                        (is_dynamic_physical_expr(p) | partitioned_file.has_statistics())
-                            .then_some(FilePruner::new(
-                                Arc::clone(p),
-                                &logical_file_schema,
-                                partition_fields.clone(),
-                                partitioned_file.clone(),
-                                predicate_creation_errors.clone(),
-                            )?),
-                    )
+                .filter(|p| {
+                    is_dynamic_physical_expr(p) || partitioned_file.has_statistics()
                 })
-                .transpose()?
-                .flatten();
+                .and_then(|p| {
+                    FilePruner::try_new(
+                        Arc::clone(p),
+                        &logical_file_schema,
+                        &partitioned_file,
+                        predicate_creation_errors.clone(),
+                    )
+                });
 
             if let Some(file_pruner) = &mut file_pruner {
                 if file_pruner.should_prune()? {
@@ -261,27 +271,23 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            let expr_simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+
             // Adapt the predicate to the physical file schema.
             // This evaluates missing columns and inserts any necessary casts.
             if let Some(expr_adapter_factory) = expr_adapter_factory.as_ref() {
                 predicate = predicate
                     .map(|p| {
-                        let partition_values = partition_fields
-                            .iter()
-                            .cloned()
-                            .zip(partitioned_file.partition_values.clone())
-                            .collect_vec();
                         let expr = expr_adapter_factory
                             .create(
                                 Arc::clone(&logical_file_schema),
                                 Arc::clone(&physical_file_schema),
                             )
-                            .with_partition_values(partition_values)
                             .rewrite(p)?;
                         // After rewriting to the file schema, further simplifications may be possible.
                         // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
                         // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
-                        PhysicalExprSimplifier::new(&physical_file_schema).simplify(expr)
+                        expr_simplifier.simplify(expr)
                     })
                     .transpose()?;
                 predicate_file_schema = Arc::clone(&physical_file_schema);
@@ -317,18 +323,10 @@ impl FileOpener for ParquetOpener {
             let mut projection =
                 ProjectionExprs::from_indices(&projection, &logical_file_schema);
             if let Some(expr_adapter_factory) = expr_adapter_factory {
-                let adapter = expr_adapter_factory
-                    .create(
-                        Arc::clone(&logical_file_schema),
-                        Arc::clone(&physical_file_schema),
-                    )
-                    .with_partition_values(
-                        partition_fields
-                            .iter()
-                            .cloned()
-                            .zip(partitioned_file.partition_values.clone())
-                            .collect_vec(),
-                    );
+                let adapter = expr_adapter_factory.create(
+                    Arc::clone(&logical_file_schema),
+                    Arc::clone(&physical_file_schema),
+                );
                 projection = projection.try_map_exprs(|expr| adapter.rewrite(expr))?;
             }
             let indices = projection.column_indices();
@@ -1235,7 +1233,7 @@ mod test {
                 force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
-                enable_row_group_stats_pruning: true,
+                enable_row_group_stats_pruning: false, // note that this is false!
                 coerce_int96: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,

@@ -27,6 +27,6 @@
 pub mod schema_rewriter;
 
 pub use schema_rewriter::{
-    DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
-    PhysicalExprAdapterFactory,
+    replace_columns_with_literals, DefaultPhysicalExprAdapter,
+    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
