@@ -21,7 +21,7 @@ use crate::{FileRange, PartitionedFile};
 use datafusion_common::Statistics;
 use itertools::Itertools;
 use std::cmp::{min, Ordering};
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::iter::repeat_with;
 use std::mem;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -464,6 +464,57 @@ impl FileGroup {
 
         chunks
     }
+
+    /// Groups files by their partition values, ensuring all files with same
+    /// partition values are in the same group.
+    ///
+    /// Note: May return fewer groups than `max_target_partitions` when the
+    /// number of unique partition values is less than the target.
+    pub fn group_by_partition_values(
+        self,
+        max_target_partitions: usize,
+    ) -> Vec<FileGroup> {
+        if self.is_empty() || max_target_partitions == 0 {
+            return vec![];
+        }
+
+        let mut partition_groups: HashMap<
+            Vec<datafusion_common::ScalarValue>,
+            Vec<PartitionedFile>,
+        > = HashMap::new();
+
+        for file in self.files {
+            partition_groups
+                .entry(file.partition_values.clone())
+                .or_default()
+                .push(file);
+        }
+
+        let num_unique_partitions = partition_groups.len();
+
+        // Sort for deterministic bucket assignment across query executions.
+        let mut sorted_partitions: Vec<_> = partition_groups.into_iter().collect();
+        sorted_partitions
+            .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+        if num_unique_partitions <= max_target_partitions {
+            sorted_partitions
+                .into_iter()
+                .map(|(_, files)| FileGroup::new(files))
+                .collect()
+        } else {
+            // Merge into max_target_partitions buckets using round-robin.
+            let mut target_groups: Vec<Vec<PartitionedFile>> =
+                vec![vec![]; max_target_partitions];
+
+            for (idx, (_, files)) in sorted_partitions.into_iter().enumerate() {
+                let bucket = idx % max_target_partitions;
+                target_groups[bucket].extend(files);
+            }
+
+            target_groups.into_iter().map(FileGroup::new).collect()
+        }
+    }
 }
 
 impl Index<usize> for FileGroup {
@@ -555,6 +606,7 @@ impl DerefMut for CompareByRangeSize {
 #[cfg(test)]
 mod test {
     use super::*;
+    use datafusion_common::ScalarValue;
 
     /// Empty file won't get partitioned
     #[test]
@@ -1159,5 +1211,43 @@ mod test {
 
         assert_partitioned_files(repartitioned.clone(), repartitioned_preserving_sort);
         repartitioned
+    }
+
+    #[test]
+    fn test_group_by_partition_values() {
+        // Edge cases: empty and zero target
+        assert!(FileGroup::default().group_by_partition_values(4).is_empty());
+        assert!(FileGroup::new(vec![pfile("a", 100)])
+            .group_by_partition_values(0)
+            .is_empty());
+
+        // Helper to create file with partition value
+        let pfile_with_pv = |path: &str, pv: &str| {
+            let mut f = pfile(path, 10);
+            f.partition_values = vec![ScalarValue::from(pv)];
+            f
+        };
+
+        // Case 1: fewer partitions than target
+        let fg = FileGroup::new(vec![
+            pfile_with_pv("a", "p1"),
+            pfile_with_pv("b", "p1"),
+            pfile_with_pv("c", "p2"),
+        ]);
+        let groups = fg.group_by_partition_values(4);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].len(), 2);
+        assert_eq!(groups[1].len(), 1);
+
+        // Case 2: more partitions than target
+        let fg = FileGroup::new(vec![
+            pfile_with_pv("a", "p1"),
+            pfile_with_pv("b", "p2"),
+            pfile_with_pv("c", "p3"),
+            pfile_with_pv("d", "p4"),
+            pfile_with_pv("e", "p5"),
+        ]);
+        let groups = fg.group_by_partition_values(3);
+        assert_eq!(groups.len(), 3);
     }
 }

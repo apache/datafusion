@@ -52,6 +52,17 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Result of a file listing operation from [`ListingTable::list_files_for_scan`].
+#[derive(Debug)]
+pub struct ListFilesResult {
+    /// File groups organized by the partitioning strategy.
+    pub file_groups: Vec<FileGroup>,
+    /// Aggregated statistics for all files.
+    pub statistics: Statistics,
+    /// Whether files are grouped by partition values (enables Hash partitioning).
+    pub grouped_by_partition: bool,
+}
+
 /// Built in [`TableProvider`] that reads data from one or more files as a single table.
 ///
 /// The files are read using an  [`ObjectStore`] instance, for example from
@@ -446,7 +457,11 @@ impl TableProvider for ListingTable {
         // at the same time. This is because the limit should be applied after the filters are applied.
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
-        let (mut partitioned_file_lists, statistics) = self
+        let ListFilesResult {
+            file_groups: mut partitioned_file_lists,
+            statistics,
+            grouped_by_partition: partitioned_by_file_group,
+        } = self
             .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
 
@@ -508,6 +523,7 @@ impl TableProvider for ListingTable {
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())
+                    .with_partitioned_by_file_group(partitioned_by_file_group)
                     .build(),
             )
             .await?;
@@ -620,11 +636,15 @@ impl ListingTable {
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> datafusion_common::Result<(Vec<FileGroup>, Statistics)> {
+    ) -> datafusion_common::Result<ListFilesResult> {
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
-            return Ok((vec![], Statistics::new_unknown(&self.file_schema)));
+            return Ok(ListFilesResult {
+                file_groups: vec![],
+                statistics: Statistics::new_unknown(&self.file_schema),
+                grouped_by_partition: false,
+            });
         };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -658,7 +678,35 @@ impl ListingTable {
         let (file_group, inexact_stats) =
             get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
-        let file_groups = file_group.split_files(self.options.target_partitions);
+        // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
+        //
+        // When enabled, files are grouped by their Hive partition column values, allowing
+        // FileScanConfig to declare Hash partitioning. This enables the optimizer to skip
+        // hash repartitioning for aggregates and joins on partition columns.
+        let threshold = ctx.config_options().optimizer.preserve_file_partitions;
+
+        let (file_groups, grouped_by_partition) = if threshold > 0
+            && !self.options.table_partition_cols.is_empty()
+        {
+            let grouped =
+                file_group.group_by_partition_values(self.options.target_partitions);
+            if grouped.len() >= threshold {
+                (grouped, true)
+            } else {
+                let all_files: Vec<_> =
+                    grouped.into_iter().flat_map(|g| g.into_inner()).collect();
+                (
+                    FileGroup::new(all_files).split_files(self.options.target_partitions),
+                    false,
+                )
+            }
+        } else {
+            (
+                file_group.split_files(self.options.target_partitions),
+                false,
+            )
+        };
+
         let (mut file_groups, mut stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
@@ -678,7 +726,11 @@ impl ListingTable {
             }
             Ok::<_, DataFusionError>(())
         })?;
-        Ok((file_groups, stats))
+        Ok(ListFilesResult {
+            file_groups,
+            statistics: stats,
+            grouped_by_partition,
+        })
     }
 
     /// Collects statistics for a given partitioned file.
