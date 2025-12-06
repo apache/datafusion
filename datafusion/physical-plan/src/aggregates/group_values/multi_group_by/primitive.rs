@@ -15,19 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aggregates::group_values::multi_group_by::helper::{
+    combine_nullability_and_value_equal_bit_packed_u64, compare_fixed_nulls_to_packed,
+    compare_fixed_raw_nulls_to_packed, compare_nulls_to_packed, CollectBool,
+};
 use crate::aggregates::group_values::multi_group_by::{
-    nulls_equal_to, GroupColumn, Nulls,
+    nulls_equal_to, FixedBitPackedMutableBuffer, GroupColumn, Nulls,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::ArrowNativeTypeOp;
 use arrow::array::{cast::AsArray, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow::buffer::ScalarBuffer;
+use arrow::array::{ArrowNativeTypeOp, BooleanArray};
+use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
+use arrow::util::bit_util::{self, apply_bitwise_binary_op, apply_bitwise_unary_op};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
-use std::iter;
+use std::ops::Deref;
 use std::sync::Arc;
+use std::{iter, u64};
 
 /// An implementation of [`GroupColumn`] for primitive values
 ///
@@ -57,83 +63,405 @@ where
         }
     }
 
-    fn vectorized_equal_to_non_nullable(
+    #[inline]
+    fn get_fixed_bit_packed_u64_for_eq_values(
         &self,
-        lhs_rows: &[usize],
-        array: &ArrayRef,
-        rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
-    ) {
-        assert!(
-            !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()),
-            "called with nullable input"
-        );
-        let array_values = array.as_primitive::<T>().values();
-
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
-
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            let result = {
-                // Getting unchecked not only for bound checks but because the bound checks are
-                // what prevents auto-vectorization
-                let left = if cfg!(debug_assertions) {
-                    self.group_values[lhs_row]
-                } else {
-                    // SAFETY: indices are guaranteed to be in bounds
-                    unsafe { *self.group_values.get_unchecked(lhs_row) }
-                };
-                let right = if cfg!(debug_assertions) {
-                    array_values[rhs_row]
-                } else {
-                    // SAFETY: indices are guaranteed to be in bounds
-                    unsafe { *array_values.get_unchecked(rhs_row) }
-                };
-
-                // Always evaluate, to allow for auto-vectorization
-                left.is_eq(right)
+        current_eq: u64,
+        length: usize,
+        lhs_rows: &[usize; 64],
+        rhs_rows: &[usize; 64],
+        array_values: &[T::Native],
+    ) -> u64 {
+        u64::collect_bool::<
+            // Using rest true as we don't wanna change bits beyond num_rows
+            true,
+            _,
+        >(length, |bit_idx| {
+            // if !current_eq.get_bit(bit_idx) {
+            //     return false;
+            // }
+            let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
+                (lhs_rows[bit_idx], rhs_rows[bit_idx])
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe {
+                    (
+                        *lhs_rows.get_unchecked(bit_idx),
+                        *rhs_rows.get_unchecked(bit_idx),
+                    )
+                }
             };
 
-            *equal_to_result = result && *equal_to_result;
+            // Getting unchecked not only for bound checks but because the bound checks are
+            // what prevents auto-vectorization
+            let left = if cfg!(debug_assertions) {
+                self.group_values[lhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *self.group_values.get_unchecked(lhs_row) }
+            };
+            let right = if cfg!(debug_assertions) {
+                array_values[rhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *array_values.get_unchecked(rhs_row) }
+            };
+
+            // Always evaluate, to allow for auto-vectorization
+            left.is_eq(right)
+        })
+    }
+
+    #[inline]
+    fn get_fixed_bit_packed_u64_for_eq_values_left_nulls(
+        &self,
+        current_eq: u64,
+        length: usize,
+        lhs_rows: &[usize; 64],
+        lhs_nulls: &[u8],
+        rhs_rows: &[usize; 64],
+        array_values: &[T::Native],
+    ) -> u64 {
+        let lhs_nulls_ptr = lhs_nulls.as_ptr();
+        u64::collect_bool::<
+            // Using rest true as we don't wanna change bits beyond num_rows
+            true,
+            _,
+        >(length, |bit_idx| {
+            
+            if !current_eq.get_bit(bit_idx) {
+                return false;
+            }
+            
+            let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
+                (lhs_rows[bit_idx], rhs_rows[bit_idx])
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe {
+                    (
+                        *lhs_rows.get_unchecked(bit_idx),
+                        *rhs_rows.get_unchecked(bit_idx),
+                    )
+                }
+            };
+            let left_is_null = unsafe { bit_util::get_bit_raw(lhs_nulls_ptr, lhs_row) };
+
+            if left_is_null {
+                return false;
+            }
+
+            // Getting unchecked not only for bound checks but because the bound checks are
+            // what prevents auto-vectorization
+            let left = if cfg!(debug_assertions) {
+                self.group_values[lhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *self.group_values.get_unchecked(lhs_row) }
+            };
+            let right = if cfg!(debug_assertions) {
+                array_values[rhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *array_values.get_unchecked(rhs_row) }
+            };
+
+            // Always evaluate, to allow for auto-vectorization
+            left.is_eq(right)
+        })
+    }
+
+    #[inline]
+    fn get_fixed_bit_packed_u64_for_eq_values_right_nulls(
+        &self,
+        current_eq: u64,
+        length: usize,
+        lhs_rows: &[usize; 64],
+        rhs_rows: &[usize; 64],
+        rhs_nulls: &[u8],
+        rhs_offset: usize,
+        array_values: &[T::Native],
+    ) -> u64 {
+        let rhs_nulls_ptr = rhs_nulls.as_ptr();
+        u64::collect_bool::<
+            // Using rest true as we don't wanna change bits beyond num_rows
+            true,
+            _,
+        >(length, |bit_idx| {
+            
+            if !current_eq.get_bit(bit_idx) {
+                return false;
+            }
+            
+            let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
+                (lhs_rows[bit_idx], rhs_rows[bit_idx])
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe {
+                    (
+                        *lhs_rows.get_unchecked(bit_idx),
+                        *rhs_rows.get_unchecked(bit_idx),
+                    )
+                }
+            };
+            let right_is_null =
+                unsafe { bit_util::get_bit_raw(rhs_nulls_ptr, rhs_offset + rhs_row) };
+
+            if right_is_null {
+                return false;
+            }
+
+            // Getting unchecked not only for bound checks but because the bound checks are
+            // what prevents auto-vectorization
+            let left = if cfg!(debug_assertions) {
+                self.group_values[lhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *self.group_values.get_unchecked(lhs_row) }
+            };
+            let right = if cfg!(debug_assertions) {
+                array_values[rhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *array_values.get_unchecked(rhs_row) }
+            };
+
+            // Always evaluate, to allow for auto-vectorization
+            left.is_eq(right)
+        })
+    }
+
+    #[inline]
+    fn get_fixed_bit_packed_u64_for_eq_values_both_nulls(
+        &self,
+        current_eq: u64,
+        length: usize,
+        lhs_rows: &[usize; 64],
+        lhs_nulls: &[u8],
+        rhs_rows: &[usize; 64],
+        rhs_nulls: &[u8],
+        rhs_offset: usize,
+        array_values: &[T::Native],
+    ) -> u64 {
+        let lhs_nulls_ptr = lhs_nulls.as_ptr();
+        let rhs_nulls_ptr = rhs_nulls.as_ptr();
+        u64::collect_bool::<
+            // Using rest true as we don't wanna change bits beyond num_rows
+            true,
+            _,
+        >(length, |bit_idx| {
+            
+            if !current_eq.get_bit(bit_idx) {
+                return false;
+            }
+            
+            let (lhs_row, rhs_row) = if cfg!(debug_assertions) {
+                (lhs_rows[bit_idx], rhs_rows[bit_idx])
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe {
+                    (
+                        *lhs_rows.get_unchecked(bit_idx),
+                        *rhs_rows.get_unchecked(bit_idx),
+                    )
+                }
+            };
+            let left_is_null = unsafe { bit_util::get_bit_raw(lhs_nulls_ptr, lhs_row) };
+
+            let right_is_null =
+                unsafe { bit_util::get_bit_raw(rhs_nulls_ptr, rhs_offset + rhs_row) };
+
+            if let Some(result) = nulls_equal_to(left_is_null, right_is_null) {
+                return result;
+            }
+
+            // Getting unchecked not only for bound checks but because the bound checks are
+            // what prevents auto-vectorization
+            let left = if cfg!(debug_assertions) {
+                self.group_values[lhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *self.group_values.get_unchecked(lhs_row) }
+            };
+            let right = if cfg!(debug_assertions) {
+                array_values[rhs_row]
+            } else {
+                // SAFETY: indices are guaranteed to be in bounds
+                unsafe { *array_values.get_unchecked(rhs_row) }
+            };
+
+            // Always evaluate, to allow for auto-vectorization
+            left.is_eq(right)
+        })
+    }
+
+    #[inline]
+    fn get_fixed_bit_packed_u64_for_eq_values_with_nulls(
+        &self,
+        current_eq: u64,
+        length: usize,
+        lhs_rows: &[usize; 64],
+        lhs_nulls: Option<&[u8]>,
+        rhs_rows: &[usize; 64],
+        rhs_values: &[T::Native],
+        rhs_nulls: Option<(
+            // offset
+            usize,
+            // buffer
+            &[u8],
+        )>,
+    ) -> u64 {
+        match (lhs_nulls, rhs_nulls) {
+            (None, None) => self.get_fixed_bit_packed_u64_for_eq_values(
+               current_eq,  length, lhs_rows, rhs_rows, rhs_values,
+            ),
+            (Some(lhs_nulls), None) => self
+                .get_fixed_bit_packed_u64_for_eq_values_left_nulls(
+                   current_eq,  length, lhs_rows, lhs_nulls, rhs_rows, rhs_values,
+                ),
+            (None, Some((rhs_offset, rhs_nulls))) => self
+                .get_fixed_bit_packed_u64_for_eq_values_right_nulls(
+                   current_eq,  length, lhs_rows, rhs_rows, rhs_nulls, rhs_offset, rhs_values,
+                ),
+            (Some(lhs_nulls), Some((rhs_offset, rhs_nulls))) => self
+                .get_fixed_bit_packed_u64_for_eq_values_both_nulls(
+                   current_eq,  length, lhs_rows, lhs_nulls, rhs_rows, rhs_nulls, rhs_offset,
+                    rhs_values,
+                ),
         }
     }
 
-    pub fn vectorized_equal_nullable(
+    // TODO - extract this function for other datatype impl
+    pub fn inner_vectorized_equal<const CHECK_NULLABILITY: bool>(
         &self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut FixedBitPackedMutableBuffer,
     ) {
-        assert!(NULLABLE, "called with non-nullable input");
-        let array = array.as_primitive::<T>();
-
-        let iter = izip!(
-            lhs_rows.iter(),
-            rhs_rows.iter(),
-            equal_to_results.iter_mut(),
-        );
-
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to in previous column, don't need to check
-            if !*equal_to_result {
-                continue;
-            }
-
-            // Perf: skip null check (by short circuit) if input is not nullable
-            let exist_null = self.nulls.is_null(lhs_row);
-            let input_null = array.is_null(rhs_row);
-            if let Some(result) = nulls_equal_to(exist_null, input_null) {
-                *equal_to_result = result;
-                continue;
-            }
-
-            // Otherwise, we need to check their values
-            *equal_to_result = self.group_values[lhs_row].is_eq(array.value(rhs_row));
+        if !CHECK_NULLABILITY {
+            assert!(
+                (array.null_count() == 0 && !self.nulls.might_have_nulls()),
+                "CHECK_NULLABILITY is false for nullable called with nullable input"
+            );
         }
+
+        let array = array.as_primitive::<T>();
+        let array_values = array.values().deref();
+
+        assert_eq!(lhs_rows.len(), rhs_rows.len());
+        assert_eq!(lhs_rows.len(), equal_to_results.len());
+
+        // TODO - skip to the first true bit in equal_to_results to avoid unnecessary work
+        //        in iterating over unnecessary bits oe even get a slice of starting from first true bit to the last true bit
+
+        // TODO - do not assume for byte aligned, added here just for POC
+        let mut index = 0;
+        let num_rows = lhs_rows.len();
+
+        let self_nulls_slice = if CHECK_NULLABILITY {
+            self.nulls.maybe_as_slice()
+        } else {
+            None
+        };
+        let array_nulls = if CHECK_NULLABILITY {
+            array
+                .nulls()
+                .map(|nulls| (nulls.offset(), nulls.inner().values()))
+        } else {
+            None
+        };
+
+        let mut scrach_left_64: [usize; 64] = [0; 64];
+        let mut scrach_right_64: [usize; 64] = [0; 64];
+        apply_bitwise_unary_op(
+            equal_to_results.0.as_slice_mut(),
+            0,
+            lhs_rows.len(),
+            |eq| {
+                // If already false, skip 64 items
+                if eq == 0 {
+                    index += 64;
+                    return 0;
+                }
+
+                let length = num_rows - index;
+
+                // Creating an array of size 64 to allow for optimization when building u64 bit packed from this
+                let (lhs_rows_fixed, rhs_rows_fixed) = if length >= 64 {
+                    (
+                        lhs_rows[index..index + 64].try_into().unwrap(),
+                        rhs_rows[index..index + 64].try_into().unwrap(),
+                    )
+                } else {
+                    scrach_left_64[..length].copy_from_slice(&lhs_rows[index..]);
+                    scrach_right_64[..length].copy_from_slice(&rhs_rows[index..]);
+
+                    (&scrach_left_64, &scrach_right_64)
+                };
+                
+                let result = self.get_fixed_bit_packed_u64_for_eq_values_with_nulls(
+                    eq,
+                    length,
+                    lhs_rows_fixed,
+                    self_nulls_slice,
+                    rhs_rows_fixed,
+                    array_values,
+                    array_nulls
+                );
+
+                // let (nullability_eq, both_valid) = if CHECK_NULLABILITY {
+                //     // TODO - rest here should be
+                //     compare_fixed_raw_nulls_to_packed(
+                //         length,
+                //         lhs_rows_fixed,
+                //         self_nulls_slice,
+                //         rhs_rows_fixed,
+                //         array_nulls,
+                //     )
+                // } else {
+                //     (
+                //         // nullability equal
+                //         u64::MAX,
+                //         // both valid
+                //         u64::MAX,
+                //     )
+                // };
+
+                // // if nullability_eq == 0 {
+                // //     index += 64;
+                // //     return 0;
+                // // }
+
+                // // // if all nullability match and they both nulls than its the same value
+                // // if nullability_eq == u64::MAX && both_valid == 0 {
+                // //     index += 64;
+                // //     return eq;
+                // // }
+
+                // // TODO - we can maybe get only from the first set bit until the last set bit
+                // // and then update those gaps with false
+                // // TODO - make sure not to override bits after `length`
+                // let values_eq = self.get_fixed_bit_packed_u64_for_eq_values(
+                //     length,
+                //     lhs_rows_fixed,
+                //     rhs_rows_fixed,
+                //     array_values,
+                // );
+
+                // let result = if CHECK_NULLABILITY {
+                //     combine_nullability_and_value_equal_bit_packed_u64(
+                //         both_valid,
+                //         nullability_eq,
+                //         values_eq,
+                //     )
+                // } else {
+                //     values_eq
+                // };
+
+                index += 64;
+                eq & result
+            },
+        );
     }
 }
 
@@ -176,17 +504,22 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
-        equal_to_results: &mut [bool],
+        equal_to_results: &mut FixedBitPackedMutableBuffer,
     ) {
         if !NULLABLE || (array.null_count() == 0 && !self.nulls.might_have_nulls()) {
-            self.vectorized_equal_to_non_nullable(
+            self.inner_vectorized_equal::<false>(
                 lhs_rows,
                 array,
                 rhs_rows,
                 equal_to_results,
             );
         } else {
-            self.vectorized_equal_nullable(lhs_rows, array, rhs_rows, equal_to_results);
+            self.inner_vectorized_equal::<true>(
+                lhs_rows,
+                array,
+                rhs_rows,
+                equal_to_results,
+            );
         }
     }
 
@@ -280,11 +613,12 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 mod tests {
     use std::sync::Arc;
 
+    use super::GroupColumn;
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
+    use crate::aggregates::group_values::multi_group_by::FixedBitPackedMutableBuffer;
     use arrow::array::{ArrayRef, Float32Array, Int64Array, NullBufferBuilder};
     use arrow::datatypes::{DataType, Float32Type, Int64Type};
-
-    use super::GroupColumn;
+    use itertools::Itertools;
 
     #[test]
     fn test_nullable_primitive_equal_to() {
@@ -296,16 +630,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
-            }
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut FixedBitPackedMutableBuffer| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -320,18 +656,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Float32Type, true>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut FixedBitPackedMutableBuffer| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -344,7 +681,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut FixedBitPackedMutableBuffer,
         ),
     {
         // Will cover such cases:
@@ -393,7 +730,8 @@ mod tests {
         let input_array = Arc::new(Float32Array::new(values, nulls.finish())) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(builder.len());
+
         equal_to(
             &builder,
             &[0, 1, 2, 3, 4, 5, 6],
@@ -402,6 +740,7 @@ mod tests {
             &mut equal_to_results,
         );
 
+        let equal_to_results: Vec<bool> = equal_to_results.into();
         assert!(!equal_to_results[0]);
         assert!(equal_to_results[1]);
         assert!(equal_to_results[2]);
@@ -421,16 +760,18 @@ mod tests {
             }
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            let iter = lhs_rows.iter().zip(rhs_rows.iter());
-            for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
-                equal_to_results[idx] = builder.equal_to(lhs_row, input_array, rhs_row);
-            }
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut FixedBitPackedMutableBuffer| {
+                let iter = lhs_rows.iter().zip(rhs_rows.iter());
+                for (idx, (&lhs_row, &rhs_row)) in iter.enumerate() {
+                    equal_to_results
+                        .set_bit(idx, builder.equal_to(lhs_row, input_array, rhs_row));
+                }
+            };
 
         test_not_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -445,18 +786,19 @@ mod tests {
                 .unwrap();
         };
 
-        let equal_to = |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
-                        lhs_rows: &[usize],
-                        input_array: &ArrayRef,
-                        rhs_rows: &[usize],
-                        equal_to_results: &mut Vec<bool>| {
-            builder.vectorized_equal_to(
-                lhs_rows,
-                input_array,
-                rhs_rows,
-                equal_to_results,
-            );
-        };
+        let equal_to =
+            |builder: &PrimitiveGroupValueBuilder<Int64Type, false>,
+             lhs_rows: &[usize],
+             input_array: &ArrayRef,
+             rhs_rows: &[usize],
+             equal_to_results: &mut FixedBitPackedMutableBuffer| {
+                builder.vectorized_equal_to(
+                    lhs_rows,
+                    input_array,
+                    rhs_rows,
+                    equal_to_results,
+                );
+            };
 
         test_not_nullable_primitive_equal_to_internal(append, equal_to);
     }
@@ -469,7 +811,7 @@ mod tests {
             &[usize],
             &ArrayRef,
             &[usize],
-            &mut Vec<bool>,
+            &mut FixedBitPackedMutableBuffer,
         ),
     {
         // Will cover such cases:
@@ -487,7 +829,7 @@ mod tests {
         let input_array = Arc::new(Int64Array::from(vec![Some(0), Some(2)])) as ArrayRef;
 
         // Check
-        let mut equal_to_results = vec![true; builder.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(builder.len());
         equal_to(
             &builder,
             &[0, 1],
@@ -496,6 +838,7 @@ mod tests {
             &mut equal_to_results,
         );
 
+        let equal_to_results: Vec<bool> = equal_to_results.into();
         assert!(equal_to_results[0]);
         assert!(!equal_to_results[1]);
     }
@@ -520,7 +863,8 @@ mod tests {
             .vectorized_append(&all_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_nulls_input_array.len()];
+        let mut equal_to_results =
+            FixedBitPackedMutableBuffer::new_set(all_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[0, 1, 2, 3, 4],
             &all_nulls_input_array,
@@ -528,6 +872,7 @@ mod tests {
             &mut equal_to_results,
         );
 
+        let equal_to_results: Vec<bool> = equal_to_results.into();
         assert!(equal_to_results[0]);
         assert!(equal_to_results[1]);
         assert!(equal_to_results[2]);
@@ -546,13 +891,15 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = vec![true; all_not_nulls_input_array.len()];
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(builder.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
             &[0, 1, 2, 3, 4],
             &mut equal_to_results,
         );
+
+        let equal_to_results: Vec<bool> = equal_to_results.into();
 
         assert!(equal_to_results[0]);
         assert!(equal_to_results[1]);
