@@ -191,7 +191,9 @@ impl FileOpener for ParquetOpener {
             // we can end the stream early.
             let mut file_pruner = predicate
                 .as_ref()
-                .filter(|p| is_dynamic_physical_expr(p))
+                .filter(|p| {
+                    is_dynamic_physical_expr(p) || partitioned_file.has_statistics()
+                })
                 .and_then(|p| {
                     FilePruner::try_new(
                         Arc::clone(p),
