@@ -27,6 +27,8 @@ use arrow::array::RecordBatch;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr_adapter::replace_columns_with_literals;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -34,7 +36,7 @@ use std::task::{Context, Poll};
 use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -51,7 +53,6 @@ use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use itertools::Itertools;
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
@@ -264,20 +265,22 @@ impl FileOpener for ParquetOpener {
             // Adapt the predicate to the physical file schema.
             // This evaluates missing columns and inserts any necessary casts.
             if let Some(expr_adapter_factory) = expr_adapter_factory.as_ref() {
+                let partition_values: HashMap<&str, &ScalarValue> = partition_fields
+                    .iter()
+                    .zip(partitioned_file.partition_values.iter())
+                    .map(|(field, value)| (field.name().as_str(), value))
+                    .collect();
                 predicate = predicate
                     .map(|p| {
-                        let partition_values = partition_fields
-                            .iter()
-                            .cloned()
-                            .zip(partitioned_file.partition_values.clone())
-                            .collect_vec();
                         let expr = expr_adapter_factory
                             .create(
                                 Arc::clone(&logical_file_schema),
                                 Arc::clone(&physical_file_schema),
                             )
-                            .with_partition_values(partition_values)
                             .rewrite(p)?;
+                        // Replace partition column references with their literal values
+                        let expr =
+                            replace_columns_with_literals(expr, &partition_values)?;
                         // After rewriting to the file schema, further simplifications may be possible.
                         // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
                         // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
@@ -317,18 +320,10 @@ impl FileOpener for ParquetOpener {
             let mut projection =
                 ProjectionExprs::from_indices(&projection, &logical_file_schema);
             if let Some(expr_adapter_factory) = expr_adapter_factory {
-                let adapter = expr_adapter_factory
-                    .create(
-                        Arc::clone(&logical_file_schema),
-                        Arc::clone(&physical_file_schema),
-                    )
-                    .with_partition_values(
-                        partition_fields
-                            .iter()
-                            .cloned()
-                            .zip(partitioned_file.partition_values.clone())
-                            .collect_vec(),
-                    );
+                let adapter = expr_adapter_factory.create(
+                    Arc::clone(&logical_file_schema),
+                    Arc::clone(&physical_file_schema),
+                );
                 projection = projection.try_map_exprs(|expr| adapter.rewrite(expr))?;
             }
             let indices = projection.column_indices();

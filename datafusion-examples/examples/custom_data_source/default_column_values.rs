@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 
 use datafusion::assert_batches_eq;
@@ -287,7 +287,6 @@ impl PhysicalExprAdapterFactory for DefaultValuePhysicalExprAdapterFactory {
             logical_file_schema,
             physical_file_schema,
             default_adapter,
-            partition_values: Vec::new(),
         })
     }
 }
@@ -299,7 +298,6 @@ struct DefaultValuePhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     default_adapter: Arc<dyn PhysicalExprAdapter>,
-    partition_values: Vec<(FieldRef, ScalarValue)>,
 }
 
 impl PhysicalExprAdapter for DefaultValuePhysicalExprAdapter {
@@ -316,27 +314,8 @@ impl PhysicalExprAdapter for DefaultValuePhysicalExprAdapter {
             .data()?;
 
         // Then apply the default adapter as a fallback to handle standard schema differences
-        // like type casting, partition column handling, etc.
-        let default_adapter = if !self.partition_values.is_empty() {
-            self.default_adapter
-                .with_partition_values(self.partition_values.clone())
-        } else {
-            self.default_adapter.clone()
-        };
-
-        default_adapter.rewrite(rewritten)
-    }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(DefaultValuePhysicalExprAdapter {
-            logical_file_schema: self.logical_file_schema.clone(),
-            physical_file_schema: self.physical_file_schema.clone(),
-            default_adapter: self.default_adapter.clone(),
-            partition_values,
-        })
+        // like type casting, etc.
+        self.default_adapter.rewrite(rewritten)
     }
 }
 

@@ -56,7 +56,7 @@ mod tests {
     use ::object_store::{path::Path, ObjectMeta};
     use arrow::{
         array::Int32Array,
-        datatypes::{DataType, Field, FieldRef, Schema, SchemaRef},
+        datatypes::{DataType, Field, Schema, SchemaRef},
         record_batch::RecordBatch,
     };
     use datafusion_common::{
@@ -209,11 +209,10 @@ mod tests {
     impl PhysicalExprAdapterFactory for TestPhysicalExprAdapterFactory {
         fn create(
             &self,
-            logical_file_schema: SchemaRef,
+            _logical_file_schema: SchemaRef,
             physical_file_schema: SchemaRef,
         ) -> Arc<dyn PhysicalExprAdapter> {
             Arc::new(TestPhysicalExprAdapter {
-                logical_file_schema,
                 physical_file_schema,
             })
         }
@@ -221,7 +220,6 @@ mod tests {
 
     #[derive(Debug)]
     struct TestPhysicalExprAdapter {
-        logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     }
 
@@ -242,16 +240,6 @@ mod tests {
                 Ok(Transformed::no(e))
             })
             .data()
-        }
-
-        fn with_partition_values(
-            &self,
-            _partition_values: Vec<(FieldRef, ScalarValue)>,
-        ) -> Arc<dyn PhysicalExprAdapter> {
-            Arc::new(TestPhysicalExprAdapter {
-                logical_file_schema: self.logical_file_schema.clone(),
-                physical_file_schema: self.physical_file_schema.clone(),
-            })
         }
     }
 }
