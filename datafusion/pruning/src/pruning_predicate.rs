@@ -2824,6 +2824,73 @@ mod tests {
         prune_with_expr(lit(1).eq(lit(2)), &schema, &statistics, expected_ret);
     }
 
+    // Test that always-true literal predicates don't prune any containers
+    #[test]
+    fn row_group_predicate_literal_true() {
+        // lit(1) = lit(1) is always true, so no containers should be pruned
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let statistics = TestStatistics::new()
+            .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
+        let expected_ret = &[true];
+        prune_with_expr(lit(1).eq(lit(1)), &schema, &statistics, expected_ret);
+    }
+
+    // Test nested/complex literal expression trees
+    #[test]
+    fn row_group_predicate_complex_literals() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let statistics = TestStatistics::new()
+            .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
+
+        // (1 + 2) > 0 is always true
+        prune_with_expr(
+            (lit(1) + lit(2)).gt(lit(0)),
+            &schema,
+            &statistics,
+            &[true],
+        );
+
+        // (1 + 2) < 0 is always false
+        prune_with_expr(
+            (lit(1) + lit(2)).lt(lit(0)),
+            &schema,
+            &statistics,
+            &[false],
+        );
+
+        // Nested AND of literals: true AND false = false
+        prune_with_expr(
+            lit(true).and(lit(false)),
+            &schema,
+            &statistics,
+            &[false],
+        );
+
+        // Nested OR of literals: true OR false = true
+        prune_with_expr(
+            lit(true).or(lit(false)),
+            &schema,
+            &statistics,
+            &[true],
+        );
+
+        // Complex nested: (1 < 2) AND (3 > 1) = true AND true = true
+        prune_with_expr(
+            lit(1).lt(lit(2)).and(lit(3).gt(lit(1))),
+            &schema,
+            &statistics,
+            &[true],
+        );
+
+        // Complex nested: (1 > 2) OR (3 < 1) = false OR false = false
+        prune_with_expr(
+            lit(1).gt(lit(2)).or(lit(3).lt(lit(1))),
+            &schema,
+            &statistics,
+            &[false],
+        );
+    }
+
     #[test]
     fn row_group_predicate_lt_bool() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
