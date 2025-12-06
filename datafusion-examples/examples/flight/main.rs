@@ -21,10 +21,14 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example flight -- [client|server|sql_server]
+//! cargo run --example flight -- [all|client|server|sql_server]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
+//!   Note: The Flight server must be started in a separate process
+//!   before running the `client` example. Therefore, running `all` will
+//!   not produce a full server+client workflow automatically.
 //! - `client` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
 //! - `server` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
 //! - `sql_server` — run DataFusion as a standalone process and execute SQL queries from JDBC clients
@@ -37,7 +41,12 @@ use std::str::FromStr;
 
 use datafusion::error::{DataFusionError, Result};
 
+/// The `all` option cannot run all examples end-to-end because the
+/// `server` example must run in a separate process before the `client`
+/// example can connect.  
+/// Therefore, `all` only iterates over individually runnable examples.
 enum ExampleKind {
+    All,
     Client,
     Server,
     SqlServer,
@@ -46,6 +55,7 @@ enum ExampleKind {
 impl AsRef<str> for ExampleKind {
     fn as_ref(&self) -> &str {
         match self {
+            Self::All => "all",
             Self::Client => "client",
             Self::Server => "server",
             Self::SqlServer => "sql_server",
@@ -58,6 +68,7 @@ impl FromStr for ExampleKind {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
+            "all" => Ok(Self::All),
             "client" => Ok(Self::Client),
             "server" => Ok(Self::Server),
             "sql_server" => Ok(Self::SqlServer),
@@ -67,12 +78,33 @@ impl FromStr for ExampleKind {
 }
 
 impl ExampleKind {
-    const ALL: [Self; 3] = [Self::Client, Self::Server, Self::SqlServer];
+    const ALL_VARIANTS: [Self; 4] =
+        [Self::All, Self::Client, Self::Server, Self::SqlServer];
+
+    const RUNNABLE_VARIANTS: [Self; 3] = [Self::Client, Self::Server, Self::SqlServer];
 
     const EXAMPLE_NAME: &str = "flight";
 
     fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
+    }
+
+    async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        match self {
+            ExampleKind::All => {
+                for example in ExampleKind::RUNNABLE_VARIANTS {
+                    println!("Running example: {}", example.as_ref());
+                    Box::pin(example.run()).await?;
+                }
+            }
+            ExampleKind::Client => client::client().await?,
+            ExampleKind::Server => server::server().await?,
+            ExampleKind::SqlServer => sql_server::sql_server().await?,
+        }
+        Ok(())
     }
 }
 
@@ -89,11 +121,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::Client => client::client().await?,
-        ExampleKind::Server => server::server().await?,
-        ExampleKind::SqlServer => sql_server::sql_server().await?,
-    }
-
-    Ok(())
+    let example = arg.parse::<ExampleKind>()?;
+    example.run().await
 }
