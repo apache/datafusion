@@ -17,25 +17,77 @@
 
 use std::sync::Arc;
 
+use arrow::array::timezone::Tz;
 use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
     StringArrayType, StringViewArray,
 };
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use arrow::datatypes::DataType;
+use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
+use arrow::datatypes::{ArrowTimestampType, DataType};
 use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
+use std::ops::Add;
 
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, unwrap_or_internal_err, DataFusionError, Result,
-    ScalarType, ScalarValue,
+    exec_datafusion_err, exec_err, internal_datafusion_err, unwrap_or_internal_err,
+    DataFusionError, Result, ScalarType, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
+
+/// Adjusts a timestamp to local time by applying the timezone offset.
+pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+    fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
+    where
+        F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,
+    {
+        match converter(ts) {
+            MappedLocalTime::Ambiguous(earliest, latest) => exec_err!(
+                "Ambiguous timestamp. Do you mean {:?} or {:?}",
+                earliest,
+                latest
+            ),
+            MappedLocalTime::None => exec_err!(
+                "The local time does not exist because there is a gap in the local time."
+            ),
+            MappedLocalTime::Single(date_time) => Ok(date_time),
+        }
+    }
+
+    let date_time = match T::UNIT {
+        Nanosecond => Utc.timestamp_nanos(ts),
+        Microsecond => convert_timestamp(ts, |ts| Utc.timestamp_micros(ts))?,
+        Millisecond => convert_timestamp(ts, |ts| Utc.timestamp_millis_opt(ts))?,
+        Second => convert_timestamp(ts, |ts| Utc.timestamp_opt(ts, 0))?,
+    };
+
+    let offset_seconds: i64 = tz
+        .offset_from_utc_datetime(&date_time.naive_utc())
+        .fix()
+        .local_minus_utc() as i64;
+
+    let adjusted_date_time = date_time.add(
+        TimeDelta::try_seconds(offset_seconds)
+            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
+    );
+
+    // convert back to i64
+    match T::UNIT {
+        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(|| {
+            internal_datafusion_err!(
+                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
+            )
+        }),
+        Microsecond => Ok(adjusted_date_time.timestamp_micros()),
+        Millisecond => Ok(adjusted_date_time.timestamp_millis()),
+        Second => Ok(adjusted_date_time.timestamp()),
+    }
+}
 
 /// Calls string_to_timestamp_nanos and converts the error type
 pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
