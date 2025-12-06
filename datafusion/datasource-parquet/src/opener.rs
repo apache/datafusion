@@ -37,12 +37,10 @@ use std::task::{Context, Poll};
 use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     exec_err, ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -66,7 +64,6 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
-use std::collections::HashMap;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -235,16 +232,11 @@ impl FileOpener for ParquetOpener {
             // we can end the stream early.
             if !constant_columns.is_empty() {
                 predicate = predicate
-                    .map(|expr| {
-                        if is_dynamic_physical_expr(&expr) {
-                            Ok(expr)
-                        } else {
-                            rewrite_physical_expr_with_constants(expr, &constant_columns)
-                        }
-                    })
+                    .map(|expr| replace_columns_with_literals(expr, &constant_columns))
                     .transpose()?;
-                projection =
-                    rewrite_projection_with_constants(projection, &constant_columns)?;
+                projection = projection.try_map_exprs(|expr| {
+                    replace_columns_with_literals(expr, &constant_columns)
+                })?;
             }
             let mut file_pruner = predicate
                 .as_ref()
@@ -604,9 +596,9 @@ fn copy_arrow_reader_metrics(
     }
 }
 
-type ConstantColumns = HashMap<usize, ScalarValue>;
+type ConstantColumns = HashMap<String, ScalarValue>;
 
-/// Extract constant column values from statistics, keyed by column index in the logical file schema.
+/// Extract constant column values from statistics, keyed by column name in the logical file schema.
 fn constant_columns_from_stats(
     statistics: Option<&Statistics>,
     file_schema: &SchemaRef,
@@ -627,12 +619,11 @@ fn constant_columns_from_stats(
         .take(file_schema.fields().len())
         .enumerate()
     {
-        if let Some(value) = constant_value_from_stats(
-            column_stats,
-            num_rows,
-            file_schema.field(idx).data_type(),
-        ) {
-            constants.insert(idx, value);
+        let field = file_schema.field(idx);
+        if let Some(value) =
+            constant_value_from_stats(column_stats, num_rows, field.data_type())
+        {
+            constants.insert(field.name().clone(), value);
         }
     }
 
@@ -664,38 +655,6 @@ fn constant_value_from_stats(
     }
 
     None
-}
-
-fn rewrite_projection_with_constants(
-    projection: ProjectionExprs,
-    constants: &ConstantColumns,
-) -> Result<ProjectionExprs> {
-    if constants.is_empty() {
-        return Ok(projection);
-    }
-
-    projection.try_map_exprs(|expr| rewrite_physical_expr_with_constants(expr, constants))
-}
-
-fn rewrite_physical_expr_with_constants(
-    expr: Arc<dyn PhysicalExpr>,
-    constants: &ConstantColumns,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    if constants.is_empty() {
-        return Ok(expr);
-    }
-
-    expr.transform(|current| {
-        if let Some(column) = current.as_any().downcast_ref::<Column>() {
-            if let Some(value) = constants.get(&column.index()) {
-                let literal = Arc::new(Literal::new(value.clone()));
-                return Ok(Transformed::yes(literal));
-            }
-        }
-        Ok(Transformed::no(current))
-    })
-    .data()
-    .map_err(DataFusionError::from)
 }
 
 /// Wraps an inner RecordBatchStream and a [`FilePruner`]
@@ -958,10 +917,7 @@ fn should_enable_page_index(
 mod test {
     use std::sync::Arc;
 
-    use super::{
-        constant_columns_from_stats, rewrite_physical_expr_with_constants,
-        rewrite_projection_with_constants, ConstantColumns,
-    };
+    use super::{constant_columns_from_stats, ConstantColumns};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -976,7 +932,9 @@ mod test {
         projection::ProjectionExprs,
         PhysicalExpr,
     };
-    use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
+    use datafusion_physical_expr_adapter::{
+        replace_columns_with_literals, DefaultPhysicalExprAdapterFactory,
+    };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
     use object_store::{memory::InMemory, path::Path, ObjectStore};
@@ -999,6 +957,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::from(5i32)),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics::new_unknown(),
             ],
@@ -1011,8 +970,8 @@ mod test {
         let (statistics, schema) = constant_int_stats();
         let constants = constant_columns_from_stats(Some(&statistics), &schema);
         assert_eq!(constants.len(), 1);
-        assert_eq!(constants.get(&0), Some(&ScalarValue::from(5i32)));
-        assert!(!constants.contains_key(&1));
+        assert_eq!(constants.get("a"), Some(&ScalarValue::from(5i32)));
+        assert!(!constants.contains_key("b"));
     }
 
     #[test]
@@ -1027,12 +986,13 @@ mod test {
                 min_value: Precision::Absent,
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
             }],
         };
 
         let constants = constant_columns_from_stats(Some(&statistics), &schema);
         assert_eq!(
-            constants.get(&0),
+            constants.get("a"),
             Some(&ScalarValue::Utf8(None)),
             "all-null column should be treated as constant null"
         );
@@ -1044,8 +1004,9 @@ mod test {
         let constants = constant_columns_from_stats(Some(&statistics), &schema);
         let projection = ProjectionExprs::from_indices(&[0, 1], &schema);
 
-        let rewritten =
-            rewrite_projection_with_constants(projection, &constants).unwrap();
+        let rewritten = projection
+            .try_map_exprs(|expr| replace_columns_with_literals(expr, &constants))
+            .unwrap();
         let exprs = rewritten.as_ref();
         assert!(exprs[0].expr.as_any().downcast_ref::<Literal>().is_some());
         assert!(exprs[1].expr.as_any().downcast_ref::<Column>().is_some());
@@ -1057,10 +1018,10 @@ mod test {
     #[test]
     fn rewrite_physical_expr_literal() {
         let mut constants = ConstantColumns::new();
-        constants.insert(0, ScalarValue::from(7i32));
+        constants.insert("a".to_string(), ScalarValue::from(7i32));
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
-        let rewritten = rewrite_physical_expr_with_constants(expr, &constants).unwrap();
+        let rewritten = replace_columns_with_literals(expr, &constants).unwrap();
         assert!(rewritten.as_any().downcast_ref::<Literal>().is_some());
     }
 
