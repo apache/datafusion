@@ -83,7 +83,7 @@ pub trait GroupColumn: Send + Sync {
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
-    );
+    ) -> usize;
 
     /// The vectorized version `append_val`
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()>;
@@ -627,12 +627,17 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         );
 
         for (col_idx, group_col) in self.group_values.iter().enumerate() {
-            group_col.vectorized_equal_to(
+            let true_count = group_col.vectorized_equal_to(
                 &self.vectorized_operation_buffers.equal_to_group_indices,
                 &cols[col_idx],
                 &self.vectorized_operation_buffers.equal_to_row_indices,
                 &mut equal_to_results,
             );
+
+            // Avoid computing next if all false
+            if true_count == 0 {
+                break;
+            }
         }
 
         // 2. Check `equal_to_results`, if found not equal to `row`s, just add them

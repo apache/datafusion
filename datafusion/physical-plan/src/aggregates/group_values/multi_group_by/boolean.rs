@@ -82,7 +82,7 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
         array: &ArrayRef,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
-    ) {
+    ) -> usize {
         let array = array.as_boolean();
 
         let iter = izip!(
@@ -90,6 +90,8 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
             rhs_rows.iter(),
             equal_to_results.iter_mut(),
         );
+
+        let mut true_count = 0;
 
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
             // Has found not equal to in previous column, don't need to check
@@ -102,12 +104,18 @@ impl<const NULLABLE: bool> GroupColumn for BooleanGroupValueBuilder<NULLABLE> {
                 let input_null = array.is_null(rhs_row);
                 if let Some(result) = nulls_equal_to(exist_null, input_null) {
                     *equal_to_result = result;
+                    true_count += result as usize;
                     continue;
                 }
             }
 
-            *equal_to_result = self.buffer.get_bit(lhs_row) == array.value(rhs_row);
+            let result = self.buffer.get_bit(lhs_row) == array.value(rhs_row);
+            *equal_to_result = result;
+
+            true_count += result as usize;
         }
+
+        true_count
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
