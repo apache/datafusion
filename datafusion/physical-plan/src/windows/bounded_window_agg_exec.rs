@@ -242,7 +242,6 @@ impl BoundedWindowAggExec {
         }
         Ok(Statistics {
             num_rows: statistics.num_rows,
-            total_rows: statistics.total_rows,
             column_statistics,
             total_byte_size: Precision::Absent,
         })

@@ -392,7 +392,6 @@ pub async fn get_statistics_with_limit(
 
     let mut statistics = Statistics {
         num_rows,
-        total_rows: num_rows,
         total_byte_size,
         column_statistics: col_stats_set,
     };

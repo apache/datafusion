@@ -260,7 +260,6 @@ impl<'a> DFParquetMetadata<'a> {
             }
         }
         statistics.num_rows = Precision::Exact(num_rows);
-        statistics.total_rows = Precision::Exact(num_rows);
         statistics.total_byte_size = Precision::Exact(total_byte_size);
 
         let file_metadata = metadata.file_metadata();

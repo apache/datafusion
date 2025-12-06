@@ -285,10 +285,6 @@ impl From<Precision<usize>> for Precision<ScalarValue> {
 pub struct Statistics {
     /// The number of rows estimated to be scanned.
     pub num_rows: Precision<usize>,
-    /// The total number of rows estimated to be in the table.
-    /// This is used to root dervied statistics, e.g. calculating the scan
-    /// size based on `∑ (for each column) => (column_size) * (num_rows / total_rows)`.
-    pub total_rows: Precision<usize>,
     /// Total bytes of the table rows.
     pub total_byte_size: Precision<usize>,
     /// Statistics on a column level.
@@ -304,7 +300,6 @@ impl Default for Statistics {
     fn default() -> Self {
         Self {
             num_rows: Precision::Absent,
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![],
         }
@@ -317,7 +312,6 @@ impl Statistics {
     pub fn new_unknown(schema: &Schema) -> Self {
         Self {
             num_rows: Precision::Absent,
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: Statistics::unknown_column(schema),
         }
@@ -338,12 +332,6 @@ impl Statistics {
         self
     }
 
-    /// Set the total number of rows in the table
-    pub fn with_total_rows(mut self, total_rows: Precision<usize>) -> Self {
-        self.total_rows = total_rows;
-        self
-    }
-
     /// Set the total size, in bytes
     pub fn with_total_byte_size(mut self, total_byte_size: Precision<usize>) -> Self {
         self.total_byte_size = total_byte_size;
@@ -360,7 +348,6 @@ impl Statistics {
     /// the exactness of all information by converting them [`Precision::Inexact`].
     pub fn to_inexact(mut self) -> Self {
         self.num_rows = self.num_rows.to_inexact();
-        self.total_rows = self.total_rows.to_inexact();
         self.total_byte_size = self.total_byte_size.to_inexact();
         self.column_statistics = self
             .column_statistics
@@ -568,14 +555,12 @@ impl Statistics {
     pub fn try_merge(self, other: &Statistics) -> Result<Self> {
         let Self {
             mut num_rows,
-            mut total_rows,
             mut total_byte_size,
             mut column_statistics,
         } = self;
 
         // Accumulate statistics for subsequent items
         num_rows = num_rows.add(&other.num_rows);
-        total_rows = total_rows.add(&other.total_rows);
         total_byte_size = total_byte_size.add(&other.total_byte_size);
 
         if column_statistics.len() != other.column_statistics.len() {
@@ -602,7 +587,6 @@ impl Statistics {
 
         Ok(Statistics {
             num_rows,
-            total_rows,
             total_byte_size,
             column_statistics,
         })
@@ -673,8 +657,8 @@ impl Display for Statistics {
 
         write!(
             f,
-            "Rows={}, TotalRows={}, Bytes={}, [{}]",
-            self.num_rows, self.total_rows, self.total_byte_size, column_stats
+            "Rows={}, Bytes={}, [{}]",
+            self.num_rows, self.total_byte_size, column_stats
         )?;
 
         Ok(())
@@ -694,15 +678,12 @@ pub struct ColumnStatistics {
     pub sum_value: Precision<ScalarValue>,
     /// Number of distinct values
     pub distinct_count: Precision<usize>,
-    /// Size of the scan of this column in bytes.
-    /// Note that this is the original estimated total size of the column
-    /// relative to [`Statistics::total_rows`], not adjusted for
-    /// filtering or other operations.
-    /// If limites, filters that reduce cardinality, etc. are applied
-    /// and [`Statistics::num_rows`] is adjusted, this value should *not*
-    /// be adjusted.
-    /// Instead the adjusted size can be cheaply computed as
-    /// `scan_byte_size * (num_rows / total_rows)`.
+    /// Estimated size of this column in bytes for the current scan.
+    ///
+    /// This value is adjusted proportionally when operators (like Filter or
+    /// Limit) reduce [`Statistics::num_rows`]. When rows are reduced, the
+    /// scan_byte_size becomes [`Precision::Inexact`] since it's an estimate
+    /// based on selectivity.
     pub scan_byte_size: Precision<usize>,
 }
 

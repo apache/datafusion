@@ -892,7 +892,6 @@ impl AggregateExec {
 
                 Ok(Statistics {
                     num_rows: Precision::Exact(1),
-                    total_rows: Precision::Absent,
                     column_statistics,
                     total_byte_size,
                 })
@@ -926,7 +925,6 @@ impl AggregateExec {
 
                 Ok(Statistics {
                     num_rows,
-                    total_rows: Precision::Absent,
                     column_statistics,
                     total_byte_size,
                 })
@@ -3419,7 +3417,6 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Exact(100),
-                total_rows: Precision::Exact(100),
                 total_byte_size: Precision::Absent,
                 column_statistics: vec![
                     ColumnStatistics::new_unknown(),
@@ -3450,7 +3447,6 @@ mod tests {
         let input_zero = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Exact(0),
-                total_rows: Precision::Exact(0),
                 total_byte_size: Precision::Exact(0),
                 column_statistics: vec![
                     ColumnStatistics::new_unknown(),

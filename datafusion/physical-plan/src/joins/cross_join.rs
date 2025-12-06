@@ -475,7 +475,6 @@ fn stats_cartesian_product(
 
     Statistics {
         num_rows,
-        total_rows: Precision::Absent,
         total_byte_size,
         column_statistics: cross_join_stats,
     }
@@ -739,7 +738,6 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(left_row_count * right_row_count),
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Exact(2 * left_bytes * right_bytes),
             column_statistics: vec![
                 ColumnStatistics {
@@ -806,7 +804,6 @@ mod tests {
 
         let right = Statistics {
             num_rows: Precision::Absent,
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics {
                 distinct_count: Precision::Exact(3),
@@ -822,7 +819,6 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Absent,
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![
                 ColumnStatistics {

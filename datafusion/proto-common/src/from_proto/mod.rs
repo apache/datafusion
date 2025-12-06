@@ -829,14 +829,10 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
         s: &protobuf::Statistics,
     ) -> datafusion_common::Result<Self, Self::Error> {
         // Keep it sync with Statistics::to_proto
+        // Note: total_rows field in proto is deprecated and ignored
         Ok(Statistics {
             num_rows: if let Some(nr) = &s.num_rows {
                 nr.clone().into()
-            } else {
-                Precision::Absent
-            },
-            total_rows: if let Some(tr) = &s.total_rows {
-                tr.clone().into()
             } else {
                 Precision::Absent
             },

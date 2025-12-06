@@ -783,7 +783,8 @@ impl From<&Statistics> for protobuf::Statistics {
             num_rows: Some(protobuf::Precision::from(&s.num_rows)),
             total_byte_size: Some(protobuf::Precision::from(&s.total_byte_size)),
             column_stats,
-            total_rows: Some(protobuf::Precision::from(&s.total_rows)),
+            // total_rows is deprecated and no longer used
+            total_rows: None,
         }
     }
 }

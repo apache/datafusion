@@ -146,7 +146,6 @@ mod test {
 
         Statistics {
             num_rows: Precision::Exact(num_rows),
-            total_rows: Precision::Exact(num_rows),
             total_byte_size: Precision::Exact(total_byte_size),
             column_statistics: column_stats,
         }
@@ -335,7 +334,6 @@ mod test {
         // (4 total rows = 2 partitions * 2 rows each, scan_byte_size = 4 * 4 = 16 bytes for int32)
         let expected_full_statistic = Statistics {
             num_rows: Precision::Inexact(0),
-            total_rows: Precision::Exact(4),
             total_byte_size: Precision::Inexact(0),
             column_statistics: vec![
                 ColumnStatistics {
@@ -365,7 +363,6 @@ mod test {
         // Per-partition stats: each partition has 2 rows, scan_byte_size = 2 * 4 = 8
         let expected_partition_statistic = Statistics {
             num_rows: Precision::Inexact(0),
-            total_rows: Precision::Exact(2),
             total_byte_size: Precision::Inexact(0),
             column_statistics: vec![
                 ColumnStatistics {
@@ -455,7 +452,6 @@ mod test {
         // Each partition gets half of combined input, total_rows per partition = 4
         let expected_stats = Statistics {
             num_rows: Precision::Inexact(4),
-            total_rows: Precision::Exact(4),
             total_byte_size: Precision::Inexact(220),
             column_statistics: vec![
                 ColumnStatistics::new_unknown(),
@@ -502,7 +498,6 @@ mod test {
         // Cross join doesn't propagate total_rows and scan_byte_size
         let expected_statistic_partition_1 = Statistics {
             num_rows: Precision::Exact(8),
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Exact(48400),
             column_statistics: vec![
                 ColumnStatistics {
@@ -533,7 +528,6 @@ mod test {
         };
         let expected_statistic_partition_2 = Statistics {
             num_rows: Precision::Exact(8),
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Exact(48400),
             column_statistics: vec![
                 ColumnStatistics {
@@ -707,7 +701,6 @@ mod test {
         // Aggregate doesn't propagate total_rows and scan_byte_size
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Inexact(110),
             column_statistics: vec![
                 ColumnStatistics {
@@ -727,7 +720,6 @@ mod test {
 
         let expected_p1_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Inexact(110),
             column_statistics: vec![
                 ColumnStatistics {
@@ -802,7 +794,6 @@ mod test {
 
         let empty_stat = Statistics {
             num_rows: Precision::Exact(0),
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![
                 ColumnStatistics::new_unknown(),
@@ -871,7 +862,6 @@ mod test {
 
         let expect_stat = Statistics {
             num_rows: Precision::Exact(1),
-            total_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics::new_unknown()],
         };
@@ -938,7 +928,6 @@ mod test {
         // Repartition preserves original total_rows from input (4 rows total)
         let expected_stats = Statistics {
             num_rows: Precision::Inexact(1),
-            total_rows: Precision::Exact(4),
             total_byte_size: Precision::Inexact(73),
             column_statistics: vec![
                 ColumnStatistics::new_unknown(),
@@ -1044,7 +1033,6 @@ mod test {
         // Repartition preserves original total_rows from input (4 rows total)
         let expected_stats = Statistics {
             num_rows: Precision::Inexact(2),
-            total_rows: Precision::Exact(4),
             total_byte_size: Precision::Inexact(110),
             column_statistics: vec![
                 ColumnStatistics::new_unknown(),
