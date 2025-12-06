@@ -22,6 +22,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+// Use hashbrown HashSet for column collection (matches collect_columns return type)
+use datafusion_common::HashSet as ColumnHashSet;
+
 use arrow::array::AsArray;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
@@ -960,24 +963,29 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn try_new(
         left: &'a Arc<dyn PhysicalExpr>,
         right: &'a Arc<dyn PhysicalExpr>,
+        left_columns: ColumnHashSet<phys_expr::Column>,
+        right_columns: ColumnHashSet<phys_expr::Column>,
         op: Operator,
         schema: &'a SchemaRef,
         required_columns: &'a mut RequiredColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
-        let left_columns = collect_columns(left);
-        let right_columns = collect_columns(right);
-        let (column_expr, scalar_expr, columns, correct_operator) =
-            match (left_columns.len(), right_columns.len()) {
-                (1, 0) => (left, right, left_columns, op),
-                (0, 1) => (right, left, right_columns, reverse_operator(op)?),
-                _ => {
-                    // if more than one column used in expression - not supported
-                    return plan_err!(
-                        "Multi-column expressions are not currently supported"
+        let (column_expr, scalar_expr, columns, correct_operator) = match (
+            left_columns.len(),
+            right_columns.len(),
+        ) {
+            (1, 0) => (left, right, left_columns, op),
+            (0, 1) => (right, left, right_columns, reverse_operator(op)?),
+            _ => {
+                // (0, 0) case: Both sides are literals - should be handled before calling try_new
+                // Other cases: more than one column used in expression - not supported
+                return plan_err!(
+                        "Expression not supported for pruning: left has {} columns, right has {} columns",
+                        left_columns.len(),
+                        right_columns.len()
                     );
-                }
-            };
+            }
+        };
 
         let df_schema = DFSchema::try_from(Arc::clone(schema))?;
         let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
@@ -1529,8 +1537,37 @@ fn build_predicate_expression(
         return expr;
     }
 
-    let expr_builder =
-        PruningExpressionBuilder::try_new(&left, &right, op, schema, required_columns);
+    // Collect columns once to avoid redundant traversal
+    let left_columns = collect_columns(&left);
+    let right_columns = collect_columns(&right);
+
+    // Handle literal-to-literal comparisons (no columns on either side)
+    // e.g., lit(1) = lit(2) should evaluate to false and prune all containers
+    if left_columns.is_empty() && right_columns.is_empty() {
+        // Both sides are constants - evaluate the expression directly
+        // Using an empty 1 row batch as input is the same approach taken by the logical expr const simplifier
+        let empty_schema = Arc::new(Schema::empty());
+        let opts = RecordBatchOptions::default().with_row_count(Some(1));
+        let empty_batch = RecordBatch::try_new_with_options(empty_schema, vec![], &opts)
+            .expect("should not fail");
+        if let Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result)))) =
+            expr.evaluate(&empty_batch)
+        {
+            return Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(result))));
+        }
+        // If evaluation fails or returns something unexpected like an array fall through to unhandled
+        return unhandled_hook.handle(expr);
+    }
+
+    let expr_builder = PruningExpressionBuilder::try_new(
+        &left,
+        &right,
+        left_columns,
+        right_columns,
+        op,
+        schema,
+        required_columns,
+    );
     let mut expr_builder = match expr_builder {
         Ok(builder) => builder,
         // allow partial failure in predicate expression generation
@@ -2772,6 +2809,66 @@ mod tests {
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
+    }
+
+    // Test that literal-to-literal comparisons are correctly evaluated.
+    // When both sides are constants, the expression should be evaluated directly
+    // and if it's false, all containers should be pruned.
+    #[test]
+    fn row_group_predicate_literal_false() {
+        // lit(1) = lit(2) is always false, so all containers should be pruned
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let statistics = TestStatistics::new()
+            .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
+        let expected_ret = &[false];
+        prune_with_expr(lit(1).eq(lit(2)), &schema, &statistics, expected_ret);
+    }
+
+    // Test that always-true literal predicates don't prune any containers
+    #[test]
+    fn row_group_predicate_literal_true() {
+        // lit(1) = lit(1) is always true, so no containers should be pruned
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let statistics = TestStatistics::new()
+            .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
+        let expected_ret = &[true];
+        prune_with_expr(lit(1).eq(lit(1)), &schema, &statistics, expected_ret);
+    }
+
+    // Test nested/complex literal expression trees
+    #[test]
+    fn row_group_predicate_complex_literals() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let statistics = TestStatistics::new()
+            .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
+
+        // (1 + 2) > 0 is always true
+        prune_with_expr((lit(1) + lit(2)).gt(lit(0)), &schema, &statistics, &[true]);
+
+        // (1 + 2) < 0 is always false
+        prune_with_expr((lit(1) + lit(2)).lt(lit(0)), &schema, &statistics, &[false]);
+
+        // Nested AND of literals: true AND false = false
+        prune_with_expr(lit(true).and(lit(false)), &schema, &statistics, &[false]);
+
+        // Nested OR of literals: true OR false = true
+        prune_with_expr(lit(true).or(lit(false)), &schema, &statistics, &[true]);
+
+        // Complex nested: (1 < 2) AND (3 > 1) = true AND true = true
+        prune_with_expr(
+            lit(1).lt(lit(2)).and(lit(3).gt(lit(1))),
+            &schema,
+            &statistics,
+            &[true],
+        );
+
+        // Complex nested: (1 > 2) OR (3 < 1) = false OR false = false
+        prune_with_expr(
+            lit(1).gt(lit(2)).or(lit(3).lt(lit(1))),
+            &schema,
+            &statistics,
+            &[false],
+        );
     }
 
     #[test]
