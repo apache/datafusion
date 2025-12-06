@@ -140,8 +140,21 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
+        let mut predicate = {
+            let partition_values: HashMap<&str, &ScalarValue> = self
+                .partition_fields
+                .iter()
+                .zip(partitioned_file.partition_values.iter())
+                .map(|(field, value)| (field.name().as_str(), value))
+                .collect();
+
+            self.predicate
+                .clone()
+                .map(|p| replace_columns_with_literals(p, &partition_values))
+                .transpose()?
+        };
+
         let projection = Arc::clone(&self.projection);
-        let mut predicate = self.predicate.clone();
         let logical_file_schema = Arc::clone(&self.logical_file_schema);
         let partition_fields = self.partition_fields.clone();
         let reorder_predicates = self.reorder_filters;
@@ -262,14 +275,11 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
+            let expr_simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+
             // Adapt the predicate to the physical file schema.
             // This evaluates missing columns and inserts any necessary casts.
             if let Some(expr_adapter_factory) = expr_adapter_factory.as_ref() {
-                let partition_values: HashMap<&str, &ScalarValue> = partition_fields
-                    .iter()
-                    .zip(partitioned_file.partition_values.iter())
-                    .map(|(field, value)| (field.name().as_str(), value))
-                    .collect();
                 predicate = predicate
                     .map(|p| {
                         let expr = expr_adapter_factory
@@ -278,13 +288,10 @@ impl FileOpener for ParquetOpener {
                                 Arc::clone(&physical_file_schema),
                             )
                             .rewrite(p)?;
-                        // Replace partition column references with their literal values
-                        let expr =
-                            replace_columns_with_literals(expr, &partition_values)?;
                         // After rewriting to the file schema, further simplifications may be possible.
                         // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
                         // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
-                        PhysicalExprSimplifier::new(&physical_file_schema).simplify(expr)
+                        expr_simplifier.simplify(expr)
                     })
                     .transpose()?;
                 predicate_file_schema = Arc::clone(&physical_file_schema);

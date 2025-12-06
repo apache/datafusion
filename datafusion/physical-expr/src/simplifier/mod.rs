@@ -18,10 +18,7 @@
 //! Simplifier for Physical Expressions
 
 use arrow::datatypes::Schema;
-use datafusion_common::{
-    tree_node::{Transformed, TreeNode, TreeNodeRewriter},
-    Result,
-};
+use datafusion_common::{tree_node::TreeNode, Result};
 use std::sync::Arc;
 
 use crate::{simplifier::not::simplify_not_expr, PhysicalExpr};
@@ -47,45 +44,36 @@ impl<'a> PhysicalExprSimplifier<'a> {
     }
 
     /// Simplify a physical expression
-    pub fn simplify(
-        &mut self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
+    pub fn simplify(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         let mut current_expr = expr;
         let mut count = 0;
         while count < MAX_LOOP_COUNT {
             count += 1;
-            let result = current_expr.rewrite(self)?;
+            let result = current_expr.transform_up(|node| {
+                #[cfg(test)]
+                let original_type = node.data_type(self.schema).unwrap();
+
+                // Apply NOT expression simplification first, then unwrap cast optimization
+                let rewritten =
+                    simplify_not_expr(&node, self.schema)?.transform_data(|node| {
+                        unwrap_cast::unwrap_cast_in_comparison(node, self.schema)
+                    })?;
+
+                #[cfg(test)]
+                assert_eq!(
+                    rewritten.data.data_type(self.schema).unwrap(),
+                    original_type,
+                    "Simplified expression should have the same data type as the original"
+                );
+
+                Ok(rewritten)
+            })?;
             if !result.transformed {
                 return Ok(result.data);
             }
             current_expr = result.data;
         }
         Ok(current_expr)
-    }
-}
-
-impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
-    type Node = Arc<dyn PhysicalExpr>;
-
-    fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-        #[cfg(test)]
-        let original_type = node.data_type(self.schema).unwrap();
-
-        // Apply NOT expression simplification first, then unwrap cast optimization
-        let rewritten =
-            simplify_not_expr(&node, self.schema)?.transform_data(|node| {
-                unwrap_cast::unwrap_cast_in_comparison(node, self.schema)
-            })?;
-
-        #[cfg(test)]
-        assert_eq!(
-            rewritten.data.data_type(self.schema).unwrap(),
-            original_type,
-            "Simplified expression should have the same data type as the original"
-        );
-
-        Ok(rewritten)
     }
 }
 
@@ -131,7 +119,7 @@ mod tests {
 
     /// Assert that simplifying `input` produces `expected`
     fn assert_not_simplify(
-        simplifier: &mut PhysicalExprSimplifier,
+        simplifier: &PhysicalExprSimplifier,
         input: Arc<dyn PhysicalExpr>,
         expected: Arc<dyn PhysicalExpr>,
     ) {
@@ -146,7 +134,7 @@ mod tests {
     #[test]
     fn test_simplify() {
         let schema = test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // Create: cast(c2 as INT32) != INT32(99)
         let column_expr = col("c2", &schema).unwrap();
@@ -173,7 +161,7 @@ mod tests {
     #[test]
     fn test_nested_expression_simplification() {
         let schema = test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // Create nested expression: (cast(c1 as INT64) > INT64(5)) OR (cast(c2 as INT32) <= INT32(10))
         let c1_expr = col("c1", &schema).unwrap();
@@ -226,7 +214,7 @@ mod tests {
     #[test]
     fn test_double_negation_elimination() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(NOT(c > 5)) -> c > 5
         let inner_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
@@ -238,24 +226,24 @@ mod tests {
         let double_not: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(inner_not));
 
         let expected = inner_expr;
-        assert_not_simplify(&mut simplifier, double_not, expected);
+        assert_not_simplify(&simplifier, double_not, expected);
         Ok(())
     }
 
     #[test]
     fn test_not_literal() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(TRUE) -> FALSE
         let not_true = Arc::new(NotExpr::new(lit(ScalarValue::Boolean(Some(true)))));
         let expected = lit(ScalarValue::Boolean(Some(false)));
-        assert_not_simplify(&mut simplifier, not_true, expected);
+        assert_not_simplify(&simplifier, not_true, expected);
 
         // NOT(FALSE) -> TRUE
         let not_false = Arc::new(NotExpr::new(lit(ScalarValue::Boolean(Some(false)))));
         let expected = lit(ScalarValue::Boolean(Some(true)));
-        assert_not_simplify(&mut simplifier, not_false, expected);
+        assert_not_simplify(&simplifier, not_false, expected);
 
         Ok(())
     }
@@ -263,7 +251,7 @@ mod tests {
     #[test]
     fn test_negate_comparison() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(c = 5) -> c != 5
         let not_eq = Arc::new(NotExpr::new(Arc::new(BinaryExpr::new(
@@ -276,7 +264,7 @@ mod tests {
             Operator::NotEq,
             lit(ScalarValue::Int32(Some(5))),
         ));
-        assert_not_simplify(&mut simplifier, not_eq, expected);
+        assert_not_simplify(&simplifier, not_eq, expected);
 
         Ok(())
     }
@@ -284,7 +272,7 @@ mod tests {
     #[test]
     fn test_demorgans_law_and() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(a AND b) -> NOT a OR NOT b
         let and_expr = Arc::new(BinaryExpr::new(
@@ -299,7 +287,7 @@ mod tests {
             Operator::Or,
             Arc::new(NotExpr::new(col("b", &schema)?)),
         ));
-        assert_not_simplify(&mut simplifier, not_and, expected);
+        assert_not_simplify(&simplifier, not_and, expected);
 
         Ok(())
     }
@@ -307,7 +295,7 @@ mod tests {
     #[test]
     fn test_demorgans_law_or() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(a OR b) -> NOT a AND NOT b
         let or_expr = Arc::new(BinaryExpr::new(
@@ -322,7 +310,7 @@ mod tests {
             Operator::And,
             Arc::new(NotExpr::new(col("b", &schema)?)),
         ));
-        assert_not_simplify(&mut simplifier, not_or, expected);
+        assert_not_simplify(&simplifier, not_or, expected);
 
         Ok(())
     }
@@ -330,7 +318,7 @@ mod tests {
     #[test]
     fn test_demorgans_with_comparison_simplification() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(c = 1 AND c = 2) -> c != 1 OR c != 2
         let eq1 = Arc::new(BinaryExpr::new(
@@ -359,7 +347,7 @@ mod tests {
                 lit(ScalarValue::Int32(Some(2))),
             )),
         ));
-        assert_not_simplify(&mut simplifier, not_and, expected);
+        assert_not_simplify(&simplifier, not_and, expected);
 
         Ok(())
     }
@@ -367,7 +355,7 @@ mod tests {
     #[test]
     fn test_not_of_not_and_not() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(NOT(a) AND NOT(b)) -> a OR b
         let not_a = Arc::new(NotExpr::new(col("a", &schema)?));
@@ -380,7 +368,7 @@ mod tests {
             Operator::Or,
             col("b", &schema)?,
         ));
-        assert_not_simplify(&mut simplifier, not_and, expected);
+        assert_not_simplify(&simplifier, not_and, expected);
 
         Ok(())
     }
@@ -388,7 +376,7 @@ mod tests {
     #[test]
     fn test_not_in_list() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(c IN (1, 2, 3)) -> c NOT IN (1, 2, 3)
         let list = vec![
@@ -400,7 +388,7 @@ mod tests {
         let not_in: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(in_list_expr));
 
         let expected = in_list(col("c", &schema)?, list, &true, &schema)?;
-        assert_not_simplify(&mut simplifier, not_in, expected);
+        assert_not_simplify(&simplifier, not_in, expected);
 
         Ok(())
     }
@@ -408,7 +396,7 @@ mod tests {
     #[test]
     fn test_not_not_in_list() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(c NOT IN (1, 2, 3)) -> c IN (1, 2, 3)
         let list = vec![
@@ -420,7 +408,7 @@ mod tests {
         let not_not_in: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(not_in_list_expr));
 
         let expected = in_list(col("c", &schema)?, list, &false, &schema)?;
-        assert_not_simplify(&mut simplifier, not_not_in, expected);
+        assert_not_simplify(&simplifier, not_not_in, expected);
 
         Ok(())
     }
@@ -428,7 +416,7 @@ mod tests {
     #[test]
     fn test_double_not_in_list() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // NOT(NOT(c IN (1, 2, 3))) -> c IN (1, 2, 3)
         let list = vec![
@@ -441,7 +429,7 @@ mod tests {
         let double_not: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(not_in));
 
         let expected = in_list(col("c", &schema)?, list, &false, &schema)?;
-        assert_not_simplify(&mut simplifier, double_not, expected);
+        assert_not_simplify(&simplifier, double_not, expected);
 
         Ok(())
     }
@@ -449,7 +437,7 @@ mod tests {
     #[test]
     fn test_deeply_nested_not() -> Result<()> {
         let schema = not_test_schema();
-        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+        let simplifier = PhysicalExprSimplifier::new(&schema);
 
         // Create a deeply nested NOT expression: NOT(NOT(NOT(...NOT(c > 5)...)))
         // This tests that we don't get stack overflow with many nested NOTs.
@@ -469,7 +457,7 @@ mod tests {
 
         // With 200 NOTs (even number), should simplify back to the original expression
         let expected = inner_expr;
-        assert_not_simplify(&mut simplifier, Arc::clone(&expr), expected);
+        assert_not_simplify(&simplifier, Arc::clone(&expr), expected);
 
         // Manually dismantle the deep input expression to avoid Stack Overflow on Drop
         // If we just let `expr` go out of scope, Rust's recursive Drop will blow the stack
