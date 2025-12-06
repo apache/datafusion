@@ -257,7 +257,7 @@ mod tests {
         );
         assert_eq!(
             exec.partition_statistics(None)?.total_byte_size,
-            Precision::Exact(671)
+            Precision::Absent,
         );
 
         Ok(())
@@ -1397,7 +1397,7 @@ mod tests {
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
             exec_enabled.partition_statistics(None)?.total_byte_size,
-            Precision::Exact(671)
+            Precision::Absent,
         );
 
         Ok(())

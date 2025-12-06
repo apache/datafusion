@@ -48,7 +48,6 @@ enum Options {
     Nlj(nlj::RunOpt),
     SortTpch(sort_tpch::RunOpt),
     Tpch(tpch::RunOpt),
-    TpchConvert(tpch::ConvertOpt),
 }
 
 // Main benchmark runner entrypoint
@@ -65,6 +64,5 @@ pub async fn main() -> Result<()> {
         Options::Nlj(opt) => opt.run().await,
         Options::SortTpch(opt) => opt.run().await,
         Options::Tpch(opt) => Box::pin(opt.run()).await,
-        Options::TpchConvert(opt) => opt.run().await,
     }
 }

@@ -193,7 +193,11 @@ impl TDigest {
         if lo.is_nan() || hi.is_nan() {
             return v;
         }
-        v.clamp(lo, hi)
+
+        // Handle the case where floating point precision causes min > max.
+        let (min, max) = if lo > hi { (hi, lo) } else { (lo, hi) };
+
+        v.clamp(min, max)
     }
 
     // public for testing in other modules
@@ -743,5 +747,23 @@ mod tests {
         let t = t.merge_unsorted_f64(vec![0.0, 1.0]);
 
         assert_eq!(t.size(), 96);
+    }
+
+    #[test]
+    fn test_identical_values_floating_point_precision() {
+        // Regression test for https://github.com/apache/datafusion/issues/14855
+        // When all values are the same, floating-point arithmetic during centroid
+        // merging can cause slight precision differences between min and max,
+        // which previously caused a panic in clamp().
+
+        let t = TDigest::new(100);
+        let values: Vec<_> = (0..215).map(|_| 15.699999988079073_f64).collect();
+
+        let t = t.merge_unsorted_f64(values);
+
+        // This should not panic
+        let result = t.estimate_quantile(0.99);
+        // The result should be approximately equal to the input value
+        assert!((result - 15.699999988079073).abs() < 1e-10);
     }
 }

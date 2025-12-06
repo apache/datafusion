@@ -18,6 +18,7 @@
 //! Types for plan display
 
 mod graphviz;
+pub mod human_readable;
 pub use graphviz::*;
 
 use std::{

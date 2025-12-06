@@ -22,10 +22,8 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::time::{interval, Duration};
 
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_execution::{
-    memory_pool::{human_readable_size, FairSpillPool},
-    runtime_env::RuntimeEnvBuilder,
-};
+use datafusion_common::human_readable_size;
+use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
 
 /// Measures the maximum RSS (in bytes) during the execution of an async task. RSS
 /// will be sampled every 7ms.

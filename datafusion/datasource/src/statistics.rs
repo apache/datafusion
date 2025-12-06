@@ -50,13 +50,13 @@ pub(crate) struct MinMaxStatistics {
 
 impl MinMaxStatistics {
     /// Sort order used to sort the statistics
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn sort_order(&self) -> &LexOrdering {
         &self.sort_order
     }
 
     /// Min value at index
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn min(&'_ self, idx: usize) -> Row<'_> {
         self.min_by_sort_order.row(idx)
     }
@@ -292,7 +292,7 @@ fn sort_columns_from_physical_sort_exprs(
     since = "47.0.0",
     note = "Please use `get_files_with_limit` and  `compute_all_files_statistics` instead"
 )]
-#[allow(unused)]
+#[expect(unused)]
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Arc<Statistics>)>>,
     file_schema: SchemaRef,
