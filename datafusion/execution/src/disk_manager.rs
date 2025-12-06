@@ -115,8 +115,6 @@ pub enum DiskManagerMode {
 }
 
 /// Configuration for temporary disk access
-#[allow(clippy::allow_attributes)]
-#[allow(deprecated)]
 #[deprecated(since = "48.0.0", note = "Use DiskManagerBuilder instead")]
 #[derive(Debug, Clone, Default)]
 pub enum DiskManagerConfig {
@@ -125,8 +123,6 @@ pub enum DiskManagerConfig {
 
     /// Create a new [DiskManager] that creates temporary files within
     /// a temporary directory chosen by the OS
-    #[allow(clippy::allow_attributes)]
-    #[allow(deprecated)]
     #[default]
     NewOs,
 
@@ -138,8 +134,7 @@ pub enum DiskManagerConfig {
     Disabled,
 }
 
-#[allow(clippy::allow_attributes)]
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl DiskManagerConfig {
     /// Create temporary files in a temporary directory chosen by the OS
     pub fn new() -> Self {
@@ -181,8 +176,7 @@ impl DiskManager {
     }
 
     /// Create a DiskManager given the configuration
-#[allow(clippy::allow_attributes)]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[deprecated(since = "48.0.0", note = "Use DiskManager::builder() instead")]
     pub fn try_new(config: DiskManagerConfig) -> Result<Arc<Self>> {
         match config {
