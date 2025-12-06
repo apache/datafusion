@@ -128,8 +128,9 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec1.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Byte size is absent because we cannot estimate the output size
+        // of the Arrow data since there are variable length columns.
+        Precision::Absent,
     );
     assert_eq!(get_static_cache_size(&state1), 1);
 
@@ -143,8 +144,8 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec2.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Absent because the data contains variable length columns
+        Precision::Absent,
     );
     assert_eq!(get_static_cache_size(&state2), 1);
 
@@ -158,8 +159,8 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec3.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Absent because the data contains variable length columns
+        Precision::Absent,
     );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);
