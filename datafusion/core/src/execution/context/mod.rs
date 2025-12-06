@@ -20,6 +20,7 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use super::options::ReadOptions;
 use crate::datasource::dynamic_file::DynamicListTableFactory;
@@ -72,7 +73,10 @@ use datafusion_common::{
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
 };
-use datafusion_execution::cache::cache_manager::DEFAULT_METADATA_CACHE_LIMIT;
+use datafusion_execution::cache::cache_manager::{
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
+    DEFAULT_METADATA_CACHE_LIMIT,
+};
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
     DiskManagerBuilder, DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
@@ -1161,6 +1165,14 @@ impl SessionContext {
                 let limit = Self::parse_memory_limit(value)?;
                 builder.with_metadata_cache_limit(limit)
             }
+            "list_files_cache_limit" => {
+                let limit = Self::parse_memory_limit(value)?;
+                builder.with_object_list_cache_limit(limit)
+            }
+            "list_files_cache_ttl" => {
+                let duration = Self::parse_duration(value)?;
+                builder.with_object_list_cache_ttl(Some(duration))
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
         };
@@ -1191,6 +1203,14 @@ impl SessionContext {
             }
             "metadata_cache_limit" => {
                 builder = builder.with_metadata_cache_limit(DEFAULT_METADATA_CACHE_LIMIT);
+            }
+            "list_files_cache_limit" => {
+                builder = builder
+                    .with_object_list_cache_limit(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT);
+            }
+            "list_files_cache_ttl" => {
+                builder =
+                    builder.with_object_list_cache_ttl(DEFAULT_LIST_FILES_CACHE_TTL);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
@@ -1230,6 +1250,28 @@ impl SessionContext {
             "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
             _ => plan_err!("Unsupported unit '{unit}' in memory limit '{limit}'"),
         }
+    }
+
+    fn parse_duration(duration: &str) -> Result<Duration> {
+        let mut minutes = None;
+        let mut seconds = None;
+
+        for duration in duration.split_inclusive(&['m', 's']) {
+            let (number, unit) = duration.split_at(duration.len() - 1);
+            let number: u64 = number.parse().map_err(|_| {
+                plan_datafusion_err!("Failed to parse number from duration '{duration}'")
+            })?;
+
+            match unit {
+                "m" if minutes.is_none() && seconds.is_none() => minutes = Some(number),
+                "s" if seconds.is_none() => seconds = Some(number),
+                _ => plan_err!("Invalid duration, unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order")?,
+            }
+        }
+
+        Ok(Duration::from_secs(
+            minutes.unwrap_or_default() * 60 + seconds.unwrap_or_default(),
+        ))
     }
 
     async fn create_custom_table(
