@@ -195,7 +195,7 @@ impl Default for DocSection {
 /// Example:
 ///
 /// ```rust
-///
+/// 
 /// # fn main() {
 ///     use datafusion_doc::{DocSection, Documentation};
 ///     let doc_section = DocSection {
