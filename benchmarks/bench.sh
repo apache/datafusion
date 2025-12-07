@@ -311,6 +311,10 @@ main() {
                     # nlj uses range() function, no data generation needed
                     echo "NLJ benchmark does not require data generation"
                     ;;
+                quantiles)
+                    # quantiles uses in-memory synthetic data
+                    echo "Quantiles benchmark does not require data generation"
+                    ;;
                 distinct)
                     # distinct uses in-memory synthetic data
                     echo "Distinct benchmark does not require data generation"
@@ -391,6 +395,7 @@ main() {
                     run_imdb
                     run_external_aggr
                     run_nlj
+                    run_quantiles
                     run_hj
                     run_distinct
                     ;;
@@ -499,6 +504,9 @@ main() {
                     ;;
                 nlj)
                     run_nlj
+                    ;;
+                quantiles)
+                    run_quantiles
                     ;;
                 hj)
                     run_hj
@@ -742,6 +750,19 @@ run_clickbench_extended() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs quantiles (median/percentile_cont) micro-benchmark for int64 and float64
+run_quantiles() {
+    RESULTS_FILE="${RESULTS_DIR}/quantiles_int64.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running quantiles micro-benchmark (int64)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- quantiles --iterations 5 --type int64 -o "${RESULTS_FILE}"
+
+    RESULTS_FILE="${RESULTS_DIR}/quantiles_float64.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running quantiles micro-benchmark (float64)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- quantiles --iterations 5 --type float64 -o "${RESULTS_FILE}"
 }
 
 # Runs distinct agg micro-benchmark (synthetic in-memory data) for int64 and float64
