@@ -31,6 +31,9 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
+
+// Re-export DmlCapabilities for convenience
+pub use datafusion_expr::dml::DmlCapabilities;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// A table which can be queried and modified.
@@ -327,6 +330,38 @@ pub trait TableProvider: Debug + Sync + Send {
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Insert into not implemented for this table")
+    }
+
+    /// Returns the DML capabilities supported by this table.
+    ///
+    /// Defaults to [`DmlCapabilities::NONE`]. Override to enable DELETE/UPDATE.
+    fn dml_capabilities(&self) -> DmlCapabilities {
+        DmlCapabilities::NONE
+    }
+
+    /// Delete rows matching the filter predicates.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    /// Empty `filters` deletes all rows.
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        _filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("DELETE not supported for {} table", self.table_type())
+    }
+
+    /// Update rows matching the filter predicates.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    /// Empty `filters` updates all rows.
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        _assignments: Vec<(String, Expr)>,
+        _filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("UPDATE not supported for {} table", self.table_type())
     }
 }
 

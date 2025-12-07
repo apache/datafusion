@@ -122,11 +122,11 @@ impl CopyTo {
 /// * `INSERT` - Appends new rows to the existing table. Calls
 ///   [`TableProvider::insert_into`]
 ///
-/// * `DELETE` - Removes rows from the table. Currently NOT supported by the
-///   [`TableProvider`] trait or builtin sources.
+/// * `DELETE` - Removes rows from the table. Calls [`TableProvider::delete_from`]
+///   if the provider returns [`DmlCapabilities`] with `delete = true`.
 ///
-/// * `UPDATE` - Modifies existing rows in the table. Currently NOT supported by
-///   the [`TableProvider`] trait or builtin sources.
+/// * `UPDATE` - Modifies existing rows in the table. Calls [`TableProvider::update`]
+///   if the provider returns [`DmlCapabilities`] with `update = true`.
 ///
 /// * `CREATE TABLE AS SELECT` - Creates a new table and populates it with data
 ///   from a query. This is similar to the `INSERT` operation, but it creates a new
@@ -136,6 +136,9 @@ impl CopyTo {
 ///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 /// [`TableProvider::insert_into`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.insert_into
+/// [`TableProvider::delete_from`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.delete_from
+/// [`TableProvider::update`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.update
+/// [`DmlCapabilities`]: crate::dml::DmlCapabilities
 #[derive(Clone)]
 pub struct DmlStatement {
     /// The table name
@@ -288,10 +291,103 @@ impl Display for InsertOp {
     }
 }
 
+/// DML operations supported by a table.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct DmlCapabilities {
+    pub delete: bool,
+    pub update: bool,
+}
+
+impl DmlCapabilities {
+    pub const NONE: Self = Self {
+        delete: false,
+        update: false,
+    };
+
+    pub const ALL: Self = Self {
+        delete: true,
+        update: true,
+    };
+
+    pub const DELETE_ONLY: Self = Self {
+        delete: true,
+        update: false,
+    };
+
+    pub const UPDATE_ONLY: Self = Self {
+        delete: false,
+        update: true,
+    };
+
+    pub fn supports_any(&self) -> bool {
+        self.delete || self.update
+    }
+}
+
+impl Display for DmlCapabilities {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let caps: Vec<&str> = [
+            self.delete.then_some("DELETE"),
+            self.update.then_some("UPDATE"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if caps.is_empty() {
+            write!(f, "NONE")
+        } else {
+            write!(f, "{}", caps.join(", "))
+        }
+    }
+}
+
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
         Schema::new(vec![Field::new("count", DataType::UInt64, false)])
             .try_into()
             .unwrap(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dml_capabilities_constants() {
+        assert_eq!(DmlCapabilities::NONE.delete, false);
+        assert_eq!(DmlCapabilities::NONE.update, false);
+
+        assert_eq!(DmlCapabilities::ALL.delete, true);
+        assert_eq!(DmlCapabilities::ALL.update, true);
+
+        assert_eq!(DmlCapabilities::DELETE_ONLY.delete, true);
+        assert_eq!(DmlCapabilities::DELETE_ONLY.update, false);
+
+        assert_eq!(DmlCapabilities::UPDATE_ONLY.delete, false);
+        assert_eq!(DmlCapabilities::UPDATE_ONLY.update, true);
+    }
+
+    #[test]
+    fn test_dml_capabilities_supports_any() {
+        assert_eq!(DmlCapabilities::NONE.supports_any(), false);
+        assert_eq!(DmlCapabilities::ALL.supports_any(), true);
+        assert_eq!(DmlCapabilities::DELETE_ONLY.supports_any(), true);
+        assert_eq!(DmlCapabilities::UPDATE_ONLY.supports_any(), true);
+    }
+
+    #[test]
+    fn test_dml_capabilities_display() {
+        assert_eq!(format!("{}", DmlCapabilities::NONE), "NONE");
+        assert_eq!(format!("{}", DmlCapabilities::ALL), "DELETE, UPDATE");
+        assert_eq!(format!("{}", DmlCapabilities::DELETE_ONLY), "DELETE");
+        assert_eq!(format!("{}", DmlCapabilities::UPDATE_ONLY), "UPDATE");
+    }
+
+    #[test]
+    fn test_dml_capabilities_default() {
+        let caps = DmlCapabilities::default();
+        assert_eq!(caps, DmlCapabilities::NONE);
+    }
 }
