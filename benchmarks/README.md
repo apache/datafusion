@@ -146,6 +146,19 @@ To verify that datafusion picked up your configuration, run the benchmarks with 
 
 ## Comparing performance of main and a branch
 
+For TPC-H
+```shell
+./benchmarks/compare_tpch.sh main mybranch
+```
+
+For TPC-DS. 
+To get data in `DATA_DIR` for TPCDS, please follow instructions in `./benchmarks/bench.sh data tcpds` 
+```shell
+DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/compare_tpcds.sh main mybranch
+```
+
+Alternatively you can compare manually followng the example velor
+
 ```shell
 git checkout main
 
