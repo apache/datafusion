@@ -22,11 +22,12 @@ use std::sync::Arc;
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::Transformed;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 use crate::PhysicalExpr;
 
 /// Simplify expressions that consist only of literals by evaluating them.
@@ -42,28 +43,10 @@ use crate::PhysicalExpr;
 pub fn simplify_const_expr(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    // Skip if already a literal - nothing to simplify
-    if expr.as_any().downcast_ref::<Literal>().is_some() {
+    if is_volatile(expr) || has_column_references(expr) {
         return Ok(Transformed::no(Arc::clone(expr)));
     }
 
-    // Check if all children are literals
-    let children = expr.children();
-    if children.is_empty() {
-        // No children means this is a leaf node (but not a Literal, handled above)
-        // This could be a Column or other leaf expression - don't simplify
-        return Ok(Transformed::no(Arc::clone(expr)));
-    }
-
-    let all_literals = children
-        .iter()
-        .all(|child| child.as_any().downcast_ref::<Literal>().is_some());
-
-    if !all_literals {
-        return Ok(Transformed::no(Arc::clone(expr)));
-    }
-
-    // All children are literals - we can evaluate this expression at plan time
     // Create a 1-row dummy batch for evaluation
     let batch = create_dummy_batch()?;
 
@@ -95,9 +78,26 @@ pub fn simplify_const_expr(
 /// The batch is never actually accessed for data - it's just needed because
 /// the PhysicalExpr::evaluate API requires a RecordBatch. For expressions
 /// that only contain literals, the batch content is irrelevant.
+///
+/// This is the same approach used in the logical expression `ConstEvaluator`.
 fn create_dummy_batch() -> Result<RecordBatch> {
     // RecordBatch requires at least one column
     let dummy_schema = Arc::new(Schema::new(vec![Field::new("_", DataType::Null, true)]));
     let col = new_null_array(&DataType::Null, 1);
     Ok(RecordBatch::try_new(dummy_schema, vec![col])?)
+}
+
+/// Check if this expression has any column references.
+pub fn has_column_references(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut has_columns = false;
+    expr.apply(|expr| {
+        if expr.as_any().downcast_ref::<Column>().is_some() {
+            has_columns = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("apply should not fail");
+    has_columns
 }
