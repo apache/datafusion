@@ -73,8 +73,7 @@ use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::Result;
-use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
+use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
@@ -106,8 +105,6 @@ pub(crate) struct DatafusionArrowPredicate {
     rows_matched: metrics::Count,
     /// how long was spent evaluating this predicate
     time: metrics::Time,
-    /// used to perform type coercion while filtering rows
-    schema_mapper: Arc<dyn SchemaMapper>,
 }
 
 impl DatafusionArrowPredicate {
@@ -131,7 +128,6 @@ impl DatafusionArrowPredicate {
             rows_pruned,
             rows_matched,
             time,
-            schema_mapper: candidate.schema_mapper,
         })
     }
 }
@@ -142,8 +138,6 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
-        let batch = self.schema_mapper.map_batch(batch)?;
-
         // scoped timer updates on drop
         let mut timer = self.time.timer();
 
@@ -183,12 +177,8 @@ pub(crate) struct FilterCandidate {
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
     /// The projection to read from the file schema to get the columns
-    /// required to pass through a `SchemaMapper` to the table schema
-    /// upon which we then evaluate the filter expression.
+    /// required to evaluate the filter expression.
     projection: Vec<usize>,
-    ///  A `SchemaMapper` used to map batches read from the file schema to
-    /// the filter's projection of the table schema.
-    schema_mapper: Arc<dyn SchemaMapper>,
     /// The projected table schema that this filter references
     filter_schema: SchemaRef,
 }
@@ -198,42 +188,17 @@ pub(crate) struct FilterCandidate {
 /// This will do several things
 /// 1. Determine the columns required to evaluate the expression
 /// 2. Calculate data required to estimate the cost of evaluating the filter
-/// 3. Rewrite column expressions in the predicate which reference columns not
-///    in the particular file schema.
 ///
-/// # Schema Rewrite
-///
-/// When parquet files are read in the context of "schema evolution" there are
-/// potentially wo schemas:
-///
-/// 1. The table schema (the columns of the table that the parquet file is part of)
-/// 2. The file schema (the columns actually in the parquet file)
-///
-/// There are times when the table schema contains columns that are not in the
-/// file schema, such as when new columns have been added in new parquet files
-/// but old files do not have the columns.
-///
-/// When a file is missing a column from the table schema, the value of the
-/// missing column is filled in by a `SchemaAdapter` (by default as `NULL`).
-///
-/// When a predicate is pushed down to the parquet reader, the predicate is
-/// evaluated in the context of the file schema.
-/// For each predicate we build a filter schema which is the projection of the table
-/// schema that contains only the columns that this filter references.
-/// If any columns from the file schema are missing from a particular file they are
-/// added by the `SchemaAdapter`, by default as `NULL`.
+/// Note that this does *not* handle any adaptation of the data schema to the expression schema,
+/// it is assumed that the expression has already been adapted to the file schema before being passed in here,
+/// generally using [`PhysicalExprAdapter`](datafusion_physical_expr_adapter::PhysicalExprAdapter).
 struct FilterCandidateBuilder {
     expr: Arc<dyn PhysicalExpr>,
     /// The schema of this parquet file.
-    /// Columns may have different types from the table schema and there may be
-    /// columns in the file schema that are not in the table schema or columns that
-    /// are in the table schema that are not in the file schema.
     file_schema: SchemaRef,
     /// The schema of the table (merged schema) -- columns may be in different
     /// order than in the file and have columns that are not in the file schema
     table_schema: SchemaRef,
-    /// A `SchemaAdapterFactory` used to map the file schema to the table schema.
-    schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
 }
 
 impl FilterCandidateBuilder {
@@ -241,13 +206,11 @@ impl FilterCandidateBuilder {
         expr: Arc<dyn PhysicalExpr>,
         file_schema: Arc<Schema>,
         table_schema: Arc<Schema>,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
         Self {
             expr,
             file_schema,
             table_schema,
-            schema_adapter_factory,
         }
     }
 
@@ -270,10 +233,24 @@ impl FilterCandidateBuilder {
                 .project(&required_indices_into_table_schema)?,
         );
 
-        let (schema_mapper, projection_into_file_schema) = self
-            .schema_adapter_factory
-            .create(Arc::clone(&projected_table_schema), self.table_schema)
-            .map_schema(&self.file_schema)?;
+        // Compute the projection into the file schema by matching column names
+        let mut projection_into_file_schema: Vec<usize> = projected_table_schema
+            .fields()
+            .iter()
+            .filter_map(|f| self.file_schema.index_of(f.name()).ok())
+            .collect();
+        // Sort and remove duplicates
+        let original_len = projection_into_file_schema.len();
+        projection_into_file_schema.sort_unstable();
+        projection_into_file_schema.dedup();
+        if projection_into_file_schema.len() < original_len {
+            // This should not happen, as we built projected_table_schema from
+            // the table schema which should not have duplicate column names.
+            return Err(internal_datafusion_err!(
+                "Duplicate column names found when building filter candidate: {:?}",
+                projection_into_file_schema
+            ));
+        }
 
         let required_bytes = size_of_columns(&projection_into_file_schema, metadata)?;
         let can_use_index = columns_sorted(&projection_into_file_schema, metadata)?;
@@ -283,7 +260,6 @@ impl FilterCandidateBuilder {
             required_bytes,
             can_use_index,
             projection: projection_into_file_schema,
-            schema_mapper: Arc::clone(&schema_mapper),
             filter_schema: Arc::clone(&projected_table_schema),
         }))
     }
@@ -429,7 +405,6 @@ pub fn build_row_filter(
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
-    schema_adapter_factory: &Arc<dyn SchemaAdapterFactory>,
 ) -> Result<Option<RowFilter>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
@@ -447,7 +422,6 @@ pub fn build_row_filter(
                 Arc::clone(expr),
                 Arc::clone(physical_file_schema),
                 Arc::clone(predicate_file_schema),
-                Arc::clone(schema_adapter_factory),
             )
             .build(metadata)
         })
@@ -511,9 +485,11 @@ mod test {
     use datafusion_common::ScalarValue;
 
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
-    use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
     use datafusion_expr::{col, Expr};
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
+    };
     use datafusion_physical_plan::metrics::{Count, Time};
 
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -538,17 +514,12 @@ mod test {
         let expr = col("int64_list").is_not_null();
         let expr = logical2physical(&expr, &table_schema);
 
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
         let table_schema = Arc::new(table_schema.clone());
 
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            table_schema.clone(),
-            table_schema,
-            schema_adapter_factory,
-        )
-        .build(metadata)
-        .expect("building candidate");
+        let candidate =
+            FilterCandidateBuilder::new(expr, table_schema.clone(), table_schema)
+                .build(metadata)
+                .expect("building candidate");
 
         assert!(candidate.is_none());
     }
@@ -578,17 +549,16 @@ mod test {
             None,
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
+        let expr = DefaultPhysicalExprAdapterFactory {}
+            .create(Arc::new(table_schema.clone()), Arc::clone(&file_schema))
+            .rewrite(expr)
+            .expect("rewriting expression");
         let table_schema = Arc::new(table_schema.clone());
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            file_schema.clone(),
-            table_schema.clone(),
-            schema_adapter_factory,
-        )
-        .build(&metadata)
-        .expect("building candidate")
-        .expect("candidate expected");
+        let candidate =
+            FilterCandidateBuilder::new(expr, file_schema.clone(), table_schema.clone())
+                .build(&metadata)
+                .expect("building candidate")
+                .expect("candidate expected");
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
@@ -619,16 +589,15 @@ mod test {
             None,
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            file_schema,
-            table_schema,
-            schema_adapter_factory,
-        )
-        .build(&metadata)
-        .expect("building candidate")
-        .expect("candidate expected");
+        // Rewrite the expression to add CastExpr for type coercion
+        let expr = DefaultPhysicalExprAdapterFactory {}
+            .create(table_schema.clone(), Arc::clone(&file_schema))
+            .rewrite(expr)
+            .expect("rewriting expression");
+        let candidate = FilterCandidateBuilder::new(expr, file_schema, table_schema)
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,

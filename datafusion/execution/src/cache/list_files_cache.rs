@@ -21,9 +21,9 @@ use std::{
 };
 
 use datafusion_common::instant::Instant;
-use object_store::{path::Path, ObjectMeta};
+use object_store::{ObjectMeta, path::Path};
 
-use crate::cache::{cache_manager::ListFilesCache, lru_queue::LruQueue, CacheAccessor};
+use crate::cache::{CacheAccessor, cache_manager::ListFilesCache, lru_queue::LruQueue};
 
 /// Default implementation of [`ListFilesCache`]
 ///
@@ -565,6 +565,9 @@ mod tests {
     }
 
     #[test]
+    // Ignored due to flakiness in CI. See
+    // https://github.com/apache/datafusion/issues/19114
+    #[ignore]
     fn test_cache_with_ttl() {
         let ttl = Duration::from_millis(100);
         let cache = DefaultListFilesCache::new(10000, Some(ttl));
@@ -593,6 +596,9 @@ mod tests {
     }
 
     #[test]
+    // Ignored due to flakiness in CI. See
+    // https://github.com/apache/datafusion/issues/19114
+    #[ignore]
     fn test_cache_with_ttl_and_lru() {
         let ttl = Duration::from_millis(200);
         let cache = DefaultListFilesCache::new(1000, Some(ttl));

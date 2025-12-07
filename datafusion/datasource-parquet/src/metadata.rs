@@ -247,10 +247,8 @@ impl<'a> DFParquetMetadata<'a> {
         let mut statistics = Statistics::new_unknown(table_schema);
         let mut has_statistics = false;
         let mut num_rows = 0_usize;
-        let mut total_byte_size = 0_usize;
         for row_group_meta in row_groups_metadata {
             num_rows += row_group_meta.num_rows() as usize;
-            total_byte_size += row_group_meta.total_byte_size() as usize;
 
             if !has_statistics {
                 has_statistics = row_group_meta
@@ -260,7 +258,7 @@ impl<'a> DFParquetMetadata<'a> {
             }
         }
         statistics.num_rows = Precision::Exact(num_rows);
-        statistics.total_byte_size = Precision::Exact(total_byte_size);
+        statistics.calculate_total_byte_size(table_schema);
 
         let file_metadata = metadata.file_metadata();
         let mut file_schema = parquet_to_arrow_schema(

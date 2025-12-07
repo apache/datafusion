@@ -16,18 +16,54 @@
 # under the License.
 
 query T
-SELECT url_encode('https://spark.apache.org');
+SELECT try_url_decode('https%3A%2F%2Fspark.apache.org');
 ----
-https%3A%2F%2Fspark.apache.org
+https://spark.apache.org
 
 # Test with LargeUtf8
 query T
-SELECT url_encode(arrow_cast('https://spark.apache.org', 'LargeUtf8'));
+SELECT try_url_decode(arrow_cast('https%3A%2F%2Fspark.apache.org', 'LargeUtf8'));
 ----
-https%3A%2F%2Fspark.apache.org
+https://spark.apache.org
 
 # Test with Utf8View
 query T
-SELECT url_encode(arrow_cast('https://spark.apache.org', 'Utf8View'));
+SELECT try_url_decode(arrow_cast('https%3A%2F%2Fspark.apache.org', 'Utf8View'));
 ----
-https%3A%2F%2Fspark.apache.org
+https://spark.apache.org
+
+# Non-ASCII string
+query T
+SELECT try_url_decode('%E4%BD%A0%E5%A5%BD')
+----
+你好
+
+# Empty string
+query T
+SELECT try_url_decode('');
+----
+(empty)
+
+# Null value
+query T
+SELECT try_url_decode(NULL::string);
+----
+NULL
+
+# Roundtrip with url_encode
+query T
+SELECT try_url_decode(url_encode('Spark SQL ~!@#$%^&*()'));
+----
+Spark SQL ~!@#$%^&*()
+
+# Plus replacement
+query T
+SELECT try_url_decode('Spark+SQL%21');
+----
+Spark SQL!
+
+# Handled invalid percent encoding error
+query T
+SELECT try_url_decode('https%3%2F%2Fspark.apache.org'::string);
+----
+NULL

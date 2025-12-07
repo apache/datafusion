@@ -305,9 +305,10 @@ impl ExecutionPlan for ProjectionExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
+        let output_schema = self.schema();
         self.projector
             .projection()
-            .project_statistics(input_stats, &self.input.schema())
+            .project_statistics(input_stats, &output_schema)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
