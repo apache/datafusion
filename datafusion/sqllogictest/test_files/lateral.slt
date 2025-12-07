@@ -453,11 +453,10 @@ logical_plan
 01)Filter: random() > Float64(0.5)
 02)--StandaloneBatchedTableFunction: batched_generate_series(Int64(1), Int64(20)), projection=[0], filters=[batched_generate_series().n > Int32(15)]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: random() > 0.5
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------BatchedTableFunctionExec: function=batched_generate_series, args=[1, 20], projection=[0], filters=[batched_generate_series().n > Int32(15)]
-05)--------PlaceholderRowExec
+01)FilterExec: random() > 0.5
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----BatchedTableFunctionExec: function=batched_generate_series, args=[1, 20], projection=[0], filters=[batched_generate_series().n > Int32(15)]
+04)------PlaceholderRowExec
 
 # Verify LATERAL projection pushdown - since generate_series only has 1 column, projection not shown
 query TT
@@ -503,12 +502,11 @@ logical_plan
 03)----LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 04)------TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: start_val@0 > 5
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]
-05)--------BatchedTableFunctionExec: function=batched_generate_series, args=[start_val@0, end_val@1]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: start_val@0 > 5
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]
+04)------BatchedTableFunctionExec: function=batched_generate_series, args=[start_val@0, end_val@1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test filter pushdown on table function output
 query I
