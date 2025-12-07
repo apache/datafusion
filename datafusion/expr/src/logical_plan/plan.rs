@@ -362,8 +362,8 @@ impl LogicalPlan {
                 ..
             }) => schema,
             LogicalPlan::StandaloneBatchedTableFunction(
-                StandaloneBatchedTableFunction { schema, .. },
-            ) => schema,
+                StandaloneBatchedTableFunction { projected_schema, .. },
+            ) => projected_schema,
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 // we take the schema of the static term as the schema of the entire recursive query
                 static_term.schema()
@@ -1167,6 +1167,7 @@ impl LogicalPlan {
                     source,
                     schema,
                     projection,
+                    projected_schema,
                     filters,
                     fetch,
                     ..
@@ -1180,6 +1181,7 @@ impl LogicalPlan {
                         args: expr,
                         schema: Arc::clone(schema),
                         projection: projection.clone(),
+                        projected_schema: Arc::clone(projected_schema),
                         filters: filters.clone(),
                         fetch: *fetch,
                     },
@@ -4439,10 +4441,12 @@ pub struct StandaloneBatchedTableFunction {
     pub source: Arc<dyn BatchedTableFunctionSource>,
     /// Expressions for table function arguments (should be constants for standalone mode)
     pub args: Vec<Expr>,
-    /// The output schema (only table function output columns)
+    /// The full output schema (all columns from table function)
     pub schema: DFSchemaRef,
-    /// Optional column indices to use as a projection
+    /// Optional column indices to use as a projection (indices into `schema`)
     pub projection: Option<Vec<usize>>,
+    /// The schema after applying projection (this is what gets returned by LogicalPlan::schema())
+    pub projected_schema: DFSchemaRef,
     /// Optional expressions to be used as filters by the table function
     pub filters: Vec<Expr>,
     /// Optional limit to push down to the function (number of rows to fetch)

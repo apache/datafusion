@@ -510,6 +510,7 @@ impl DefaultPhysicalPlanner {
                     args,
                     schema,
                     projection,
+                    projected_schema,
                     filters,
                     fetch,
                 },
@@ -529,7 +530,8 @@ impl DefaultPhysicalPlanner {
                     .map(|e| self.create_physical_expr(e, &empty_schema, session_state))
                     .collect::<Result<Vec<_>>>()?;
 
-                let function_schema = Arc::clone(schema.inner());
+                let full_function_schema = Arc::clone(schema.inner());
+                let projected_function_schema = Arc::clone(projected_schema.inner());
 
                 // All filters have been pre-filtered by the logical optimizer
                 // based on supports_filters_pushdown(). Just pass them all through.
@@ -540,8 +542,8 @@ impl DefaultPhysicalPlanner {
                     Arc::clone(batched_tf.inner()),
                     physical_args,
                     placeholder_exec,
-                    Arc::clone(&function_schema), // projected_schema
-                    function_schema,              // table_function_schema
+                    projected_function_schema,
+                    full_function_schema,
                     datafusion_catalog::BatchedTableFunctionMode::Standalone,
                     projection.clone(),
                     filters.clone(),

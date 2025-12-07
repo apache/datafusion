@@ -209,13 +209,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             &func_schema,
                         )?;
 
+                        let qualified_func_schema = Arc::new(qualified_func_schema);
                         let plan = LogicalPlan::StandaloneBatchedTableFunction(
                             StandaloneBatchedTableFunction {
                                 function_name: tbl_func_name.clone(),
                                 source,
                                 args,
-                                schema: Arc::new(qualified_func_schema),
+                                schema: Arc::clone(&qualified_func_schema),
                                 projection: None,
+                                projected_schema: qualified_func_schema,
                                 filters: vec![],
                                 fetch: None,
                             },
@@ -393,14 +395,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                     let qualified_func_schema =
                         DFSchema::try_from_qualified_schema(&qualifier, &func_schema)?;
+                    let qualified_func_schema = Arc::new(qualified_func_schema);
 
                     let plan = LogicalPlan::StandaloneBatchedTableFunction(
                         StandaloneBatchedTableFunction {
                             function_name: func_name.to_string(),
                             source,
                             args: func_args,
-                            schema: Arc::new(qualified_func_schema),
+                            schema: Arc::clone(&qualified_func_schema),
                             projection: None,
+                            projected_schema: qualified_func_schema,
                             filters: vec![],
                             fetch: None,
                         },

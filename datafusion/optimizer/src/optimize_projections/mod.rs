@@ -255,6 +255,7 @@ fn optimize_projections(
         LogicalPlan::LateralBatchedTableFunction(ref lateral) => {
             // Schema: [input_fields..., function_output_fields...]
             let input_len = lateral.input.schema().fields().len();
+            let original_tf_schema = lateral.source.schema();
             let tf_len = lateral.table_function_schema.fields().len();
 
             // Determine which input columns and function output columns are needed
@@ -288,17 +289,27 @@ fn optimize_projections(
                     // No function output columns needed
                     None
                 } else if tf_indices.len() == tf_len {
-                    // All function output columns needed
+                    // All current function output columns needed - keep existing projection
                     lateral.projection.clone()
                 } else {
                     // Subset of function output columns needed
                     Some(match &lateral.projection {
                         Some(existing_proj) => {
-                            // Chain projections: map through existing projection
+                            // Chain projections: tf_indices are into current projected schema,
+                            // existing_proj maps current projected schema to original schema
                             tf_indices.iter().map(|&idx| existing_proj[idx]).collect()
                         }
-                        None => tf_indices,
+                        None => {
+                            // No existing projection, tf_indices are already into original schema
+                            tf_indices
+                        }
                     })
+                };
+
+                let qualifier = if lateral.table_function_schema.fields().is_empty() {
+                    None
+                } else {
+                    lateral.table_function_schema.qualified_field(0).0.cloned()
                 };
 
                 // Update table function schema if projection changed
@@ -306,9 +317,8 @@ fn optimize_projections(
                     let qualified_fields: Vec<_> = proj
                         .iter()
                         .map(|&i| {
-                            let (qualifier, field) =
-                                lateral.table_function_schema.qualified_field(i);
-                            (qualifier.cloned(), Arc::clone(field))
+                            let field = original_tf_schema.field(i);
+                            (qualifier.clone(), Arc::new(field.clone()))
                         })
                         .collect();
                     Arc::new(DFSchema::new_with_metadata(
@@ -450,15 +460,32 @@ fn optimize_projections(
                 .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::StandaloneBatchedTableFunction(scan) => {
-            // Get indices referred to in the original (schema with all fields)
-            // given projected indices.
             let new_projection = match &scan.projection {
-                Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
-                None => indices.into_inner(),
+                Some(existing_proj) => {
+                    indices.into_mapped_indices(|idx| existing_proj[idx])
+                }
+                None => {
+                    indices.into_inner()
+                }
+            };
+
+            let new_projected_schema = {
+                let qualified_fields: Vec<_> = new_projection
+                    .iter()
+                    .map(|&i| {
+                        let (qualifier, field) = scan.schema.qualified_field(i);
+                        (qualifier.cloned(), Arc::clone(field))
+                    })
+                    .collect();
+                Arc::new(DFSchema::new_with_metadata(
+                    qualified_fields,
+                    scan.schema.metadata().clone(),
+                )?)
             };
 
             let mut new_scan = scan.clone();
             new_scan.projection = Some(new_projection);
+            new_scan.projected_schema = new_projected_schema;
             return Ok(Transformed::yes(
                 LogicalPlan::StandaloneBatchedTableFunction(new_scan),
             ));
