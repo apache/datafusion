@@ -1943,11 +1943,8 @@ async fn run_aggregate_dyn_filter_case(case: AggregateDynFilterCase<'_>) {
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
 
-    let session_config: SessionConfig = config.into();
-    let optimizer_context = OptimizerContext::new(session_config);
-
     let optimized = FilterPushdown::new_post_optimization()
-        .optimize_plan(plan, &optimizer_context)
+        .optimize(plan, &config)
         .unwrap();
 
     let before = format_plan_for_test(&optimized);
@@ -2309,11 +2306,8 @@ fn test_aggregate_dynamic_filter_not_created_for_single_mode() {
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
 
-    let session_config: SessionConfig = config.into();
-    let optimizer_context = OptimizerContext::new(session_config);
-
     let optimized = FilterPushdown::new_post_optimization()
-        .optimize_plan(plan, &optimizer_context)
+        .optimize(plan, &config)
         .unwrap();
 
     let formatted = format_plan_for_test(&optimized);
