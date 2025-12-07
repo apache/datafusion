@@ -23,7 +23,7 @@ use core::num::FpCategory;
 
 use arrow::{
     array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray},
-    datatypes::{DataType, FieldRef, Field},
+    datatypes::{DataType, Field, FieldRef},
 };
 use bigdecimal::{
     num_bigint::{BigInt, Sign},
@@ -31,11 +31,11 @@ use bigdecimal::{
 };
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, plan_err, DataFusionError, ScalarValue, Result,
+    exec_datafusion_err, exec_err, plan_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 
 /// Spark-compatible `format_string` expression
@@ -2354,14 +2354,12 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
 mod tests {
     use super::*;
     use arrow::datatypes::DataType::Utf8;
-    use datafusion_common::{Result};
+    use datafusion_common::Result;
 
     #[test]
     fn test_format_string_nullability() -> Result<()> {
-
         let func = FormatStringFunc::new();
-        let nullable_format: FieldRef =
-            Arc::new(Field::new("fmt", Utf8, true));
+        let nullable_format: FieldRef = Arc::new(Field::new("fmt", Utf8, true));
 
         let out_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[nullable_format],
@@ -2372,8 +2370,7 @@ mod tests {
             out_nullable.is_nullable(),
             "format_string(fmt, ...) should be nullable when fmt is nullable"
         );
-        let non_nullable_format: FieldRef =
-            Arc::new(Field::new("fmt", Utf8, false));
+        let non_nullable_format: FieldRef = Arc::new(Field::new("fmt", Utf8, false));
 
         let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[non_nullable_format],
