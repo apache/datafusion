@@ -54,31 +54,50 @@ fn cast_struct_column(
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    if source_col.data_type().is_null() {
+        return Ok(new_null_array(
+            &Struct(target_fields.to_vec().into()),
+            source_col.len(),
+        ));
+    }
+
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
         validate_struct_compatibility(source_struct.fields(), target_fields)?;
 
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
+        let source_fields = source_struct.fields();
 
-        for target_child_field in target_fields {
+        for (idx, target_child_field) in target_fields.iter().enumerate() {
             fields.push(Arc::clone(target_child_field));
-            match source_struct.column_by_name(target_child_field.name()) {
-                Some(source_child_col) => {
-                    let adapted_child =
-                        cast_column(source_child_col, target_child_field, cast_options)
-                            .map_err(|e| {
-                            e.context(format!(
-                                "While casting struct field '{}'",
-                                target_child_field.name()
-                            ))
-                        })?;
-                    arrays.push(adapted_child);
-                }
-                None => {
-                    arrays.push(new_null_array(target_child_field.data_type(), num_rows));
-                }
-            }
+            let source_child_col = source_struct
+                .column_by_name(target_child_field.name())
+                .map(Arc::clone)
+                .or_else(|| {
+                    source_fields.get(idx).and_then(|field| {
+                        if is_positional_field(field, idx) {
+                            source_struct.columns().get(idx).cloned()
+                        } else {
+                            None
+                        }
+                    })
+                });
+
+            let Some(source_child_col) = source_child_col else {
+                arrays.push(new_null_array(target_child_field.data_type(), num_rows));
+                continue;
+            };
+
+            let adapted_child =
+                cast_column(&source_child_col, target_child_field, cast_options)
+                    .map_err(|e| {
+                        e.context(format!(
+                            "While casting struct field '{}'",
+                            target_child_field.name()
+                        ))
+                    })?;
+            arrays.push(adapted_child);
         }
 
         let struct_array =
@@ -205,12 +224,22 @@ pub fn validate_struct_compatibility(
     target_fields: &[FieldRef],
 ) -> Result<()> {
     // Check compatibility for each target field
-    for target_field in target_fields {
+    for (idx, target_field) in target_fields.iter().enumerate() {
         // Look for matching field in source by name
-        if let Some(source_field) = source_fields
+        let source_field = source_fields
             .iter()
             .find(|f| f.name() == target_field.name())
-        {
+            .or_else(|| {
+                source_fields.get(idx).and_then(|field| {
+                    if is_positional_field(field, idx) {
+                        Some(field)
+                    } else {
+                        None
+                    }
+                })
+            });
+
+        if let Some(source_field) = source_field {
             // Ensure nullability is compatible. It is invalid to cast a nullable
             // source field to a non-nullable target field as this may discard
             // null values.
@@ -247,6 +276,17 @@ pub fn validate_struct_compatibility(
 
     // Extra fields in source are OK - they'll be ignored
     Ok(())
+}
+
+fn is_positional_field(field: &FieldRef, idx: usize) -> bool {
+    field.name().is_empty()
+        || field
+            .name()
+            .as_str()
+            .strip_prefix('c')
+            .and_then(|suffix| suffix.parse::<usize>().ok())
+            .map(|n| n == idx)
+            .unwrap_or(false)
 }
 
 #[cfg(test)]
