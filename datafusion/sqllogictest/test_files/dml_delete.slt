@@ -1,0 +1,368 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## DELETE tests
+##########
+
+# Test basic DELETE with WHERE clause
+statement ok
+CREATE TABLE test_delete AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+DELETE FROM test_delete WHERE column1 > 1;
+----
+2
+
+query IT rowsort
+SELECT * FROM test_delete;
+----
+1 a
+
+statement ok
+DROP TABLE test_delete;
+
+# Test DELETE all rows (no WHERE clause)
+statement ok
+CREATE TABLE test_delete_all AS VALUES (1, 'x'), (2, 'y'), (3, 'z');
+
+query I
+DELETE FROM test_delete_all;
+----
+3
+
+query I
+SELECT COUNT(*) FROM test_delete_all;
+----
+0
+
+statement ok
+DROP TABLE test_delete_all;
+
+# Test DELETE with equality predicate
+statement ok
+CREATE TABLE test_delete_eq AS VALUES (1, 'one'), (2, 'two'), (3, 'three');
+
+query I
+DELETE FROM test_delete_eq WHERE column1 = 2;
+----
+1
+
+query IT rowsort
+SELECT * FROM test_delete_eq;
+----
+1 one
+3 three
+
+statement ok
+DROP TABLE test_delete_eq;
+
+# Test DELETE with compound predicate (AND)
+statement ok
+CREATE TABLE test_delete_compound AS VALUES (1, 10), (2, 20), (3, 30), (4, 40);
+
+query I
+DELETE FROM test_delete_compound WHERE column1 > 1 AND column2 < 40;
+----
+2
+
+query II rowsort
+SELECT * FROM test_delete_compound;
+----
+1 10
+4 40
+
+statement ok
+DROP TABLE test_delete_compound;
+
+# Test DELETE with OR predicate
+statement ok
+CREATE TABLE test_delete_or AS VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd');
+
+query I
+DELETE FROM test_delete_or WHERE column1 = 1 OR column1 = 4;
+----
+2
+
+query IT rowsort
+SELECT * FROM test_delete_or;
+----
+2 b
+3 c
+
+statement ok
+DROP TABLE test_delete_or;
+
+# Test DELETE with no matching rows
+statement ok
+CREATE TABLE test_delete_nomatch AS VALUES (1, 'a'), (2, 'b');
+
+query I
+DELETE FROM test_delete_nomatch WHERE column1 > 100;
+----
+0
+
+query IT rowsort
+SELECT * FROM test_delete_nomatch;
+----
+1 a
+2 b
+
+statement ok
+DROP TABLE test_delete_nomatch;
+
+# Test DELETE with NULL values
+statement ok
+CREATE TABLE test_delete_null(id INT, name VARCHAR);
+
+statement ok
+INSERT INTO test_delete_null VALUES (1, 'one'), (2, NULL), (3, 'three');
+
+query I
+DELETE FROM test_delete_null WHERE name IS NULL;
+----
+1
+
+query IT rowsort
+SELECT * FROM test_delete_null;
+----
+1 one
+3 three
+
+statement ok
+DROP TABLE test_delete_null;
+
+# Test DELETE with NULL predicate (SQL semantics: NULL predicate should NOT delete row)
+# When comparing with NULL, the predicate evaluates to NULL, not true/false
+statement ok
+CREATE TABLE test_delete_null_pred(id INT, value INT);
+
+statement ok
+INSERT INTO test_delete_null_pred VALUES (1, 10), (2, NULL), (3, 30);
+
+# This predicate evaluates to NULL for row with id=2 (because NULL > 15 is NULL)
+# Only row with id=3 should be deleted (30 > 15 is true)
+# Row with id=2 should be kept (NULL > 15 is NULL, not true)
+query I
+DELETE FROM test_delete_null_pred WHERE value > 15;
+----
+1
+
+query II rowsort
+SELECT * FROM test_delete_null_pred;
+----
+1 10
+2 NULL
+
+statement ok
+DROP TABLE test_delete_null_pred;
+
+# Test DELETE with string predicate
+statement ok
+CREATE TABLE test_delete_string AS VALUES ('apple', 1), ('banana', 2), ('cherry', 3);
+
+query I
+DELETE FROM test_delete_string WHERE column1 = 'banana';
+----
+1
+
+query TI rowsort
+SELECT * FROM test_delete_string;
+----
+apple 1
+cherry 3
+
+statement ok
+DROP TABLE test_delete_string;
+
+# Test multiple DELETEs on same table
+statement ok
+CREATE TABLE test_multi_delete AS VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e');
+
+query I
+DELETE FROM test_multi_delete WHERE column1 = 1;
+----
+1
+
+query I
+DELETE FROM test_multi_delete WHERE column1 = 3;
+----
+1
+
+query I
+DELETE FROM test_multi_delete WHERE column1 = 5;
+----
+1
+
+query IT rowsort
+SELECT * FROM test_multi_delete;
+----
+2 b
+4 d
+
+statement ok
+DROP TABLE test_multi_delete;
+
+# Test DELETE with LIKE predicate
+statement ok
+CREATE TABLE test_delete_like AS VALUES ('apple'), ('apricot'), ('banana'), ('avocado');
+
+query I
+DELETE FROM test_delete_like WHERE column1 LIKE 'ap%';
+----
+2
+
+query T rowsort
+SELECT * FROM test_delete_like;
+----
+avocado
+banana
+
+statement ok
+DROP TABLE test_delete_like;
+
+# Test DELETE with BETWEEN predicate
+statement ok
+CREATE TABLE test_delete_between AS VALUES (1), (5), (10), (15), (20);
+
+query I
+DELETE FROM test_delete_between WHERE column1 BETWEEN 5 AND 15;
+----
+3
+
+query I rowsort
+SELECT * FROM test_delete_between;
+----
+1
+20
+
+statement ok
+DROP TABLE test_delete_between;
+
+# Test DELETE with IN predicate
+statement ok
+CREATE TABLE test_delete_in AS VALUES (1), (2), (3), (4), (5);
+
+query I
+DELETE FROM test_delete_in WHERE column1 IN (2, 4);
+----
+2
+
+query I rowsort
+SELECT * FROM test_delete_in;
+----
+1
+3
+5
+
+statement ok
+DROP TABLE test_delete_in;
+
+# Test DELETE with NOT IN predicate
+statement ok
+CREATE TABLE test_delete_not_in AS VALUES (1), (2), (3), (4), (5);
+
+query I
+DELETE FROM test_delete_not_in WHERE column1 NOT IN (2, 4);
+----
+3
+
+query I rowsort
+SELECT * FROM test_delete_not_in;
+----
+2
+4
+
+statement ok
+DROP TABLE test_delete_not_in;
+
+# Test DELETE with IS NOT NULL predicate
+statement ok
+CREATE TABLE test_delete_is_not_null(id INT, name VARCHAR);
+
+statement ok
+INSERT INTO test_delete_is_not_null VALUES (1, 'one'), (2, NULL), (3, 'three');
+
+query I
+DELETE FROM test_delete_is_not_null WHERE name IS NOT NULL;
+----
+2
+
+query IT rowsort
+SELECT * FROM test_delete_is_not_null;
+----
+2 NULL
+
+statement ok
+DROP TABLE test_delete_is_not_null;
+
+# Test DELETE with ABS function in WHERE
+statement ok
+CREATE TABLE test_delete_abs AS VALUES (-5, 'neg'), (5, 'pos'), (-10, 'neg2'), (3, 'small');
+
+query I
+DELETE FROM test_delete_abs WHERE ABS(column1) > 7;
+----
+1
+
+query IT rowsort
+SELECT * FROM test_delete_abs;
+----
+-5 neg
+3 small
+5 pos
+
+statement ok
+DROP TABLE test_delete_abs;
+
+# Test DELETE with float values
+statement ok
+CREATE TABLE test_delete_float AS VALUES (1.5), (2.7), (3.14159), (0.5);
+
+query I
+DELETE FROM test_delete_float WHERE column1 > 2.0;
+----
+2
+
+query R rowsort
+SELECT * FROM test_delete_float;
+----
+0.5
+1.5
+
+statement ok
+DROP TABLE test_delete_float;
+
+# Test DELETE with boolean values
+statement ok
+CREATE TABLE test_delete_bool(active BOOLEAN, name VARCHAR);
+
+statement ok
+INSERT INTO test_delete_bool VALUES (true, 'yes'), (false, 'no'), (true, 'maybe');
+
+query I
+DELETE FROM test_delete_bool WHERE active = true;
+----
+2
+
+query BT rowsort
+SELECT * FROM test_delete_bool;
+----
+false no
+
+statement ok
+DROP TABLE test_delete_bool;
