@@ -122,7 +122,7 @@ impl Default for SessionConfig {
 /// execution plans, or other components that have access to the session config.
 /// They provide a flexible way to attach extra data or behavior to the session config.
 #[derive(Clone, Debug)]
-pub struct Extensions {
+struct Extensions {
     inner: AnyMap,
 }
 
@@ -201,20 +201,6 @@ impl SessionConfig {
     /// ```
     pub fn options_mut(&mut self) -> &mut ConfigOptions {
         Arc::make_mut(&mut self.options)
-    }
-
-    /// Return a handle to the extensions.
-    ///
-    /// Can be used to read the current extensions.
-    pub fn extensions(&self) -> &Arc<Extensions> {
-        &self.extensions
-    }
-
-    /// Return a mutable handle to the extensions.
-    ///
-    /// Can be used to set extensions.
-    pub fn extensions_mut(&mut self) -> &mut Extensions {
-        Arc::make_mut(&mut self.extensions)
     }
 
     /// Set a configuration option
@@ -633,7 +619,7 @@ impl SessionConfig {
     where
         T: Send + Sync + 'static,
     {
-        self.extensions_mut().insert::<T>(ext);
+        Arc::make_mut(&mut self.extensions).insert::<T>(ext);
     }
 
     /// Get extension, if any for the specified type `T` exists.
