@@ -45,10 +45,10 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
-    build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
     BatchedTableFunctionSource, BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr,
     ExprSchemable, LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown,
-    TableSource, WindowFunctionDefinition,
+    TableSource, WindowFunctionDefinition, build_join_schema, expr_vec_fmt,
+    requalify_sides_if_needed,
 };
 
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
@@ -2175,14 +2175,21 @@ impl LogicalPlan {
                             expr_vec_fmt!(struct_type_columns)
                         )
                     }
-                    LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
-                        function_name,
-                        args,
-                        projection,
-                        filters,
-                        ..
-                    }) => {
-                        write!(f, "LateralBatchedTableFunction: {}({})", function_name, expr_vec_fmt!(args))?;
+                    LogicalPlan::LateralBatchedTableFunction(
+                        LateralBatchedTableFunction {
+                            function_name,
+                            args,
+                            projection,
+                            filters,
+                            ..
+                        },
+                    ) => {
+                        write!(
+                            f,
+                            "LateralBatchedTableFunction: {}({})",
+                            function_name,
+                            expr_vec_fmt!(args)
+                        )?;
                         if let Some(proj) = projection {
                             write!(f, ", projection={proj:?}")?;
                         }
@@ -2191,14 +2198,21 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::StandaloneBatchedTableFunction(StandaloneBatchedTableFunction {
-                        function_name,
-                        args,
-                        projection,
-                        filters,
-                        ..
-                    }) => {
-                        write!(f, "StandaloneBatchedTableFunction: {}({})", function_name, expr_vec_fmt!(args))?;
+                    LogicalPlan::StandaloneBatchedTableFunction(
+                        StandaloneBatchedTableFunction {
+                            function_name,
+                            args,
+                            projection,
+                            filters,
+                            ..
+                        },
+                    ) => {
+                        write!(
+                            f,
+                            "StandaloneBatchedTableFunction: {}({})",
+                            function_name,
+                            expr_vec_fmt!(args)
+                        )?;
                         if let Some(proj) = projection {
                             write!(f, ", projection={proj:?}")?;
                         }

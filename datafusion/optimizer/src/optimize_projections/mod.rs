@@ -308,7 +308,7 @@ fn optimize_projections(
                         .map(|&i| {
                             let (qualifier, field) =
                                 lateral.table_function_schema.qualified_field(i);
-                            (qualifier.cloned(), field.clone())
+                            (qualifier.cloned(), Arc::clone(field))
                         })
                         .collect();
                     Arc::new(DFSchema::new_with_metadata(

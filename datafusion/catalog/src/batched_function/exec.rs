@@ -77,7 +77,7 @@ pub struct BatchedTableFunctionExec {
 }
 
 impl BatchedTableFunctionExec {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         func: Arc<dyn BatchedTableFunctionImpl>,
         args: Vec<Arc<dyn PhysicalExpr>>,
@@ -303,7 +303,7 @@ impl BatchedTableFunctionStream {
         match self.mode {
             BatchedTableFunctionMode::Lateral => combine_lateral_result(
                 input_batch,
-                chunk.output,
+                &chunk.output,
                 &chunk.input_row_indices,
             ),
             BatchedTableFunctionMode::Standalone => Ok(chunk.output),

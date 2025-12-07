@@ -38,12 +38,12 @@
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
 use crate::{
-    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
-    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
+    DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
     LateralBatchedTableFunction, Limit, LogicalPlan, Partitioning, Prepare, Projection,
     RecursiveQuery, Repartition, Sort, StandaloneBatchedTableFunction, Statement,
     Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values,
-    Window,
+    Window, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 

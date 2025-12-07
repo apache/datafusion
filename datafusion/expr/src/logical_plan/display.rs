@@ -21,11 +21,11 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr,
-    Filter, Join, LateralBatchedTableFunction, Limit, LogicalPlan, Partitioning,
-    Projection, RecursiveQuery, Repartition, Sort, StandaloneBatchedTableFunction,
-    Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values,
-    Window,
+    Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
+    LateralBatchedTableFunction, Limit, LogicalPlan, Partitioning, Projection,
+    RecursiveQuery, Repartition, Sort, StandaloneBatchedTableFunction, Subquery,
+    SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values, Window,
+    expr_vec_fmt,
 };
 
 use crate::dml::CopyTo;

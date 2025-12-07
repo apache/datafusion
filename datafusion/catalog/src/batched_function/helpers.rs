@@ -102,7 +102,7 @@ pub fn materialized_batch_stream(
 /// ```
 pub fn combine_lateral_result(
     input_batch: &RecordBatch,
-    output_batch: RecordBatch,
+    output_batch: &RecordBatch,
     input_row_indices: &[u32],
 ) -> Result<RecordBatch> {
     if input_row_indices.len() != output_batch.num_rows() {
@@ -168,7 +168,7 @@ mod tests {
         let input_row_indices = vec![0, 0, 1, 1];
 
         let result =
-            combine_lateral_result(&input_batch, output_batch, &input_row_indices)
+            combine_lateral_result(&input_batch, &output_batch, &input_row_indices)
                 .unwrap();
 
         assert_eq!(result.num_columns(), 3);
@@ -235,7 +235,7 @@ mod tests {
         let input_row_indices = vec![0, 0, 0];
 
         let result =
-            combine_lateral_result(&input_batch, output_batch, &input_row_indices);
+            combine_lateral_result(&input_batch, &output_batch, &input_row_indices);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
