@@ -296,7 +296,7 @@ mod tests {
 
         let out_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[nullable_field],
-            scalar_arguments: &[], 
+            scalar_arguments: &[None], 
         })?;
 
         assert!(
