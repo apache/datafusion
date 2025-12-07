@@ -117,6 +117,8 @@ pub enum DiskManagerMode {
 /// Configuration for temporary disk access
 #[deprecated(since = "48.0.0", note = "Use DiskManagerBuilder instead")]
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::allow_attributes)]
+#[allow(deprecated)]
 pub enum DiskManagerConfig {
     /// Use the provided [DiskManager] instance
     Existing(Arc<DiskManager>),
