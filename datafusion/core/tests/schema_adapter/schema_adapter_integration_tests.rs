@@ -564,20 +564,9 @@ async fn test_parquet_missing_column() -> Result<()> {
         .push_down_filters(false)
         .execute()
         .await?;
-    // There will be data: the filter is (null) is not null or a = 24.
-    // Statistics pruning doesn't handle `null is not null` so it resolves to `true or a = 24` -> `true` so no row groups are pruned
-    #[rustfmt::skip]
-    let expected = [
-        "+---+---+-----+",
-        "| a | b | c   |",
-        "+---+---+-----+",
-        "| 1 |   | 1.1 |",
-        "| 2 |   | 2.2 |",
-        "| 3 |   | 3.3 |",
-        "+---+---+-----+",
-    ];
-    assert_batches_eq!(expected, &batches);
-    // On the other hand the filter `b = 'foo' and a = 24` should prune all data even with only statistics-based pushdown
+    // There should be zero batches
+    assert_eq!(batches.len(), 0);
+    // Check another filter: `b = 'foo' and a = 24` should also prune data with only statistics-based pushdown
     let filter = col("b").eq(lit("foo")).and(col("a").eq(lit(24)));
     let batches = test_case
         .clone()
@@ -587,6 +576,24 @@ async fn test_parquet_missing_column() -> Result<()> {
         .await?;
     // There should be zero batches
     assert_eq!(batches.len(), 0);
+    // On the other hand `b is null and a = 2` should prune only the second row group with stats only pruning
+    let filter = col("b").is_null().and(col("a").eq(lit(2)));
+    let batches = test_case
+        .clone()
+        .with_predicate(filter)
+        .push_down_filters(false)
+        .execute()
+        .await?;
+    #[rustfmt::skip]
+    let expected = [
+        "+---+---+-----+",
+        "| a | b | c   |",
+        "+---+---+-----+",
+        "| 1 |   | 1.1 |",
+        "| 2 |   | 2.2 |",
+        "+---+---+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
 
     Ok(())
 }

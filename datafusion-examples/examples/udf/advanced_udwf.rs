@@ -17,6 +17,8 @@
 
 //! See `main.rs` for how to run it.
 
+use std::{any::Any, fs::File, io::Write, sync::Arc};
+
 use arrow::datatypes::Field;
 use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
@@ -38,8 +40,7 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
-use std::any::Any;
-use std::sync::Arc;
+use tempfile::tempdir;
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
 /// defined window function. As in the `simple_udwf.rs` example, this struct implements
@@ -229,12 +230,46 @@ async fn create_context() -> Result<SessionContext> {
     // declare a new context. In spark API, this corresponds to a new spark SQL session
     let ctx = SessionContext::new();
 
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    println!("pwd: {}", std::env::current_dir().unwrap().display());
-    let csv_path = "../../datafusion/core/tests/data/cars.csv".to_string();
-    let read_options = CsvReadOptions::default().has_header(true);
+    // content from file 'datafusion/core/tests/data/cars.csv'
+    let csv_data = r#"car,speed,time
+red,20.0,1996-04-12T12:05:03.000000000
+red,20.3,1996-04-12T12:05:04.000000000
+red,21.4,1996-04-12T12:05:05.000000000
+red,21.5,1996-04-12T12:05:06.000000000
+red,19.0,1996-04-12T12:05:07.000000000
+red,18.0,1996-04-12T12:05:08.000000000
+red,17.0,1996-04-12T12:05:09.000000000
+red,7.0,1996-04-12T12:05:10.000000000
+red,7.1,1996-04-12T12:05:11.000000000
+red,7.2,1996-04-12T12:05:12.000000000
+red,3.0,1996-04-12T12:05:13.000000000
+red,1.0,1996-04-12T12:05:14.000000000
+red,0.0,1996-04-12T12:05:15.000000000
+green,10.0,1996-04-12T12:05:03.000000000
+green,10.3,1996-04-12T12:05:04.000000000
+green,10.4,1996-04-12T12:05:05.000000000
+green,10.5,1996-04-12T12:05:06.000000000
+green,11.0,1996-04-12T12:05:07.000000000
+green,12.0,1996-04-12T12:05:08.000000000
+green,14.0,1996-04-12T12:05:09.000000000
+green,15.0,1996-04-12T12:05:10.000000000
+green,15.1,1996-04-12T12:05:11.000000000
+green,15.2,1996-04-12T12:05:12.000000000
+green,8.0,1996-04-12T12:05:13.000000000
+green,2.0,1996-04-12T12:05:14.000000000
+"#;
+    let dir = tempdir()?;
+    let file_path = dir.path().join("cars.csv");
+    {
+        let mut file = File::create(&file_path)?;
+        // write CSV data
+        file.write_all(csv_data.as_bytes())?;
+    } // scope closes the file
+    let file_path = file_path.to_str().unwrap();
 
-    ctx.register_csv("cars", &csv_path, read_options).await?;
+    ctx.register_csv("cars", file_path, CsvReadOptions::new())
+        .await?;
+
     Ok(ctx)
 }
 
