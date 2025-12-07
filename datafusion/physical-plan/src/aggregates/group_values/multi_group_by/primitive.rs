@@ -891,7 +891,7 @@ mod tests {
             .vectorized_append(&all_not_nulls_input_array, &[0, 1, 2, 3, 4])
             .unwrap();
 
-        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(builder.len());
+        let mut equal_to_results = FixedBitPackedMutableBuffer::new_set(all_not_nulls_input_array.len());
         builder.vectorized_equal_to(
             &[5, 6, 7, 8, 9],
             &all_not_nulls_input_array,
