@@ -2200,6 +2200,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "datafusion",
+ "datafusion-common",
  "datafusion-physical-expr-adapter",
  "datafusion-proto",
  "env_logger",

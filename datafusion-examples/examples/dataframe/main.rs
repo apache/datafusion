@@ -28,6 +28,7 @@
 //! - `dataframe` — run a query using a DataFrame API against parquet files, csv files, and in-memory data, including multiple subqueries
 //! - `deserialize_to_struct` — convert query results (Arrow ArrayRefs) into Rust structs
 
+mod cache_factory;
 mod dataframe;
 mod deserialize_to_struct;
 
@@ -38,6 +39,7 @@ use datafusion::error::{DataFusionError, Result};
 enum ExampleKind {
     Dataframe,
     DeserializeToStruct,
+    CacheFactory,
 }
 
 impl AsRef<str> for ExampleKind {
@@ -45,6 +47,7 @@ impl AsRef<str> for ExampleKind {
         match self {
             Self::Dataframe => "dataframe",
             Self::DeserializeToStruct => "deserialize_to_struct",
+            Self::CacheFactory => "cache_factory",
         }
     }
 }
@@ -56,6 +59,7 @@ impl FromStr for ExampleKind {
         match s {
             "dataframe" => Ok(Self::Dataframe),
             "deserialize_to_struct" => Ok(Self::DeserializeToStruct),
+            "cache_factory" => Ok(Self::CacheFactory),
             _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
         }
     }
@@ -88,6 +92,9 @@ async fn main() -> Result<()> {
         ExampleKind::Dataframe => dataframe::dataframe_example().await?,
         ExampleKind::DeserializeToStruct => {
             deserialize_to_struct::deserialize_to_struct().await?
+        }
+        ExampleKind::CacheFactory => {
+            cache_factory::cache_dataframe_with_custom_logic().await?
         }
     }
 
