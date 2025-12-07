@@ -62,7 +62,9 @@ use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
+use datafusion::logical_expr::{
+    create_udf, ExprVolatility, JoinType, Operator, Volatility,
+};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
@@ -1019,6 +1021,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             std::fmt::Display::fmt(self, f)
+        }
+
+        fn node_volatility(&self) -> ExprVolatility {
+            ExprVolatility::Immutable
         }
     }
 

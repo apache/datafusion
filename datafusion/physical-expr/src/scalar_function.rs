@@ -360,7 +360,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
         write!(f, ")")
     }
 
-    #[allow(deprecated)]
     fn is_volatile_node(&self) -> bool {
         self.fun.signature().volatility == Volatility::Volatile
     }
@@ -375,8 +374,9 @@ mod tests {
     use super::*;
     use crate::expressions::Column;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::ExprVolatility;
     use datafusion_expr::{ScalarUDF, ScalarUDFImpl, Signature};
-    use datafusion_physical_expr_common::physical_expr::is_volatile;
+    use datafusion_physical_expr_common::physical_expr::volatility;
     use std::any::Any;
 
     /// Test helper to create a mock UDF with a specific volatility
@@ -436,17 +436,17 @@ mod tests {
         )
         .unwrap();
 
-        assert!(volatile_expr.is_volatile_node());
+        assert_eq!(volatile_expr.node_volatility(), ExprVolatility::Volatile);
         let volatile_arc: Arc<dyn PhysicalExpr> = Arc::new(volatile_expr);
-        assert!(is_volatile(&volatile_arc));
+        assert_eq!(volatility(&volatile_arc), ExprVolatility::Volatile);
 
         // Test non-volatile function
         let stable_expr =
             ScalarFunctionExpr::try_new(stable_udf, args, &schema, config_options)
                 .unwrap();
 
-        assert!(!stable_expr.is_volatile_node());
+        assert_eq!(stable_expr.node_volatility(), ExprVolatility::Stable);
         let stable_arc: Arc<dyn PhysicalExpr> = Arc::new(stable_expr);
-        assert!(!is_volatile(&stable_arc));
+        assert_eq!(volatility(&stable_arc), ExprVolatility::Stable);
     }
 }

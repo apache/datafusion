@@ -28,7 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ExprVolatility};
 
 #[derive(Debug, Clone, Eq)]
 pub struct UnKnownColumn {
@@ -89,6 +89,10 @@ impl PhysicalExpr for UnKnownColumn {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Immutable
     }
 }
 

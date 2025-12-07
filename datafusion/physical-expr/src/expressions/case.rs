@@ -33,7 +33,7 @@ use datafusion_common::{
     assert_or_internal_err, exec_err, internal_datafusion_err, internal_err,
     DataFusionError, HashMap, HashSet, Result, ScalarValue,
 };
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ExprVolatility};
 use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
@@ -1443,6 +1443,10 @@ impl PhysicalExpr for CaseExpr {
             write!(f, " ")?;
         }
         write!(f, "END")
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

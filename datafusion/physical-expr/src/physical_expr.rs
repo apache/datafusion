@@ -237,13 +237,13 @@ mod tests {
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
-    use datafusion_physical_expr_common::physical_expr::is_volatile;
+    use datafusion_physical_expr_common::physical_expr::volatility;
 
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::ColumnarValue;
     use datafusion_expr::Operator;
+    use datafusion_expr::{ColumnarValue, ExprVolatility};
     use std::any::Any;
     use std::fmt;
 
@@ -366,13 +366,13 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
         let column = Arc::new(Column::new("test", 0)) as Arc<dyn PhysicalExpr>;
 
-        // Test is_volatile_node() - should return false by default
-        assert!(!literal.is_volatile_node());
-        assert!(!column.is_volatile_node());
+        // Test node_volatility() - should return Immutable by default
+        assert_eq!(literal.node_volatility(), ExprVolatility::Immutable);
+        assert_eq!(column.node_volatility(), ExprVolatility::Immutable);
 
-        // Test is_volatile() - should return false for non-volatile expressions
-        assert!(!is_volatile(&literal));
-        assert!(!is_volatile(&column));
+        // Test volatility() - should return Immutable for non-volatile expressions
+        assert_eq!(volatility(&literal), ExprVolatility::Immutable);
+        assert_eq!(volatility(&column), ExprVolatility::Immutable);
     }
 
     /// Mock volatile PhysicalExpr for testing purposes
@@ -427,6 +427,14 @@ mod tests {
             self.volatile
         }
 
+        fn node_volatility(&self) -> ExprVolatility {
+            if self.volatile {
+                ExprVolatility::Volatile
+            } else {
+                ExprVolatility::Stable
+            }
+        }
+
         fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "mock_volatile({})", self.volatile)
         }
@@ -439,19 +447,19 @@ mod tests {
         // Create a volatile mock expression
         let volatile_expr =
             Arc::new(MockVolatileExpr::new(true)) as Arc<dyn PhysicalExpr>;
-        assert!(volatile_expr.is_volatile_node());
-        assert!(is_volatile(&volatile_expr));
+        assert_eq!(volatile_expr.node_volatility(), ExprVolatility::Volatile);
+        assert_eq!(volatility(&volatile_expr), ExprVolatility::Volatile);
 
         // Create a non-volatile mock expression
         let stable_expr = Arc::new(MockVolatileExpr::new(false)) as Arc<dyn PhysicalExpr>;
-        assert!(!stable_expr.is_volatile_node());
-        assert!(!is_volatile(&stable_expr));
+        assert_eq!(stable_expr.node_volatility(), ExprVolatility::Stable);
+        assert_eq!(volatility(&stable_expr), ExprVolatility::Stable);
 
         // Create a literal (non-volatile)
         let literal =
             Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
-        assert!(!literal.is_volatile_node());
-        assert!(!is_volatile(&literal));
+        assert_eq!(literal.node_volatility(), ExprVolatility::Immutable);
+        assert_eq!(volatility(&literal), ExprVolatility::Immutable);
 
         // Test composite expression: volatile_expr AND literal
         // The BinaryExpr itself is not volatile, but contains a volatile child
@@ -461,8 +469,8 @@ mod tests {
             Arc::clone(&literal),
         )) as Arc<dyn PhysicalExpr>;
 
-        assert!(!composite_expr.is_volatile_node()); // BinaryExpr itself is not volatile
-        assert!(is_volatile(&composite_expr)); // But it contains a volatile child
+        assert_eq!(composite_expr.node_volatility(), ExprVolatility::Immutable); // BinaryExpr itself is not volatile
+        assert_eq!(volatility(&composite_expr), ExprVolatility::Volatile); // But it contains a volatile child
 
         // Test composite expression with all non-volatile children
         let stable_composite = Arc::new(BinaryExpr::new(
@@ -471,7 +479,10 @@ mod tests {
             Arc::clone(&literal),
         )) as Arc<dyn PhysicalExpr>;
 
-        assert!(!stable_composite.is_volatile_node());
-        assert!(!is_volatile(&stable_composite)); // No volatile children
+        assert_eq!(
+            stable_composite.node_volatility(),
+            ExprVolatility::Immutable
+        );
+        assert_eq!(volatility(&stable_composite), ExprVolatility::Stable); // No volatile children
     }
 }

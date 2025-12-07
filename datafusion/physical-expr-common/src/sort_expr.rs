@@ -61,6 +61,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 /// #  fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {todo!()}
 /// #  fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> {todo!()}
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { todo!() }
+/// # fn node_volatility(&self) -> datafusion_expr_common::signature::ExprVolatility { datafusion_expr_common::signature::ExprVolatility::Constant }
 /// # }
 /// # impl Display for MyPhysicalExpr {
 /// #    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "a") }

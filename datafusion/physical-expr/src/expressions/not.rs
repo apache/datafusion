@@ -30,6 +30,7 @@ use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValu
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::statistics::Distribution::{self, Bernoulli};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::ExprVolatility;
 
 /// Not expression
 #[derive(Debug, Eq)]
@@ -183,6 +184,10 @@ impl PhysicalExpr for NotExpr {
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "NOT ")?;
         self.arg.fmt_sql(f)
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

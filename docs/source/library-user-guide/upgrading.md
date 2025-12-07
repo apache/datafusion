@@ -476,6 +476,59 @@ impl PhysicalOptimizerRule for MyOptimizerRule {
 
 This enables optimizer rules to access custom extensions registered with the session, which was not possible with the old `&ConfigOptions` parameter.
 
+### `PhysicalExpr::node_volatility` is now a required method
+
+The `PhysicalExpr` trait now requires implementations to explicitly specify their volatility via the `node_volatility()` method. Previously, this method had a default implementation returning `ExprVolatility::Immutable`.
+
+**Who is affected:**
+
+- Users who have implemented custom `PhysicalExpr` implementations
+
+**Why this change:**
+
+The default `Immutable` volatility was incorrect for many expression types. Expressions like `BinaryExpr`, `CastExpr`, etc. should return `Constant` (they derive volatility entirely from their children), while column references should return `Immutable`. Removing the default forces implementers to explicitly choose the correct volatility, preventing subtle bugs.
+
+**Migration guide:**
+
+Add the `node_volatility` method to your `PhysicalExpr` implementation:
+
+```rust,ignore
+use datafusion_expr::ExprVolatility;
+
+impl PhysicalExpr for MyCustomExpr {
+    // ... other methods ...
+
+    fn node_volatility(&self) -> ExprVolatility {
+        // Choose the appropriate volatility for your expression:
+        // - Constant: Expression node doesn't add volatility (e.g., binary ops, casts)
+        // - Immutable: Depends on input data (e.g., column references)
+        // - Stable: Same value within a query (e.g., now(), current_date())
+        // - Volatile: Different value each evaluation (e.g., random(), uuid())
+        ExprVolatility::Constant
+    }
+}
+```
+
+**Choosing the correct volatility:**
+
+| Volatility | Use when | Examples |
+|------------|----------|----------|
+| `Constant` | Expression derives volatility entirely from children | `BinaryExpr`, `CastExpr`, `CaseExpr`, `NotExpr` |
+| `Immutable` | Expression depends on input row data | `Column`, column references |
+| `Stable` | Expression returns same value within a query execution | `now()`, `current_date()` |
+| `Volatile` | Expression may return different values each evaluation | `random()`, `uuid()`, expressions with mutable state |
+
+**Note:** The overall volatility of an expression tree is computed by taking the maximum volatility of the node and all its children. For example, `col("a") + lit(1)` has volatility `Immutable` because `Immutable.max(Constant) = Immutable`.
+
+### Deprecated volatility methods
+
+The following methods have been deprecated in favor of the new `ExprVolatility` API:
+
+- `Expr::is_volatile_node()` → Use `node_volatility() == ExprVolatility::Volatile`
+- `Expr::is_volatile()` → Use `volatility() == ExprVolatility::Volatile`
+- `PhysicalExpr::is_volatile_node()` → Use `node_volatility() == ExprVolatility::Volatile`
+- `is_volatile(expr)` → Use `volatility(expr) == ExprVolatility::Volatile`
+
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0

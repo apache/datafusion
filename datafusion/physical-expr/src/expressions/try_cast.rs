@@ -28,7 +28,7 @@ use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ExprVolatility};
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
 #[derive(Debug, Eq)]
@@ -124,6 +124,10 @@ impl PhysicalExpr for TryCastExpr {
         write!(f, "TRY_CAST(")?;
         self.expr.fmt_sql(f)?;
         write!(f, " AS {:?})", self.cast_type)
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

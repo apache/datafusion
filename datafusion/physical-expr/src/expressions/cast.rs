@@ -27,6 +27,7 @@ use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
+use datafusion_expr::ExprVolatility;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -213,6 +214,10 @@ impl PhysicalExpr for CastExpr {
         write!(f, " AS {:?}", self.cast_type)?;
 
         write!(f, ")")
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

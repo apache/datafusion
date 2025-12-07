@@ -36,7 +36,7 @@ use datafusion_common::{
     assert_or_internal_err, exec_datafusion_err, exec_err, DFSchema, HashSet, Result,
     ScalarValue,
 };
-use datafusion_expr::{expr_vec_fmt, ColumnarValue};
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, ExprVolatility};
 
 use ahash::RandomState;
 use datafusion_common::HashMap;
@@ -531,6 +531,10 @@ impl PhysicalExpr for InListExpr {
             expr.fmt_sql(f)?;
         }
         write!(f, ")")
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

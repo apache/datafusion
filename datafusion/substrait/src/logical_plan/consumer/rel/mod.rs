@@ -42,7 +42,7 @@ use crate::logical_plan::consumer::SubstraitConsumer;
 use async_recursion::async_recursion;
 use datafusion::common::{not_impl_err, substrait_datafusion_err, substrait_err, Column};
 use datafusion::logical_expr::builder::project;
-use datafusion::logical_expr::{Expr, LogicalPlan, Projection};
+use datafusion::logical_expr::{Expr, ExprVolatility, LogicalPlan, Projection};
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
 use substrait::proto::rel_common::{Emit, EmitKind};
@@ -169,5 +169,7 @@ fn retrieve_emit_kind(rel_common: Option<&RelCommon>) -> EmitKind {
 }
 
 fn contains_volatile_expr(proj: &Projection) -> bool {
-    proj.expr.iter().any(|e| e.is_volatile())
+    proj.expr
+        .iter()
+        .any(|e| e.volatility() == ExprVolatility::Volatile)
 }

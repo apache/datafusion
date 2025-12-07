@@ -277,12 +277,24 @@ impl ExprVolatility {
         func_volatility: Volatility,
         arg_volatilities: impl Iterator<Item = Self>,
     ) -> Self {
-        let func_vol = match func_volatility {
+        let func_vol: Self = func_volatility.into();
+        Self::fold(std::iter::once(func_vol).chain(arg_volatilities))
+    }
+}
+
+impl From<Volatility> for ExprVolatility {
+    /// Converts a function's [`Volatility`] to an [`ExprVolatility`].
+    ///
+    /// - [`Volatility::Immutable`] → [`ExprVolatility::Constant`] (immutable functions
+    ///   with constant args produce constant results)
+    /// - [`Volatility::Stable`] → [`ExprVolatility::Stable`]
+    /// - [`Volatility::Volatile`] → [`ExprVolatility::Volatile`]
+    fn from(v: Volatility) -> Self {
+        match v {
             Volatility::Immutable => ExprVolatility::Constant,
             Volatility::Stable => ExprVolatility::Stable,
             Volatility::Volatile => ExprVolatility::Volatile,
-        };
-        Self::fold(std::iter::once(func_vol).chain(arg_volatilities))
+        }
     }
 }
 

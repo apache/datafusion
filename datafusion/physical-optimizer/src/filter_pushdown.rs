@@ -37,8 +37,8 @@ use crate::{OptimizerContext, PhysicalOptimizerRule};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{assert_eq_or_internal_err, config::ConfigOptions, Result};
+use datafusion_expr::ExprVolatility;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -713,7 +713,8 @@ impl<T: Clone> FilteredVec<T> {
 fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut allow_pushdown = true;
     expr.apply(|e| {
-        allow_pushdown = allow_pushdown && !is_volatile(e);
+        allow_pushdown =
+            allow_pushdown && e.node_volatility() != ExprVolatility::Volatile;
         if allow_pushdown {
             Ok(TreeNodeRecursion::Continue)
         } else {

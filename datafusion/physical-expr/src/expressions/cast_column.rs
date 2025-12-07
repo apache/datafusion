@@ -26,6 +26,7 @@ use arrow::{
 use datafusion_common::{
     format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column, Result, ScalarValue,
 };
+use datafusion_expr::ExprVolatility;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use std::{
     any::Any,
@@ -179,6 +180,10 @@ impl PhysicalExpr for CastColumnExpr {
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

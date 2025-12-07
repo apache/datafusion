@@ -38,7 +38,8 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
+    and, or, BinaryExpr, Expr, ExprVolatility, Filter, Operator, Projection,
+    TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -1130,7 +1131,7 @@ impl OptimizerRule for PushDownFilter {
                 let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
                     filter_predicates
                         .into_iter()
-                        .partition(|pred| pred.is_volatile());
+                        .partition(|pred| pred.volatility() == ExprVolatility::Volatile);
 
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
@@ -1307,7 +1308,7 @@ fn rewrite_projection(
 
             (qualified_name(qualifier, field.name()), expr)
         })
-        .partition(|(_, value)| value.is_volatile());
+        .partition(|(_, value)| value.volatility() == ExprVolatility::Volatile);
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];

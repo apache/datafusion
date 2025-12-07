@@ -25,6 +25,7 @@ use arrow::{
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::ExprVolatility;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
@@ -107,6 +108,10 @@ impl PhysicalExpr for IsNotNullExpr {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.arg.fmt_sql(f)?;
         write!(f, " IS NOT NULL")
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

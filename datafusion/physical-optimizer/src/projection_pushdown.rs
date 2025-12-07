@@ -30,6 +30,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{JoinSide, JoinType, Result};
+use datafusion_expr::ExprVolatility;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -431,7 +432,7 @@ impl<'a> JoinFilterRewriter<'a> {
 }
 
 fn is_volatile_expression_tree(expr: &dyn PhysicalExpr) -> bool {
-    if expr.is_volatile_node() {
+    if expr.node_volatility() == ExprVolatility::Volatile {
         return true;
     }
 

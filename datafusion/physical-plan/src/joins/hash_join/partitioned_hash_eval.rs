@@ -25,7 +25,7 @@ use arrow::{
     datatypes::{DataType, Schema},
 };
 use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ExprVolatility};
 use datafusion_physical_expr_common::physical_expr::{
     DynHash, PhysicalExpr, PhysicalExprRef,
 };
@@ -154,5 +154,9 @@ impl PhysicalExpr for HashExpr {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }

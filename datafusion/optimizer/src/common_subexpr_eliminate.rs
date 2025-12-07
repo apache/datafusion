@@ -34,7 +34,7 @@ use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator, SortExpr};
+use datafusion_expr::{col, BinaryExpr, Case, Expr, ExprVolatility, Operator, SortExpr};
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -694,7 +694,7 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn is_valid(node: &Expr) -> bool {
-        !node.is_volatile_node()
+        node.node_volatility() != ExprVolatility::Volatile
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {

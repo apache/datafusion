@@ -19,7 +19,7 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{assert_or_internal_err, Result};
-use datafusion_expr::{ColumnarValue, Operator};
+use datafusion_expr::{ColumnarValue, ExprVolatility, Operator};
 use datafusion_physical_expr_common::datum::apply_cmp;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
@@ -148,6 +148,10 @@ impl PhysicalExpr for LikeExpr {
         self.expr.fmt_sql(f)?;
         write!(f, " {} ", self.op_name())?;
         self.pattern.fmt_sql(f)
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

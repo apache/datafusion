@@ -17,6 +17,7 @@
 
 use abi_stable::StableAbi;
 use datafusion::logical_expr::Volatility;
+use datafusion_expr::ExprVolatility;
 
 #[repr(C)]
 #[derive(Debug, StableAbi, Clone)]
@@ -47,11 +48,48 @@ impl From<&FFI_Volatility> for Volatility {
     }
 }
 
+/// FFI-safe representation of [`ExprVolatility`].
+///
+/// This enum represents the volatility of an expression, which includes
+/// a `Constant` variant for expressions that can be evaluated at planning time.
+#[repr(C)]
+#[derive(Debug, StableAbi, Clone, Copy)]
+#[allow(non_camel_case_types)]
+pub enum FFI_ExprVolatility {
+    Constant,
+    Immutable,
+    Stable,
+    Volatile,
+}
+
+impl From<ExprVolatility> for FFI_ExprVolatility {
+    fn from(value: ExprVolatility) -> Self {
+        match value {
+            ExprVolatility::Constant => Self::Constant,
+            ExprVolatility::Immutable => Self::Immutable,
+            ExprVolatility::Stable => Self::Stable,
+            ExprVolatility::Volatile => Self::Volatile,
+        }
+    }
+}
+
+impl From<FFI_ExprVolatility> for ExprVolatility {
+    fn from(value: FFI_ExprVolatility) -> Self {
+        match value {
+            FFI_ExprVolatility::Constant => Self::Constant,
+            FFI_ExprVolatility::Immutable => Self::Immutable,
+            FFI_ExprVolatility::Stable => Self::Stable,
+            FFI_ExprVolatility::Volatile => Self::Volatile,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion::logical_expr::Volatility;
+    use datafusion_expr::ExprVolatility;
 
-    use super::FFI_Volatility;
+    use super::{FFI_ExprVolatility, FFI_Volatility};
 
     fn test_round_trip_volatility(volatility: Volatility) {
         let ffi_volatility: FFI_Volatility = volatility.into();
@@ -65,5 +103,20 @@ mod tests {
         test_round_trip_volatility(Volatility::Immutable);
         test_round_trip_volatility(Volatility::Stable);
         test_round_trip_volatility(Volatility::Volatile);
+    }
+
+    fn test_round_trip_expr_volatility(volatility: ExprVolatility) {
+        let ffi_volatility: FFI_ExprVolatility = volatility.into();
+        let round_trip: ExprVolatility = ffi_volatility.into();
+
+        assert_eq!(volatility, round_trip);
+    }
+
+    #[test]
+    fn test_all_round_trip_expr_volatility() {
+        test_round_trip_expr_volatility(ExprVolatility::Constant);
+        test_round_trip_expr_volatility(ExprVolatility::Immutable);
+        test_round_trip_expr_volatility(ExprVolatility::Stable);
+        test_round_trip_expr_volatility(ExprVolatility::Volatile);
     }
 }

@@ -447,13 +447,17 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// # Examples
     ///
-    /// - Literals should return [`ExprVolatility::Constant`]
-    /// - Column references should return [`ExprVolatility::Immutable`] (default)
-    /// - Scalar functions should return their function's volatility
-    /// - Volatile functions like `random()` should return [`ExprVolatility::Volatile`]
-    fn node_volatility(&self) -> ExprVolatility {
-        ExprVolatility::Immutable
-    }
+    /// - [`ExprVolatility::Constant`]: For expression nodes that don't add volatility
+    ///   themselves (e.g., binary operations, casts, case expressions). The overall
+    ///   volatility of these expressions is determined entirely by their children.
+    /// - [`ExprVolatility::Immutable`]: For expressions that depend on input data
+    ///   (e.g., column references). Same input always produces same output.
+    /// - [`ExprVolatility::Stable`]: For expressions that return the same value within
+    ///   a single query execution (e.g., `now()`, `current_date()`).
+    /// - [`ExprVolatility::Volatile`]: For expressions that may return different values
+    ///   on each evaluation (e.g., `random()`, `uuid()`), or expressions with mutable
+    ///   internal state.
+    fn node_volatility(&self) -> ExprVolatility;
 }
 
 #[deprecated(
@@ -560,6 +564,7 @@ where
 /// # fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>>{ unimplemented!() }
 /// # fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
 /// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { write!(f, "CASE a > b THEN 1 ELSE 0 END") }
+/// # fn node_volatility(&self) -> datafusion_expr_common::signature::ExprVolatility { datafusion_expr_common::signature::ExprVolatility::Constant }
 /// # }
 /// # impl std::fmt::Display for MyExpr {fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { unimplemented!() } }
 /// # fn make_physical_expr() -> Arc<dyn PhysicalExpr> { Arc::new(MyExpr{}) }
@@ -752,6 +757,10 @@ mod test {
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             f.write_str("TestExpr")
+        }
+
+        fn node_volatility(&self) -> datafusion_expr_common::signature::ExprVolatility {
+            datafusion_expr_common::signature::ExprVolatility::Constant
         }
     }
 

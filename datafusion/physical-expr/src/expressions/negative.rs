@@ -37,7 +37,7 @@ use datafusion_expr::statistics::Distribution::{
 };
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
-    ColumnarValue,
+    ColumnarValue, ExprVolatility,
 };
 
 /// Negative expression
@@ -177,6 +177,10 @@ impl PhysicalExpr for NegativeExpr {
         write!(f, "(- ")?;
         self.arg.fmt_sql(f)?;
         write!(f, ")")
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

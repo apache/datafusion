@@ -38,7 +38,7 @@ use datafusion_expr::statistics::{
     combine_bernoullis, combine_gaussians, create_bernoulli_from_comparison,
     new_generic_from_binary_op, Distribution,
 };
-use datafusion_expr::{ColumnarValue, Operator};
+use datafusion_expr::{ColumnarValue, ExprVolatility, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp};
 
 use kernels::{
@@ -518,6 +518,10 @@ impl PhysicalExpr for BinaryExpr {
         write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Constant
     }
 }
 

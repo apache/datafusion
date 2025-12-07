@@ -38,7 +38,7 @@ use arrow_schema::{ffi::FFI_ArrowSchema, DataType, Field, FieldRef, Schema};
 use datafusion_common::{ffi_datafusion_err, Result};
 use datafusion_expr::{
     interval_arithmetic::Interval, sort_properties::ExprProperties,
-    statistics::Distribution, ColumnarValue,
+    statistics::Distribution, ColumnarValue, ExprVolatility,
 };
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -53,6 +53,7 @@ use crate::{
     record_batch_stream::{record_batch_to_wrapped_array, wrapped_array_to_record_batch},
     rresult, rresult_return,
     util::FFIResult,
+    volatility::FFI_ExprVolatility,
 };
 
 #[repr(C)]
@@ -122,6 +123,8 @@ pub struct FFI_PhysicalExpr {
     pub snapshot_generation: unsafe extern "C" fn(&Self) -> u64,
 
     pub is_volatile_node: unsafe extern "C" fn(&Self) -> bool,
+
+    pub node_volatility: unsafe extern "C" fn(&Self) -> FFI_ExprVolatility,
 
     // Display trait
     pub display: unsafe extern "C" fn(&Self) -> RString,
@@ -363,8 +366,17 @@ unsafe extern "C" fn snapshot_generation_fn_wrapper(expr: &FFI_PhysicalExpr) -> 
 
 unsafe extern "C" fn is_volatile_node_fn_wrapper(expr: &FFI_PhysicalExpr) -> bool {
     let expr = expr.inner();
+    #[allow(deprecated)]
     expr.is_volatile_node()
 }
+
+unsafe extern "C" fn node_volatility_fn_wrapper(
+    expr: &FFI_PhysicalExpr,
+) -> FFI_ExprVolatility {
+    let expr = expr.inner();
+    expr.node_volatility().into()
+}
+
 unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> RString {
     let expr = expr.inner();
     format!("{expr}").into()
@@ -408,6 +420,7 @@ unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalEx
         snapshot: snapshot_fn_wrapper,
         snapshot_generation: snapshot_generation_fn_wrapper,
         is_volatile_node: is_volatile_node_fn_wrapper,
+        node_volatility: node_volatility_fn_wrapper,
         display: display_fn_wrapper,
         hash: hash_fn_wrapper,
         clone: clone_fn_wrapper,
@@ -446,6 +459,7 @@ impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
             snapshot: snapshot_fn_wrapper,
             snapshot_generation: snapshot_generation_fn_wrapper,
             is_volatile_node: is_volatile_node_fn_wrapper,
+            node_volatility: node_volatility_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -678,6 +692,10 @@ impl PhysicalExpr for ForeignPhysicalExpr {
 
     fn is_volatile_node(&self) -> bool {
         unsafe { (self.expr.is_volatile_node)(&self.expr) }
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        unsafe { (self.expr.node_volatility)(&self.expr).into() }
     }
 }
 
@@ -930,7 +948,11 @@ mod tests {
     #[test]
     fn ffi_physical_expr_volatility() {
         let (original, foreign_expr) = create_test_expr();
-        assert_eq!(original.is_volatile_node(), foreign_expr.is_volatile_node());
+        #[allow(deprecated)]
+        {
+            assert_eq!(original.is_volatile_node(), foreign_expr.is_volatile_node());
+        }
+        assert_eq!(original.node_volatility(), foreign_expr.node_volatility());
     }
 
     #[test]

@@ -37,8 +37,8 @@ use datafusion_common::{
     exec_datafusion_err, internal_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility,
+    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr,
+    ExprVolatility, Like, Operator, Volatility,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
@@ -831,7 +831,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 left,
                 op: Eq,
                 right,
-            }) if (left == right) & !left.is_volatile() => {
+            }) if (left == right) & (left.volatility() != ExprVolatility::Volatile) => {
                 Transformed::yes(match !info.nullable(&left)? {
                     true => lit(true),
                     false => Expr::BinaryExpr(BinaryExpr {
@@ -951,7 +951,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }) if has_common_conjunction(&left, &right) => {
                 let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
                 let (common, rhs): (Vec<_>, Vec<_>) = iter_conjunction_owned(*right)
-                    .partition(|e| lhs.contains(e) && !e.is_volatile());
+                    .partition(|e| {
+                        lhs.contains(e) && e.volatility() != ExprVolatility::Volatile
+                    });
 
                 let new_rhs = rhs.into_iter().reduce(and);
                 let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
@@ -1986,7 +1988,8 @@ fn to_string_scalar(data_type: &DataType, value: Option<String>) -> Expr {
 
 fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
     let lhs_set: HashSet<&Expr> = iter_conjunction(lhs).collect();
-    iter_conjunction(rhs).any(|e| lhs_set.contains(&e) && !e.is_volatile())
+    iter_conjunction(rhs)
+        .any(|e| lhs_set.contains(&e) && e.volatility() != ExprVolatility::Volatile)
 }
 
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121

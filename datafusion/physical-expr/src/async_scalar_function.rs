@@ -23,7 +23,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_common::{internal_err, not_impl_err};
 use datafusion_expr::async_udf::AsyncScalarUDF;
-use datafusion_expr::ScalarFunctionArgs;
+use datafusion_expr::{ExprVolatility, ScalarFunctionArgs};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
@@ -247,5 +247,9 @@ impl PhysicalExpr for AsyncFuncExpr {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.func)
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        self.func.node_volatility()
     }
 }

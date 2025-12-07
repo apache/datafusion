@@ -25,7 +25,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
     Result,
 };
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ExprVolatility};
 use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
 
 /// State of a dynamic filter, tracking both updates and completion.
@@ -414,6 +414,13 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     fn snapshot_generation(&self) -> u64 {
         // Return the current generation of the expression.
         self.inner.read().generation
+    }
+
+    fn node_volatility(&self) -> ExprVolatility {
+        // Although DynamicFilterPhysicalExpr can change its inner expression,
+        // from the perspective of optimizer rules it can be treated as immutable
+        // so that it can be pushed down, etc.
+        ExprVolatility::Immutable
     }
 }
 
