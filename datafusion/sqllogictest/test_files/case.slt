@@ -828,6 +828,11 @@ NULL N/A N/A N/A N/A
 2 two two two two
 NULL N/A N/A N/A N/A
 
+statement ok
+drop table float_source;
+
+statement ok
+drop table floats;
 
 #####
 # End of lookup table CASE tests
