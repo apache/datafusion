@@ -22,6 +22,7 @@ use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::exec_err;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ReturnFieldArgs, TypeSignature
 };
 use datafusion_functions::utils::make_scalar_function;
 use std::sync::Arc;
@@ -91,6 +92,11 @@ impl ScalarUDFImpl for SparkLengthFunc {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), Boolean, nullable)))
     }
 }
 
@@ -193,8 +199,9 @@ mod tests {
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, Int32Array};
     use arrow::datatypes::DataType::Int32;
+    use arrow::datatypes::{Field, FieldRef};
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl, ReturnFieldArgs};
 
     macro_rules! test_spark_length_string {
         ($INPUT:expr, $EXPECTED:expr) => {
