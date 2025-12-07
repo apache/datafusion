@@ -356,25 +356,25 @@ mod tests {
 
     #[test]
     fn test_dml_capabilities_constants() {
-        assert_eq!(DmlCapabilities::NONE.delete, false);
-        assert_eq!(DmlCapabilities::NONE.update, false);
+        assert!(!DmlCapabilities::NONE.delete);
+        assert!(!DmlCapabilities::NONE.update);
 
-        assert_eq!(DmlCapabilities::ALL.delete, true);
-        assert_eq!(DmlCapabilities::ALL.update, true);
+        assert!(DmlCapabilities::ALL.delete);
+        assert!(DmlCapabilities::ALL.update);
 
-        assert_eq!(DmlCapabilities::DELETE_ONLY.delete, true);
-        assert_eq!(DmlCapabilities::DELETE_ONLY.update, false);
+        assert!(DmlCapabilities::DELETE_ONLY.delete);
+        assert!(!DmlCapabilities::DELETE_ONLY.update);
 
-        assert_eq!(DmlCapabilities::UPDATE_ONLY.delete, false);
-        assert_eq!(DmlCapabilities::UPDATE_ONLY.update, true);
+        assert!(!DmlCapabilities::UPDATE_ONLY.delete);
+        assert!(DmlCapabilities::UPDATE_ONLY.update);
     }
 
     #[test]
     fn test_dml_capabilities_supports_any() {
-        assert_eq!(DmlCapabilities::NONE.supports_any(), false);
-        assert_eq!(DmlCapabilities::ALL.supports_any(), true);
-        assert_eq!(DmlCapabilities::DELETE_ONLY.supports_any(), true);
-        assert_eq!(DmlCapabilities::UPDATE_ONLY.supports_any(), true);
+        assert!(!DmlCapabilities::NONE.supports_any());
+        assert!(DmlCapabilities::ALL.supports_any());
+        assert!(DmlCapabilities::DELETE_ONLY.supports_any());
+        assert!(DmlCapabilities::UPDATE_ONLY.supports_any());
     }
 
     #[test]
