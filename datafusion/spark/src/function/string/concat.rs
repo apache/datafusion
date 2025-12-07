@@ -71,8 +71,11 @@ impl ScalarUDFImpl for SparkConcat {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        // Delegate to the underlying ConcatFunc for return type determination
+        // This allows proper handling of array concatenation
+        let concat_func = ConcatFunc::new();
+        concat_func.return_type(arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -80,8 +83,10 @@ impl ScalarUDFImpl for SparkConcat {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        // Accept any string types, including zero arguments
-        Ok(arg_types.to_vec())
+        // Delegate to the underlying ConcatFunc for type coercion
+        // This allows proper handling of array vs string type validation
+        let concat_func = ConcatFunc::new();
+        concat_func.coerce_types(arg_types)
     }
 }
 
@@ -119,7 +124,43 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
 
     // If all scalars and any is NULL, return NULL immediately
     if matches!(null_mask, NullMaskResolution::ReturnNull) {
-        return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+        // First check if we're dealing with array types by delegating to ConcatFunc
+        let concat_func = ConcatFunc::new();
+        let return_type = concat_func.return_type(
+            &arg_values
+                .iter()
+                .map(|arg| arg.data_type())
+                .collect::<Vec<_>>(),
+        )?;
+
+        // Return appropriate null value based on return type
+        return Ok(ColumnarValue::Scalar(match return_type {
+            DataType::List(_) => {
+                let null_array = arrow::array::new_null_array(&return_type, 1);
+                let list_array = null_array
+                    .as_any()
+                    .downcast_ref::<arrow::array::ListArray>()
+                    .unwrap();
+                ScalarValue::List(Arc::new(list_array.clone()))
+            }
+            DataType::LargeList(_) => {
+                let null_array = arrow::array::new_null_array(&return_type, 1);
+                let list_array = null_array
+                    .as_any()
+                    .downcast_ref::<arrow::array::LargeListArray>()
+                    .unwrap();
+                ScalarValue::LargeList(Arc::new(list_array.clone()))
+            }
+            DataType::FixedSizeList(_, _) => {
+                let null_array = arrow::array::new_null_array(&return_type, 1);
+                let list_array = null_array
+                    .as_any()
+                    .downcast_ref::<arrow::array::FixedSizeListArray>()
+                    .unwrap();
+                ScalarValue::FixedSizeList(Arc::new(list_array.clone()))
+            }
+            _ => ScalarValue::Utf8(None),
+        }));
     }
 
     // Step 2: Delegate to DataFusion's concat
@@ -198,8 +239,36 @@ fn apply_null_mask(
 ) -> Result<ColumnarValue> {
     match (result, null_mask) {
         // Scalar with ReturnNull mask means return NULL
-        (ColumnarValue::Scalar(_), NullMaskResolution::ReturnNull) => {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+        (ColumnarValue::Scalar(scalar), NullMaskResolution::ReturnNull) => {
+            // Return null value with the appropriate type
+            let null_scalar = match scalar.data_type() {
+                DataType::List(_) => {
+                    let null_array = arrow::array::new_null_array(&scalar.data_type(), 1);
+                    let list_array = null_array
+                        .as_any()
+                        .downcast_ref::<arrow::array::ListArray>()
+                        .unwrap();
+                    ScalarValue::List(Arc::new(list_array.clone()))
+                }
+                DataType::LargeList(_) => {
+                    let null_array = arrow::array::new_null_array(&scalar.data_type(), 1);
+                    let list_array = null_array
+                        .as_any()
+                        .downcast_ref::<arrow::array::LargeListArray>()
+                        .unwrap();
+                    ScalarValue::LargeList(Arc::new(list_array.clone()))
+                }
+                DataType::FixedSizeList(_, _) => {
+                    let null_array = arrow::array::new_null_array(&scalar.data_type(), 1);
+                    let list_array = null_array
+                        .as_any()
+                        .downcast_ref::<arrow::array::FixedSizeListArray>()
+                        .unwrap();
+                    ScalarValue::FixedSizeList(Arc::new(list_array.clone()))
+                }
+                _ => ScalarValue::Utf8(None),
+            };
+            Ok(ColumnarValue::Scalar(null_scalar))
         }
         // Scalar without mask, return as-is
         (scalar @ ColumnarValue::Scalar(_), NullMaskResolution::NoMask) => Ok(scalar),

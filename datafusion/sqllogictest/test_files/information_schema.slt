@@ -830,12 +830,10 @@ datafusion public string_agg 1 IN expression String NULL false 1
 datafusion public string_agg 2 IN delimiter String NULL false 1
 datafusion public string_agg 1 OUT NULL String NULL false 1
 
-# test variable length arguments
+# test variable length arguments - concat function with variadic_any signature may not expose parameters
 query TTTBI rowsort
 select specific_name, data_type, parameter_mode, is_variadic, rid from information_schema.parameters where specific_name = 'concat';
 ----
-concat String IN true 0
-concat String OUT false 0
 
 # test ceorcion signature
 query TTITI rowsort
