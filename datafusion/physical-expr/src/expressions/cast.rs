@@ -98,13 +98,14 @@ impl CastExpr {
         &self.cast_options
     }
 
-    /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
-    pub fn is_bigger_cast(&self, src: &DataType) -> bool {
-        if self.cast_type.eq(src) {
+    /// Check if casting from the specified source type to the target type is a
+    /// widening cast (e.g. from `Int8` to `Int16`).
+    pub fn check_bigger_cast(cast_type: &DataType, src: &DataType) -> bool {
+        if cast_type.eq(src) {
             return true;
         }
         matches!(
-            (src, &self.cast_type),
+            (src, cast_type),
             (Int8, Int16 | Int32 | Int64)
                 | (Int16, Int32 | Int64)
                 | (Int32, Int64)
@@ -118,6 +119,11 @@ impl CastExpr {
                 | (Int64 | UInt64, Float64)
                 | (Utf8, LargeUtf8)
         )
+    }
+
+    /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
+    pub fn is_bigger_cast(&self, src: &DataType) -> bool {
+        Self::check_bigger_cast(&self.cast_type, src)
     }
 }
 
@@ -739,6 +745,9 @@ mod tests {
         );
         Ok(())
     }
+
+    // Tests for timestamp timezone casting have been moved to timestamps.slt
+    // See the "Casting between timestamp with and without timezone" section
 
     #[test]
     fn invalid_cast() {

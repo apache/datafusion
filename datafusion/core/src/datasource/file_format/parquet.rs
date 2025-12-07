@@ -724,7 +724,7 @@ mod tests {
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
             exec.partition_statistics(None)?.total_byte_size,
-            Precision::Exact(671)
+            Precision::Absent,
         );
 
         Ok(())
@@ -770,10 +770,9 @@ mod tests {
             exec.partition_statistics(None)?.num_rows,
             Precision::Exact(8)
         );
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
             exec.partition_statistics(None)?.total_byte_size,
-            Precision::Exact(671)
+            Precision::Absent,
         );
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
