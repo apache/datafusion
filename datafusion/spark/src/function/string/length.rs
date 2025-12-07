@@ -309,7 +309,7 @@ mod tests {
 
         let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[non_nullable_field],
-            scalar_arguments: &[], 
+            scalar_arguments: &[None], 
         })?;
 
         assert!(
