@@ -18,11 +18,11 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArrayType, PrimitiveArray, StringArrayType,
 };
-use arrow::datatypes::{DataType, Int32Type, Field, FieldRef};
-use datafusion_common::{exec_err};
+use arrow::datatypes::{DataType, Field, FieldRef, Int32Type};
+use datafusion_common::exec_err;
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
-    ReturnFieldArgs
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 use std::sync::Arc;
@@ -79,7 +79,9 @@ impl ScalarUDFImpl for SparkLengthFunc {
     }
 
     fn return_type(&self, _args: &[DataType]) -> datafusion_common::Result<DataType> {
-        datafusion_common::internal_err!("return_type should not be called, use return_field_from_args instead")
+        datafusion_common::internal_err!(
+            "return_type should not be called, use return_field_from_args instead"
+        )
     }
 
     fn invoke_with_args(
@@ -93,7 +95,10 @@ impl ScalarUDFImpl for SparkLengthFunc {
         &self.aliases
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> datafusion_common::Result<FieldRef> {
+    fn return_field_from_args(
+        &self,
+        args: ReturnFieldArgs,
+    ) -> datafusion_common::Result<FieldRef> {
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         // spark length always returns Int32
         Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
@@ -201,7 +206,7 @@ mod tests {
     use arrow::datatypes::DataType::Int32;
     use arrow::datatypes::{Field, FieldRef};
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl, ReturnFieldArgs};
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarUDFImpl};
 
     macro_rules! test_spark_length_string {
         ($INPUT:expr, $EXPECTED:expr) => {
@@ -291,12 +296,11 @@ mod tests {
     fn test_spark_length_nullability() -> Result<()> {
         let func = SparkLengthFunc::new();
 
-        let nullable_field: FieldRef =
-            Arc::new(Field::new("col", DataType::Utf8, true));
+        let nullable_field: FieldRef = Arc::new(Field::new("col", DataType::Utf8, true));
 
         let out_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[nullable_field],
-            scalar_arguments: &[None], 
+            scalar_arguments: &[None],
         })?;
 
         assert!(
@@ -309,7 +313,7 @@ mod tests {
 
         let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[non_nullable_field],
-            scalar_arguments: &[None], 
+            scalar_arguments: &[None],
         })?;
 
         assert!(
@@ -319,5 +323,4 @@ mod tests {
 
         Ok(())
     }
-
 }
