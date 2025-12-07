@@ -1431,6 +1431,7 @@ struct PerPartitionStream {
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
 
+    /// None for sort preserving variant (merge sort already does coalescing)
     batch_coalescer: Option<LimitedBatchCoalescer>,
 }
 
@@ -1541,6 +1542,46 @@ impl PerPartitionStream {
             }
         }
     }
+
+    fn poll_next_and_coalesce(
+        self: &mut Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        coalescer: &mut LimitedBatchCoalescer,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        let cloned_time = self.baseline_metrics.elapsed_compute().clone();
+        let mut completed = false;
+
+        loop {
+            if let Some(batch) = coalescer.next_completed_batch() {
+                return Poll::Ready(Some(Ok(batch)));
+            }
+            if completed {
+                return Poll::Ready(None);
+            }
+            let inner_poll = self.poll_next_inner(cx);
+            let _timer = cloned_time.timer();
+
+            match inner_poll {
+                Poll::Pending => {
+                    return Poll::Pending;
+                }
+                Poll::Ready(None) => {
+                    completed = true;
+                    if let Err(err) = coalescer.finish() {
+                        return Poll::Ready(Some(Err(err)));
+                    }
+                }
+                Poll::Ready(Some(Ok(batch))) => {
+                    if let Err(err) = coalescer.push_batch(batch) {
+                        return Poll::Ready(Some(Err(err)));
+                    }
+                }
+                Poll::Ready(Some(err)) => {
+                    return Poll::Ready(Some(err));
+                }
+            }
+        }
+    }
 }
 
 impl Stream for PerPartitionStream {
@@ -1550,52 +1591,13 @@ impl Stream for PerPartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = match self.batch_coalescer.take() {
-            Some(mut coalescer) => {
-                let cloned_time = self.baseline_metrics.elapsed_compute().clone();
-                let mut completed = false;
-                let poll;
-                loop {
-                    if let Some(batch) = coalescer.next_completed_batch() {
-                        poll = Poll::Ready(Some(Ok(batch)));
-                        break;
-                    }
-                    if completed {
-                        poll = Poll::Ready(None);
-                        break;
-                    }
-                    let inner_poll = self.poll_next_inner(cx);
-                    let _timer = cloned_time.timer();
-
-                    match inner_poll {
-                        Poll::Pending => {
-                            poll = Poll::Pending;
-                            break;
-                        }
-                        Poll::Ready(None) => {
-                            completed = true;
-                            if let Err(err) = coalescer.finish() {
-                                poll = Poll::Ready(Some(Err(err)));
-                                break;
-                            }
-                        }
-                        Poll::Ready(Some(Ok(batch))) => {
-                            if let Err(err) = coalescer.push_batch(batch) {
-                                poll = Poll::Ready(Some(Err(err)));
-                                break;
-                            }
-                        }
-                        Poll::Ready(Some(err)) => {
-                            poll = Poll::Ready(Some(err));
-                            break;
-                        }
-                    }
-                }
-                self.batch_coalescer = Some(coalescer);
-                poll
-            }
-            None => self.poll_next_inner(cx),
-        };
+        let poll;
+        if let Some(mut coalescer) = self.batch_coalescer.take() {
+            poll = self.poll_next_and_coalesce(cx, &mut coalescer);
+            self.batch_coalescer = Some(coalescer);
+        } else {
+            poll = self.poll_next_inner(cx);
+        }
         self.baseline_metrics.record_poll(poll)
     }
 }
@@ -1630,6 +1632,7 @@ mod tests {
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use insta::assert_snapshot;
 
@@ -1716,6 +1719,32 @@ mod tests {
         assert_eq!(8, output_partitions.len());
         assert_eq!(total_rows, 8 * 50 * 3);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repartition_with_coalescing() -> Result<()> {
+        let schema = test_schema();
+        // create 50 batches, each having 8 rows
+        let partition = create_vec_batches(50);
+        let partitions = vec![partition.clone(), partition.clone()];
+        let partitioning = Partitioning::RoundRobinBatch(1);
+
+        let session_config = SessionConfig::new().with_batch_size(200);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
+
+        // create physical plan
+        let exec = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?;
+
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                assert_eq!(200, batch.num_rows());
+            }
+        }
         Ok(())
     }
 
