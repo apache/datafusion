@@ -306,7 +306,7 @@ mod tests {
         let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
         let scan = DFTableScan {
             table_name: datafusion::common::TableReference::bare("nodes"),
-            source: source,
+            source,
             projection: None,
             projected_schema: Arc::new(df_schema),
             filters: vec![],
