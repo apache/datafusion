@@ -1,4 +1,4 @@
-// Licensed to the Apache Software Foundation (ASF) under one
+﻿// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -24,6 +24,8 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
+use std::any::Any;
+use std::sync::Arc;
 
 /// Spark-compatible `luhn_check` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#luhn_check>
@@ -70,9 +72,8 @@ impl ScalarUDFImpl for SparkLuhnCheck {
         Ok(Boolean)
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-        Ok(Arc::new(Field::new(self.name(), Boolean, nullable)))
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), Boolean, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -154,3 +155,4 @@ fn luhn_check_impl(input: &str) -> bool {
 
     digits_processed > 0 && sum.is_multiple_of(10)
 }
+
