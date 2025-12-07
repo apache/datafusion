@@ -93,7 +93,8 @@ impl RunOpt {
                     .map(|i| (i % self.cardinality) as i64)
                     .collect::<Vec<_>>();
                 let array = Arc::new(Int64Array::from(values)) as _;
-                let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+                let schema =
+                    Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
                 (schema.clone(), RecordBatch::try_new(schema, vec![array])?)
             }
             DistinctType::Float64 => {
@@ -101,8 +102,11 @@ impl RunOpt {
                     .map(|i| (i % self.cardinality) as f64)
                     .collect::<Vec<_>>();
                 let array = Arc::new(Float64Array::from(values)) as _;
-                let schema =
-                    Arc::new(Schema::new(vec![Field::new("v", DataType::Float64, false)]));
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "v",
+                    DataType::Float64,
+                    false,
+                )]));
                 (schema.clone(), RecordBatch::try_new(schema, vec![array])?)
             }
         };

@@ -51,9 +51,7 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::{
-    DistinctKey, GenericDistinctBuffer,
-};
+use datafusion_functions_aggregate_common::utils::{DistinctKey, GenericDistinctBuffer};
 use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(

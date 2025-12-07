@@ -106,8 +106,11 @@ impl RunOpt {
                     .map(|i| (i % self.cardinality) as f64)
                     .collect::<Vec<_>>();
                 let array = Arc::new(Float64Array::from(values)) as _;
-                let schema =
-                    Arc::new(Schema::new(vec![Field::new("v", DataType::Float64, false)]));
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "v",
+                    DataType::Float64,
+                    false,
+                )]));
                 (schema.clone(), RecordBatch::try_new(schema, vec![array])?)
             }
         };
@@ -117,13 +120,8 @@ impl RunOpt {
 
         let mut run = BenchmarkRun::new();
 
-        self.bench_query(
-            &mut run,
-            "median",
-            "SELECT median(v) FROM t",
-            &ctx,
-        )
-        .await?;
+        self.bench_query(&mut run, "median", "SELECT median(v) FROM t", &ctx)
+            .await?;
 
         self.bench_query(
             &mut run,

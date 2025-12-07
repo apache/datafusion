@@ -307,10 +307,10 @@ impl<T: ArrowPrimitiveType + DistinctKey> GenericDistinctBuffer<T> {
             PrimitiveArray::<T>::from_iter_values(
                 self.values.iter().map(|v| T::from_key(*v)),
             )
-                // Ideally we'd just use T::DATA_TYPE but this misses things like
-                // decimal scale/precision and timestamp timezones, which need to
-                // match up with Accumulator::state_fields
-                .with_data_type(self.data_type.clone()),
+            // Ideally we'd just use T::DATA_TYPE but this misses things like
+            // decimal scale/precision and timestamp timezones, which need to
+            // match up with Accumulator::state_fields
+            .with_data_type(self.data_type.clone()),
         );
         Ok(vec![
             SingleRowListArrayBuilder::new(arr).build_list_scalar(),
@@ -331,8 +331,7 @@ impl<T: ArrowPrimitiveType + DistinctKey> GenericDistinctBuffer<T> {
 
         let arr = as_primitive_array::<T>(&values[0])?;
         if arr.null_count() > 0 {
-            self.values
-                .extend(arr.iter().flatten().map(T::to_key));
+            self.values.extend(arr.iter().flatten().map(T::to_key));
         } else {
             self.values
                 .extend(arr.values().iter().cloned().map(T::to_key));
