@@ -349,3 +349,45 @@ fn make_count_schema() -> DFSchemaRef {
             .unwrap(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dml_capabilities_constants() {
+        assert!(!DmlCapabilities::NONE.delete);
+        assert!(!DmlCapabilities::NONE.update);
+
+        assert!(DmlCapabilities::ALL.delete);
+        assert!(DmlCapabilities::ALL.update);
+
+        assert!(DmlCapabilities::DELETE_ONLY.delete);
+        assert!(!DmlCapabilities::DELETE_ONLY.update);
+
+        assert!(!DmlCapabilities::UPDATE_ONLY.delete);
+        assert!(DmlCapabilities::UPDATE_ONLY.update);
+    }
+
+    #[test]
+    fn test_dml_capabilities_supports_any() {
+        assert!(!DmlCapabilities::NONE.supports_any());
+        assert!(DmlCapabilities::ALL.supports_any());
+        assert!(DmlCapabilities::DELETE_ONLY.supports_any());
+        assert!(DmlCapabilities::UPDATE_ONLY.supports_any());
+    }
+
+    #[test]
+    fn test_dml_capabilities_display() {
+        assert_eq!(format!("{}", DmlCapabilities::NONE), "NONE");
+        assert_eq!(format!("{}", DmlCapabilities::ALL), "DELETE, UPDATE");
+        assert_eq!(format!("{}", DmlCapabilities::DELETE_ONLY), "DELETE");
+        assert_eq!(format!("{}", DmlCapabilities::UPDATE_ONLY), "UPDATE");
+    }
+
+    #[test]
+    fn test_dml_capabilities_default() {
+        let caps = DmlCapabilities::default();
+        assert_eq!(caps, DmlCapabilities::NONE);
+    }
+}
