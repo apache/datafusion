@@ -311,6 +311,10 @@ main() {
                     # nlj uses range() function, no data generation needed
                     echo "NLJ benchmark does not require data generation"
                     ;;
+                distinct)
+                    # distinct uses in-memory synthetic data
+                    echo "Distinct benchmark does not require data generation"
+                    ;;
                 hj)
                     # hj uses range() function, no data generation needed
                     echo "HJ benchmark does not require data generation"
@@ -388,6 +392,7 @@ main() {
                     run_external_aggr
                     run_nlj
                     run_hj
+                    run_distinct
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -497,6 +502,9 @@ main() {
                     ;;
                 hj)
                     run_hj
+                    ;;
+                distinct)
+                    run_distinct
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -734,6 +742,19 @@ run_clickbench_extended() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs distinct agg micro-benchmark (synthetic in-memory data) for int64 and float64
+run_distinct() {
+    RESULTS_FILE="${RESULTS_DIR}/distinct_int64.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running distinct micro-benchmark (int64)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- distinct --iterations 5 --type int64 -o "${RESULTS_FILE}"
+
+    RESULTS_FILE="${RESULTS_DIR}/distinct_float64.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running distinct micro-benchmark (float64)..."
+    debug_run $CARGO_COMMAND --bin dfbench -- distinct --iterations 5 --type float64 -o "${RESULTS_FILE}"
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)

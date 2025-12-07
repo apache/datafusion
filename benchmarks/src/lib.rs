@@ -18,6 +18,7 @@
 //! DataFusion benchmark runner
 pub mod cancellation;
 pub mod clickbench;
+pub mod distinct;
 pub mod h2o;
 pub mod hj;
 pub mod imdb;
