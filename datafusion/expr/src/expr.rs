@@ -27,7 +27,7 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::{AggregateUDF, Volatility};
+use crate::{AggregateUDF, ExprVolatility, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -1969,6 +1969,10 @@ impl Expr {
     /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
     /// - `rand()` returns `true`,
     /// - `a + rand()` returns `false`
+    #[deprecated(
+        since = "47.0.0",
+        note = "Use `node_volatility() == ExprVolatility::Volatile` instead"
+    )]
     pub fn is_volatile_node(&self) -> bool {
         matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
     }
@@ -1980,9 +1984,141 @@ impl Expr {
     /// return a different value.
     ///
     /// See [`Volatility`] for more information.
+    #[deprecated(
+        since = "47.0.0",
+        note = "Use `volatility() == ExprVolatility::Volatile` instead"
+    )]
+    #[allow(deprecated)]
     pub fn is_volatile(&self) -> bool {
         self.exists(|expr| Ok(expr.is_volatile_node()))
             .expect("exists closure is infallible")
+    }
+
+    /// Returns the volatility of this expression node without considering children.
+    ///
+    /// For most expression types, this returns the intrinsic volatility of the
+    /// node itself. For expressions with children, use [`Self::volatility`] to
+    /// get the combined volatility.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_expr::{col, lit, ExprVolatility};
+    ///
+    /// // Literal is constant
+    /// assert_eq!(lit(42).node_volatility(), ExprVolatility::Constant);
+    ///
+    /// // Column reference is immutable
+    /// assert_eq!(col("a").node_volatility(), ExprVolatility::Immutable);
+    /// ```
+    pub fn node_volatility(&self) -> ExprVolatility {
+        match self {
+            // Literals are always constant
+            Expr::Literal(_, _) => ExprVolatility::Constant,
+
+            // Column references depend on input data
+            Expr::Column(_) => ExprVolatility::Immutable,
+
+            // Scalar variables (e.g., @@var) are typically stable within a query
+            Expr::ScalarVariable(_, _) => ExprVolatility::Stable,
+
+            // Outer reference columns depend on outer query data
+            Expr::OuterReferenceColumn(_, _) => ExprVolatility::Immutable,
+
+            // Placeholders are resolved at planning time, but their value
+            // comes from external input, so treat as immutable
+            Expr::Placeholder(_) => ExprVolatility::Immutable,
+
+            // Scalar functions have their own volatility
+            Expr::ScalarFunction(func) => func.func.signature().volatility.into(),
+
+            // Aggregate functions are typically immutable (deterministic for same input)
+            Expr::AggregateFunction(_) => ExprVolatility::Immutable,
+
+            // Window functions are typically immutable
+            Expr::WindowFunction(_) => ExprVolatility::Immutable,
+
+            // Subqueries: depends on the subquery, but generally immutable
+            Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => {
+                ExprVolatility::Immutable
+            }
+
+            // All other expression types (BinaryExpr, Cast, Case, etc.)
+            // have volatility determined entirely by their children
+            Expr::Alias(_)
+            | Expr::BinaryExpr(_)
+            | Expr::Like(_)
+            | Expr::SimilarTo(_)
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Negative(_)
+            | Expr::Between(_)
+            | Expr::Case(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_)
+            | Expr::InList(_)
+            | Expr::GroupingSet(_)
+            | Expr::Unnest(_) => ExprVolatility::Constant,
+
+            // Wildcard should be resolved before this point
+            #[expect(deprecated)]
+            Expr::Wildcard { .. } => ExprVolatility::Constant,
+        }
+    }
+
+    /// Returns the overall volatility of this expression tree.
+    ///
+    /// This recursively computes the volatility by combining the node's
+    /// volatility with all of its children's volatilities, returning
+    /// the maximum (most volatile) level found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_expr::{col, lit, ExprVolatility};
+    ///
+    /// // Literal is constant
+    /// assert_eq!(lit(42).volatility(), ExprVolatility::Constant);
+    ///
+    /// // Column reference is immutable
+    /// assert_eq!(col("a").volatility(), ExprVolatility::Immutable);
+    ///
+    /// // Constant + Constant = Constant
+    /// assert_eq!((lit(1) + lit(2)).volatility(), ExprVolatility::Constant);
+    ///
+    /// // Constant + Immutable = Immutable
+    /// assert_eq!((col("a") + lit(1)).volatility(), ExprVolatility::Immutable);
+    /// ```
+    pub fn volatility(&self) -> ExprVolatility {
+        let mut max_volatility = self.node_volatility();
+
+        // Early return for volatile (can't get higher)
+        if max_volatility == ExprVolatility::Volatile {
+            return max_volatility;
+        }
+
+        // Traverse children and find maximum volatility
+        self.apply(|expr| {
+            let child_volatility = expr.node_volatility();
+            max_volatility = max_volatility.max(child_volatility);
+
+            // Short-circuit if we've found volatile (highest level)
+            if max_volatility == ExprVolatility::Volatile {
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        })
+        .expect("volatility traversal is infallible");
+
+        max_volatility
     }
 
     /// Recursively find all [`Expr::Placeholder`] expressions, and

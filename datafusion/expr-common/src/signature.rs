@@ -84,6 +84,208 @@ pub enum Volatility {
     Volatile,
 }
 
+/// Describes the volatility of an expression, considering both the expression
+/// type and its children.
+///
+/// This is distinct from [`Volatility`] which describes function behavior.
+/// `ExprVolatility` describes the overall expression behavior after considering
+/// the expression structure and all its inputs.
+///
+/// The variants are ordered from least volatile to most volatile:
+/// `Constant < Immutable < Stable < Volatile`
+///
+/// # Examples
+///
+/// ```
+/// use datafusion_expr_common::signature::ExprVolatility;
+///
+/// // Ordering comparison
+/// assert!(ExprVolatility::Constant < ExprVolatility::Immutable);
+/// assert!(ExprVolatility::Immutable < ExprVolatility::Stable);
+/// assert!(ExprVolatility::Stable < ExprVolatility::Volatile);
+///
+/// // Combining volatilities takes the maximum
+/// let vol = ExprVolatility::Constant.max(ExprVolatility::Immutable);
+/// assert_eq!(vol, ExprVolatility::Immutable);
+/// ```
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+pub enum ExprVolatility {
+    /// The expression always evaluates to the same value regardless of input.
+    ///
+    /// Examples:
+    /// - Literals: `1`, `'hello'`, `NULL`
+    /// - Constant expressions: `1 + 2`, `abs(-5)`
+    /// - Immutable functions with all constant arguments: `concat('a', 'b')`
+    ///
+    /// Constant expressions can be evaluated at planning time.
+    Constant,
+
+    /// The expression returns the same output for the same input values.
+    ///
+    /// Examples:
+    /// - Column references: `col("a")`
+    /// - Immutable functions with non-constant arguments: `abs(col("a"))`
+    /// - Binary operations on columns: `col("a") + col("b")`
+    ///
+    /// Immutable expressions cannot be evaluated at planning time but are
+    /// deterministic given the input data.
+    Immutable,
+
+    /// The expression returns the same value within a single query execution
+    /// but may return different values across queries.
+    ///
+    /// Examples:
+    /// - `now()`, `current_date()`, `current_timestamp()`
+    /// - Stable functions with any arguments
+    ///
+    /// Stable expressions can be evaluated once per query execution.
+    Stable,
+
+    /// The expression may return different values on each evaluation.
+    ///
+    /// Examples:
+    /// - `random()`, `uuid()`
+    /// - Any expression containing a volatile function
+    ///
+    /// Volatile expressions must be evaluated for each row.
+    Volatile,
+}
+
+impl ExprVolatility {
+    /// Combines two volatilities, returning the "highest" (most volatile).
+    ///
+    /// This is used when computing the volatility of expressions with
+    /// multiple children (e.g., binary expressions, function arguments).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_expr_common::signature::ExprVolatility;
+    ///
+    /// assert_eq!(
+    ///     ExprVolatility::Constant.max(ExprVolatility::Immutable),
+    ///     ExprVolatility::Immutable
+    /// );
+    /// assert_eq!(
+    ///     ExprVolatility::Stable.max(ExprVolatility::Immutable),
+    ///     ExprVolatility::Stable
+    /// );
+    /// assert_eq!(
+    ///     ExprVolatility::Volatile.max(ExprVolatility::Constant),
+    ///     ExprVolatility::Volatile
+    /// );
+    /// ```
+    #[inline]
+    pub fn max(self, other: Self) -> Self {
+        std::cmp::max(self, other)
+    }
+
+    /// Returns true if this expression can be evaluated at planning time.
+    ///
+    /// This is true for `Constant` expressions only.
+    #[inline]
+    pub fn is_constant(&self) -> bool {
+        matches!(self, ExprVolatility::Constant)
+    }
+
+    /// Returns true if this expression is deterministic for a given input.
+    ///
+    /// This is true for `Constant` and `Immutable` expressions.
+    #[inline]
+    pub fn is_deterministic(&self) -> bool {
+        matches!(self, ExprVolatility::Constant | ExprVolatility::Immutable)
+    }
+
+    /// Returns true if this expression can be safely cached within a query.
+    ///
+    /// This is true for `Constant`, `Immutable`, and `Stable` expressions.
+    #[inline]
+    pub fn is_cacheable_within_query(&self) -> bool {
+        !matches!(self, ExprVolatility::Volatile)
+    }
+
+    /// Folds multiple volatilities together, returning the maximum (most volatile).
+    ///
+    /// This is useful when computing the volatility of an expression with
+    /// multiple children.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_expr_common::signature::ExprVolatility;
+    ///
+    /// // Folding constants gives constant
+    /// let volatilities = [ExprVolatility::Constant, ExprVolatility::Constant];
+    /// assert_eq!(ExprVolatility::fold(volatilities.iter().copied()), ExprVolatility::Constant);
+    ///
+    /// // Any immutable promotes the result to immutable
+    /// let volatilities = [ExprVolatility::Constant, ExprVolatility::Immutable];
+    /// assert_eq!(ExprVolatility::fold(volatilities.iter().copied()), ExprVolatility::Immutable);
+    ///
+    /// // Any volatile makes the whole expression volatile
+    /// let volatilities = [ExprVolatility::Constant, ExprVolatility::Volatile];
+    /// assert_eq!(ExprVolatility::fold(volatilities.iter().copied()), ExprVolatility::Volatile);
+    ///
+    /// // Empty iterator returns Constant (identity element)
+    /// assert_eq!(ExprVolatility::fold(std::iter::empty()), ExprVolatility::Constant);
+    /// ```
+    pub fn fold(volatilities: impl Iterator<Item = Self>) -> Self {
+        volatilities.fold(ExprVolatility::Constant, |acc, v| acc.max(v))
+    }
+
+    /// Computes the volatility of a function call given the function's volatility
+    /// and the volatilities of its arguments.
+    ///
+    /// The result is the maximum of:
+    /// - The function's volatility (converted via [`From<Volatility>`])
+    /// - All argument volatilities
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_expr_common::signature::{ExprVolatility, Volatility};
+    ///
+    /// // Immutable function with constant args = constant
+    /// let args = [ExprVolatility::Constant, ExprVolatility::Constant];
+    /// assert_eq!(
+    ///     ExprVolatility::function_call_volatility(Volatility::Immutable, args.iter().copied()),
+    ///     ExprVolatility::Constant
+    /// );
+    ///
+    /// // Immutable function with column args = immutable
+    /// let args = [ExprVolatility::Immutable, ExprVolatility::Constant];
+    /// assert_eq!(
+    ///     ExprVolatility::function_call_volatility(Volatility::Immutable, args.iter().copied()),
+    ///     ExprVolatility::Immutable
+    /// );
+    ///
+    /// // Volatile function = always volatile regardless of args
+    /// let args = [ExprVolatility::Constant];
+    /// assert_eq!(
+    ///     ExprVolatility::function_call_volatility(Volatility::Volatile, args.iter().copied()),
+    ///     ExprVolatility::Volatile
+    /// );
+    ///
+    /// // Stable function with constant args = stable
+    /// let args = [ExprVolatility::Constant];
+    /// assert_eq!(
+    ///     ExprVolatility::function_call_volatility(Volatility::Stable, args.iter().copied()),
+    ///     ExprVolatility::Stable
+    /// );
+    /// ```
+    pub fn function_call_volatility(
+        func_volatility: Volatility,
+        arg_volatilities: impl Iterator<Item = Self>,
+    ) -> Self {
+        let func_vol = match func_volatility {
+            Volatility::Immutable => ExprVolatility::Constant,
+            Volatility::Stable => ExprVolatility::Stable,
+            Volatility::Volatile => ExprVolatility::Volatile,
+        };
+        Self::fold(std::iter::once(func_vol).chain(arg_volatilities))
+    }
+}
+
 /// Represents the arity (number of arguments) of a function signature
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arity {

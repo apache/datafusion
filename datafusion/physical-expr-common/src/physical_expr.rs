@@ -35,6 +35,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::signature::ExprVolatility;
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_expr_common::statistics::Distribution;
 
@@ -427,8 +428,31 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// It is highly recommended that volatile expressions implement this method and return `true`.
     /// This default may be removed in the future if it causes problems or we decide to
     /// eat the cost of the breaking change and require all implementers to make a choice.
+    #[deprecated(
+        since = "47.0.0",
+        note = "Use `node_volatility() == ExprVolatility::Volatile` instead"
+    )]
     fn is_volatile_node(&self) -> bool {
         false
+    }
+
+    /// Returns the volatility of this physical expression node without considering children.
+    ///
+    /// This returns the intrinsic volatility of the node itself. For the combined
+    /// volatility of an expression tree, use the free function [`volatility`].
+    ///
+    /// The default implementation returns [`ExprVolatility::Immutable`], which is
+    /// appropriate for most expression types that are deterministic given their inputs.
+    /// Expressions with different volatility characteristics should override this method.
+    ///
+    /// # Examples
+    ///
+    /// - Literals should return [`ExprVolatility::Constant`]
+    /// - Column references should return [`ExprVolatility::Immutable`] (default)
+    /// - Scalar functions should return their function's volatility
+    /// - Volatile functions like `random()` should return [`ExprVolatility::Volatile`]
+    fn node_volatility(&self) -> ExprVolatility {
+        ExprVolatility::Immutable
     }
 }
 
@@ -625,6 +649,11 @@ pub fn is_dynamic_physical_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
 ///
 /// This method recursively checks if any sub-expression is volatile, for example
 /// `1 + RANDOM()` will return `true`.
+#[deprecated(
+    since = "47.0.0",
+    note = "Use `volatility(expr) == ExprVolatility::Volatile` instead"
+)]
+#[allow(deprecated)]
 pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
     if expr.is_volatile_node() {
         return true;
@@ -640,6 +669,41 @@ pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
     })
     .expect("infallible closure should not fail");
     is_volatile
+}
+
+/// Returns the overall volatility of a physical expression tree.
+///
+/// This recursively computes the volatility by combining each node's
+/// volatility with all of its children's volatilities, returning
+/// the maximum (most volatile) level found.
+///
+/// # Examples
+///
+/// - A literal expression returns [`ExprVolatility::Constant`]
+/// - A column reference returns [`ExprVolatility::Immutable`]
+/// - A binary expression with constant operands returns [`ExprVolatility::Constant`]
+/// - Any expression containing `random()` returns [`ExprVolatility::Volatile`]
+pub fn volatility(expr: &Arc<dyn PhysicalExpr>) -> ExprVolatility {
+    let mut max_volatility = expr.node_volatility();
+
+    // Early return for volatile (can't get higher)
+    if max_volatility == ExprVolatility::Volatile {
+        return max_volatility;
+    }
+
+    expr.apply(|e| {
+        let child_volatility = e.node_volatility();
+        max_volatility = max_volatility.max(child_volatility);
+
+        if max_volatility == ExprVolatility::Volatile {
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("volatility traversal is infallible");
+
+    max_volatility
 }
 
 #[cfg(test)]

@@ -21,7 +21,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
-use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
+use datafusion_expr::{Aggregate, Expr, ExprVolatility, LogicalPlan, LogicalPlanBuilder};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
 /// and places additional projection on top of aggregation, to preserve
@@ -91,25 +91,20 @@ impl OptimizerRule for EliminateGroupByConstant {
     }
 }
 
-/// Checks if expression is constant, and can be eliminated from group by.
+/// Checks if expression is constant within a query, and can be eliminated from group by.
 ///
-/// Intended to be used only within this rule, helper function, which heavily
-/// relies on `SimplifyExpressions` result.
+/// An expression is considered constant for GROUP BY purposes if it has the same
+/// value for all rows within a single query execution. This includes:
+/// - [`ExprVolatility::Constant`]: Expressions that can be evaluated at planning time
+/// - [`ExprVolatility::Stable`]: Expressions like `now()` that are constant within a query
+///
+/// Note: `Immutable` expressions are NOT included because they depend on input data
+/// and may have different values for different rows.
 fn is_constant_expression(expr: &Expr) -> bool {
-    match expr {
-        Expr::Alias(e) => is_constant_expression(&e.expr),
-        Expr::BinaryExpr(e) => {
-            is_constant_expression(&e.left) && is_constant_expression(&e.right)
-        }
-        Expr::Literal(_, _) => true,
-        Expr::ScalarFunction(e) => {
-            matches!(
-                e.func.signature().volatility,
-                Volatility::Immutable | Volatility::Stable
-            ) && e.args.iter().all(is_constant_expression)
-        }
-        _ => false,
-    }
+    matches!(
+        expr.volatility(),
+        ExprVolatility::Constant | ExprVolatility::Stable
+    )
 }
 
 #[cfg(test)]
@@ -124,7 +119,7 @@ mod tests {
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
         col, lit, ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, TypeSignature,
+        ScalarUDFImpl, Signature, TypeSignature, Volatility,
     };
 
     use datafusion_functions_aggregate::expr_fn::count;
