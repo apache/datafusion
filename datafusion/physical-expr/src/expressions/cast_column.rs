@@ -24,7 +24,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column, Result, ScalarValue,
+    Result, ScalarValue, format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use std::{
@@ -192,8 +192,8 @@ mod tests {
         datatypes::{DataType, Field, Fields, SchemaRef},
     };
     use datafusion_common::{
-        cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
         Result as DFResult, ScalarValue,
+        cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
     };
 
     fn make_schema(field: &Field) -> SchemaRef {

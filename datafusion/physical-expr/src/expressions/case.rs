@@ -18,20 +18,20 @@
 mod literal_lookup_table;
 
 use super::{Column, Literal};
-use crate::expressions::{lit, try_cast};
 use crate::PhysicalExpr;
+use crate::expressions::{lit, try_cast};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
-    is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
-    SlicesIterator,
+    FilterBuilder, FilterPredicate, SlicesIterator, is_not_null, not, nullif,
+    prep_null_mask_filter,
 };
 use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
-    assert_or_internal_err, exec_err, internal_datafusion_err, internal_err,
-    DataFusionError, HashMap, HashSet, Result, ScalarValue,
+    DataFusionError, HashMap, HashSet, Result, ScalarValue, assert_or_internal_err,
+    exec_err, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
 use std::borrow::Cow;
@@ -874,10 +874,10 @@ impl CaseBody {
             }
         }
         // if all then results are null, we use data type of else expr instead if possible.
-        if data_type.equals_datatype(&DataType::Null) {
-            if let Some(e) = &self.else_expr {
-                data_type = e.data_type(input_schema)?;
-            }
+        if data_type.equals_datatype(&DataType::Null)
+            && let Some(e) = &self.else_expr
+        {
+            data_type = e.data_type(input_schema)?;
         }
 
         Ok(data_type)
@@ -1573,7 +1573,7 @@ mod tests {
     use super::*;
 
     use crate::expressions;
-    use crate::expressions::{binary, cast, col, is_not_null, lit, BinaryExpr};
+    use crate::expressions::{BinaryExpr, binary, cast, col, is_not_null, lit};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
@@ -3024,8 +3024,8 @@ mod tests {
     }
 
     #[test]
-    fn test_case_when_literal_lookup_f32_to_string_with_special_values_and_duplicate_cases(
-    ) {
+    fn test_case_when_literal_lookup_f32_to_string_with_special_values_and_duplicate_cases()
+     {
         let lookup_map = create_lookup([
             (Some(4.0), Some("four point zero")),
             (Some(f32::NAN), Some("NaN")),

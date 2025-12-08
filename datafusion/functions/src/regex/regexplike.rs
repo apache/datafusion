@@ -23,11 +23,11 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::types::logical_string;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_err, plan_err, Result, ScalarValue,
+    Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::{
-    binary_expr, cast, Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl,
-    Signature, TypeSignature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility, binary_expr, cast,
 };
 use datafusion_macros::user_doc;
 
@@ -275,29 +275,31 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Utf8 => args[2].as_string::<i32>(),
                 LargeUtf8 => {
                     let large_string_array = args[2].as_string::<i64>();
-                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len()).map(|i| {
-                        if large_string_array.is_null(i) {
-                            None
-                        } else {
-                            Some(large_string_array.value(i))
-                        }
-                    })
-                    .collect();
+                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len())
+                        .map(|i| {
+                            if large_string_array.is_null(i) {
+                                None
+                            } else {
+                                Some(large_string_array.value(i))
+                            }
+                        })
+                        .collect();
 
                     &GenericStringArray::<i32>::from(string_vec)
-                },
+                }
                 _ => {
                     let string_view_array = args[2].as_string_view();
-                    let string_vec: Vec<Option<String>> = (0..string_view_array.len()).map(|i| {
-                        if string_view_array.is_null(i) {
-                            None
-                        } else {
-                            Some(string_view_array.value(i).to_string())
-                        }
-                    })
-                    .collect();
+                    let string_vec: Vec<Option<String>> = (0..string_view_array.len())
+                        .map(|i| {
+                            if string_view_array.is_null(i) {
+                                None
+                            } else {
+                                Some(string_view_array.value(i).to_string())
+                            }
+                        })
+                        .collect();
                     &GenericStringArray::<i32>::from(string_vec)
-                },
+                }
             };
 
             if flags.iter().any(|s| s == Some("g")) {
@@ -305,7 +307,7 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
 
             handle_regexp_like(&args[0], &args[1], Some(flags))
-        },
+        }
         other => exec_err!(
             "`regexp_like` was called with {other} arguments. It requires at least 2 and at most 3."
         ),
@@ -384,7 +386,7 @@ fn handle_regexp_like(
         other => {
             return internal_err!(
                 "Unsupported data type {other:?} for function `regexp_like`"
-            )
+            );
         }
     };
 

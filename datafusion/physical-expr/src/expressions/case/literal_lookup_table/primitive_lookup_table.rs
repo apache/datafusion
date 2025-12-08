@@ -19,8 +19,8 @@ use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, PrimitiveArray,
 };
-use arrow::datatypes::{i256, DataType, IntervalDayTime, IntervalMonthDayNano};
-use datafusion_common::{internal_err, HashMap, ScalarValue};
+use arrow::datatypes::{DataType, IntervalDayTime, IntervalMonthDayNano, i256};
+use datafusion_common::{HashMap, ScalarValue, internal_err};
 use half::f16;
 use std::fmt::Debug;
 use std::hash::Hash;

@@ -19,14 +19,14 @@ mod boolean_lookup_table;
 mod bytes_like_lookup_table;
 mod primitive_lookup_table;
 
+use crate::expressions::Literal;
+use crate::expressions::case::CaseBody;
 use crate::expressions::case::literal_lookup_table::boolean_lookup_table::BooleanIndexMap;
 use crate::expressions::case::literal_lookup_table::bytes_like_lookup_table::BytesLikeIndexMap;
 use crate::expressions::case::literal_lookup_table::primitive_lookup_table::PrimitiveIndexMap;
-use crate::expressions::case::CaseBody;
-use crate::expressions::Literal;
-use arrow::array::{downcast_primitive, Array, ArrayRef, UInt32Array};
+use arrow::array::{Array, ArrayRef, UInt32Array, downcast_primitive};
 use arrow::datatypes::DataType;
-use datafusion_common::{arrow_datafusion_err, plan_datafusion_err, ScalarValue};
+use datafusion_common::{ScalarValue, arrow_datafusion_err, plan_datafusion_err};
 use indexmap::IndexMap;
 use std::fmt::Debug;
 

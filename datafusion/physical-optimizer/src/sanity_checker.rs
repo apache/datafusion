@@ -47,7 +47,7 @@ use itertools::izip;
 pub struct SanityCheckPlan {}
 
 impl SanityCheckPlan {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

@@ -17,14 +17,14 @@
 
 use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 use arrow::array::{
-    downcast_integer, Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray,
-    DictionaryArray, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
-    StringArray, StringViewArray,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, DictionaryArray,
+    FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray, StringArray,
+    StringViewArray, downcast_integer,
 };
 use arrow::datatypes::{
     ArrowDictionaryKeyType, BinaryViewType, DataType, StringViewType,
 };
-use datafusion_common::{internal_err, plan_datafusion_err, HashMap, ScalarValue};
+use datafusion_common::{HashMap, ScalarValue, internal_err, plan_datafusion_err};
 use std::fmt::Debug;
 
 /// Map from byte-like literal values to their first occurrence index
@@ -126,9 +126,7 @@ fn try_get_bytes_iterator(
 
         DataType::Dictionary(key, _) => {
             macro_rules! downcast_dictionary_array_helper {
-                ($t:ty) => {{
-                    get_bytes_iterator_for_dictionary(array.as_dictionary::<$t>())?
-                }};
+                ($t:ty) => {{ get_bytes_iterator_for_dictionary(array.as_dictionary::<$t>())? }};
             }
 
             downcast_integer! {
@@ -140,7 +138,7 @@ fn try_get_bytes_iterator(
             return Err(plan_datafusion_err!(
                 "Unsupported data type for bytes lookup table: {}",
                 t
-            ))
+            ));
         }
     })
 }
@@ -219,7 +217,7 @@ fn get_bytes_iterator_for_dictionary<K: ArrowDictionaryKeyType + Send + Sync>(
             return Err(plan_datafusion_err!(
                 "Unsupported data type for lookup table dictionary value: {}",
                 t
-            ))
+            ));
         }
     })
 }

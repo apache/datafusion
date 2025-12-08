@@ -25,11 +25,11 @@ use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{Result, not_impl_err, plan_err};
+use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
-use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
 };
@@ -184,7 +184,9 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             );
         }
         if arg_types[2] != DataType::Float64 {
-            return plan_err!("approx_percentile_cont_with_weight requires float64 percentile input types");
+            return plan_err!(
+                "approx_percentile_cont_with_weight requires float64 percentile input types"
+            );
         }
         if arg_types.len() == 4 && !arg_types[3].is_integer() {
             return plan_err!(

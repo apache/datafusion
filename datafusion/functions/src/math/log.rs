@@ -31,14 +31,14 @@ use arrow::error::ArrowError;
 use arrow_buffer::i256;
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
+    Result, ScalarValue, exec_err, internal_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    lit, Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature, TypeSignatureClass,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
+    TypeSignature, TypeSignatureClass, lit,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -249,7 +249,7 @@ impl ScalarUDFImpl for LogFunc {
                 )?
             }
             other => {
-                return exec_err!("Unsupported data type {other:?} for function log")
+                return exec_err!("Unsupported data type {other:?} for function log");
             }
         };
 
@@ -324,7 +324,7 @@ impl ScalarUDFImpl for LogFunc {
                         _ => {
                             return internal_err!(
                                 "Unexpected number of arguments in log::simplify"
-                            )
+                            );
                         }
                     };
                     Ok(ExprSimplifyResult::Original(args))
@@ -350,10 +350,10 @@ mod tests {
         Date32Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
     };
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{Field, DECIMAL256_MAX_PRECISION};
+    use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field};
+    use datafusion_common::DFSchema;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
 
@@ -1120,7 +1120,8 @@ mod tests {
         };
         let result = LogFunc::new().invoke_with_args(args);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string().lines().next().unwrap(),
+        assert_eq!(
+            result.unwrap_err().to_string().lines().next().unwrap(),
             "Arrow error: Not yet implemented: Log of Decimal256 larger than Decimal128 is not yet supported: 170141183460469231731687303715884106727"
         );
     }

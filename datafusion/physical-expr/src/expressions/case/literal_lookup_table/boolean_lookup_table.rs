@@ -18,7 +18,7 @@
 use crate::expressions::case::literal_lookup_table::WhenLiteralIndexMap;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, ScalarValue};
+use datafusion_common::{ScalarValue, internal_err};
 
 #[derive(Clone, Debug)]
 pub(super) struct BooleanIndexMap {
@@ -58,12 +58,12 @@ impl BooleanIndexMap {
                 ScalarValue::Boolean(None) => {
                     return internal_err!(
                         "Null literal found in non-null literals for BooleanIndexMap"
-                    )
+                    );
                 }
                 _ => {
                     return internal_err!(
                         "Non-boolean literal found in literals for BooleanIndexMap"
-                    )
+                    );
                 }
             }
         }
