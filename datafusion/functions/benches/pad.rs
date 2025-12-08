@@ -20,13 +20,13 @@ use arrow::datatypes::{DataType, Field, Int64Type};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use datafusion_common::config::ConfigOptions;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::DataFusionError;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::{lpad, rpad};
-use rand::distr::{Distribution, Uniform};
 use rand::Rng;
+use rand::distr::{Distribution, Uniform};
 use std::hint::black_box;
 use std::sync::Arc;
 
