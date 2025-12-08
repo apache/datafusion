@@ -22,9 +22,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-// Use hashbrown HashSet for column collection (matches collect_columns return type)
-use datafusion_common::HashSet as ColumnHashSet;
-
 use arrow::array::AsArray;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
@@ -38,16 +35,16 @@ use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::TransformedResult;
+use datafusion_common::tree_node::{TransformedResult, TreeNodeRecursion};
 use datafusion_common::{assert_eq_or_internal_err, Column, DFSchema};
 use datafusion_common::{
-    internal_datafusion_err, plan_datafusion_err, plan_err,
+    internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::expressions::CastColumnExpr;
-use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
+use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
@@ -963,27 +960,39 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn try_new(
         left: &'a Arc<dyn PhysicalExpr>,
         right: &'a Arc<dyn PhysicalExpr>,
-        left_columns: ColumnHashSet<phys_expr::Column>,
-        right_columns: ColumnHashSet<phys_expr::Column>,
+        left_columns: ColumnReferenceCount,
+        right_columns: ColumnReferenceCount,
         op: Operator,
         schema: &'a SchemaRef,
         required_columns: &'a mut RequiredColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
-        let (column_expr, scalar_expr, columns, correct_operator) = match (
-            left_columns.len(),
-            right_columns.len(),
+        let (column_expr, scalar_expr, column, correct_operator) = match (
+            left_columns,
+            right_columns,
         ) {
-            (1, 0) => (left, right, left_columns, op),
-            (0, 1) => (right, left, right_columns, reverse_operator(op)?),
-            _ => {
-                // (0, 0) case: Both sides are literals - should be handled before calling try_new
-                // Other cases: more than one column used in expression - not supported
+            (ColumnReferenceCount::One(column), ColumnReferenceCount::Zero) => {
+                (left, right, column, op)
+            }
+            (ColumnReferenceCount::Zero, ColumnReferenceCount::One(column)) => {
+                (right, left, column, reverse_operator(op)?)
+            }
+            (ColumnReferenceCount::One(_), ColumnReferenceCount::One(_)) => {
+                // both sides have one column - not supported
                 return plan_err!(
-                        "Expression not supported for pruning: left has {} columns, right has {} columns",
-                        left_columns.len(),
-                        right_columns.len()
+                        "Expression not supported for pruning: left has 1 column, right has 1 column"
                     );
+            }
+            (ColumnReferenceCount::Zero, ColumnReferenceCount::Zero) => {
+                // both sides are literals - should be handled before calling try_new
+                return internal_err!(
+                        "Unexpected expression for pruning: left and right are both constant expressions"
+                    );
+            }
+            (ColumnReferenceCount::Many, _) | (_, ColumnReferenceCount::Many) => {
+                return plan_err!(
+                    "Expression not supported for pruning: left or right has multiple columns"
+                );
             }
         };
 
@@ -994,7 +1003,6 @@ impl<'a> PruningExpressionBuilder<'a> {
             scalar_expr,
             df_schema,
         )?;
-        let column = columns.iter().next().unwrap().clone();
         let field = match schema.column_with_name(column.name()) {
             Some((_, f)) => f,
             _ => {
@@ -1538,12 +1546,14 @@ fn build_predicate_expression(
     }
 
     // Collect columns once to avoid redundant traversal
-    let left_columns = collect_columns(&left);
-    let right_columns = collect_columns(&right);
+    let left_columns = ColumnReferenceCount::from_expression(&left);
+    let right_columns = ColumnReferenceCount::from_expression(&right);
 
     // Handle literal-to-literal comparisons (no columns on either side)
     // e.g., lit(1) = lit(2) should evaluate to false and prune all containers
-    if left_columns.is_empty() && right_columns.is_empty() {
+    if left_columns == ColumnReferenceCount::Zero
+        && right_columns == ColumnReferenceCount::Zero
+    {
         // Both sides are constants - evaluate the expression directly
         // Using an empty 1 row batch as input is the same approach taken by the logical expr const simplifier
         let empty_schema = Arc::new(Schema::empty());
@@ -1580,6 +1590,48 @@ fn build_predicate_expression(
 
     build_statistics_expr(&mut expr_builder)
         .unwrap_or_else(|_| unhandled_hook.handle(expr))
+}
+
+/// Count of distinct column references in an expression.
+/// This is the same as [`collect_columns`] but optimized to stop counting
+/// once more than one distinct column is found.
+///
+/// For example, in expression `col1 + col2`, the count is `Many`.
+/// In expression `col1 + 5`, the count is `One`.
+/// In expression `5 + 10`, the count is `Zero`.
+#[derive(Debug, PartialEq, Eq)]
+enum ColumnReferenceCount {
+    /// no column references
+    Zero,
+    /// Only one column reference
+    One(phys_expr::Column),
+    /// More than one column reference
+    Many,
+}
+
+impl ColumnReferenceCount {
+    /// Count the number of distinct column references in an expression
+    fn from_expression(expr: &Arc<dyn PhysicalExpr>) -> Self {
+        let mut seen = HashSet::<phys_expr::Column>::new();
+        expr.apply(|expr| {
+            if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
+                seen.insert(column.clone());
+                if seen.len() > 1 {
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        // pre_visit always returns OK, so this will always too
+        .expect("no way to return error during recursion");
+        match seen.len() {
+            0 => ColumnReferenceCount::Zero,
+            1 => ColumnReferenceCount::One(
+                seen.into_iter().next().expect("just checked len==1"),
+            ),
+            _ => ColumnReferenceCount::Many,
+        }
+    }
 }
 
 fn build_statistics_expr(
