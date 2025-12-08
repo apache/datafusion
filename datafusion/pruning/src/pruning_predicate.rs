@@ -38,7 +38,7 @@ use datafusion_common::error::Result;
 use datafusion_common::tree_node::{TransformedResult, TreeNodeRecursion};
 use datafusion_common::{assert_eq_or_internal_err, Column, DFSchema};
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
+    internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
     ScalarValue,
 };
@@ -456,6 +456,11 @@ impl PruningPredicate {
     ///
     /// See the struct level documentation on [`PruningPredicate`] for more
     /// details.
+    ///
+    /// Note that `PruningPredicate` does not attempt to normalize or simplify
+    /// the input expression.
+    /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
+    /// before calling this method to get the best results.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`
         // which does not handle dynamic exprs in general
@@ -985,8 +990,8 @@ impl<'a> PruningExpressionBuilder<'a> {
             }
             (ColumnReferenceCount::Zero, ColumnReferenceCount::Zero) => {
                 // both sides are literals - should be handled before calling try_new
-                return internal_err!(
-                        "Unexpected expression for pruning: left and right are both constant expressions"
+                return plan_err!(
+                        "Pruning literal expressions is not supported, please call PhysicalExprSimplifier first"
                     );
             }
             (ColumnReferenceCount::Many, _) | (_, ColumnReferenceCount::Many) => {
@@ -1545,30 +1550,8 @@ fn build_predicate_expression(
         return expr;
     }
 
-    // Collect columns once to avoid redundant traversal
     let left_columns = ColumnReferenceCount::from_expression(&left);
     let right_columns = ColumnReferenceCount::from_expression(&right);
-
-    // Handle literal-to-literal comparisons (no columns on either side)
-    // e.g., lit(1) = lit(2) should evaluate to false and prune all containers
-    if left_columns == ColumnReferenceCount::Zero
-        && right_columns == ColumnReferenceCount::Zero
-    {
-        // Both sides are constants - evaluate the expression directly
-        // Using an empty 1 row batch as input is the same approach taken by the logical expr const simplifier
-        let empty_schema = Arc::new(Schema::empty());
-        let opts = RecordBatchOptions::default().with_row_count(Some(1));
-        let empty_batch = RecordBatch::try_new_with_options(empty_schema, vec![], &opts)
-            .expect("should not fail");
-        if let Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(result)))) =
-            expr.evaluate(&empty_batch)
-        {
-            return Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(result))));
-        }
-        // If evaluation fails or returns something unexpected like an array fall through to unhandled
-        return unhandled_hook.handle(expr);
-    }
-
     let expr_builder = PruningExpressionBuilder::try_new(
         &left,
         &right,
@@ -1599,6 +1582,8 @@ fn build_predicate_expression(
 /// For example, in expression `col1 + col2`, the count is `Many`.
 /// In expression `col1 + 5`, the count is `One`.
 /// In expression `5 + 10`, the count is `Zero`.
+///
+/// [`collect_columns`]: datafusion_physical_expr::utils::collect_columns
 #[derive(Debug, PartialEq, Eq)]
 enum ColumnReferenceCount {
     /// no column references
@@ -2863,6 +2848,16 @@ mod tests {
         Ok(())
     }
 
+    /// Test that non-boolean literal expressions don't prune any containers and error gracefully by not pruning anything instead of e.g. panicking
+    #[test]
+    fn row_group_predicate_non_boolean() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let statistics = TestStatistics::new()
+            .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
+        let expected_ret = &[true];
+        prune_with_expr(lit(1), &schema, &statistics, expected_ret);
+    }
+
     // Test that literal-to-literal comparisons are correctly evaluated.
     // When both sides are constants, the expression should be evaluated directly
     // and if it's false, all containers should be pruned.
@@ -2873,10 +2868,11 @@ mod tests {
         let statistics = TestStatistics::new()
             .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
         let expected_ret = &[false];
-        prune_with_expr(lit(1).eq(lit(2)), &schema, &statistics, expected_ret);
+        prune_with_simplified_expr(lit(1).eq(lit(2)), &schema, &statistics, expected_ret);
     }
 
-    // Test that always-true literal predicates don't prune any containers
+    /// Test nested/complex literal expression trees.
+    /// This is an integration test that PhysicalExprSimplifier + PruningPredicate work together as expected.
     #[test]
     fn row_group_predicate_literal_true() {
         // lit(1) = lit(1) is always true, so no containers should be pruned
@@ -2884,10 +2880,28 @@ mod tests {
         let statistics = TestStatistics::new()
             .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
         let expected_ret = &[true];
-        prune_with_expr(lit(1).eq(lit(1)), &schema, &statistics, expected_ret);
+        prune_with_simplified_expr(lit(1).eq(lit(1)), &schema, &statistics, expected_ret);
     }
 
-    // Test nested/complex literal expression trees
+    /// Test nested/complex literal expression trees.
+    /// This is an integration test that PhysicalExprSimplifier + PruningPredicate work together as expected.
+    #[test]
+    fn row_group_predicate_literal_null() {
+        // lit(1) = null is always null, so no containers should be pruned
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let statistics = TestStatistics::new()
+            .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
+        let expected_ret = &[true];
+        prune_with_simplified_expr(
+            lit(1).eq(lit(ScalarValue::Null)),
+            &schema,
+            &statistics,
+            expected_ret,
+        );
+    }
+
+    /// Test nested/complex literal expression trees.
+    /// This is an integration test that PhysicalExprSimplifier + PruningPredicate work together as expected.
     #[test]
     fn row_group_predicate_complex_literals() {
         let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
@@ -2895,19 +2909,39 @@ mod tests {
             .with("c1", ContainerStats::new_i32(vec![Some(0)], vec![Some(10)]));
 
         // (1 + 2) > 0 is always true
-        prune_with_expr((lit(1) + lit(2)).gt(lit(0)), &schema, &statistics, &[true]);
+        prune_with_simplified_expr(
+            (lit(1) + lit(2)).gt(lit(0)),
+            &schema,
+            &statistics,
+            &[true],
+        );
 
         // (1 + 2) < 0 is always false
-        prune_with_expr((lit(1) + lit(2)).lt(lit(0)), &schema, &statistics, &[false]);
+        prune_with_simplified_expr(
+            (lit(1) + lit(2)).lt(lit(0)),
+            &schema,
+            &statistics,
+            &[false],
+        );
 
         // Nested AND of literals: true AND false = false
-        prune_with_expr(lit(true).and(lit(false)), &schema, &statistics, &[false]);
+        prune_with_simplified_expr(
+            lit(true).and(lit(false)),
+            &schema,
+            &statistics,
+            &[false],
+        );
 
         // Nested OR of literals: true OR false = true
-        prune_with_expr(lit(true).or(lit(false)), &schema, &statistics, &[true]);
+        prune_with_simplified_expr(
+            lit(true).or(lit(false)),
+            &schema,
+            &statistics,
+            &[true],
+        );
 
         // Complex nested: (1 < 2) AND (3 > 1) = true AND true = true
-        prune_with_expr(
+        prune_with_simplified_expr(
             lit(1).lt(lit(2)).and(lit(3).gt(lit(1))),
             &schema,
             &statistics,
@@ -2915,7 +2949,7 @@ mod tests {
         );
 
         // Complex nested: (1 > 2) OR (3 < 1) = false OR false = false
-        prune_with_expr(
+        prune_with_simplified_expr(
             lit(1).gt(lit(2)).or(lit(3).lt(lit(1))),
             &schema,
             &statistics,
@@ -5281,6 +5315,21 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
+        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let result = p.prune(statistics).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    fn prune_with_simplified_expr(
+        expr: Expr,
+        schema: &SchemaRef,
+        statistics: &TestStatistics,
+        expected: &[bool],
+    ) {
+        println!("Pruning with expr: {expr}");
+        let expr = logical2physical(&expr, schema);
+        let mut simplifier = PhysicalExprSimplifier::new(schema);
+        let expr = simplifier.simplify(expr).unwrap();
         let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
