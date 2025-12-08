@@ -31,8 +31,8 @@ use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, utils::take_function_args, Result,
-    ScalarValue,
+    Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
+    utils::take_function_args,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
@@ -192,7 +192,7 @@ fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
         dt => {
             return internal_err!(
                 "to_local_time function requires timestamp argument, got {dt}"
-            )
+            );
         }
     };
 
@@ -378,15 +378,15 @@ fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{types::TimestampNanosecondType, Array, TimestampNanosecondArray};
+    use arrow::array::{Array, TimestampNanosecondArray, types::TimestampNanosecondType};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::NaiveDateTime;
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
-    use super::{adjust_to_local_time, ToLocalTimeFunc};
+    use super::{ToLocalTimeFunc, adjust_to_local_time};
 
     #[test]
     fn test_adjust_to_local_time() {

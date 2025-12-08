@@ -18,8 +18,8 @@
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
 use crate::{
-    equivalence::ProjectionMapping, expressions::UnKnownColumn, physical_exprs_equal,
-    EquivalenceProperties, PhysicalExpr,
+    EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
+    expressions::UnKnownColumn, physical_exprs_equal,
 };
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use std::fmt;
