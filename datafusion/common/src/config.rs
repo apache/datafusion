@@ -694,6 +694,12 @@ config_namespace! {
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
 
+        /// (reading) Force the use of RowSelections for filter results, when
+        /// pushdown_filters is enabled. If false, the reader will automatically
+        /// choose between a RowSelection and a Bitmap based on the number and
+        /// pattern of selected rows.
+        pub force_filter_selections: bool, default = false
+
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
         pub schema_force_view_types: bool, default = true
