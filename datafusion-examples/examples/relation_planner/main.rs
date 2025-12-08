@@ -98,10 +98,20 @@ async fn main() -> Result<()> {
         DataFusionError::Execution("Missing argument".to_string())
     })?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::MatchRecognize => match_recognize::match_recognize().await?,
-        ExampleKind::PivotUnpivot => pivot_unpivot::pivot_unpivot().await?,
-        ExampleKind::TableSample => table_sample::table_sample().await?,
+    if arg == "all" {
+        for example in ExampleKind::ALL {
+            match example {
+                ExampleKind::MatchRecognize => match_recognize::match_recognize().await?,
+                ExampleKind::PivotUnpivot => pivot_unpivot::pivot_unpivot().await?,
+                ExampleKind::TableSample => table_sample::table_sample().await?,
+            }
+        }
+    } else {
+        match arg.parse::<ExampleKind>()? {
+            ExampleKind::MatchRecognize => match_recognize::match_recognize().await?,
+            ExampleKind::PivotUnpivot => pivot_unpivot::pivot_unpivot().await?,
+            ExampleKind::TableSample => table_sample::table_sample().await?,
+        }
     }
 
     Ok(())
