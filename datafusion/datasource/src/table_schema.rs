@@ -144,13 +144,10 @@ impl TableSchema {
             self.table_partition_cols = Arc::new(partition_cols);
         } else {
             // Append to existing partition columns
-            self.table_partition_cols = Arc::new(
-                self.table_partition_cols
-                    .iter()
-                    .cloned()
-                    .chain(partition_cols)
-                    .collect(),
+            let table_partition_cols = Arc::get_mut(&mut self.table_partition_cols).expect(
+                "Expected to be the sole owner of table_partition_cols since this function accepts mut self",
             );
+            table_partition_cols.extend(partition_cols);
         }
         let mut builder = SchemaBuilder::from(self.file_schema.as_ref());
         builder.extend(self.table_partition_cols.iter().cloned());
