@@ -40,6 +40,23 @@ directly on the `Field`. For example:
 + let field = Arc::clone(df_schema.field("my_column"));
 ```
 
+### ListingTableProvider now caches `LIST` commands
+
+In prior versions, `ListingTableProvider` would issue `LIST` commands to
+the underlying object store each time it needed to list files for a query.
+To improve performance, `ListingTableProvider` now caches the results of
+`LIST` commands for the lifetime of the `ListingTableProvider` instance.
+
+Note that by default the cache has no expiration time, so if files are added or removed
+from the underlying object store, the `ListingTableProvider` will not see
+those changes until the `ListingTableProvider` instance is dropped and recreated.
+
+You will be able to configure the maximum cache size and cache expiration time via a configuration option:
+
+See <https://github.com/apache/datafusion/issues/19056> for more details.
+
+Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
+
 ### Removal of `pyarrow` feature
 
 The `pyarrow` feature flag has been removed. This feature has been migrated to
@@ -231,7 +248,7 @@ Previously you may write:
 Instead this should now be:
 
 ```rust,ignore
-    let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.try_into()?;
+    let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.into();
     let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
 ```
 
@@ -352,7 +369,16 @@ let config = FileScanConfigBuilder::new(url, source)
     .build();
 ```
 
-**Handling projections in `FileSource`:**
+### `SchemaAdapterFactory` Fully Removed from Parquet
+
+Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaadapterfactory-and-schemaadapter), `SchemaAdapterFactory` has been fully removed from Parquet scanning. This applies to both:
+
+- **Predicate pushdown / row filtering** (deprecated in 49.0.0)
+- **Projections** (newly removed in 52.0.0)
+
+If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
+
+See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
 
 ### `PhysicalOptimizerRule::optimize` deprecated in favor of `optimize_plan`
 

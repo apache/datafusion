@@ -22,11 +22,11 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
-use arrow::compute::{can_cast_types, CastOptions};
+use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -98,13 +98,14 @@ impl CastExpr {
         &self.cast_options
     }
 
-    /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
-    pub fn is_bigger_cast(&self, src: &DataType) -> bool {
-        if self.cast_type.eq(src) {
+    /// Check if casting from the specified source type to the target type is a
+    /// widening cast (e.g. from `Int8` to `Int16`).
+    pub fn check_bigger_cast(cast_type: &DataType, src: &DataType) -> bool {
+        if cast_type.eq(src) {
             return true;
         }
         matches!(
-            (src, &self.cast_type),
+            (src, cast_type),
             (Int8, Int16 | Int32 | Int64)
                 | (Int16, Int32 | Int64)
                 | (Int32, Int64)
@@ -118,6 +119,11 @@ impl CastExpr {
                 | (Int64 | UInt64, Float64)
                 | (Utf8, LargeUtf8)
         )
+    }
+
+    /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
+    pub fn is_bigger_cast(&self, src: &DataType) -> bool {
+        Self::check_bigger_cast(&self.cast_type, src)
     }
 }
 
@@ -185,7 +191,7 @@ impl PhysicalExpr for CastExpr {
         // Get child's datatype:
         let cast_type = child_interval.data_type();
         Ok(Some(vec![
-            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?
+            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?,
         ]))
     }
 
@@ -256,8 +262,8 @@ mod tests {
 
     use arrow::{
         array::{
-            Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
-            Int64Array, Int8Array, StringArray, Time64NanosecondArray,
+            Array, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+            Int32Array, Int64Array, StringArray, Time64NanosecondArray,
             TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
@@ -740,6 +746,9 @@ mod tests {
         Ok(())
     }
 
+    // Tests for timestamp timezone casting have been moved to timestamps.slt
+    // See the "Casting between timestamp with and without timezone" section
+
     #[test]
     fn invalid_cast() {
         // Ensure a useful error happens at plan time if invalid casts are used
@@ -765,9 +774,10 @@ mod tests {
         match result {
             Ok(_) => panic!("expected error"),
             Err(e) => {
-                assert!(e
-                    .to_string()
-                    .contains("Cannot cast string '9.1' to value of Int32 type"))
+                assert!(
+                    e.to_string()
+                        .contains("Cannot cast string '9.1' to value of Int32 type")
+                )
             }
         }
         Ok(())

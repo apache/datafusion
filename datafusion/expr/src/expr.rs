@@ -41,8 +41,8 @@ use datafusion_common::{
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{
-    display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
-    RenameSelectItem, ReplaceSelectElement,
+    ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
+    ReplaceSelectElement, display_comma_separated,
 };
 
 // Moved in 51.0.0 to datafusion_common
@@ -2681,24 +2681,23 @@ impl HashNode for Expr {
 // Modifies expr to match the DataType, metadata, and nullability of other if it is
 // a placeholder with previously unspecified type information (i.e., most placeholders)
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
-    if let Expr::Placeholder(Placeholder { id: _, field }) = expr {
-        if field.is_none() {
-            let other_field = other.to_field(schema);
-            match other_field {
-                Err(e) => {
-                    Err(e.context(format!(
-                        "Can not find type of {other} needed to infer type of {expr}"
-                    )))?;
-                }
-                Ok((_, other_field)) => {
-                    // We can't infer the nullability of the future parameter that might
-                    // be bound, so ensure this is set to true
-                    *field =
-                        Some(other_field.as_ref().clone().with_nullable(true).into());
-                }
+    if let Expr::Placeholder(Placeholder { id: _, field }) = expr
+        && field.is_none()
+    {
+        let other_field = other.to_field(schema);
+        match other_field {
+            Err(e) => {
+                Err(e.context(format!(
+                    "Can not find type of {other} needed to infer type of {expr}"
+                )))?;
             }
-        };
-    }
+            Ok((_, other_field)) => {
+                // We can't infer the nullability of the future parameter that might
+                // be bound, so ensure this is set to true
+                *field = Some(other_field.as_ref().clone().with_nullable(true).into());
+            }
+        }
+    };
     Ok(())
 }
 
@@ -3511,8 +3510,8 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 mod test {
     use crate::expr_fn::col;
     use crate::{
-        case, lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
+        lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
     };
     use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
@@ -3628,11 +3627,11 @@ mod test {
     #[test]
     fn infer_placeholder_with_metadata() {
         // name == $1, where name is a non-nullable string
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)
-                .with_metadata(
-                    [("some_key".to_string(), "some_value".to_string())].into(),
-                )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false).with_metadata(
+                [("some_key".to_string(), "some_value".to_string())].into(),
+            ),
+        ]));
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         let expr = binary_expr(col("name"), Operator::Eq, placeholder("$1"));

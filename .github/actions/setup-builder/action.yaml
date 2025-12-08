@@ -46,3 +46,17 @@ runs:
       # https://github.com/actions/checkout/issues/766
       shell: bash
       run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+    - name: Remove unnecessary preinstalled software
+      shell: bash
+      run: |
+        echo "Disk space before cleanup:"
+        df -h 
+        apt-get clean
+        # remove tool cache: about 8.5GB (github has host /opt/hostedtoolcache mounted as /__t)
+        rm -rf /__t/* || true
+        # remove Haskell runtime: about 6.3GB (host /usr/local/.ghcup)
+        rm -rf /host/usr/local/.ghcup || true
+        # remove Android library: about 7.8GB (host /usr/local/lib/android)
+        rm -rf /host/usr/local/lib/android || true
+        echo "Disk space after cleanup:"
+        df -h

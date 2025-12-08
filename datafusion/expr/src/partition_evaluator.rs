@@ -18,7 +18,7 @@
 //! Partition evaluation module
 
 use arrow::array::ArrayRef;
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use std::fmt::Debug;
 use std::ops::Range;
 
