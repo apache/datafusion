@@ -1269,9 +1269,15 @@ impl SessionContext {
             }
         }
 
-        Ok(Duration::from_secs(
+        let duration = Duration::from_secs(
             minutes.unwrap_or_default() * 60 + seconds.unwrap_or_default(),
-        ))
+        );
+
+        if duration.is_zero() {
+            return plan_err!("Duration must be greater than 0 seconds");
+        }
+
+        Ok(duration)
     }
 
     async fn create_custom_table(
