@@ -38,7 +38,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub struct CoalesceBatches {}
 
 impl CoalesceBatches {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }
