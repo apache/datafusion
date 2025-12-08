@@ -95,7 +95,7 @@ pub trait PhysicalOptimizerRule: Debug {
         context: &OptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Default implementation: delegate to the old method for backwards compatibility
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.optimize(plan, context.session_config().options())
     }
 

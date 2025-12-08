@@ -818,8 +818,8 @@ impl FileScanConfig {
     }
 
     #[deprecated(
-        since = "53.0.0",
-        note = "This method is no longer used, use eq_properties instead. It will be removed in 58.0.0."
+        since = "52.0.0",
+        note = "This method is no longer used, use eq_properties instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
     )]
     pub fn projected_constraints(&self) -> Constraints {
         let props = self.eq_properties();
@@ -838,8 +838,8 @@ impl FileScanConfig {
     }
 
     #[deprecated(
-        since = "53.0.0",
-        note = "Use file_column_projection_indices instead. This method will be removed in 58.0.0."
+        since = "52.0.0",
+        note = "This method is no longer used, use eq_properties instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
     )]
     pub fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
         #[expect(deprecated)]
