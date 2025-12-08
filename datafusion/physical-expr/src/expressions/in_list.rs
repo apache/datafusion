@@ -2630,7 +2630,7 @@ mod tests {
         }
 
         struct DictionaryInListTestCase {
-            _name: &'static str,
+            name: &'static str,
             dict_type: DataType,
             dict_keys: Vec<Option<i8>>,
             dict_values: ArrayRef,
@@ -2722,7 +2722,7 @@ mod tests {
         // Dictionary: keys [0, 1, null] → values ["a", "d", -]
         // Rows: ["a", "d", null]
         let utf8_case = DictionaryInListTestCase {
-            _name: "dictionary_utf8",
+            name: "dictionary_utf8",
             dict_type: DataType::Dictionary(
                 Box::new(DataType::Int8),
                 Box::new(DataType::Utf8),
@@ -2742,7 +2742,7 @@ mod tests {
         // Dictionary: keys [0, 1, null] → values [10, 20, -]
         // Rows: [10, 20, null]
         let int64_case = DictionaryInListTestCase {
-            _name: "dictionary_int64",
+            name: "dictionary_int64",
             dict_type: DataType::Dictionary(
                 Box::new(DataType::Int8),
                 Box::new(DataType::Int64),
@@ -2773,7 +2773,7 @@ mod tests {
         // Rows: [1.5, 3.7, null, NaN]
         // Note: NaN is a value (not null), so it goes in the values array
         let float64_case = DictionaryInListTestCase {
-            _name: "dictionary_float64",
+            name: "dictionary_float64",
             dict_type: DataType::Dictionary(
                 Box::new(DataType::Int8),
                 Box::new(DataType::Float64),
@@ -2812,24 +2812,27 @@ mod tests {
         };
 
         // Execute all test cases
+        let test_name = utf8_case.name;
         run_dictionary_in_list_test(utf8_case).map_err(|e| {
             datafusion_common::DataFusionError::Execution(format!(
-                "Dictionary test failed for UTF8: {}",
-                e
+                "Dictionary test '{}' failed: {}",
+                test_name, e
             ))
         })?;
 
+        let test_name = int64_case.name;
         run_dictionary_in_list_test(int64_case).map_err(|e| {
             datafusion_common::DataFusionError::Execution(format!(
-                "Dictionary test failed for Int64: {}",
-                e
+                "Dictionary test '{}' failed: {}",
+                test_name, e
             ))
         })?;
 
+        let test_name = float64_case.name;
         run_dictionary_in_list_test(float64_case).map_err(|e| {
             datafusion_common::DataFusionError::Execution(format!(
-                "Dictionary test failed for Float64: {}",
-                e
+                "Dictionary test '{}' failed: {}",
+                test_name, e
             ))
         })?;
 
@@ -2837,7 +2840,7 @@ mod tests {
         // This tests that multiple rows with the same key (pointing to the same value)
         // are evaluated correctly
         let dedup_case = DictionaryInListTestCase {
-            _name: "dictionary_deduplication",
+            name: "dictionary_deduplication",
             dict_type: DataType::Dictionary(
                 Box::new(DataType::Int8),
                 Box::new(DataType::Utf8),
@@ -2861,10 +2864,11 @@ mod tests {
             dict_needle_test: None,
         };
 
+        let test_name = dedup_case.name;
         run_dictionary_in_list_test(dedup_case).map_err(|e| {
             datafusion_common::DataFusionError::Execution(format!(
-                "Dictionary deduplication test failed: {}",
-                e
+                "Dictionary test '{}' failed: {}",
+                test_name, e
             ))
         })?;
 
