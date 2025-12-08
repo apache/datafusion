@@ -458,9 +458,10 @@ impl PruningPredicate {
     /// details.
     ///
     /// Note that `PruningPredicate` does not attempt to normalize or simplify
-    /// the input expression.
+    /// the input expression unless calling [`snapshot_physical_expr_opt`]
+    /// returns a new expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
-    /// before calling this method to get the best results.
+    /// before calling this method to make sure the expressions can be used for pruning.
     pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
         // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
