@@ -435,15 +435,13 @@ impl HashJoinStream {
                 HashJoinStreamState::ExhaustedProbeSide => {
                     handle_state!(self.process_unmatched_build_batch())
                 }
-                HashJoinStreamState::Completed => {
+                HashJoinStreamState::Completed if !self.output_buffer.is_empty() => {
                     // Flush any remaining buffered data
-                    if !self.output_buffer.is_empty() {
-                        self.output_buffer.finish_buffered_batch()?;
-                        // Continue loop to emit the flushed batch
-                        continue;
-                    }
-                    Poll::Ready(None)
+                    self.output_buffer.finish_buffered_batch()?;
+                    // Continue loop to emit the flushed batch
+                    continue;
                 }
+                HashJoinStreamState::Completed => Poll::Ready(None),
             };
         }
     }
