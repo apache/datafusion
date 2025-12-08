@@ -610,7 +610,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
     ///     // report output is only nullable if any one of the arguments are nullable
     ///     let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
+    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, nullable));
     ///     Ok(field)
     /// }
     /// # }
@@ -638,7 +638,11 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
             .cloned()
             .collect::<Vec<_>>();
         let return_type = self.return_type(&data_types)?;
-        Ok(Arc::new(Field::new(self.name(), return_type, true)))
+        // The output is nullable if any of the input arguments are nullable.
+        // For functions with different null semantics (e.g., concat ignores nulls,
+        // coalesce only returns null if all inputs are null), override this method.
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 
     #[deprecated(
@@ -969,6 +973,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::Field;
     use datafusion_expr_common::signature::Volatility;
     use std::hash::DefaultHasher;
 
@@ -992,12 +997,83 @@ mod tests {
         }
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            unimplemented!()
+            Ok(DataType::Int32)
         }
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             unimplemented!()
         }
+    }
+
+    /// Test that the default `return_field_from_args` implementation correctly
+    /// computes nullability based on input argument nullability.
+    ///
+    /// This is a regression test for the bug where UDFs always returned
+    /// `is_nullable = true` regardless of input nullability.
+    #[test]
+    fn test_return_field_nullability_from_args() {
+        let udf = ScalarUDF::from(TestScalarUDFImpl {
+            name: "test_func",
+            field: "test",
+            signature: Signature::any(2, Volatility::Immutable),
+        });
+
+        // All non-nullable inputs -> output should be non-nullable
+        let non_nullable_fields: Vec<FieldRef> = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, false)),
+        ];
+        let args = ReturnFieldArgs {
+            arg_fields: &non_nullable_fields,
+            scalar_arguments: &[],
+        };
+        let result = udf.return_field_from_args(args).unwrap();
+        assert!(
+            !result.is_nullable(),
+            "Output should be non-nullable when all inputs are non-nullable"
+        );
+
+        // One nullable input -> output should be nullable
+        let one_nullable_fields: Vec<FieldRef> = vec![
+            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("b", DataType::Int32, true)), // nullable
+        ];
+        let args = ReturnFieldArgs {
+            arg_fields: &one_nullable_fields,
+            scalar_arguments: &[],
+        };
+        let result = udf.return_field_from_args(args).unwrap();
+        assert!(
+            result.is_nullable(),
+            "Output should be nullable when any input is nullable"
+        );
+
+        // All nullable inputs -> output should be nullable
+        let all_nullable_fields: Vec<FieldRef> = vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ];
+        let args = ReturnFieldArgs {
+            arg_fields: &all_nullable_fields,
+            scalar_arguments: &[],
+        };
+        let result = udf.return_field_from_args(args).unwrap();
+        assert!(
+            result.is_nullable(),
+            "Output should be nullable when all inputs are nullable"
+        );
+
+        // No inputs -> output should be non-nullable
+        let no_fields: Vec<FieldRef> = vec![];
+        let args = ReturnFieldArgs {
+            arg_fields: &no_fields,
+            scalar_arguments: &[],
+        };
+        let result = udf.return_field_from_args(args).unwrap();
+        assert!(
+            !result.is_nullable(),
+            "Output should be non-nullable when there are no inputs"
+        );
     }
 
     // PartialEq and Hash must be consistent, and also PartialEq and PartialOrd
