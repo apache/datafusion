@@ -819,7 +819,8 @@ mod tests {
             ])?;
 
             let col_a = col("a", &schema)?;
-            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![array.clone()])?;
+            let batch =
+                RecordBatch::try_new(Arc::new(schema.clone()), vec![array.clone()])?;
 
             // Helper to format SQL-like representation for error messages
             let _format_sql = |negated: bool, with_null: bool| -> String {
@@ -939,7 +940,11 @@ mod tests {
 
         run_test_cases(vec![
             primitive_test_case("utf8", ScalarValue::Utf8, string_data.clone()),
-            primitive_test_case("large_utf8", ScalarValue::LargeUtf8, string_data.clone()),
+            primitive_test_case(
+                "large_utf8",
+                ScalarValue::LargeUtf8,
+                string_data.clone(),
+            ),
             primitive_test_case("utf8_view", ScalarValue::Utf8View, string_data),
         ])
     }
@@ -957,7 +962,11 @@ mod tests {
 
         run_test_cases(vec![
             primitive_test_case("binary", ScalarValue::Binary, binary_data.clone()),
-            primitive_test_case("large_binary", ScalarValue::LargeBinary, binary_data.clone()),
+            primitive_test_case(
+                "large_binary",
+                ScalarValue::LargeBinary,
+                binary_data.clone(),
+            ),
             primitive_test_case("binary_view", ScalarValue::BinaryView, binary_data),
         ])
     }
@@ -2594,6 +2603,259 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(3)?;
         let result = as_boolean_array(&result);
         assert_eq!(result, &BooleanArray::from(vec![true, true, false]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_dictionary_types() -> Result<()> {
+        // Helper functions for creating dictionary literals
+        fn dict_lit_int64(key_type: DataType, value: i64) -> Arc<dyn PhysicalExpr> {
+            lit(ScalarValue::Dictionary(
+                Box::new(key_type),
+                Box::new(ScalarValue::Int64(Some(value))),
+            ))
+        }
+
+        fn dict_lit_float64(key_type: DataType, value: f64) -> Arc<dyn PhysicalExpr> {
+            lit(ScalarValue::Dictionary(
+                Box::new(key_type),
+                Box::new(ScalarValue::Float64(Some(value))),
+            ))
+        }
+
+        // Test case structures
+        struct DictNeedleTest {
+            list_values: Vec<Arc<dyn PhysicalExpr>>,
+            expected: Vec<Option<bool>>,
+        }
+
+        struct DictionaryInListTestCase {
+            _name: &'static str,
+            dict_type: DataType,
+            dict_keys: Vec<Option<i8>>,
+            dict_values: ArrayRef,
+            list_values_no_null: Vec<Arc<dyn PhysicalExpr>>,
+            list_values_with_null: Vec<Arc<dyn PhysicalExpr>>,
+            expected_1: Vec<Option<bool>>,
+            expected_2: Vec<Option<bool>>,
+            expected_3: Vec<Option<bool>>,
+            expected_4: Vec<Option<bool>>,
+            dict_needle_test: Option<DictNeedleTest>,
+        }
+
+        // Test harness function
+        fn run_dictionary_in_list_test(
+            test_case: DictionaryInListTestCase,
+        ) -> Result<()> {
+            // Create schema with dictionary type
+            let schema =
+                Schema::new(vec![Field::new("a", test_case.dict_type.clone(), true)]);
+            let col_a = col("a", &schema)?;
+
+            // Create dictionary array from keys and values
+            let keys = Int8Array::from(test_case.dict_keys.clone());
+            let dict_array: ArrayRef =
+                Arc::new(DictionaryArray::try_new(keys, test_case.dict_values)?);
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![dict_array])?;
+
+            let exp1 = test_case.expected_1.clone();
+            let exp2 = test_case.expected_2.clone();
+            let exp3 = test_case.expected_3.clone();
+            let exp4 = test_case.expected_4;
+
+            // Test 1: a IN (values_no_null)
+            in_list!(
+                batch,
+                test_case.list_values_no_null.clone(),
+                &false,
+                exp1,
+                Arc::clone(&col_a),
+                &schema
+            );
+
+            // Test 2: a NOT IN (values_no_null)
+            in_list!(
+                batch,
+                test_case.list_values_no_null.clone(),
+                &true,
+                exp2,
+                Arc::clone(&col_a),
+                &schema
+            );
+
+            // Test 3: a IN (values_with_null)
+            in_list!(
+                batch,
+                test_case.list_values_with_null.clone(),
+                &false,
+                exp3,
+                Arc::clone(&col_a),
+                &schema
+            );
+
+            // Test 4: a NOT IN (values_with_null)
+            in_list!(
+                batch,
+                test_case.list_values_with_null,
+                &true,
+                exp4,
+                Arc::clone(&col_a),
+                &schema
+            );
+
+            // Optional: Dictionary needle test (if provided)
+            if let Some(needle_test) = test_case.dict_needle_test {
+                in_list_raw!(
+                    batch,
+                    needle_test.list_values,
+                    &false,
+                    needle_test.expected,
+                    Arc::clone(&col_a),
+                    &schema
+                );
+            }
+
+            Ok(())
+        }
+
+        // Test case 1: UTF8
+        // Dictionary: keys [0, 1, null] → values ["a", "d", -]
+        // Rows: ["a", "d", null]
+        let utf8_case = DictionaryInListTestCase {
+            _name: "dictionary_utf8",
+            dict_type: DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Utf8),
+            ),
+            dict_keys: vec![Some(0), Some(1), None],
+            dict_values: Arc::new(StringArray::from(vec![Some("a"), Some("d")])),
+            list_values_no_null: vec![lit("a"), lit("b")],
+            list_values_with_null: vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))],
+            expected_1: vec![Some(true), Some(false), None],
+            expected_2: vec![Some(false), Some(true), None],
+            expected_3: vec![Some(true), None, None],
+            expected_4: vec![Some(false), None, None],
+            dict_needle_test: None,
+        };
+
+        // Test case 2: Int64 with dictionary needles
+        // Dictionary: keys [0, 1, null] → values [10, 20, -]
+        // Rows: [10, 20, null]
+        let int64_case = DictionaryInListTestCase {
+            _name: "dictionary_int64",
+            dict_type: DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int64),
+            ),
+            dict_keys: vec![Some(0), Some(1), None],
+            dict_values: Arc::new(Int64Array::from(vec![Some(10), Some(20)])),
+            list_values_no_null: vec![lit(10i64), lit(15i64)],
+            list_values_with_null: vec![
+                lit(10i64),
+                lit(15i64),
+                lit(ScalarValue::Int64(None)),
+            ],
+            expected_1: vec![Some(true), Some(false), None],
+            expected_2: vec![Some(false), Some(true), None],
+            expected_3: vec![Some(true), None, None],
+            expected_4: vec![Some(false), None, None],
+            dict_needle_test: Some(DictNeedleTest {
+                list_values: vec![
+                    dict_lit_int64(DataType::Int16, 10),
+                    dict_lit_int64(DataType::Int16, 15),
+                ],
+                expected: vec![Some(true), Some(false), None],
+            }),
+        };
+
+        // Test case 3: Float64 with NaN and dictionary needles
+        // Dictionary: keys [0, 1, null, 2] → values [1.5, 3.7, NaN, -]
+        // Rows: [1.5, 3.7, null, NaN]
+        // Note: NaN is a value (not null), so it goes in the values array
+        let float64_case = DictionaryInListTestCase {
+            _name: "dictionary_float64",
+            dict_type: DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Float64),
+            ),
+            dict_keys: vec![Some(0), Some(1), None, Some(2)],
+            dict_values: Arc::new(Float64Array::from(vec![
+                Some(1.5),      // index 0
+                Some(3.7),      // index 1
+                Some(f64::NAN), // index 2
+            ])),
+            list_values_no_null: vec![lit(1.5f64), lit(2.0f64)],
+            list_values_with_null: vec![
+                lit(1.5f64),
+                lit(2.0f64),
+                lit(ScalarValue::Float64(None)),
+            ],
+            // Test 1: a IN (1.5, 2.0) → [true, false, null, false]
+            // NaN is false because NaN not in list and no NULL in list
+            expected_1: vec![Some(true), Some(false), None, Some(false)],
+            // Test 2: a NOT IN (1.5, 2.0) → [false, true, null, true]
+            // NaN is true because NaN not in list
+            expected_2: vec![Some(false), Some(true), None, Some(true)],
+            // Test 3: a IN (1.5, 2.0, NULL) → [true, null, null, null]
+            // 3.7 and NaN become null due to NULL in list (three-valued logic)
+            expected_3: vec![Some(true), None, None, None],
+            // Test 4: a NOT IN (1.5, 2.0, NULL) → [false, null, null, null]
+            // 3.7 and NaN become null due to NULL in list
+            expected_4: vec![Some(false), None, None, None],
+            dict_needle_test: Some(DictNeedleTest {
+                list_values: vec![
+                    dict_lit_float64(DataType::UInt16, 1.5),
+                    dict_lit_float64(DataType::UInt16, 2.0),
+                ],
+                expected: vec![Some(true), Some(false), None, Some(false)],
+            }),
+        };
+
+        // Execute all test cases
+        run_dictionary_in_list_test(utf8_case).map_err(|e| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "Dictionary test failed for UTF8: {}",
+                e
+            ))
+        })?;
+
+        run_dictionary_in_list_test(int64_case).map_err(|e| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "Dictionary test failed for Int64: {}",
+                e
+            ))
+        })?;
+
+        run_dictionary_in_list_test(float64_case).map_err(|e| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "Dictionary test failed for Float64: {}",
+                e
+            ))
+        })?;
+
+        // Additional test for Float64 NaN in IN list
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Float64));
+        let schema = Schema::new(vec![Field::new("a", dict_type.clone(), true)]);
+        let col_a = col("a", &schema)?;
+
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
+        let values = Float64Array::from(vec![Some(1.5), Some(3.7), Some(f64::NAN)]);
+        let dict_array: ArrayRef =
+            Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![dict_array])?;
+
+        // Test: a IN (1.5, 2.0, NaN)
+        let list_with_nan = vec![lit(1.5f64), lit(2.0f64), lit(f64::NAN)];
+        in_list!(
+            batch,
+            list_with_nan,
+            &false,
+            vec![Some(true), Some(false), None, Some(true)],
+            col_a,
+            &schema
+        );
+
         Ok(())
     }
 }
