@@ -19,13 +19,14 @@
 
 use arrow::datatypes::Schema;
 use datafusion_common::{
-    tree_node::{Transformed, TreeNode, TreeNodeRewriter},
     Result,
+    tree_node::{Transformed, TreeNode, TreeNodeRewriter},
 };
 use std::sync::Arc;
 
-use crate::{simplifier::not::simplify_not_expr, PhysicalExpr};
+use crate::{PhysicalExpr, simplifier::not::simplify_not_expr};
 
+pub mod const_evaluator;
 pub mod not;
 pub mod unwrap_cast;
 
@@ -72,11 +73,13 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
         #[cfg(test)]
         let original_type = node.data_type(self.schema).unwrap();
 
-        // Apply NOT expression simplification first, then unwrap cast optimization
-        let rewritten =
-            simplify_not_expr(&node, self.schema)?.transform_data(|node| {
+        // Apply NOT expression simplification first, then unwrap cast optimization,
+        // then constant expression evaluation
+        let rewritten = simplify_not_expr(&node, self.schema)?
+            .transform_data(|node| {
                 unwrap_cast::unwrap_cast_in_comparison(node, self.schema)
-            })?;
+            })?
+            .transform_data(|node| const_evaluator::simplify_const_expr(&node))?;
 
         #[cfg(test)]
         assert_eq!(
@@ -93,7 +96,7 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
 mod tests {
     use super::*;
     use crate::expressions::{
-        col, in_list, lit, BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr,
+        BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr, col, in_list, lit,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
@@ -137,8 +140,7 @@ mod tests {
     ) {
         let result = simplifier.simplify(Arc::clone(&input)).unwrap();
         assert_eq!(
-            &result,
-            &expected,
+            &result, &expected,
             "Simplification should transform:\n  input: {input}\n  to:    {expected}\n  got:   {result}"
         );
     }
@@ -490,5 +492,132 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_simplify_literal_binary_expr() {
+        let schema = Schema::empty();
+        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+
+        // 1 + 2 -> 3
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(lit(1i32), Operator::Plus, lit(2i32)));
+        let result = simplifier.simplify(expr).unwrap();
+        let literal = as_literal(&result);
+        assert_eq!(literal.value(), &ScalarValue::Int32(Some(3)));
+    }
+
+    #[test]
+    fn test_simplify_literal_comparison() {
+        let schema = Schema::empty();
+        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+
+        // 5 > 3 -> true
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(lit(5i32), Operator::Gt, lit(3i32)));
+        let result = simplifier.simplify(expr).unwrap();
+        let literal = as_literal(&result);
+        assert_eq!(literal.value(), &ScalarValue::Boolean(Some(true)));
+
+        // 2 > 3 -> false
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(lit(2i32), Operator::Gt, lit(3i32)));
+        let result = simplifier.simplify(expr).unwrap();
+        let literal = as_literal(&result);
+        assert_eq!(literal.value(), &ScalarValue::Boolean(Some(false)));
+    }
+
+    #[test]
+    fn test_simplify_nested_literal_expr() {
+        let schema = Schema::empty();
+        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+
+        // (1 + 2) * 3 -> 9
+        let inner: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(lit(1i32), Operator::Plus, lit(2i32)));
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(inner, Operator::Multiply, lit(3i32)));
+        let result = simplifier.simplify(expr).unwrap();
+        let literal = as_literal(&result);
+        assert_eq!(literal.value(), &ScalarValue::Int32(Some(9)));
+    }
+
+    #[test]
+    fn test_simplify_deeply_nested_literals() {
+        let schema = Schema::empty();
+        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+
+        // ((1 + 2) * 3) + ((4 - 1) * 2) -> 9 + 6 -> 15
+        let left: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(lit(1i32), Operator::Plus, lit(2i32))),
+            Operator::Multiply,
+            lit(3i32),
+        ));
+        let right: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(lit(4i32), Operator::Minus, lit(1i32))),
+            Operator::Multiply,
+            lit(2i32),
+        ));
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(left, Operator::Plus, right));
+        let result = simplifier.simplify(expr).unwrap();
+        let literal = as_literal(&result);
+        assert_eq!(literal.value(), &ScalarValue::Int32(Some(15)));
+    }
+
+    #[test]
+    fn test_no_simplify_with_column() {
+        let schema = test_schema();
+        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+
+        // c1 + 2 should NOT be simplified (has column reference)
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("c1", &schema).unwrap(),
+            Operator::Plus,
+            lit(2i32),
+        ));
+        let result = simplifier.simplify(expr).unwrap();
+        // Should remain a BinaryExpr, not become a Literal
+        assert!(result.as_any().downcast_ref::<BinaryExpr>().is_some());
+    }
+
+    #[test]
+    fn test_partial_simplify_with_column() {
+        let schema = test_schema();
+        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+
+        // (1 + 2) + c1 should simplify the literal part: 3 + c1
+        let literal_part: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(lit(1i32), Operator::Plus, lit(2i32)));
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            literal_part,
+            Operator::Plus,
+            col("c1", &schema).unwrap(),
+        ));
+        let result = simplifier.simplify(expr).unwrap();
+
+        // Should be a BinaryExpr with a Literal(3) on the left
+        let binary = as_binary(&result);
+        let left_literal = as_literal(binary.left());
+        assert_eq!(left_literal.value(), &ScalarValue::Int32(Some(3)));
+    }
+
+    #[test]
+    fn test_simplify_literal_string_concat() {
+        let schema = Schema::empty();
+        let mut simplifier = PhysicalExprSimplifier::new(&schema);
+
+        // 'hello' || ' world' -> 'hello world'
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            lit("hello"),
+            Operator::StringConcat,
+            lit(" world"),
+        ));
+        let result = simplifier.simplify(expr).unwrap();
+        let literal = as_literal(&result);
+        assert_eq!(
+            literal.value(),
+            &ScalarValue::Utf8(Some("hello world".to_string()))
+        );
     }
 }

@@ -15,13 +15,53 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query T
+SELECT url_decode('https%3A%2F%2Fspark.apache.org');
+----
+https://spark.apache.org
 
-## Original Query: SELECT url_decode('https%3A%2F%2Fspark.apache.org');
-## PySpark 3.5.5 Result: {'url_decode(https%3A%2F%2Fspark.apache.org)': 'https://spark.apache.org', 'typeof(url_decode(https%3A%2F%2Fspark.apache.org))': 'string', 'typeof(https%3A%2F%2Fspark.apache.org)': 'string'}
-#query
-#SELECT url_decode('https%3A%2F%2Fspark.apache.org'::string);
+# Test with LargeUtf8
+query T
+SELECT url_decode(arrow_cast('https%3A%2F%2Fspark.apache.org', 'LargeUtf8'));
+----
+https://spark.apache.org
+
+# Test with Utf8View
+query T
+SELECT url_decode(arrow_cast('https%3A%2F%2Fspark.apache.org', 'Utf8View'));
+----
+https://spark.apache.org
+
+# Non-ASCII string
+query T
+SELECT url_decode('%E4%BD%A0%E5%A5%BD')
+----
+你好
+
+# Empty string
+query T
+SELECT url_decode('');
+----
+(empty)
+
+# Null value
+query T
+SELECT url_decode(NULL::string);
+----
+NULL
+
+# Roundtrip with url_encode
+query T
+SELECT url_decode(url_encode('Spark SQL ~!@#$%^&*()'));
+----
+Spark SQL ~!@#$%^&*()
+
+# Plus replacement
+query T
+SELECT url_decode('Spark+SQL%21');
+----
+Spark SQL!
+
+# Invalid percent encoding case
+query error DataFusion error: Execution error: Invalid percent\-encoding: invalid hex sequence '%3%' at position 5
+SELECT url_decode('https%3%2F%2Fspark.apache.org'::string);

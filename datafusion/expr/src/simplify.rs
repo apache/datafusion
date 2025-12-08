@@ -18,9 +18,9 @@
 //! Structs and traits to provide the information needed for expression simplification.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_datafusion_err, DFSchemaRef, Result};
+use datafusion_common::{DFSchemaRef, Result, internal_datafusion_err};
 
-use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
+use crate::{Expr, ExprSchemable, execution_props::ExecutionProps};
 
 /// Provides the information necessary to apply algebraic simplification to an
 /// [Expr]. See [SimplifyContext] for one concrete implementation.
@@ -74,10 +74,10 @@ impl<'a> SimplifyContext<'a> {
 impl SimplifyInfo for SimplifyContext<'_> {
     /// Returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        if let Some(schema) = &self.schema {
-            if let Ok(DataType::Boolean) = expr.get_type(schema) {
-                return Ok(true);
-            }
+        if let Some(schema) = &self.schema
+            && let Ok(DataType::Boolean) = expr.get_type(schema)
+        {
+            return Ok(true);
         }
 
         Ok(false)

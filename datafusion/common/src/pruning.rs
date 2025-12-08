@@ -169,6 +169,36 @@ impl PartitionPruningStatistics {
     ///   This must **not** be the schema of the entire file or table:
     ///   instead it must only be the schema of the partition columns,
     ///   in the same order as the values in `partition_values`.
+    ///
+    /// # Example
+    ///
+    /// To create [`PartitionPruningStatistics`] for two partition columns `a` and `b`,
+    /// for three containers like this:
+    ///
+    /// | a | b |
+    /// | - | - |
+    /// | 1 | 2 |
+    /// | 3 | 4 |
+    /// | 5 | 6 |
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion_common::ScalarValue;
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::pruning::PartitionPruningStatistics;
+    ///
+    /// let partition_values = vec![
+    ///     vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
+    ///     vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
+    ///     vec![ScalarValue::from(5i32), ScalarValue::from(6i32)],
+    /// ];
+    /// let partition_fields = vec![
+    ///     Arc::new(Field::new("a", DataType::Int32, false)),
+    ///     Arc::new(Field::new("b", DataType::Int32, false)),
+    /// ];
+    /// let partition_stats =
+    ///     PartitionPruningStatistics::try_new(partition_values, partition_fields).unwrap();
+    /// ```
     pub fn try_new(
         partition_values: Vec<Vec<ScalarValue>>,
         partition_fields: Vec<FieldRef>,
