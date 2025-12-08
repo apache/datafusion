@@ -80,15 +80,9 @@ impl DefaultListFilesCache {
     }
 
     #[cfg(test)]
-    pub fn new_with_provider(
-        memory_limit: usize,
-        ttl: Option<Duration>,
-        provider: Arc<dyn TimeProvider>,
-    ) -> Self {
-        Self {
-            state: Mutex::new(DefaultListFilesCacheState::new(memory_limit, ttl)),
-            time_provider: provider,
-        }
+    pub(crate) fn with_time_provider(mut self, provider: Arc<dyn TimeProvider>) -> Self {
+        self.time_provider = provider;
+        self
     }
 
     /// Returns the cache's memory limit in bytes.
@@ -659,8 +653,8 @@ mod tests {
         let ttl = Duration::from_millis(200);
 
         let mock_time = Arc::new(MockTimeProvider::new());
-        let cache =
-            DefaultListFilesCache::new_with_provider(1000, Some(ttl), mock_time.clone());
+        let cache = DefaultListFilesCache::new(1000, Some(ttl))
+            .with_time_provider(Arc::clone(&mock_time) as Arc<dyn TimeProvider>);
 
         let (path1, value1, _) = create_test_list_files_entry("path1", 1, 400);
         let (path2, value2, _) = create_test_list_files_entry("path2", 1, 400);
