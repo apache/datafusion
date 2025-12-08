@@ -648,8 +648,51 @@ mod tests {
         Ok(())
     }
 
+    /// Shows that the statistics cache is not enabled by default yet
+    /// See https://github.com/apache/datafusion/issues/19217
     #[tokio::test]
-    async fn test_statistics_cache() -> Result<(), DataFusionError> {
+    async fn test_statistics_cache_default() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+
+        ctx.register_udtf(
+            "statistics_cache",
+            Arc::new(StatisticsCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        for filename in [
+            "alltypes_plain",
+            "alltypes_tiny_pages",
+            "lz4_raw_compressed_larger",
+        ] {
+            ctx.sql(
+                format!(
+                    "create external table {filename}
+                    stored as parquet
+                    location '../parquet-testing/data/{filename}.parquet'",
+                )
+                .as_str(),
+            )
+            .await?
+            .collect()
+            .await?;
+        }
+
+        let sql = "SELECT split_part(path, '/', -1) as filename, file_size_bytes, num_rows, num_columns, table_size_bytes from statistics_cache() order by filename";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        ++
+        ++
+        ");
+
+        Ok(())
+    }
+
+    // Can be removed when https://github.com/apache/datafusion/issues/19217 is resolved
+    #[tokio::test]
+    async fn test_statistics_cache_override() -> Result<(), DataFusionError> {
         let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
         let cache_config = CacheManagerConfig::default()
             .with_files_statistics_cache(Some(file_statistics_cache.clone()));
