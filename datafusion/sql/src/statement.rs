@@ -1643,22 +1643,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let constraints =
             self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-            PlanCreateExternalTable {
-                schema: df_schema,
-                name,
-                location,
-                file_type,
-                table_partition_cols,
-                if_not_exists,
-                or_replace,
-                temporary,
-                definition,
-                order_exprs: ordered_exprs,
-                unbounded,
-                options: options_map,
-                constraints,
-                column_defaults,
-            },
+            PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                .with_partition_cols(table_partition_cols)
+                .with_if_not_exists(if_not_exists)
+                .with_or_replace(or_replace)
+                .with_temporary(temporary)
+                .with_definition(definition)
+                .with_order_exprs(ordered_exprs)
+                .with_unbounded(unbounded)
+                .with_options(options_map)
+                .with_constraints(constraints)
+                .with_column_defaults(column_defaults)
+                .build(),
         )))
     }
 

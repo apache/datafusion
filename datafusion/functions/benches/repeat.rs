@@ -22,9 +22,9 @@ use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
-use datafusion_common::config::ConfigOptions;
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use datafusion_common::DataFusionError;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::hint::black_box;

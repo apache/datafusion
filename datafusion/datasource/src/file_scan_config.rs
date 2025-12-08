@@ -28,8 +28,7 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, ColumnStatistics, Constraints, Result,
-    ScalarValue, Statistics,
+    internal_datafusion_err, internal_err, Constraints, Result, ScalarValue, Statistics,
 };
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
@@ -647,32 +646,26 @@ impl DataSource for FileScanConfig {
             if let Some(file_group) = self.file_groups.get(partition) {
                 if let Some(stat) = file_group.file_statistics(None) {
                     // Project the statistics based on the projection
-                    let table_cols_stats = self
-                        .projection_indices()
-                        .into_iter()
-                        .map(|idx| {
-                            if idx < self.file_schema().fields().len() {
-                                stat.column_statistics[idx].clone()
-                            } else {
-                                // TODO provide accurate stat for partition column
-                                // See https://github.com/apache/datafusion/issues/1186
-                                ColumnStatistics::new_unknown()
-                            }
-                        })
-                        .collect();
-
-                    return Ok(Statistics {
-                        num_rows: stat.num_rows,
-                        total_byte_size: stat.total_byte_size,
-                        column_statistics: table_cols_stats,
-                    });
+                    let output_schema = self.projected_schema()?;
+                    return if let Some(projection) = self.file_source.projection() {
+                        projection.project_statistics(stat.clone(), &output_schema)
+                    } else {
+                        Ok(stat.clone())
+                    };
                 }
             }
             // If no statistics available for this partition, return unknown
             Ok(Statistics::new_unknown(self.projected_schema()?.as_ref()))
         } else {
             // Return aggregate statistics across all partitions
-            Ok(self.projected_stats())
+            let statistics = self.statistics();
+            let projection = self.file_source.projection();
+            let output_schema = self.projected_schema()?;
+            if let Some(projection) = &projection {
+                projection.project_statistics(statistics.clone(), &output_schema)
+            } else {
+                Ok(statistics)
+            }
         }
     }
 
@@ -777,15 +770,6 @@ impl FileScanConfig {
         self.file_source.table_schema().table_partition_cols()
     }
 
-    fn projection_indices(&self) -> Vec<usize> {
-        match self.file_source.projection() {
-            Some(proj) => proj.ordered_column_indices(),
-            None => (0..self.file_schema().fields().len()
-                + self.table_partition_cols().len())
-                .collect(),
-        }
-    }
-
     /// Returns the unprojected table statistics, marking them as inexact if filters are present.
     ///
     /// When filters are pushed down (including pruning predicates and bloom filters),
@@ -796,30 +780,6 @@ impl FileScanConfig {
             self.statistics.clone().to_inexact()
         } else {
             self.statistics.clone()
-        }
-    }
-
-    fn projected_stats(&self) -> Statistics {
-        let statistics = self.statistics();
-
-        let table_cols_stats = self
-            .projection_indices()
-            .into_iter()
-            .map(|idx| {
-                if idx < self.file_schema().fields().len() {
-                    statistics.column_statistics[idx].clone()
-                } else {
-                    // TODO provide accurate stat for partition column (#1186)
-                    ColumnStatistics::new_unknown()
-                }
-            })
-            .collect();
-
-        Statistics {
-            num_rows: statistics.num_rows,
-            // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-            total_byte_size: statistics.total_byte_size,
-            column_statistics: table_cols_stats,
         }
     }
 
@@ -857,9 +817,13 @@ impl FileScanConfig {
         Ok(())
     }
 
+    #[deprecated(
+        since = "52.0.0",
+        note = "This method is no longer used, use eq_properties instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+    )]
     pub fn projected_constraints(&self) -> Constraints {
-        let indexes = self.projection_indices();
-        self.constraints.project(&indexes).unwrap_or_default()
+        let props = self.eq_properties();
+        props.constraints().clone()
     }
 
     /// Specifies whether newlines in (quoted) values are supported.
@@ -873,7 +837,12 @@ impl FileScanConfig {
         self.new_lines_in_values
     }
 
+    #[deprecated(
+        since = "52.0.0",
+        note = "This method is no longer used, use eq_properties instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+    )]
     pub fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
+        #[expect(deprecated)]
         self.file_source.projection().as_ref().map(|p| {
             p.ordered_column_indices()
                 .into_iter()
@@ -1090,6 +1059,24 @@ impl DisplayAs for FileScanConfig {
     }
 }
 
+/// Get the indices of columns in a projection if the projection is a simple
+/// list of columns.
+/// If there are any expressions other than columns, returns None.
+fn ordered_column_indices_from_projection(
+    projection: &ProjectionExprs,
+) -> Option<Vec<usize>> {
+    projection
+        .expr_iter()
+        .map(|e| {
+            let index = e
+                .as_any()
+                .downcast_ref::<datafusion_physical_expr::expressions::Column>()?
+                .index();
+            Some(index)
+        })
+        .collect::<Option<Vec<usize>>>()
+}
+
 /// The various listing tables does not attempt to read all files
 /// concurrently, instead they will read files in sequence within a
 /// partition.  This is an important property as it allows plans to
@@ -1165,11 +1152,15 @@ fn get_projected_output_ordering(
                 return false;
             }
 
-            let indices = base_config
+            let Some(indices) = base_config
                 .file_source
                 .projection()
                 .as_ref()
-                .map(|p| p.ordered_column_indices());
+                .map(|p| ordered_column_indices_from_projection(p))
+            else {
+                // Can't determine if ordered without a simple projection
+                return true;
+            };
 
             let statistics = match MinMaxStatistics::new_from_files(
                 &new_ordering,
@@ -1234,8 +1225,8 @@ mod tests {
     };
 
     use arrow::datatypes::Field;
-    use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
+    use datafusion_common::{internal_err, ColumnStatistics};
     use datafusion_expr::{Operator, SortExpr};
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
@@ -1269,76 +1260,6 @@ mod tests {
             table_partition_col,
             "partition columns are the last columns and ust have all values defined in created field"
         );
-    }
-
-    #[test]
-    fn test_projected_file_schema_with_partition_col() {
-        let schema = aggr_test_schema();
-        let partition_cols = vec![
-            (
-                "part1".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-            (
-                "part2".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-        ];
-
-        // Projected file schema for config with projection including partition column
-        let config = config_for_projection(
-            schema.clone(),
-            Some(vec![0, 3, 5, schema.fields().len()]),
-            Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols),
-        );
-        let projection = projected_file_schema(&config);
-
-        // Assert partition column filtered out in projected file schema
-        let expected_columns = vec!["c1", "c4", "c6"];
-        let actual_columns = projection
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
-        assert_eq!(expected_columns, actual_columns);
-    }
-
-    /// Projects only file schema, ignoring partition columns
-    fn projected_file_schema(config: &FileScanConfig) -> SchemaRef {
-        let file_schema = config.file_source.table_schema().file_schema();
-        if let Some(file_indices) = config.file_column_projection_indices() {
-            Arc::new(file_schema.project(&file_indices).unwrap())
-        } else {
-            Arc::clone(file_schema)
-        }
-    }
-
-    #[test]
-    fn test_projected_file_schema_without_projection() {
-        let schema = aggr_test_schema();
-        let partition_cols = vec![
-            (
-                "part1".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-            (
-                "part2".to_owned(),
-                wrap_partition_type_in_dict(DataType::Utf8),
-            ),
-        ];
-
-        // Projected file schema for config without projection
-        let config = config_for_projection(
-            schema.clone(),
-            None,
-            Statistics::new_unknown(&schema),
-            to_partition_cols(partition_cols),
-        );
-        let projection = projected_file_schema(&config);
-
-        // Assert projected file schema is equal to file schema
-        assert_eq!(projection.fields(), schema.fields());
     }
 
     #[test]
@@ -1665,14 +1586,6 @@ mod tests {
         .unwrap()
         .with_statistics(statistics)
         .build()
-    }
-
-    /// Convert partition columns from Vec<String DataType> to Vec<Field>
-    fn to_partition_cols(table_partition_cols: Vec<(String, DataType)>) -> Vec<Field> {
-        table_partition_cols
-            .iter()
-            .map(|(name, dtype)| Field::new(name, dtype.clone(), false))
-            .collect::<Vec<_>>()
     }
 
     #[test]
@@ -2154,8 +2067,8 @@ mod tests {
             "Second projected column should be col2 with 10 nulls"
         );
 
-        // Verify row count and byte size are preserved
+        // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
-        assert_eq!(partition_stats.total_byte_size, Precision::Exact(1024));
+        assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
     }
 }

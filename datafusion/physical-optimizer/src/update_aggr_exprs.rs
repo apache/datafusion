@@ -48,7 +48,7 @@ use crate::{OptimizerContext, PhysicalOptimizerRule};
 pub struct OptimizeAggregateOrder {}
 
 impl OptimizeAggregateOrder {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }

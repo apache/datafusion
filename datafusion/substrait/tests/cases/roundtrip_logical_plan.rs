@@ -1163,6 +1163,96 @@ async fn simple_intersect_table_reuse() -> Result<()> {
 }
 
 #[tokio::test]
+async fn self_referential_intersect() -> Result<()> {
+    // Test INTERSECT with the same table on both sides
+    // This previously failed with "Schema contains duplicate qualified field name"
+    // The fix ensures requalify_sides_if_needed is called in intersect_or_except
+    // After roundtrip through Substrait, SubqueryAlias is lost and requalification
+    // produces "left" and "right" aliases
+    // Note: INTERSECT (without ALL) includes DISTINCT, but the outer Aggregate
+    // is optimized away, resulting in just the **LeftSemi** join
+    // (LeftSemi returns rows from left that exist in right)
+    assert_expected_plan(
+        "SELECT a FROM data WHERE a > 0 INTERSECT SELECT a FROM data WHERE a < 5",
+        "LeftSemi Join: left.a = right.a\
+        \n  SubqueryAlias: left\
+        \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n      Filter: data.a > Int64(0)\
+        \n        TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n  SubqueryAlias: right\
+        \n    Filter: data.a < Int64(5)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn self_referential_except() -> Result<()> {
+    // Test EXCEPT with the same table on both sides
+    // This previously failed with "Schema contains duplicate qualified field name"
+    // The fix ensures requalify_sides_if_needed is called in intersect_or_except
+    // After roundtrip through Substrait, SubqueryAlias is lost and requalification
+    // produces "left" and "right" aliases
+    // Note: EXCEPT (without ALL) includes DISTINCT, but the outer Aggregate
+    // is optimized away, resulting in just the **LeftAnti** join
+    // (LeftAnti returns rows from left that don't exist in right)
+    assert_expected_plan(
+        "SELECT a FROM data WHERE a > 0 EXCEPT SELECT a FROM data WHERE a < 5",
+        "LeftAnti Join: left.a = right.a\
+        \n  SubqueryAlias: left\
+        \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n      Filter: data.a > Int64(0)\
+        \n        TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n  SubqueryAlias: right\
+        \n    Filter: data.a < Int64(5)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn self_referential_intersect_all() -> Result<()> {
+    // Test INTERSECT ALL with the same table on both sides
+    // INTERSECT ALL preserves duplicates and does not include DISTINCT
+    // Uses **LeftSemi** join (returns rows from left that exist in right)
+    // The requalification ensures no duplicate field name errors
+    assert_expected_plan(
+        "SELECT a FROM data WHERE a > 0 INTERSECT ALL SELECT a FROM data WHERE a < 5",
+        "LeftSemi Join: left.a = right.a\
+        \n  SubqueryAlias: left\
+        \n    Filter: data.a > Int64(0)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n  SubqueryAlias: right\
+        \n    Filter: data.a < Int64(5)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn self_referential_except_all() -> Result<()> {
+    // Test EXCEPT ALL with the same table on both sides
+    // EXCEPT ALL preserves duplicates and does not include DISTINCT
+    // Uses **LeftAnti** join (returns rows from left that don't exist in right)
+    // The requalification ensures no duplicate field name errors
+    assert_expected_plan(
+        "SELECT a FROM data WHERE a > 0 EXCEPT ALL SELECT a FROM data WHERE a < 5",
+        "LeftAnti Join: left.a = right.a\
+        \n  SubqueryAlias: left\
+        \n    Filter: data.a > Int64(0)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n  SubqueryAlias: right\
+        \n    Filter: data.a < Int64(5)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
 async fn simple_window_function() -> Result<()> {
     roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, sum(b) OVER (PARTITION BY a) FROM data;").await
 }

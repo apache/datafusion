@@ -80,10 +80,9 @@ logical_plan
 04)----TableScan: t2 projection=[id, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.explain.format = "tree";
@@ -103,25 +102,19 @@ physical_plan
 06)│          val: val         │
 07)└─────────────┬─────────────┘
 08)┌─────────────┴─────────────┐
-09)│    CoalesceBatchesExec    │
+09)│        HashJoinExec       │
 10)│    --------------------   │
-11)│     target_batch_size:    │
-12)│            8192           │
-13)└─────────────┬─────────────┘
-14)┌─────────────┴─────────────┐
-15)│        HashJoinExec       │
-16)│    --------------------   │
-17)│      NullsEqual: true     ├──────────────┐
-18)│                           │              │
-19)│      on: (val = val)      │              │
-20)└─────────────┬─────────────┘              │
-21)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-22)│       DataSourceExec      ││       DataSourceExec      │
-23)│    --------------------   ││    --------------------   │
-24)│         bytes: 288        ││         bytes: 288        │
-25)│       format: memory      ││       format: memory      │
-26)│          rows: 1          ││          rows: 1          │
-27)└───────────────────────────┘└───────────────────────────┘
+11)│      NullsEqual: true     ├──────────────┐
+12)│                           │              │
+13)│      on: (val = val)      │              │
+14)└─────────────┬─────────────┘              │
+15)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+16)│       DataSourceExec      ││       DataSourceExec      │
+17)│    --------------------   ││    --------------------   │
+18)│         bytes: 288        ││         bytes: 288        │
+19)│       format: memory      ││       format: memory      │
+20)│          rows: 1          ││          rows: 1          │
+21)└───────────────────────────┘└───────────────────────────┘
 
 statement ok
 set datafusion.explain.format = "indent";
@@ -148,15 +141,14 @@ logical_plan
 05)----TableScan: t2 projection=[id, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], projection=[id@0, val@1, id@3, val@4], NullsEqual: true
-04)------CoalescePartitionsExec
-05)--------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------FilterExec: CAST(val@1 AS Int64) + 1 IS NOT DISTINCT FROM 11
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
-09)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
-10)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], projection=[id@0, val@1, id@3, val@4], NullsEqual: true
+03)----CoalescePartitionsExec
+04)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: CAST(val@1 AS Int64) + 1 IS NOT DISTINCT FROM 11
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
+09)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Mixed join predicate with `IS DISTINCT FROM` and `IS NOT DISTINCT FROM`
 query IIII rowsort
@@ -178,12 +170,11 @@ logical_plan
 04)----TableScan: t2 projection=[id, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], filter=CAST(val@0 AS Int64) % 3 IS DISTINCT FROM CAST(val@1 AS Int64) % 3, projection=[id@0, val@1, id@3, val@4], NullsEqual: true
-04)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
-07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], filter=CAST(val@0 AS Int64) % 3 IS DISTINCT FROM CAST(val@1 AS Int64) % 3, projection=[id@0, val@1, id@3, val@4], NullsEqual: true
+03)----ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test mixed equal and IS NOT DISTINCT FROM conditions
 # The `IS NOT DISTINCT FROM` expr should NOT in HashJoin's `on` predicate
@@ -199,10 +190,9 @@ logical_plan
 04)----TableScan: t2 projection=[id, val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], filter=val@0 IS NOT DISTINCT FROM val@1
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], filter=val@0 IS NOT DISTINCT FROM val@1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test the mixed condition join result
 query IIII rowsort
@@ -240,14 +230,12 @@ logical_plan
 06)----TableScan: t0 projection=[val]
 physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@0, val@1)], projection=[id@1, val@2, id@3, val@4], NullsEqual: true
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)--------CoalesceBatchesExec: target_batch_size=8192
-07)----------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
-09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@0, val@1)], projection=[id@1, val@2, id@3, val@4], NullsEqual: true
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test IS NOT DISTINCT FROM with multiple columns
 statement ok
@@ -284,13 +272,12 @@ JOIN t4 ON (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.val2 IS NOT DISTINCT F
 ----
 01)Projection: t3.id AS t3_id, t4.id AS t4_id, t3.val1, t4.val1, t3.val2, t4.val2
 01)ProjectionExec: expr=[id@0 as t3_id, id@3 as t4_id, val1@1 as val1, val1@4 as val1, val2@2 as val2, val2@5 as val2]
-02)--CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val1@1, val1@1), (val2@2, val2@2)], NullsEqual: true
 02)--Inner Join: t3.val1 = t4.val1, t3.val2 = t4.val2
-03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val1@1, val1@1), (val2@2, val2@2)], NullsEqual: true
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 03)----TableScan: t3 projection=[id, val1, val2]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)----TableScan: t4 projection=[id, val1, val2]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
 logical_plan
 physical_plan
 
