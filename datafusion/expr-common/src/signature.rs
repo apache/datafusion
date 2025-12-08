@@ -96,7 +96,7 @@ pub enum Volatility {
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust
 /// use datafusion_expr_common::signature::ExprVolatility;
 ///
 /// // Ordering comparison
@@ -159,7 +159,7 @@ impl ExprVolatility {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// use datafusion_expr_common::signature::ExprVolatility;
     ///
     /// assert_eq!(
@@ -178,30 +178,6 @@ impl ExprVolatility {
     #[inline]
     pub fn max(self, other: Self) -> Self {
         std::cmp::max(self, other)
-    }
-
-    /// Returns true if this expression can be evaluated at planning time.
-    ///
-    /// This is true for `Constant` expressions only.
-    #[inline]
-    pub fn is_constant(&self) -> bool {
-        matches!(self, ExprVolatility::Constant)
-    }
-
-    /// Returns true if this expression is deterministic for a given input.
-    ///
-    /// This is true for `Constant` and `Immutable` expressions.
-    #[inline]
-    pub fn is_deterministic(&self) -> bool {
-        matches!(self, ExprVolatility::Constant | ExprVolatility::Immutable)
-    }
-
-    /// Returns true if this expression can be safely cached within a query.
-    ///
-    /// This is true for `Constant`, `Immutable`, and `Stable` expressions.
-    #[inline]
-    pub fn is_cacheable_within_query(&self) -> bool {
-        !matches!(self, ExprVolatility::Volatile)
     }
 
     /// Folds multiple volatilities together, returning the maximum (most volatile).
