@@ -467,13 +467,13 @@ impl PruningPredicate {
         // so that PruningPredicate can work with a static expression.
         let tf = snapshot_physical_expr_opt(expr)?;
         if tf.transformed {
-            // If we had an expresion such as Dynamic(part_col < 5 and col < 10)
+            // If we had an expression such as Dynamic(part_col < 5 and col < 10)
             // (this could come from something like `select * from t order by part_col, col, limit 10`)
             // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
             // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
             // the expression we have now is `8 < 5 and col < 10`.
             // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
-            let mut simplifier = PhysicalExprSimplifier::new(&schema);
+            let simplifier = PhysicalExprSimplifier::new(&schema);
             expr = simplifier.simplify(tf.data)?;
         } else {
             expr = tf.data;
@@ -3001,7 +3001,7 @@ mod tests {
                 let Some(col_expr) =
                     child_expr.as_any().downcast_ref::<phys_expr::Column>()
                 else {
-                    return Arc::clone(&child_expr);
+                    return Arc::clone(child_expr);
                 };
                 if col_expr.name() == "part" {
                     // simulate dynamic filter replacement with literal "A"
@@ -5394,7 +5394,7 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let mut simplifier = PhysicalExprSimplifier::new(schema);
+        let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
         let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
