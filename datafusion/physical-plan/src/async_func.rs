@@ -101,12 +101,12 @@ impl AsyncFuncExec {
         ))
     }
 
-    pub fn async_exprs(&self) -> Vec<Arc<AsyncFuncExpr>> {
-        self.async_exprs.clone()
+    pub fn async_exprs(&self) -> &[Arc<AsyncFuncExpr>] {
+        &self.async_exprs
     }
 
-    pub fn input(&self) -> Arc<dyn ExecutionPlan> {
-        Arc::clone(&self.input)
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
     }
 }
 

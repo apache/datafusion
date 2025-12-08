@@ -1993,6 +1993,12 @@ impl protobuf::PhysicalPlanNode {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&async_func.input, ctx, extension_codec)?;
 
+        if async_func.async_exprs.len() != async_func.async_expr_names.len() {
+            return internal_err!(
+                "AsyncFuncExecNode async_exprs length does not match async_expr_names"
+            );
+        }
+
         let async_exprs = async_func
             .async_exprs
             .iter()
@@ -3272,7 +3278,7 @@ impl protobuf::PhysicalPlanNode {
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input(),
+            Arc::clone(exec.input()),
             extension_codec,
         )?;
 

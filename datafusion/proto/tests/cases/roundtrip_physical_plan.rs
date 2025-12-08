@@ -2352,11 +2352,12 @@ async fn roundtrip_async_func_exec() -> Result<()> {
     let async_udf = AsyncScalarUDF::new(Arc::new(TestAsyncUDF::new()));
     ctx.register_udf(async_udf.into_scalar_udf());
 
-    let logical_plan = ctx
-        .state()
-        .create_logical_plan("select test_async_udf(1)")
+    let physical_plan = ctx
+        .sql("select test_async_udf(1)")
+        .await?
+        .create_physical_plan()
         .await?;
-    let physical_plan = ctx.state().create_physical_plan(&logical_plan).await?;
+
     let codec = TestAsyncUDFPhysicalCodec {};
     roundtrip_test_and_return(physical_plan, &ctx, &codec)?;
 
