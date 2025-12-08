@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -114,11 +114,7 @@ fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .as_primitive::<Float64Type>()
                 .unary::<_, Float64Type>(
                     |x: f64| {
-                        if x == 0_f64 {
-                            0_f64
-                        } else {
-                            x.signum()
-                        }
+                        if x == 0_f64 { 0_f64 } else { x.signum() }
                     },
                 ),
         ) as ArrayRef),
@@ -128,11 +124,7 @@ fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .as_primitive::<Float32Type>()
                 .unary::<_, Float32Type>(
                     |x: f32| {
-                        if x == 0_f32 {
-                            0_f32
-                        } else {
-                            x.signum()
-                        }
+                        if x == 0_f32 { 0_f32 } else { x.signum() }
                     },
                 ),
         ) as ArrayRef),
