@@ -429,7 +429,6 @@ impl PhysicalOptimizerRule for FilterPushdown {
         )
     }
 
-    #[allow(deprecated)]
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,

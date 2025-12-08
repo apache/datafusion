@@ -32,7 +32,7 @@ use datafusion::datasource::listing::{
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
-use datafusion::physical_expr::expressions::CastExpr;
+use datafusion::physical_expr::expressions::{CastColumnExpr, CastExpr};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::SessionConfig;
 use datafusion_physical_expr_adapter::{
@@ -187,6 +187,19 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
                     cast.expr().data_type(&self.physical_file_schema)?;
                 let output_data_type = cast.data_type(&self.physical_file_schema)?;
                 if !cast.is_bigger_cast(&input_data_type) {
+                    return not_impl_err!(
+                        "Unsupported CAST from {input_data_type} to {output_data_type}"
+                    );
+                }
+            }
+            if let Some(cast) = expr.as_any().downcast_ref::<CastColumnExpr>() {
+                let input_data_type =
+                    cast.expr().data_type(&self.physical_file_schema)?;
+                let output_data_type = cast.data_type(&self.physical_file_schema)?;
+                if !CastExpr::check_bigger_cast(
+                    cast.target_field().data_type(),
+                    &input_data_type,
+                ) {
                     return not_impl_err!(
                         "Unsupported CAST from {input_data_type} to {output_data_type}"
                     );

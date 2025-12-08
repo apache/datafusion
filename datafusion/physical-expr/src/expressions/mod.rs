@@ -35,24 +35,24 @@ mod not;
 mod try_cast;
 mod unknown_column;
 
+pub use crate::PhysicalSortExpr;
 /// Module with some convenient methods used in expression building
 pub use crate::aggregate::stats::StatsType;
-pub use crate::PhysicalSortExpr;
 
-pub use binary::{binary, similar_to, BinaryExpr};
-pub use case::{case, CaseExpr};
-pub use cast::{cast, CastExpr};
+pub use binary::{BinaryExpr, binary, similar_to};
+pub use case::{CaseExpr, case};
+pub use cast::{CastExpr, cast};
 pub use cast_column::CastColumnExpr;
-pub use column::{col, with_new_schema, Column};
+pub use column::{Column, col, with_new_schema};
 pub use datafusion_expr::utils::format_state_name;
 pub use dynamic_filters::DynamicFilterPhysicalExpr;
-pub use in_list::{in_list, InListExpr};
-pub use is_not_null::{is_not_null, IsNotNullExpr};
-pub use is_null::{is_null, IsNullExpr};
-pub use like::{like, LikeExpr};
-pub use literal::{lit, Literal};
-pub use negative::{negative, NegativeExpr};
+pub use in_list::{InListExpr, in_list};
+pub use is_not_null::{IsNotNullExpr, is_not_null};
+pub use is_null::{IsNullExpr, is_null};
+pub use like::{LikeExpr, like};
+pub use literal::{Literal, lit};
+pub use negative::{NegativeExpr, negative};
 pub use no_op::NoOp;
-pub use not::{not, NotExpr};
-pub use try_cast::{try_cast, TryCastExpr};
+pub use not::{NotExpr, not};
+pub use try_cast::{TryCastExpr, try_cast};
 pub use unknown_column::UnKnownColumn;

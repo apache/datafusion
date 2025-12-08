@@ -39,7 +39,7 @@ mod tests {
                     "External table provider failed to implement create_scalar_udf"
                         .to_string(),
                 ))?();
-        let foreign_rank_func: Arc<dyn WindowUDFImpl> = (&ffi_rank_func).try_into()?;
+        let foreign_rank_func: Arc<dyn WindowUDFImpl> = (&ffi_rank_func).into();
 
         let udwf = WindowUDF::new_from_shared_impl(foreign_rank_func);
 

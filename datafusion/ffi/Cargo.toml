@@ -48,6 +48,7 @@ async-ffi = { version = "0.5.0", features = ["abi_stable"] }
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false }
 datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
