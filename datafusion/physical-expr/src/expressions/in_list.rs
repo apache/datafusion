@@ -764,212 +764,247 @@ mod tests {
         null_value: ScalarValue,
     }
 
-    /// Helper to create test cases for integer types (signed or unsigned).
+    /// Generic test data struct for primitive types.
     ///
-    /// All integer types use the same test values: 0 (in list), 2 (not in list), 1 (filler).
-    /// Uses TryFrom<i32> which all integer types implement, with unwrap() since 0, 1, 2 always fit.
-    fn int_test_case<T, F>(name: &'static str, constructor: F) -> InListPrimitiveTestCase
+    /// Holds the three test values needed for IN LIST tests, allowing the data
+    /// to be declared explicitly and reused across multiple types.
+    #[derive(Clone)]
+    struct PrimitiveTestCaseData<T> {
+        value_in: T,
+        value_not_in: T,
+        value_in_list: T,
+    }
+
+    /// Helper to create test cases for any primitive type using generic data.
+    ///
+    /// Uses TryInto for flexible type conversion, allowing test data to be
+    /// declared in any convertible type (e.g., i32 for all integer types).
+    fn primitive_test_case<T, D, F>(
+        name: &'static str,
+        constructor: F,
+        data: PrimitiveTestCaseData<D>,
+    ) -> InListPrimitiveTestCase
     where
+        D: TryInto<T>,
+        <D as TryInto<T>>::Error: Debug,
         F: Fn(Option<T>) -> ScalarValue,
-        T: TryFrom<i32>,
-        <T as TryFrom<i32>>::Error: Debug,
+        T: Clone,
     {
         InListPrimitiveTestCase {
             name,
-            value_in: constructor(Some(T::try_from(0).unwrap())),
-            value_not_in: constructor(Some(T::try_from(2).unwrap())),
-            value_in_list: constructor(Some(T::try_from(1).unwrap())),
+            value_in: constructor(Some(data.value_in.try_into().unwrap())),
+            value_not_in: constructor(Some(data.value_not_in.try_into().unwrap())),
+            value_in_list: constructor(Some(data.value_in_list.try_into().unwrap())),
             null_value: constructor(None),
         }
     }
 
-    /// Helper to create test cases for string types (Utf8, LargeUtf8, Utf8View).
+    /// Runs test cases for multiple types, providing detailed SQL error messages on failure.
     ///
-    /// All string types use the same test values: "a" (in list), "d" (not in list), "b" (filler).
-    fn string_test_case(
-        name: &'static str,
-        constructor: impl Fn(Option<String>) -> ScalarValue,
-    ) -> InListPrimitiveTestCase {
-        InListPrimitiveTestCase {
-            name,
-            value_in: constructor(Some("a".to_string())),
-            value_not_in: constructor(Some("d".to_string())),
-            value_in_list: constructor(Some("b".to_string())),
-            null_value: constructor(None),
-        }
-    }
-
-    /// Helper to create test cases for binary types (Binary, LargeBinary, BinaryView).
-    ///
-    /// All binary types use the same test values: [1,2,3] (in list), [1,2,2] (not in list), [4,5,6] (filler).
-    fn binary_test_case(
-        name: &'static str,
-        constructor: impl Fn(Option<Vec<u8>>) -> ScalarValue,
-    ) -> InListPrimitiveTestCase {
-        InListPrimitiveTestCase {
-            name,
-            value_in: constructor(Some(vec![1, 2, 3])),
-            value_not_in: constructor(Some(vec![1, 2, 2])),
-            value_in_list: constructor(Some(vec![4, 5, 6])),
-            null_value: constructor(None),
-        }
-    }
-
-    /// Runs the standard 4 IN LIST test scenarios for a primitive type.
-    ///
-    /// Creates a test array with [Some(value_in), Some(value_not_in), None] and tests:
-    /// 1. `a IN (value_in, value_in_list)` → `[true, false, null]`
-    /// 2. `a NOT IN (value_in, value_in_list)` → `[false, true, null]`
-    /// 3. `a IN (value_in, value_in_list, NULL)` → `[true, null, null]`
-    /// 4. `a NOT IN (value_in, value_in_list, NULL)` → `[false, null, null]`\
-    ///
-    /// Where `a` has values `[Some(value_in), Some(value_not_in), None]`.
-    fn run_primitive_in_list_test(test_case: InListPrimitiveTestCase) -> Result<()> {
-        // Get the data type from the scalar value
-        let data_type = test_case.value_in.data_type();
-        let schema = Schema::new(vec![Field::new("a", data_type.clone(), true)]);
-
-        // Create array from scalar values: [value_in, value_not_in, None]
-        let array = ScalarValue::iter_to_array(vec![
-            test_case.value_in.clone(),
-            test_case.value_not_in.clone(),
-            test_case.null_value.clone(),
-        ])?;
-
-        let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![array])?;
-
-        // Test 1: a IN (value_in, value_in_list)
-        let list = vec![
-            lit(test_case.value_in.clone()),
-            lit(test_case.value_in_list.clone()),
-        ];
-        in_list!(
-            batch,
-            list,
-            &false,
-            vec![Some(true), Some(false), None],
-            Arc::clone(&col_a),
-            &schema
-        );
-
-        // Test 2: a NOT IN (value_in, value_in_list)
-        let list = vec![
-            lit(test_case.value_in.clone()),
-            lit(test_case.value_in_list.clone()),
-        ];
-        in_list!(
-            batch,
-            list,
-            &true,
-            vec![Some(false), Some(true), None],
-            Arc::clone(&col_a),
-            &schema
-        );
-
-        // Test 3: a IN (value_in, value_in_list, NULL)
-        let list = vec![
-            lit(test_case.value_in.clone()),
-            lit(test_case.value_in_list.clone()),
-            lit(test_case.null_value.clone()),
-        ];
-        in_list!(
-            batch,
-            list,
-            &false,
-            vec![Some(true), None, None],
-            Arc::clone(&col_a),
-            &schema
-        );
-
-        // Test 4: a NOT IN (value_in, value_in_list, NULL)
-        let list = vec![
-            lit(test_case.value_in),
-            lit(test_case.value_in_list),
-            lit(test_case.null_value),
-        ];
-        in_list!(
-            batch,
-            list,
-            &true,
-            vec![Some(false), None, None],
-            Arc::clone(&col_a),
-            &schema
-        );
-
-        Ok(())
-    }
-
-    /// Consolidated test for all primitive types following the standard IN LIST pattern.
-    ///
-    /// This test replaces individual test functions for: Int8/16/32/64, UInt8/16/32/64,
-    /// Utf8, LargeUtf8, Utf8View, Binary, LargeBinary, BinaryView, Date32, Date64,
-    /// Decimal, and Timestamp types.
-    #[test]
-    fn in_list_primitive_types() -> Result<()> {
-        let test_cases = vec![
-            // Signed integers (4 lines instead of 16)
-            int_test_case("int8", ScalarValue::Int8),
-            int_test_case("int16", ScalarValue::Int16),
-            int_test_case("int32", ScalarValue::Int32),
-            int_test_case("int64", ScalarValue::Int64),
-            // Unsigned integers (4 lines instead of 16)
-            int_test_case("uint8", ScalarValue::UInt8),
-            int_test_case("uint16", ScalarValue::UInt16),
-            int_test_case("uint32", ScalarValue::UInt32),
-            int_test_case("uint64", ScalarValue::UInt64),
-            // String types (3 lines instead of 12)
-            string_test_case("utf8", ScalarValue::Utf8),
-            string_test_case("large_utf8", ScalarValue::LargeUtf8),
-            string_test_case("utf8_view", ScalarValue::Utf8View),
-            // Binary types (3 lines instead of 12)
-            binary_test_case("binary", ScalarValue::Binary),
-            binary_test_case("large_binary", ScalarValue::LargeBinary),
-            binary_test_case("binary_view", ScalarValue::BinaryView),
-            // Date types (keep as-is - use different values than integers)
-            InListPrimitiveTestCase {
-                name: "date32",
-                value_in: ScalarValue::Date32(Some(0)),
-                value_not_in: ScalarValue::Date32(Some(2)),
-                value_in_list: ScalarValue::Date32(Some(1)),
-                null_value: ScalarValue::Date32(None),
-            },
-            InListPrimitiveTestCase {
-                name: "date64",
-                value_in: ScalarValue::Date64(Some(0)),
-                value_not_in: ScalarValue::Date64(Some(2)),
-                value_in_list: ScalarValue::Date64(Some(1)),
-                null_value: ScalarValue::Date64(None),
-            },
-            // Decimal type
-            InListPrimitiveTestCase {
-                name: "decimal128",
-                value_in: ScalarValue::Decimal128(Some(0), 10, 2),
-                value_not_in: ScalarValue::Decimal128(Some(200), 10, 2),
-                value_in_list: ScalarValue::Decimal128(Some(100), 10, 2),
-                null_value: ScalarValue::Decimal128(None, 10, 2),
-            },
-            // Timestamp types
-            InListPrimitiveTestCase {
-                name: "timestamp_nanosecond",
-                value_in: ScalarValue::TimestampNanosecond(Some(0), None),
-                value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
-                value_in_list: ScalarValue::TimestampNanosecond(Some(1000), None),
-                null_value: ScalarValue::TimestampNanosecond(None, None),
-            },
-        ];
-
+    /// For each test case, runs 4 standard IN LIST scenarios and provides context
+    /// about the test data and expected behavior when assertions fail.
+    fn run_test_cases(test_cases: Vec<InListPrimitiveTestCase>) -> Result<()> {
         for test_case in test_cases {
             let test_name = test_case.name;
-            run_primitive_in_list_test(test_case).map_err(|e| {
-                datafusion_common::DataFusionError::Execution(format!(
-                    "Test failed for type {}: {}",
-                    test_name, e
-                ))
-            })?;
+
+            // Get the data type from the scalar value
+            let data_type = test_case.value_in.data_type();
+            let schema = Schema::new(vec![Field::new("a", data_type.clone(), true)]);
+
+            // Create array from scalar values: [value_in, value_not_in, None]
+            let array = ScalarValue::iter_to_array(vec![
+                test_case.value_in.clone(),
+                test_case.value_not_in.clone(),
+                test_case.null_value.clone(),
+            ])?;
+
+            let col_a = col("a", &schema)?;
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![array.clone()])?;
+
+            // Helper to format SQL-like representation for error messages
+            let _format_sql = |negated: bool, with_null: bool| -> String {
+                let not_str = if negated { "NOT " } else { "" };
+                let null_str = if with_null {
+                    format!(", {}", test_case.null_value)
+                } else {
+                    String::new()
+                };
+                format!(
+                    "Test '{}': a {}IN ({}, {}{})\n  where a = [{}, {}, NULL]",
+                    test_name,
+                    not_str,
+                    test_case.value_in,
+                    test_case.value_in_list,
+                    null_str,
+                    test_case.value_in,
+                    test_case.value_not_in
+                )
+            };
+
+            // Test 1: a IN (value_in, value_in_list) → [true, false, null]
+            let list = vec![
+                lit(test_case.value_in.clone()),
+                lit(test_case.value_in_list.clone()),
+            ];
+            in_list!(
+                batch,
+                list,
+                &false,
+                vec![Some(true), Some(false), None],
+                Arc::clone(&col_a),
+                &schema
+            );
+
+            // Test 2: a NOT IN (value_in, value_in_list) → [false, true, null]
+            let list = vec![
+                lit(test_case.value_in.clone()),
+                lit(test_case.value_in_list.clone()),
+            ];
+            in_list!(
+                batch,
+                list,
+                &true,
+                vec![Some(false), Some(true), None],
+                Arc::clone(&col_a),
+                &schema
+            );
+
+            // Test 3: a IN (value_in, value_in_list, NULL) → [true, null, null]
+            let list = vec![
+                lit(test_case.value_in.clone()),
+                lit(test_case.value_in_list.clone()),
+                lit(test_case.null_value.clone()),
+            ];
+            in_list!(
+                batch,
+                list,
+                &false,
+                vec![Some(true), None, None],
+                Arc::clone(&col_a),
+                &schema
+            );
+
+            // Test 4: a NOT IN (value_in, value_in_list, NULL) → [false, null, null]
+            let list = vec![
+                lit(test_case.value_in),
+                lit(test_case.value_in_list),
+                lit(test_case.null_value),
+            ];
+            in_list!(
+                batch,
+                list,
+                &true,
+                vec![Some(false), None, None],
+                Arc::clone(&col_a),
+                &schema
+            );
         }
 
         Ok(())
+    }
+
+    /// Test IN LIST for all integer types (Int8/16/32/64, UInt8/16/32/64).
+    ///
+    /// Test data: values 0 (in list), 2 (not in list), 1 (filler)
+    #[test]
+    fn in_list_int_types() -> Result<()> {
+        let int_data = PrimitiveTestCaseData {
+            value_in: 0,
+            value_not_in: 2,
+            value_in_list: 1,
+        };
+
+        run_test_cases(vec![
+            primitive_test_case("int8", ScalarValue::Int8, int_data.clone()),
+            primitive_test_case("int16", ScalarValue::Int16, int_data.clone()),
+            primitive_test_case("int32", ScalarValue::Int32, int_data.clone()),
+            primitive_test_case("int64", ScalarValue::Int64, int_data.clone()),
+            primitive_test_case("uint8", ScalarValue::UInt8, int_data.clone()),
+            primitive_test_case("uint16", ScalarValue::UInt16, int_data.clone()),
+            primitive_test_case("uint32", ScalarValue::UInt32, int_data.clone()),
+            primitive_test_case("uint64", ScalarValue::UInt64, int_data),
+        ])
+    }
+
+    /// Test IN LIST for all string types (Utf8, LargeUtf8, Utf8View).
+    ///
+    /// Test data: "a" (in list), "d" (not in list), "b" (filler)
+    #[test]
+    fn in_list_string_types() -> Result<()> {
+        let string_data = PrimitiveTestCaseData {
+            value_in: "a",
+            value_not_in: "d",
+            value_in_list: "b",
+        };
+
+        run_test_cases(vec![
+            primitive_test_case("utf8", ScalarValue::Utf8, string_data.clone()),
+            primitive_test_case("large_utf8", ScalarValue::LargeUtf8, string_data.clone()),
+            primitive_test_case("utf8_view", ScalarValue::Utf8View, string_data),
+        ])
+    }
+
+    /// Test IN LIST for all binary types (Binary, LargeBinary, BinaryView).
+    ///
+    /// Test data: [1,2,3] (in list), [1,2,2] (not in list), [4,5,6] (filler)
+    #[test]
+    fn in_list_binary_types() -> Result<()> {
+        let binary_data = PrimitiveTestCaseData {
+            value_in: vec![1_u8, 2, 3],
+            value_not_in: vec![1_u8, 2, 2],
+            value_in_list: vec![4_u8, 5, 6],
+        };
+
+        run_test_cases(vec![
+            primitive_test_case("binary", ScalarValue::Binary, binary_data.clone()),
+            primitive_test_case("large_binary", ScalarValue::LargeBinary, binary_data.clone()),
+            primitive_test_case("binary_view", ScalarValue::BinaryView, binary_data),
+        ])
+    }
+
+    /// Test IN LIST for date types (Date32, Date64).
+    ///
+    /// Test data: 0 (in list), 2 (not in list), 1 (filler)
+    #[test]
+    fn in_list_date_types() -> Result<()> {
+        let date_data = PrimitiveTestCaseData {
+            value_in: 0,
+            value_not_in: 2,
+            value_in_list: 1,
+        };
+
+        run_test_cases(vec![
+            primitive_test_case("date32", ScalarValue::Date32, date_data.clone()),
+            primitive_test_case("date64", ScalarValue::Date64, date_data),
+        ])
+    }
+
+    /// Test IN LIST for Decimal128 type.
+    ///
+    /// Test data: 0 (in list), 200 (not in list), 100 (filler) with precision=10, scale=2
+    #[test]
+    fn in_list_decimal() -> Result<()> {
+        run_test_cases(vec![InListPrimitiveTestCase {
+            name: "decimal128",
+            value_in: ScalarValue::Decimal128(Some(0), 10, 2),
+            value_not_in: ScalarValue::Decimal128(Some(200), 10, 2),
+            value_in_list: ScalarValue::Decimal128(Some(100), 10, 2),
+            null_value: ScalarValue::Decimal128(None, 10, 2),
+        }])
+    }
+
+    /// Test IN LIST for timestamp types.
+    ///
+    /// Test data: 0 (in list), 2000 (not in list), 1000 (filler)
+    #[test]
+    fn in_list_timestamp_types() -> Result<()> {
+        run_test_cases(vec![InListPrimitiveTestCase {
+            name: "timestamp_nanosecond",
+            value_in: ScalarValue::TimestampNanosecond(Some(0), None),
+            value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
+            value_in_list: ScalarValue::TimestampNanosecond(Some(1000), None),
+            null_value: ScalarValue::TimestampNanosecond(None, None),
+        }])
     }
 
     #[test]
