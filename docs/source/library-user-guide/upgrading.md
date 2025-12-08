@@ -392,8 +392,8 @@ Similarly, the `Cast` type wrapped by `Expr::Cast` was updated to use a `FieldRe
 underlying storage to represent casts to Arrow extension types. Code that constructed
 or matched casts in the form `Expr::Cast(Cast { expr, data_type })` will need to be updated.
 Casts to `DataType` can continue to be constructed with `Expr::Cast(Cast::new(expr, DataType::...))`,
-although we reccomend `Expr::Cast(Cast::new_from_field(expr, existing_field_ref))` when
-constructing casts programmatically to avoid dropping extension type metdata.
+although we recommend `Expr::Cast(Cast::new_from_field(expr, existing_field_ref))` when
+constructing casts programmatically to avoid dropping extension type metadata.
 
 ## DataFusion `51.0.0`
 
