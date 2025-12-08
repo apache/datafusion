@@ -25,6 +25,8 @@ use dashmap::DashMap;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 
+pub use crate::cache::DefaultFilesMetadataCache;
+
 /// Default implementation of [`FileStatisticsCache`]
 ///
 /// Stores collected statistics for files
