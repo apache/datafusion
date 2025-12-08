@@ -30,9 +30,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
 use datafusion_common::DFSchema;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-use datafusion_execution::cache::cache_unit::{
-    DefaultFileStatisticsCache, DefaultListFilesCache,
-};
+use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+use datafusion_execution::cache::DefaultListFilesCache;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
@@ -40,7 +39,7 @@ use datafusion_expr::{col, lit, Expr};
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
-use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::ExecutionPlan;
 use tempfile::tempdir;
@@ -84,10 +83,8 @@ async fn check_stats_precision_with_filter_pushdown() {
         Arc::new(FilterExec::try_new(physical_filter, exec_with_filter).unwrap())
             as Arc<dyn ExecutionPlan>;
 
-    let session_config = SessionConfig::from(options.clone());
-    let optimizer_context = OptimizerContext::new(session_config);
     let optimized_exec = FilterPushdown::new()
-        .optimize_plan(filtered_exec, &optimizer_context)
+        .optimize(filtered_exec, &options)
         .unwrap();
 
     assert!(
@@ -129,8 +126,9 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec1.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Byte size is absent because we cannot estimate the output size
+        // of the Arrow data since there are variable length columns.
+        Precision::Absent,
     );
     assert_eq!(get_static_cache_size(&state1), 1);
 
@@ -144,8 +142,8 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec2.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Absent because the data contains variable length columns
+        Precision::Absent,
     );
     assert_eq!(get_static_cache_size(&state2), 1);
 
@@ -159,8 +157,8 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec3.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Absent because the data contains variable length columns
+        Precision::Absent,
     );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);

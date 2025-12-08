@@ -352,6 +352,13 @@ impl SessionState {
         self.optimizer.rules.push(optimizer_rule);
     }
 
+    /// Removes an optimizer rule by name, returning `true` if it existed.
+    pub(crate) fn remove_optimizer_rule(&mut self, name: &str) -> bool {
+        let original_len = self.optimizer.rules.len();
+        self.optimizer.rules.retain(|r| r.name() != name);
+        self.optimizer.rules.len() < original_len
+    }
+
     /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn set_function_factory(&mut self, function_factory: Arc<dyn FunctionFactory>) {
         self.function_factory = Some(function_factory);
@@ -2038,6 +2045,12 @@ impl FunctionRegistry for SessionState {
 
     fn udwfs(&self) -> HashSet<String> {
         self.window_functions.keys().cloned().collect()
+    }
+}
+
+impl datafusion_execution::TaskContextProvider for SessionState {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        SessionState::task_ctx(self)
     }
 }
 

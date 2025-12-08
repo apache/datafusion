@@ -27,10 +27,10 @@ use datafusion_expr::type_coercion::binary::{
 
 use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
-    cast, Coercion, ColumnarValue, Documentation, Expr, Like, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, Like, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility, cast,
 };
 use datafusion_macros::user_doc;
 
@@ -55,7 +55,9 @@ fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
         let result = arrow::compute::kernels::comparison::starts_with(&arg0, &arg1)?;
         Ok(Arc::new(result) as ArrayRef)
     } else {
-        internal_err!("Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View")
+        internal_err!(
+            "Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View"
+        )
     }
 }
 
@@ -121,7 +123,9 @@ impl ScalarUDFImpl for StartsWithFunc {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 make_scalar_function(starts_with, vec![])(&args.args)
             }
-            _ => internal_err!("Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View")?,
+            _ => internal_err!(
+                "Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View"
+            )?,
         }
     }
 
@@ -132,15 +136,18 @@ impl ScalarUDFImpl for StartsWithFunc {
     ) -> Result<ExprSimplifyResult> {
         if let Expr::Literal(scalar_value, _) = &args[1] {
             // Convert starts_with(col, 'prefix') to col LIKE 'prefix%' with proper escaping
-            // Example: starts_with(col, 'ja%') -> col LIKE 'ja\%%'
-            //   1. 'ja%'         (input pattern)
-            //   2. 'ja\%'        (escape special char '%')
-            //   3. 'ja\%%'       (add suffix for starts_with)
+            // Escapes pattern characters: starts_with(col, 'j\_a%') -> col LIKE 'j\\\_a\%%'
+            //   1. 'j\_a%'         (input pattern)
+            //   2. 'j\\\_a\%'       (escape special chars '%', '_' and '\')
+            //   3. 'j\\\_a\%%'      (add unescaped % suffix for starts_with)
             let like_expr = match scalar_value {
                 ScalarValue::Utf8(Some(pattern))
                 | ScalarValue::LargeUtf8(Some(pattern))
                 | ScalarValue::Utf8View(Some(pattern)) => {
-                    let escaped_pattern = pattern.replace("%", "\\%");
+                    let escaped_pattern = pattern
+                        .replace("\\", "\\\\")
+                        .replace("%", "\\%")
+                        .replace("_", "\\_");
                     let like_pattern = format!("{escaped_pattern}%");
                     Expr::Literal(ScalarValue::Utf8(Some(like_pattern)), None)
                 }

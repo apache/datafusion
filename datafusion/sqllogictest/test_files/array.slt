@@ -2033,6 +2033,7 @@ query error Failed to coerce arguments to satisfy a call to 'array_slice' functi
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeListView(Int64)'), 2, 6),
        array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeListView(Utf8)'), 3, 7);
 
+
 # array_slice scalar function #6 (with positive indexes; nested array)
 query ?
 select array_slice(make_array(make_array(1, 2, 3, 4, 5), make_array(6, 7, 8, 9, 10)), 1, 1);

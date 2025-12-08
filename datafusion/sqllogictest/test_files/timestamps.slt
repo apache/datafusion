@@ -3702,6 +3702,76 @@ FROM ts_data_micros_kolkata
 2020-09-08T18:12:29.190+05:30
 2020-09-08T17:12:29.190+05:30
 
+
+##########
+## Casting between timestamp with and without timezone
+##########
+
+# Test casting from Timestamp(Nanosecond, Some("UTC")) to Timestamp(Nanosecond, None)
+# Verifies that the underlying nanosecond values are preserved when removing timezone
+
+# Verify input type
+query T
+SELECT arrow_typeof(arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+Timestamp(ns, "UTC")
+
+# Verify output type after casting
+query T
+SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))'), 'Timestamp(Nanosecond, None)'));
+----
+Timestamp(ns)
+
+# Verify values are preserved when casting from timestamp with timezone to timestamp without timezone
+query P rowsort
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, None)')
+FROM (VALUES
+  (arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(2, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(3, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(4, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(5, 'Timestamp(Nanosecond, Some("UTC"))'))
+) t;
+----
+1970-01-01T00:00:00.000000001
+1970-01-01T00:00:00.000000002
+1970-01-01T00:00:00.000000003
+1970-01-01T00:00:00.000000004
+1970-01-01T00:00:00.000000005
+
+# Test casting from Timestamp(Nanosecond, None) to Timestamp(Nanosecond, Some("UTC"))
+# Verifies that the underlying nanosecond values are preserved when adding timezone
+
+# Verify input type
+query T
+SELECT arrow_typeof(arrow_cast(1, 'Timestamp(Nanosecond, None)'));
+----
+Timestamp(ns)
+
+# Verify output type after casting
+query T
+SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, None)'), 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+Timestamp(ns, "UTC")
+
+# Verify values are preserved when casting from timestamp without timezone to timestamp with timezone
+query P rowsort
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))')
+FROM (VALUES
+  (arrow_cast(1, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(2, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(3, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(4, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(5, 'Timestamp(Nanosecond, None)'))
+) t;
+----
+1970-01-01T00:00:00.000000001Z
+1970-01-01T00:00:00.000000002Z
+1970-01-01T00:00:00.000000003Z
+1970-01-01T00:00:00.000000004Z
+1970-01-01T00:00:00.000000005Z
+
+
 ##########
 ## Common timestamp data
 ##########

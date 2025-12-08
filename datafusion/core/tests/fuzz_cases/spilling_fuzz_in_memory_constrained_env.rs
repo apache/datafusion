@@ -31,7 +31,7 @@ use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
-use datafusion_execution::memory_pool::units::{KB, MB};
+use datafusion_common::units::{KB, MB};
 use datafusion_execution::memory_pool::{
     FairSpillPool, MemoryConsumer, MemoryReservation,
 };
