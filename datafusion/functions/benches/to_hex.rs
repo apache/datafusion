@@ -19,7 +19,7 @@ extern crate criterion;
 
 use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
 use arrow::util::bench_util::create_primitive_array;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;

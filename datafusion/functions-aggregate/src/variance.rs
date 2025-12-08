@@ -25,12 +25,12 @@ use arrow::{
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
-use datafusion_common::{downcast_value, not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, downcast_value, not_impl_err, plan_err};
 use datafusion_expr::{
-    function::{AccumulatorArgs, StateFieldsArgs},
-    utils::format_state_name,
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
     Volatility,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::format_state_name,
 };
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,

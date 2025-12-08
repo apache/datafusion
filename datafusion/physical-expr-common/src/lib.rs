@@ -24,6 +24,8 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+// https://github.com/apache/datafusion/issues/18881
+#![deny(clippy::allow_attributes)]
 
 //! Physical Expr Common packages for [DataFusion]
 //! This package contains high level PhysicalExpr trait
