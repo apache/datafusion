@@ -687,14 +687,6 @@ mod tests {
         }
     }
 
-    fn try_cast_static_filter_to_set(
-        list: &[Arc<dyn PhysicalExpr>],
-        schema: &Schema,
-    ) -> Result<ArrayStaticFilter> {
-        let array = try_evaluate_constant_list(list, schema)?;
-        ArrayStaticFilter::try_new(array)
-    }
-
     // Attempts to coerce the types of `list_type` to be comparable with the
     // `expr_type`
     fn get_coerce_type(expr_type: &DataType, list_type: &[DataType]) -> Option<DataType> {
@@ -772,13 +764,66 @@ mod tests {
         null_value: ScalarValue,
     }
 
+    /// Helper to create test cases for integer types (signed or unsigned).
+    ///
+    /// All integer types use the same test values: 0 (in list), 2 (not in list), 1 (filler).
+    /// Uses TryFrom<i32> which all integer types implement, with unwrap() since 0, 1, 2 always fit.
+    fn int_test_case<T, F>(name: &'static str, constructor: F) -> InListPrimitiveTestCase
+    where
+        F: Fn(Option<T>) -> ScalarValue,
+        T: TryFrom<i32>,
+        <T as TryFrom<i32>>::Error: Debug,
+    {
+        InListPrimitiveTestCase {
+            name,
+            value_in: constructor(Some(T::try_from(0).unwrap())),
+            value_not_in: constructor(Some(T::try_from(2).unwrap())),
+            value_in_list: constructor(Some(T::try_from(1).unwrap())),
+            null_value: constructor(None),
+        }
+    }
+
+    /// Helper to create test cases for string types (Utf8, LargeUtf8, Utf8View).
+    ///
+    /// All string types use the same test values: "a" (in list), "d" (not in list), "b" (filler).
+    fn string_test_case(
+        name: &'static str,
+        constructor: impl Fn(Option<String>) -> ScalarValue,
+    ) -> InListPrimitiveTestCase {
+        InListPrimitiveTestCase {
+            name,
+            value_in: constructor(Some("a".to_string())),
+            value_not_in: constructor(Some("d".to_string())),
+            value_in_list: constructor(Some("b".to_string())),
+            null_value: constructor(None),
+        }
+    }
+
+    /// Helper to create test cases for binary types (Binary, LargeBinary, BinaryView).
+    ///
+    /// All binary types use the same test values: [1,2,3] (in list), [1,2,2] (not in list), [4,5,6] (filler).
+    fn binary_test_case(
+        name: &'static str,
+        constructor: impl Fn(Option<Vec<u8>>) -> ScalarValue,
+    ) -> InListPrimitiveTestCase {
+        InListPrimitiveTestCase {
+            name,
+            value_in: constructor(Some(vec![1, 2, 3])),
+            value_not_in: constructor(Some(vec![1, 2, 2])),
+            value_in_list: constructor(Some(vec![4, 5, 6])),
+            null_value: constructor(None),
+        }
+    }
+
     /// Runs the standard 4 IN LIST test scenarios for a primitive type.
     ///
     /// Creates a test array with [Some(value_in), Some(value_not_in), None] and tests:
     /// 1. `a IN (value_in, value_in_list)` → `[true, false, null]`
     /// 2. `a NOT IN (value_in, value_in_list)` → `[false, true, null]`
     /// 3. `a IN (value_in, value_in_list, NULL)` → `[true, null, null]`
-    /// 4. `a NOT IN (value_in, value_in_list, NULL)` → `[false, null, null]`
+    /// 4. `a NOT IN (value_in, value_in_list, NULL)` → `[false, null, null]`\
+    ///
+    /// Where `a` has values `[Some(value_in), Some(value_not_in), None]`.
     fn run_primitive_in_list_test(test_case: InListPrimitiveTestCase) -> Result<()> {
         // Get the data type from the scalar value
         let data_type = test_case.value_in.data_type();
@@ -863,109 +908,25 @@ mod tests {
     #[test]
     fn in_list_primitive_types() -> Result<()> {
         let test_cases = vec![
-            // Signed integers
-            InListPrimitiveTestCase {
-                name: "int8",
-                value_in: ScalarValue::Int8(Some(0)),
-                value_not_in: ScalarValue::Int8(Some(2)),
-                value_in_list: ScalarValue::Int8(Some(1)),
-                null_value: ScalarValue::Int8(None),
-            },
-            InListPrimitiveTestCase {
-                name: "int16",
-                value_in: ScalarValue::Int16(Some(0)),
-                value_not_in: ScalarValue::Int16(Some(2)),
-                value_in_list: ScalarValue::Int16(Some(1)),
-                null_value: ScalarValue::Int16(None),
-            },
-            InListPrimitiveTestCase {
-                name: "int32",
-                value_in: ScalarValue::Int32(Some(0)),
-                value_not_in: ScalarValue::Int32(Some(2)),
-                value_in_list: ScalarValue::Int32(Some(1)),
-                null_value: ScalarValue::Int32(None),
-            },
-            InListPrimitiveTestCase {
-                name: "int64",
-                value_in: ScalarValue::Int64(Some(0)),
-                value_not_in: ScalarValue::Int64(Some(2)),
-                value_in_list: ScalarValue::Int64(Some(1)),
-                null_value: ScalarValue::Int64(None),
-            },
-            // Unsigned integers
-            InListPrimitiveTestCase {
-                name: "uint8",
-                value_in: ScalarValue::UInt8(Some(0)),
-                value_not_in: ScalarValue::UInt8(Some(2)),
-                value_in_list: ScalarValue::UInt8(Some(1)),
-                null_value: ScalarValue::UInt8(None),
-            },
-            InListPrimitiveTestCase {
-                name: "uint16",
-                value_in: ScalarValue::UInt16(Some(0)),
-                value_not_in: ScalarValue::UInt16(Some(2)),
-                value_in_list: ScalarValue::UInt16(Some(1)),
-                null_value: ScalarValue::UInt16(None),
-            },
-            InListPrimitiveTestCase {
-                name: "uint32",
-                value_in: ScalarValue::UInt32(Some(0)),
-                value_not_in: ScalarValue::UInt32(Some(2)),
-                value_in_list: ScalarValue::UInt32(Some(1)),
-                null_value: ScalarValue::UInt32(None),
-            },
-            InListPrimitiveTestCase {
-                name: "uint64",
-                value_in: ScalarValue::UInt64(Some(0)),
-                value_not_in: ScalarValue::UInt64(Some(2)),
-                value_in_list: ScalarValue::UInt64(Some(1)),
-                null_value: ScalarValue::UInt64(None),
-            },
-            // String types
-            InListPrimitiveTestCase {
-                name: "utf8",
-                value_in: ScalarValue::Utf8(Some("a".to_string())),
-                value_not_in: ScalarValue::Utf8(Some("d".to_string())),
-                value_in_list: ScalarValue::Utf8(Some("b".to_string())),
-                null_value: ScalarValue::Utf8(None),
-            },
-            InListPrimitiveTestCase {
-                name: "large_utf8",
-                value_in: ScalarValue::LargeUtf8(Some("a".to_string())),
-                value_not_in: ScalarValue::LargeUtf8(Some("d".to_string())),
-                value_in_list: ScalarValue::LargeUtf8(Some("b".to_string())),
-                null_value: ScalarValue::LargeUtf8(None),
-            },
-            InListPrimitiveTestCase {
-                name: "utf8_view",
-                value_in: ScalarValue::Utf8View(Some("a".to_string())),
-                value_not_in: ScalarValue::Utf8View(Some("d".to_string())),
-                value_in_list: ScalarValue::Utf8View(Some("b".to_string())),
-                null_value: ScalarValue::Utf8View(None),
-            },
-            // Binary types
-            InListPrimitiveTestCase {
-                name: "binary",
-                value_in: ScalarValue::Binary(Some(vec![1, 2, 3])),
-                value_not_in: ScalarValue::Binary(Some(vec![1, 2, 2])),
-                value_in_list: ScalarValue::Binary(Some(vec![4, 5, 6])),
-                null_value: ScalarValue::Binary(None),
-            },
-            InListPrimitiveTestCase {
-                name: "large_binary",
-                value_in: ScalarValue::LargeBinary(Some(vec![1, 2, 3])),
-                value_not_in: ScalarValue::LargeBinary(Some(vec![1, 2, 2])),
-                value_in_list: ScalarValue::LargeBinary(Some(vec![4, 5, 6])),
-                null_value: ScalarValue::LargeBinary(None),
-            },
-            InListPrimitiveTestCase {
-                name: "binary_view",
-                value_in: ScalarValue::BinaryView(Some(vec![1, 2, 3])),
-                value_not_in: ScalarValue::BinaryView(Some(vec![1, 2, 2])),
-                value_in_list: ScalarValue::BinaryView(Some(vec![4, 5, 6])),
-                null_value: ScalarValue::BinaryView(None),
-            },
-            // Date types
+            // Signed integers (4 lines instead of 16)
+            int_test_case("int8", ScalarValue::Int8),
+            int_test_case("int16", ScalarValue::Int16),
+            int_test_case("int32", ScalarValue::Int32),
+            int_test_case("int64", ScalarValue::Int64),
+            // Unsigned integers (4 lines instead of 16)
+            int_test_case("uint8", ScalarValue::UInt8),
+            int_test_case("uint16", ScalarValue::UInt16),
+            int_test_case("uint32", ScalarValue::UInt32),
+            int_test_case("uint64", ScalarValue::UInt64),
+            // String types (3 lines instead of 12)
+            string_test_case("utf8", ScalarValue::Utf8),
+            string_test_case("large_utf8", ScalarValue::LargeUtf8),
+            string_test_case("utf8_view", ScalarValue::Utf8View),
+            // Binary types (3 lines instead of 12)
+            binary_test_case("binary", ScalarValue::Binary),
+            binary_test_case("large_binary", ScalarValue::LargeBinary),
+            binary_test_case("binary_view", ScalarValue::BinaryView),
+            // Date types (keep as-is - use different values than integers)
             InListPrimitiveTestCase {
                 name: "date32",
                 value_in: ScalarValue::Date32(Some(0)),
