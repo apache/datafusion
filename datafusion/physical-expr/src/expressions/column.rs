@@ -28,7 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
@@ -158,7 +158,11 @@ impl Column {
                 self.name,
                 self.index,
                 input_schema.fields.len(),
-                input_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
+                input_schema
+                    .fields()
+                    .iter()
+                    .map(|f| f.name())
+                    .collect::<Vec<_>>()
             )
         }
     }

@@ -33,7 +33,7 @@ use crate::{OptimizerContext, PhysicalOptimizerRule};
 pub struct AggregateStatistics {}
 
 impl AggregateStatistics {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -41,6 +41,7 @@ impl AggregateStatistics {
 
 impl PhysicalOptimizerRule for AggregateStatistics {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    #[expect(clippy::allow_attributes)] // See https://github.com/apache/datafusion/issues/18881#issuecomment-3621545670
     #[allow(clippy::only_used_in_recursion)] // See https://github.com/rust-lang/rust-clippy/issues/14566
     fn optimize_plan(
         &self,

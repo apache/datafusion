@@ -22,7 +22,7 @@ use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
@@ -276,27 +276,30 @@ impl WindowUDFImpl for NthValue {
             }));
         }
 
-        let n =
-            match get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)
-                .map_err(|_e| {
-                    exec_datafusion_err!(
-                "Expected a signed integer literal for the second argument of nth_value")
-                })?
-                .map(|v| get_signed_integer(&v))
-            {
-                Some(Ok(n)) => {
-                    if partition_evaluator_args.is_reversed() {
-                        -n
-                    } else {
-                        n
-                    }
-                }
-                _ => {
-                    return exec_err!(
+        let n = match get_scalar_value_from_args(
+            partition_evaluator_args.input_exprs(),
+            1,
+        )
+        .map_err(|_e| {
+            exec_datafusion_err!(
                 "Expected a signed integer literal for the second argument of nth_value"
             )
+        })?
+        .map(|v| get_signed_integer(&v))
+        {
+            Some(Ok(n)) => {
+                if partition_evaluator_args.is_reversed() {
+                    -n
+                } else {
+                    n
                 }
-            };
+            }
+            _ => {
+                return exec_err!(
+                    "Expected a signed integer literal for the second argument of nth_value"
+                );
+            }
+        };
 
         Ok(Box::new(NthValueEvaluator {
             state,
