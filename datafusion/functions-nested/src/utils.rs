@@ -28,7 +28,7 @@ use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools as _;

@@ -18,8 +18,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use super::{
-    utils::character_length_to_sql, utils::date_part_to_sql,
-    utils::sqlite_date_trunc_to_sql, utils::sqlite_from_unixtime_to_sql, Unparser,
+    Unparser, utils::character_length_to_sql, utils::date_part_to_sql,
+    utils::sqlite_date_trunc_to_sql, utils::sqlite_from_unixtime_to_sql,
 };
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;

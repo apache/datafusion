@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use datafusion_common::Result;
-use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use object_store::ObjectStore;
 

@@ -20,8 +20,8 @@
 use std::{borrow::Cow, sync::Arc};
 
 use crate::metrics::{
-    value::{PruningMetrics, RatioMergeStrategy, RatioMetrics},
     MetricType,
+    value::{PruningMetrics, RatioMergeStrategy, RatioMetrics},
 };
 
 use super::{

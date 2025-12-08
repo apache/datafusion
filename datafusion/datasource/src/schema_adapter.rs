@@ -21,14 +21,15 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 use arrow::{
-    array::{new_null_array, ArrayRef, RecordBatch, RecordBatchOptions},
+    array::{ArrayRef, RecordBatch, RecordBatchOptions, new_null_array},
     compute::can_cast_types,
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 use datafusion_common::{
+    ColumnStatistics,
     format::DEFAULT_CAST_OPTIONS,
     nested_struct::{cast_column, validate_struct_compatibility},
-    plan_err, ColumnStatistics,
+    plan_err,
 };
 use std::{fmt::Debug, sync::Arc};
 /// Function used by [`SchemaMapping`] to adapt a column from the file schema to
@@ -343,11 +344,10 @@ where
     for (file_idx, file_field) in file_schema.fields.iter().enumerate() {
         if let Some((table_idx, table_field)) =
             projected_table_schema.fields().find(file_field.name())
+            && can_map_field(file_field, table_field)?
         {
-            if can_map_field(file_field, table_field)? {
-                field_mappings[table_idx] = Some(projection.len());
-                projection.push(file_idx);
-            }
+            field_mappings[table_idx] = Some(projection.len());
+            projection.push(file_idx);
         }
     }
 
@@ -487,7 +487,7 @@ mod tests {
         datatypes::{DataType, Field, TimeUnit},
         record_batch::RecordBatch,
     };
-    use datafusion_common::{stats::Precision, Result, ScalarValue, Statistics};
+    use datafusion_common::{Result, ScalarValue, Statistics, stats::Precision};
 
     #[test]
     fn test_schema_mapping_map_statistics_basic() {

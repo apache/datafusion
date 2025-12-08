@@ -28,10 +28,10 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::{
-    base_type, coerced_type_with_base_type_only, ListCoercion,
-};
 use datafusion_common::Result;
+use datafusion_common::utils::{
+    ListCoercion, base_type, coerced_type_with_base_type_only,
+};
 use datafusion_common::{
     cast::as_generic_list_array,
     exec_err, plan_err,
@@ -297,7 +297,7 @@ impl ScalarUDFImpl for ArrayConcat {
                 DataType::Null | DataType::List(_) | DataType::FixedSizeList(..) => (),
                 DataType::LargeList(_) => large_list = true,
                 arg_type => {
-                    return plan_err!("{} does not support type {arg_type}", self.name())
+                    return plan_err!("{} does not support type {arg_type}", self.name());
                 }
             }
 

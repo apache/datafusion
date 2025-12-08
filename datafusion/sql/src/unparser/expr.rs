@@ -25,27 +25,27 @@ use sqlparser::ast::{
 use std::sync::Arc;
 use std::vec;
 
-use super::dialect::IntervalStyle;
 use super::Unparser;
+use super::dialect::IntervalStyle;
 use arrow::array::{
+    ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
         ArrowTemporalType, Time32MillisecondType, Time32SecondType,
         Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
     },
-    ArrayRef, Date32Array, Date64Array, PrimitiveArray,
 };
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, DecimalType,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
 };
 use arrow::util::display::array_value_to_string;
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, internal_datafusion_err,
-    internal_err, not_impl_err, plan_err, Column, Result, ScalarValue,
+    Column, Result, ScalarValue, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_expr::{
-    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
+    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
 };
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::tokenizer::Span;
@@ -639,9 +639,9 @@ impl Unparser<'_> {
             Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
             _ => {
                 return internal_err!(
-                "get_field expects second argument to be a string, but received: {:?}",
-                &args[1]
-            )
+                    "get_field expects second argument to be a string, but received: {:?}",
+                    &args[1]
+                );
             }
         };
 
@@ -650,7 +650,12 @@ impl Unparser<'_> {
                 let mut id = match self.col_to_sql(col)? {
                     ast::Expr::Identifier(ident) => vec![ident],
                     ast::Expr::CompoundIdentifier(idents) => idents,
-                    other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
+                    other => {
+                        return internal_err!(
+                            "expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}",
+                            other
+                        );
+                    }
                 };
                 id.push(field);
                 Ok(ast::Expr::CompoundIdentifier(id))
@@ -1070,7 +1075,7 @@ impl Unparser<'_> {
                 return Err(internal_datafusion_err!(
                     "Expected Timestamp, got {:?}",
                     T::DATA_TYPE
-                ))
+                ));
             }
         };
 
@@ -1430,7 +1435,9 @@ impl Unparser<'_> {
             };
             return Ok(ast::Expr::Interval(interval));
         } else if months != 0 {
-            return not_impl_err!("Unsupported Interval scalar with both Month and DayTime for IntervalStyle::MySQL");
+            return not_impl_err!(
+                "Unsupported Interval scalar with both Month and DayTime for IntervalStyle::MySQL"
+            );
         }
 
         // DAY only
@@ -1618,7 +1625,9 @@ impl Unparser<'_> {
                         };
                         Ok(ast::Expr::Interval(interval))
                     } else {
-                        not_impl_err!("Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard")
+                        not_impl_err!(
+                            "Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard"
+                        )
                     }
                 }
                 _ => not_impl_err!(
@@ -1787,12 +1796,12 @@ mod tests {
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
-        interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, ColumnarValue, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility, WindowFrame, WindowFunctionDefinition, case, cast, col, cube, exists,
+        grouping_set, interval_datetime_lit, interval_year_month_lit, lit, not,
+        not_exists, out_ref_col, placeholder, rollup, table_scan, try_cast, when,
     };
-    use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
+    use datafusion_expr::{ExprFunctionExt, interval_month_day_nano_lit};
     use datafusion_functions::datetime::from_unixtime::FromUnixtimeFunc;
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;

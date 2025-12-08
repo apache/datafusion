@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use datafusion_expr::binary::BinaryTypeCoercer;
-use itertools::{izip, Itertools as _};
+use itertools::{Itertools as _, izip};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 
@@ -29,9 +29,9 @@ use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference,
+    plan_err,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
@@ -50,9 +50,9 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
     AggregateUDF, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection,
-    ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits, is_false,
+    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -480,7 +480,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => plan_err!(
-                        "Can not find compatible types to compare {expr_data_type} with [{}]", list_data_types.iter().join(", ")
+                        "Can not find compatible types to compare {expr_data_type} with [{}]",
+                        list_data_types.iter().join(", ")
                     ),
                     Some(coerced_type) => {
                         // find the coerced type
@@ -491,9 +492,9 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                                 list_expr.cast_to(&coerced_type, self.schema)
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Ok(Transformed::yes(Expr::InList(InList ::new(
-                             Box::new(cast_expr),
-                             cast_list_expr,
+                        Ok(Transformed::yes(Expr::InList(InList::new(
+                            Box::new(cast_expr),
+                            cast_list_expr,
                             negated,
                         ))))
                     }
@@ -1119,10 +1120,10 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
-    use crate::analyzer::type_coercion::{
-        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
-    };
     use crate::analyzer::Analyzer;
+    use crate::analyzer::type_coercion::{
+        TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
+    };
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1131,10 +1132,10 @@ mod test {
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
-        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
-        BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
-        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        SimpleAggregateUDF, Subquery, Union, Volatility,
+        AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
+        ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
+        col, create_udaf, is_true, lit,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
     use datafusion_sql::TableReference;
@@ -1882,7 +1883,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         assert_type_coercion_error(
             plan,
-            "Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean"
+            "Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean",
         )?;
 
         // is not true
@@ -2028,7 +2029,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         assert_type_coercion_error(
             plan,
-            "Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean"
+            "Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean",
         )?;
 
         // is not unknown

@@ -23,7 +23,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{logical_plan::Filter, Expr, ExprSchemable, LogicalPlan};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, logical_plan::Filter};
 use std::sync::Arc;
 
 /// The FilterNullJoinKeys rule will identify joins with equi-join conditions
@@ -108,12 +108,12 @@ fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assert_optimized_plan_eq_snapshot;
     use crate::OptimizerContext;
+    use crate::assert_optimized_plan_eq_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Column;
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{col, lit, JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{JoinType, LogicalPlanBuilder, col, lit};
 
     macro_rules! assert_optimized_plan_equal {
         (
