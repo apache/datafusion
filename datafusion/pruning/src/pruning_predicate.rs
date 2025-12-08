@@ -3009,7 +3009,7 @@ mod tests {
                         "A".to_string(),
                     )))) as Arc<dyn PhysicalExpr>
                 } else {
-                    Arc::clone(&child_expr)
+                    Arc::clone(child_expr)
                 }
             })
             .collect_vec();
