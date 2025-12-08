@@ -46,7 +46,7 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
-use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
+use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
@@ -461,10 +461,23 @@ impl PruningPredicate {
     /// the input expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to get the best results.
-    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
-        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`
-        // which does not handle dynamic exprs in general
-        let expr = snapshot_physical_expr(expr)?;
+    pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
+        // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
+        // so that PruningPredicate can work with a static expression.
+        let tf = snapshot_physical_expr_opt(expr)?;
+        if tf.transformed {
+            // If we had an expresion such as Dynamic(part_col < 5 and col < 10)
+            // (this could come from something like `select * from t order by part_col, col, limit 10`)
+            // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
+            // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
+            // the expression we have now is `8 < 5 and col < 10`.
+            // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
+            let mut simplifier = PhysicalExprSimplifier::new(&schema);
+            expr = simplifier.simplify(tf.data)?;
+        } else {
+            expr = tf.data;
+        }
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
         // build predicate expression once
@@ -1958,6 +1971,7 @@ mod tests {
     use super::*;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_expr::{and, col, lit, or};
+    use datafusion_physical_expr::utils::collect_columns;
     use insta::assert_snapshot;
 
     use arrow::array::Decimal128Array;
@@ -1968,8 +1982,11 @@ mod tests {
     use datafusion_expr::expr::InList;
     use datafusion_expr::{cast, is_null, try_cast, Expr};
     use datafusion_functions_nested::expr_fn::{array_has, make_array};
-    use datafusion_physical_expr::expressions as phys_expr;
+    use datafusion_physical_expr::expressions::{
+        self as phys_expr, DynamicFilterPhysicalExpr,
+    };
     use datafusion_physical_expr::planner::logical2physical;
+    use itertools::Itertools;
 
     #[derive(Debug, Default)]
     /// Mock statistic provider for tests
@@ -2955,6 +2972,55 @@ mod tests {
             &statistics,
             &[false],
         );
+    }
+
+    /// Integration test demonstrating that a dynamic filter with replaced children as literals will be snapshotted, simplified and then pruned correctly.
+    #[test]
+    fn row_group_predicate_dynamic_filter_with_literals() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("part", DataType::Utf8, true),
+        ]));
+        let statistics = TestStatistics::new()
+            // Note that we have no stats, pruning can only happen via partition value pruning from the dynamic filter
+            .with_row_counts("c1", vec![Some(10)]);
+        let dynamic_filter_expr = col("c1").gt(lit(5)).and(col("part").eq(lit("B")));
+        let phys_expr = logical2physical(&dynamic_filter_expr, &schema);
+        let children = collect_columns(&phys_expr)
+            .iter()
+            .map(|c| Arc::new(c.clone()) as Arc<dyn PhysicalExpr>)
+            .collect_vec();
+        let dynamic_phys_expr =
+            Arc::new(DynamicFilterPhysicalExpr::new(children, phys_expr))
+                as Arc<dyn PhysicalExpr>;
+        // Simulate the partition value substitution that would happen in ParquetOpener
+        let remapped_expr = dynamic_phys_expr
+            .children()
+            .into_iter()
+            .map(|child_expr| {
+                let Some(col_expr) =
+                    child_expr.as_any().downcast_ref::<phys_expr::Column>()
+                else {
+                    return Arc::clone(&child_expr);
+                };
+                if col_expr.name() == "part" {
+                    // simulate dynamic filter replacement with literal "A"
+                    Arc::new(phys_expr::Literal::new(ScalarValue::Utf8(Some(
+                        "A".to_string(),
+                    )))) as Arc<dyn PhysicalExpr>
+                } else {
+                    Arc::clone(&child_expr)
+                }
+            })
+            .collect_vec();
+        let dynamic_filter_expr =
+            dynamic_phys_expr.with_new_children(remapped_expr).unwrap();
+        // After substitution the expression is c1 > 5 AND part = "B" which should prune the file since the partition value is "A"
+        let expected = &[false];
+        let p =
+            PruningPredicate::try_new(dynamic_filter_expr, Arc::clone(&schema)).unwrap();
+        let result = p.prune(&statistics).unwrap();
+        assert_eq!(result, expected);
     }
 
     #[test]

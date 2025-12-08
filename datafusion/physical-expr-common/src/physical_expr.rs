@@ -579,6 +579,25 @@ pub fn fmt_sql(expr: &dyn PhysicalExpr) -> impl Display + '_ {
 pub fn snapshot_physical_expr(
     expr: Arc<dyn PhysicalExpr>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    snapshot_physical_expr_opt(expr).data()
+}
+
+/// Take a snapshot of the given `PhysicalExpr` if it is dynamic.
+///
+/// Take a snapshot of this `PhysicalExpr` if it is dynamic.
+/// This is used to capture the current state of `PhysicalExpr`s that may contain
+/// dynamic references to other operators in order to serialize it over the wire
+/// or treat it via downcast matching.
+///
+/// See the documentation of [`PhysicalExpr::snapshot`] for more details.
+///
+/// # Returns
+///
+/// Returns a `[`Transformed`] indicating whether a snapshot was taken,
+/// along with the resulting `PhysicalExpr`.
+pub fn snapshot_physical_expr_opt(
+    expr: Arc<dyn PhysicalExpr>,
+) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     expr.transform_up(|e| {
         if let Some(snapshot) = e.snapshot()? {
             Ok(Transformed::yes(snapshot))
@@ -586,7 +605,6 @@ pub fn snapshot_physical_expr(
             Ok(Transformed::no(Arc::clone(&e)))
         }
     })
-    .data()
 }
 
 /// Check the generation of this `PhysicalExpr`.
