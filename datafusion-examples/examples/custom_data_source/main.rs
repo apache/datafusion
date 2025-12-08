@@ -70,7 +70,7 @@ impl ExampleKind {
         match self {
             ExampleKind::All => {
                 for example in ExampleKind::runnable() {
-                    println!("Running example: {}", example);
+                    println!("Running example: {example}");
                     Box::pin(example.run()).await?;
                 }
             }
