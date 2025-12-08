@@ -56,8 +56,8 @@ object_store = { workspace = true, features = ["aws", "http"] }
 prost = { workspace = true }
 rand = { workspace = true }
 serde_json = { workspace = true }
-strum = "0.27.2"
-strum_macros = "0.27.2"
+strum = { workspace = true }
+strum_macros = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
