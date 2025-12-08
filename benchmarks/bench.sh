@@ -87,6 +87,9 @@ tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB),
 tpch_csv10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single csv file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 
+# TPC-DS Benchmarks
+tpcds:                  TPCDS inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
+
 # Extended TPC-H Benchmarks
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
@@ -222,6 +225,9 @@ main() {
                     ;;
                 tpch_csv10)
                     data_tpch "10" "csv"
+                    ;;
+                tpcds)
+                    data_tpcds
                     ;;
                 clickbench_1)
                     data_clickbench_1
@@ -394,6 +400,7 @@ main() {
                     run_external_aggr
                     run_nlj
                     run_hj
+                    run_tpcds
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -412,6 +419,9 @@ main() {
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
+                    ;;
+                tpcds)
+                    run_tpcds
                     ;;
                 cancellation)
                     run_cancellation
@@ -610,6 +620,24 @@ data_tpch() {
     exit 1
 }
 
+# Points to TPCDS data generation instructions
+data_tpcds() {
+    TPCDS_DIR="${DATA_DIR}"
+
+    # Check if TPCDS data directory exists
+    if [ ! -d "${TPCDS_DIR}" ]; then
+        echo ""
+        echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
+        echo "  git clone https://github.com/apache/datafusion-benchmarks"
+        echo ""
+        return 1
+    fi
+
+    echo ""
+    echo "TPC-DS data already exists in ${TPCDS_DIR}"
+    echo ""
+}
+
 # Runs the tpch benchmark
 run_tpch() {
     SCALE_FACTOR=$1
@@ -641,6 +669,37 @@ run_tpch_mem() {
     echo "Running tpch_mem benchmark..."
     # -m means in memory
     debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the tpcds benchmark
+run_tpcds() {
+    TPCDS_DIR="${DATA_DIR}"
+
+    # Check if TPCDS data directory exists
+    if [ ! -d "${TPCDS_DIR}" ]; then
+        echo "Error: TPC-DS data directory does not exist: ${TPCDS_DIR}" >&2
+        echo "" >&2
+        echo "Please prepare TPC-DS data first by following instructions:" >&2
+        echo "  ./bench.sh data tpcds" >&2
+        echo "" >&2
+        exit 1
+    fi
+
+    # Check if directory contains parquet files
+    if ! find "${TPCDS_DIR}" -name "*.parquet" -print -quit | grep -q .; then
+        echo "Error: TPC-DS data directory exists but contains no parquet files: ${TPCDS_DIR}" >&2
+        echo "" >&2
+        echo "Please prepare TPC-DS data first by following instructions:" >&2
+        echo "  ./bench.sh data tpcds" >&2
+        echo "" >&2
+        exit 1
+    fi
+
+    RESULTS_FILE="${RESULTS_DIR}/tpcds_sf1.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running tpcds benchmark..."
+
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the compile profile benchmark helper
