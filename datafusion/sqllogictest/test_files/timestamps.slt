@@ -791,6 +791,81 @@ FROM (
   ) as t (time, val)
 group by time;
 
+query D
+SELECT DATE_BIN(INTERVAL '15 minutes', TIME '14:38:50', TIME '00:00:00')
+----
+14:30:00
+
+# Supports Month-Day-Nano nanosecond interval
+query D
+SELECT DATE_BIN(INTERVAL '10 nanoseconds', TIME '14:38:50.000000016', TIME '00:00:00')
+----
+14:38:50.000000010
+
+# Supports Month-Day-Nano nanosecond interval via fractions
+query D
+SELECT DATE_BIN(INTERVAL '0.000000010 seconds', TIME '14:38:50.000000016', TIME '00:00:00')
+----
+14:38:50.000000010
+
+# Supports Month-Day-Nano microsecond interval
+query D
+SELECT DATE_BIN(INTERVAL '5 microseconds', TIME '14:38:50.000006', TIME '00:00:00')
+----
+14:38:50.000005
+
+# stride by 7 days
+query error DataFusion error: Execution error: DATE_BIN stride for TIME input must be less than 1 day
+SELECT DATE_BIN(INTERVAL '7 days', TIME '14:38:50', TIME '00:00:00')
+
+# stride by 25 hours
+query error DataFusion error: Execution error: DATE_BIN stride for TIME input must be less than 1 day
+SELECT DATE_BIN(INTERVAL '25 hours', TIME '14:38:50', TIME '00:00:00')
+
+# stride by 23 hours, 59 minutes 59 seconds
+query D
+SELECT DATE_BIN(INTERVAL '23 hours 59 minutes 59 seconds', TIME '14:38:50', TIME '00:00:00')
+----
+00:00:00
+
+# mixed types
+query error Failed to coerce arguments to satisfy a call to 'date_bin' function:
+SELECT DATE_BIN(INTERVAL '23 hours', TIME '14:38:50', TIMESTAMP '2022-08-03 14:38:50.000000006Z')
+
+# mixed types
+query error Failed to coerce arguments to satisfy a call to 'date_bin' function:
+SELECT DATE_BIN(INTERVAL '23 hours', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIME '14:38:50')
+
+# Can coerce all string arguments
+query D
+SELECT DATE_BIN('15 minutes', '14:38:50'::time, '00:00:00'::time)
+----
+14:30:00
+
+# Call in two arguments (should be the same as the above query)
+query B
+SELECT DATE_BIN('15 minutes', '14:38:50'::time) = DATE_BIN('15 minutes', '14:38:50'::time, '00:00:00'::time)
+----
+true
+
+# Shift forward by 5 minutes
+query D
+SELECT DATE_BIN(INTERVAL '15 minutes', TIME '14:38:50', TIME '00:05:00')
+----
+14:35:00
+
+# Shift backward by 5 minutes
+query D
+SELECT DATE_BIN(INTERVAL '15 minutes', TIME '14:38:50', TIME '23:55:00')
+----
+14:25:00
+
+# origin after source, TIME in previous bucket
+query D
+SELECT DATE_BIN(INTERVAL '15 minutes', TIME '14:38:50', TIME '14:40:00')
+----
+14:25:00
+
 query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
 ----

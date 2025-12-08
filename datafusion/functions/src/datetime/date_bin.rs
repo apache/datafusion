@@ -24,11 +24,16 @@ use arrow::array::types::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType,
 };
-use arrow::array::{ArrayRef, PrimitiveArray};
-use arrow::datatypes::DataType::{Null, Timestamp, Utf8};
+use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
+use arrow::datatypes::DataType::{
+    LargeUtf8, Null, Time32, Time64, Timestamp, Utf8, Utf8View,
+};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{
+    DataType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimeUnit,
+};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err, plan_err};
@@ -109,7 +114,7 @@ impl Default for DateBinFunc {
 impl DateBinFunc {
     pub fn new() -> Self {
         let base_sig = |array_type: TimeUnit| {
-            vec![
+            let mut v = vec![
                 Exact(vec![
                     DataType::Interval(MonthDayNano),
                     Timestamp(array_type, None),
@@ -146,7 +151,44 @@ impl DateBinFunc {
                     DataType::Interval(DayTime),
                     Timestamp(array_type, Some(TIMEZONE_WILDCARD.into())),
                 ]),
-            ]
+            ];
+
+            match array_type {
+                Second | Millisecond => {
+                    v.append(&mut vec![
+                        Exact(vec![
+                            DataType::Interval(MonthDayNano),
+                            Time32(array_type),
+                            Time32(array_type),
+                        ]),
+                        Exact(vec![DataType::Interval(MonthDayNano), Time32(array_type)]),
+                        Exact(vec![
+                            DataType::Interval(DayTime),
+                            Time32(array_type),
+                            Time32(array_type),
+                        ]),
+                        Exact(vec![DataType::Interval(DayTime), Time32(array_type)]),
+                    ]);
+                }
+                Microsecond | Nanosecond => {
+                    v.append(&mut vec![
+                        Exact(vec![
+                            DataType::Interval(DayTime),
+                            Time64(array_type),
+                            Time64(array_type),
+                        ]),
+                        Exact(vec![DataType::Interval(DayTime), Time64(array_type)]),
+                        Exact(vec![
+                            DataType::Interval(MonthDayNano),
+                            Time64(array_type),
+                            Time64(array_type),
+                        ]),
+                        Exact(vec![DataType::Interval(MonthDayNano), Time64(array_type)]),
+                    ]);
+                }
+            }
+
+            v
         };
 
         let full_sig = [Nanosecond, Microsecond, Millisecond, Second]
@@ -176,13 +218,12 @@ impl ScalarUDFImpl for DateBinFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[1] {
-            Timestamp(Nanosecond, None) | Utf8 | Null => Ok(Timestamp(Nanosecond, None)),
-            Timestamp(Nanosecond, tz_opt) => Ok(Timestamp(Nanosecond, tz_opt.clone())),
-            Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
-            Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),
-            Timestamp(Second, tz_opt) => Ok(Timestamp(Second, tz_opt.clone())),
+            Utf8 | LargeUtf8 | Utf8View | Null => Ok(Timestamp(Nanosecond, None)),
+            Timestamp(tu, tz_opt) => Ok(Timestamp(*tu, tz_opt.clone())),
+            Time32(tu) => Ok(Time32(*tu)),
+            Time64(tu) => Ok(Time64(*tu)),
             _ => plan_err!(
-                "The date_bin function can only accept timestamp as the second arg."
+                "The date_bin function can only accept timestamp or time as the second arg."
             ),
         }
     }
@@ -193,11 +234,17 @@ impl ScalarUDFImpl for DateBinFunc {
     ) -> Result<ColumnarValue> {
         let args = &args.args;
         if args.len() == 2 {
-            // Default to unix EPOCH
-            let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                Some(0),
-                Some("+00:00".into()),
-            ));
+            let origin = if matches!(args[1].data_type(), Time32(_)) {
+                ColumnarValue::Scalar(ScalarValue::Time32Second(Some(0)))
+            } else if matches!(args[1].data_type(), Time64(_)) {
+                ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(0)))
+            } else {
+                // Default to unix EPOCH
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                    Some(0),
+                    Some("+00:00".into()),
+                ))
+            };
             date_bin_impl(&args[0], &args[1], &origin)
         } else if args.len() == 3 {
             date_bin_impl(&args[0], &args[1], &args[2])
@@ -226,6 +273,8 @@ impl ScalarUDFImpl for DateBinFunc {
         self.doc()
     }
 }
+
+const MAX_STRIDE_FOR_TIME: i64 = 1_000_000_000 * 3600 * 24; // 1 day max for time types
 
 enum Interval {
     Nanoseconds(i64),
@@ -370,11 +419,53 @@ fn date_bin_impl(
         }
     };
 
-    let origin = match origin {
-        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), _)) => *v,
+    let (origin, is_time) = match origin {
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), _)) => {
+            (*v, false)
+        }
+        ColumnarValue::Scalar(ScalarValue::Time32Second(Some(v))) => {
+            match stride {
+                Interval::Months(m) => {
+                    if m > 0 {
+                        return exec_err!(
+                            "DATE_BIN stride for TIME input must be less than 1 day"
+                        );
+                    }
+                }
+                Interval::Nanoseconds(ns) => {
+                    if ns >= MAX_STRIDE_FOR_TIME {
+                        return exec_err!(
+                            "DATE_BIN stride for TIME input must be less than 1 day"
+                        );
+                    }
+                }
+            }
+
+            (*v as i64, true)
+        }
+        ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(v))) => {
+            match stride {
+                Interval::Months(m) => {
+                    if m > 0 {
+                        return exec_err!(
+                            "DATE_BIN stride for TIME input must be less than 1 day"
+                        );
+                    }
+                }
+                Interval::Nanoseconds(ns) => {
+                    if ns >= MAX_STRIDE_FOR_TIME {
+                        return exec_err!(
+                            "DATE_BIN stride for TIME input must be less than 1 day"
+                        );
+                    }
+                }
+            }
+
+            (*v, true)
+        }
         ColumnarValue::Scalar(v) => {
             return exec_err!(
-                "DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision but got {}",
+                "DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision or a TIME but got {}",
                 v.data_type()
             );
         }
@@ -439,7 +530,49 @@ fn date_bin_impl(
                 tz_opt.clone(),
             ))
         }
-
+        ColumnarValue::Scalar(ScalarValue::Time32Millisecond(v)) => {
+            if !is_time {
+                return exec_err!("DATE_BIN with Time32 source requires Time32 origin");
+            }
+            let apply_stride_fn = move |x: i32| {
+                let binned_nanos = stride_fn(stride, x as i64, origin);
+                let nanos = binned_nanos % (24 * 3600 * 1_000_000_000);
+                (nanos / 1_000_000) as i32
+            };
+            ColumnarValue::Scalar(ScalarValue::Time32Millisecond(v.map(apply_stride_fn)))
+        }
+        ColumnarValue::Scalar(ScalarValue::Time32Second(v)) => {
+            if !is_time {
+                return exec_err!("DATE_BIN with Time32 source requires Time32 origin");
+            }
+            let apply_stride_fn = move |x: i32| {
+                let binned_nanos = stride_fn(stride, x as i64, origin);
+                let nanos = binned_nanos % (24 * 3600 * 1_000_000_000);
+                (nanos / 1_000_000_000) as i32
+            };
+            ColumnarValue::Scalar(ScalarValue::Time32Second(v.map(apply_stride_fn)))
+        }
+        ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v)) => {
+            if !is_time {
+                return exec_err!("DATE_BIN with Time64 source requires Time64 origin");
+            }
+            let apply_stride_fn = move |x: i64| {
+                let binned_nanos = stride_fn(stride, x, origin);
+                binned_nanos % (24 * 3600 * 1_000_000_000)
+            };
+            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v.map(apply_stride_fn)))
+        }
+        ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v)) => {
+            if !is_time {
+                return exec_err!("DATE_BIN with Time64 source requires Time64 origin");
+            }
+            let apply_stride_fn = move |x: i64| {
+                let binned_nanos = stride_fn(stride, x, origin);
+                let nanos = binned_nanos % (24 * 3600 * 1_000_000_000);
+                nanos / 1_000
+            };
+            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v.map(apply_stride_fn)))
+        }
         ColumnarValue::Array(array) => {
             fn transform_array_with_stride<T>(
                 origin: i64,
@@ -481,9 +614,74 @@ fn date_bin_impl(
                         origin, stride, stride_fn, array, tz_opt,
                     )?
                 }
+                Time32(Millisecond) => {
+                    if !is_time {
+                        return exec_err!(
+                            "DATE_BIN with Time32 source requires Time32 origin"
+                        );
+                    }
+                    let array = array.as_primitive::<Time32MillisecondType>();
+                    let apply_stride_fn = move |x: i32| {
+                        let binned_nanos = stride_fn(stride, x as i64, origin);
+                        let nanos = binned_nanos % (24 * 3600 * 1_000_000_000);
+                        (nanos / 1_000_000) as i32
+                    };
+                    let array: PrimitiveArray<Time32MillisecondType> =
+                        array.unary(apply_stride_fn);
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                Time32(Second) => {
+                    if !is_time {
+                        return exec_err!(
+                            "DATE_BIN with Time32 source requires Time32 origin"
+                        );
+                    }
+                    let array = array.as_primitive::<Time32SecondType>();
+                    let apply_stride_fn = move |x: i32| {
+                        let binned_nanos = stride_fn(stride, x as i64, origin);
+                        let nanos = binned_nanos % (24 * 3600 * 1_000_000_000);
+                        (nanos / 1_000_000_000) as i32
+                    };
+                    let array: PrimitiveArray<Time32SecondType> =
+                        array.unary(apply_stride_fn);
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                Time64(Microsecond) => {
+                    if !is_time {
+                        return exec_err!(
+                            "DATE_BIN with Time64 source requires Time64 origin"
+                        );
+                    }
+                    use arrow::array::cast::AsArray;
+                    let array = array.as_primitive::<Time64MicrosecondType>();
+                    let apply_stride_fn = move |x: i64| {
+                        let binned_nanos = stride_fn(stride, x, origin);
+                        binned_nanos % (24 * 3600 * 1_000_000_000)
+                    };
+                    let array: PrimitiveArray<Time64MicrosecondType> =
+                        array.unary(apply_stride_fn);
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                Time64(Nanosecond) => {
+                    if !is_time {
+                        return exec_err!(
+                            "DATE_BIN with Time64 source requires Time64 origin"
+                        );
+                    }
+                    use arrow::array::cast::AsArray;
+                    let array = array.as_primitive::<Time64NanosecondType>();
+                    let apply_stride_fn = move |x: i64| {
+                        let binned_nanos = stride_fn(stride, x, origin);
+                        let nanos = binned_nanos % (24 * 3600 * 1_000_000_000);
+                        nanos / 1_000
+                    };
+                    let array: PrimitiveArray<Time64NanosecondType> =
+                        array.unary(apply_stride_fn);
+                    ColumnarValue::Array(Arc::new(array))
+                }
                 _ => {
                     return exec_err!(
-                        "DATE_BIN expects source argument to be a TIMESTAMP but got {}",
+                        "DATE_BIN expects source argument to be a TIMESTAMP or TIME but got {}",
                         array.data_type()
                     );
                 }
@@ -491,7 +689,7 @@ fn date_bin_impl(
         }
         _ => {
             return exec_err!(
-                "DATE_BIN expects source argument to be a TIMESTAMP scalar or array"
+                "DATE_BIN expects source argument to be a TIMESTAMP or TIME scalar or array"
             );
         }
     })
@@ -687,7 +885,7 @@ mod tests {
         let res = invoke_date_bin_with_args(args, 1, return_field);
         assert_eq!(
             res.err().unwrap().strip_backtrace(),
-            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision but got Timestamp(µs)"
+            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosecond precision or a TIME but got Timestamp(µs)"
         );
 
         args = vec![
