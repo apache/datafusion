@@ -230,10 +230,14 @@ pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 
 #[derive(Clone)]
 pub struct CacheManagerConfig {
-    /// Enable cache of files statistics when listing files.
-    /// Avoid get same file statistics repeatedly in same datafusion session.
-    /// Default is disable. Fow now only supports Parquet files.
+    /// Enable caching of file statistics when listing files.
+    /// Enabling the cache avoids repeatedly reading file statistics in a DataFusion session.
+    /// Default is disabled. Currently only Parquet files are supported.
     pub table_files_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
+    /// Enable caching of file metadata when listing files.
+    /// Enabling the cache avoids repeat list and object metadata fetch operations, which may be
+    /// expensive in certain situations (e.g. remote object storage), for objects under paths that
+    /// are cached.
     /// Note that if this option is enabled, DataFusion will not see any updates to the underlying
     /// storage for at least `list_files_cache_ttl` duration.
     /// Default is disabled.
