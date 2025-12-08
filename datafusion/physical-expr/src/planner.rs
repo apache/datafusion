@@ -25,7 +25,7 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::{format_type_and_metadata, FieldMetadata};
+use datafusion_common::metadata::{FieldMetadata, format_type_and_metadata};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
 };
@@ -34,7 +34,7 @@ use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
-    binary_expr, lit, Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, TryCast,
+    Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, TryCast, binary_expr, lit,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1
