@@ -270,12 +270,14 @@ fn intersect() -> Result<()> {
     assert_snapshot!(
     format!("{plan}"),
     @r#"
-LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8
-  Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]
-    LeftSemi Join: test.col_int32 = test.col_int32, test.col_utf8 = test.col_utf8
-      Aggregate: groupBy=[[test.col_int32, test.col_utf8]], aggr=[[]]
+LeftSemi Join: left.col_int32 = test.col_int32, left.col_utf8 = test.col_utf8
+  Aggregate: groupBy=[[left.col_int32, left.col_utf8]], aggr=[[]]
+    LeftSemi Join: left.col_int32 = right.col_int32, left.col_utf8 = right.col_utf8
+      Aggregate: groupBy=[[left.col_int32, left.col_utf8]], aggr=[[]]
+        SubqueryAlias: left
+          TableScan: test projection=[col_int32, col_utf8]
+      SubqueryAlias: right
         TableScan: test projection=[col_int32, col_utf8]
-      TableScan: test projection=[col_int32, col_utf8]
   TableScan: test projection=[col_int32, col_utf8]
 "#
     );

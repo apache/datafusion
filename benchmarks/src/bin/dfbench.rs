@@ -34,7 +34,7 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use datafusion_benchmarks::{
-    cancellation, clickbench, h2o, hj, imdb, nlj, sort_tpch, tpch,
+    cancellation, clickbench, h2o, hj, imdb, nlj, sort_tpch, tpcds, tpch,
 };
 
 #[derive(Debug, StructOpt)]
@@ -48,7 +48,7 @@ enum Options {
     Nlj(nlj::RunOpt),
     SortTpch(sort_tpch::RunOpt),
     Tpch(tpch::RunOpt),
-    TpchConvert(tpch::ConvertOpt),
+    Tpcds(tpcds::RunOpt),
 }
 
 // Main benchmark runner entrypoint
@@ -65,6 +65,6 @@ pub async fn main() -> Result<()> {
         Options::Nlj(opt) => opt.run().await,
         Options::SortTpch(opt) => opt.run().await,
         Options::Tpch(opt) => Box::pin(opt.run()).await,
-        Options::TpchConvert(opt) => opt.run().await,
+        Options::Tpcds(opt) => Box::pin(opt.run()).await,
     }
 }

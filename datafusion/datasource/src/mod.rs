@@ -24,6 +24,7 @@
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
@@ -62,7 +63,7 @@ use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
 pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
 use std::ops::Range;
@@ -157,6 +158,24 @@ impl PartitionedFile {
             metadata_size_hint: None,
         }
         .with_range(start, end)
+    }
+
+    /// Size of the file to be scanned (taking into account the range, if present).
+    pub fn effective_size(&self) -> u64 {
+        if let Some(range) = &self.range {
+            (range.end - range.start) as u64
+        } else {
+            self.object_meta.size
+        }
+    }
+
+    /// Effective range of the file to be scanned.
+    pub fn range(&self) -> (u64, u64) {
+        if let Some(range) = &self.range {
+            (range.start as u64, range.end as u64)
+        } else {
+            (0, self.object_meta.size)
+        }
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided

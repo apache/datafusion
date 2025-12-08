@@ -25,7 +25,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -98,12 +98,14 @@ impl AggregateUDFImpl for ApproxMedian {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.input_fields[0].data_type().is_null() {
-            Ok(vec![Field::new(
-                format_state_name(args.name, self.name()),
-                DataType::Null,
-                true,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, self.name()),
+                    DataType::Null,
+                    true,
+                )
+                .into(),
+            ])
         } else {
             Ok(vec![
                 Field::new(format_state_name(args.name, "max_size"), UInt64, false),

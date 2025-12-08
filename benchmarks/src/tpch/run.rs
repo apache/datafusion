@@ -93,9 +93,9 @@ pub struct RunOpt {
     prefer_hash_join: BoolDefaultTrue,
 
     /// If true then Piecewise Merge Join can be used, if false then it will opt for Nested Loop Join
-    /// True by default.
+    /// False by default.
     #[structopt(
-        short = "j",
+        short = "w",
         long = "enable_piecewise_merge_join",
         default_value = "false"
     )]

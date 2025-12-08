@@ -34,7 +34,6 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::Result;
 use datafusion::execution::memory_pool::FairSpillPool;
-use datafusion::execution::memory_pool::{human_readable_size, units};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -44,6 +43,7 @@ use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{exec_err, DEFAULT_PARQUET_EXTENSION};
+use datafusion_common::{human_readable_size, units};
 
 #[derive(Debug, StructOpt)]
 #[structopt(
