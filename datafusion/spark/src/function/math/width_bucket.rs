@@ -33,13 +33,13 @@ use datafusion_common::types::{
     logical_duration_microsecond, logical_float64, logical_int32, logical_interval_mdn,
     logical_interval_year_month, NativeType,
 };
-use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass,
 };
+use datafusion_functions::utils::make_scalar_function;
 
 use arrow::array::{Int32Array, Int32Builder};
 use arrow::datatypes::TimeUnit::Microsecond;
@@ -61,9 +61,7 @@ impl SparkWidthBucket {
     pub fn new() -> Self {
         let numeric = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_float64()),
-            vec![
-                TypeSignatureClass::Numeric,
-            ],
+            vec![TypeSignatureClass::Numeric],
             NativeType::Float64,
         );
         let duration = Coercion::new_implicit(
@@ -83,19 +81,34 @@ impl SparkWidthBucket {
         );
         let type_signature = Signature::one_of(
             vec![
-                width_bucket_signature(&numeric, &bucket),
-                width_bucket_signature(&duration, &bucket),
-                width_bucket_signature(&interval_ym, &bucket),
-                width_bucket_signature(&interval_mdn, &bucket),
+                TypeSignature::Coercible(vec![
+                    numeric.clone(),
+                    numeric.clone(),
+                    numeric.clone(),
+                    bucket.clone(),
+                ]),
+                TypeSignature::Coercible(vec![
+                    duration.clone(),
+                    duration.clone(),
+                    duration.clone(),
+                    bucket.clone(),
+                ]),
+                TypeSignature::Coercible(vec![
+                    interval_ym.clone(),
+                    interval_ym.clone(),
+                    interval_ym.clone(),
+                    bucket.clone(),
+                ]),
+                TypeSignature::Coercible(vec![
+                    interval_mdn.clone(),
+                    interval_mdn.clone(),
+                    interval_mdn.clone(),
+                    bucket.clone(),
+                ]),
             ],
             Immutable,
         )
-        .with_parameter_names(vec![
-            "expr",
-            "min",
-            "max",
-            "num_buckets",
-        ])
+        .with_parameter_names(vec!["expr", "min", "max", "num_buckets"])
         .expect("valid parameter names");
         Self {
             signature: type_signature,
@@ -121,16 +134,7 @@ impl ScalarUDFImpl for SparkWidthBucket {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [value, minv, maxv, buckets] = take_function_args(self.name(), &args.args)?;
-
-        let arrays = vec![
-            value.to_array(args.number_rows)?,
-            minv.to_array(args.number_rows)?,
-            maxv.to_array(args.number_rows)?,
-            buckets.to_array(args.number_rows)?,
-        ];
-
-        width_bucket_kern(&arrays).map(ColumnarValue::Array)
+        make_scalar_function(width_bucket_kern, vec![])(&args.args)
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
@@ -191,10 +195,6 @@ fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
             nb.data_type()
         ),
     }
-}
-
-fn width_bucket_signature(arg: &Coercion, bucket: &Coercion) -> TypeSignature {
-    TypeSignature::Coercible(vec![arg.clone(), arg.clone(), arg.clone(), bucket.clone()])
 }
 
 macro_rules! width_bucket_kernel_impl {
