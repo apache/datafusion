@@ -38,8 +38,8 @@ use std::sync::Arc;
 
 use log::debug;
 
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::WindowUDF;
+use datafusion_expr::registry::FunctionRegistry;
 
 #[macro_use]
 pub mod macros;

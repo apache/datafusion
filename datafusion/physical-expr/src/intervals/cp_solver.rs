@@ -148,19 +148,19 @@ use std::sync::Arc;
 use super::utils::{
     convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
 };
-use crate::expressions::{BinaryExpr, Literal};
-use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
+use crate::expressions::{BinaryExpr, Literal};
+use crate::utils::{ExprTreeNode, build_dag};
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
+use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::{Interval, apply_operator, satisfy_greater};
 
+use petgraph::Outgoing;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
-use petgraph::Outgoing;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.

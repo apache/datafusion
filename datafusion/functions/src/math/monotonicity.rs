@@ -17,11 +17,11 @@
 
 use std::sync::LazyLock;
 
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_doc::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_expr::Documentation;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::Documentation;
 
 /// Non-increasing on the interval \[−1, 1\], undefined otherwise.
 pub fn acos_order(input: &[ExprProperties]) -> Result<SortProperties> {
