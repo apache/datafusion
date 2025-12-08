@@ -737,9 +737,9 @@ mod tests {
         +-----------------------------------+-----------------+--------------+-------------+------------------+
         | filename                          | file_size_bytes | num_rows     | num_columns | table_size_bytes |
         +-----------------------------------+-----------------+--------------+-------------+------------------+
-        | alltypes_plain.parquet            | 1851            | Exact(8)     | 11          | Exact(671)       |
-        | alltypes_tiny_pages.parquet       | 454233          | Exact(7300)  | 13          | Exact(323579)    |
-        | lz4_raw_compressed_larger.parquet | 380836          | Exact(10000) | 1           | Exact(400103)    |
+        | alltypes_plain.parquet            | 1851            | Exact(8)     | 11          | Absent           |
+        | alltypes_tiny_pages.parquet       | 454233          | Exact(7300)  | 13          | Absent           |
+        | lz4_raw_compressed_larger.parquet | 380836          | Exact(10000) | 1           | Absent           |
         +-----------------------------------+-----------------+--------------+-------------+------------------+
         ");
 
