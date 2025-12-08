@@ -25,9 +25,8 @@ use datafusion_datasource::{
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
     schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
 };
-use datafusion_execution::config::SessionConfig;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
-use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
@@ -375,9 +374,7 @@ impl OptimizationTest {
         let input = format_execution_plan(&input_plan);
         let input_schema = input_plan.schema();
 
-        let session_config = SessionConfig::from(parquet_pushdown_config);
-        let optimizer_context = OptimizerContext::new(session_config.clone());
-        let output_result = opt.optimize_plan(input_plan, &optimizer_context);
+        let output_result = opt.optimize(input_plan, &parquet_pushdown_config);
         let output = output_result
             .and_then(|plan| {
                 if opt.schema_check() && (plan.schema() != input_schema) {
