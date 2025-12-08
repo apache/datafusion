@@ -305,7 +305,8 @@ pub(super) fn lookup_join_hashmap(
     let probe_indices_unfiltered: UInt32Array =
         std::mem::take(probe_indices_buffer).into();
 
-    // TODO: optimize equal_rows_arr to avoid allocation of new buffers
+    // TODO: optimize equal_rows_arr to avoid allocation of intermediate arrays
+    // https://github.com/apache/datafusion/issues/12131
     let (build_indices, probe_indices) = equal_rows_arr(
         &build_indices_unfiltered,
         &probe_indices_unfiltered,
