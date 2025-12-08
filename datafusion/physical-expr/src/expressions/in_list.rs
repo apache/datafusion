@@ -241,9 +241,10 @@ impl StaticFilter for Int32StaticFilter {
             .ok_or_else(|| exec_datafusion_err!("Failed to downcast array"))?;
 
         let haystack_has_nulls = self.null_count > 0;
+        let has_nulls = v.null_count() > 0 || haystack_has_nulls;
 
-        let result = match (v.null_count() > 0, haystack_has_nulls, negated) {
-            (true, _, false) | (false, true, false) => {
+        let result = match (has_nulls, negated) {
+            (true, false) => {
                 // Either needle or haystack has nulls, not negated
                 BooleanArray::from_iter(v.iter().map(|value| match value {
                     None => None,
@@ -258,7 +259,7 @@ impl StaticFilter for Int32StaticFilter {
                     }
                 }))
             }
-            (true, _, true) | (false, true, true) => {
+            (true, true) => {
                 // Either needle or haystack has nulls, negated
                 BooleanArray::from_iter(v.iter().map(|value| match value {
                     None => None,
@@ -273,13 +274,13 @@ impl StaticFilter for Int32StaticFilter {
                     }
                 }))
             }
-            (false, false, false) => {
+            (false, false) => {
                 // No nulls anywhere, not negated
                 BooleanArray::from_iter(
                     v.values().iter().map(|value| self.values.contains(value)),
                 )
             }
-            (false, false, true) => {
+            (false, true) => {
                 // No nulls anywhere, negated
                 BooleanArray::from_iter(
                     v.values().iter().map(|value| !self.values.contains(value)),
@@ -820,7 +821,7 @@ mod tests {
 
             let col_a = col("a", &schema)?;
             let batch =
-                RecordBatch::try_new(Arc::new(schema.clone()), vec![array.clone()])?;
+                RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::clone(&array)])?;
 
             // Helper to format SQL-like representation for error messages
             let _format_sql = |negated: bool, with_null: bool| -> String {
@@ -2815,24 +2816,21 @@ mod tests {
         let test_name = utf8_case.name;
         run_dictionary_in_list_test(utf8_case).map_err(|e| {
             datafusion_common::DataFusionError::Execution(format!(
-                "Dictionary test '{}' failed: {}",
-                test_name, e
+                "Dictionary test '{test_name}' failed: {e}"
             ))
         })?;
 
         let test_name = int64_case.name;
         run_dictionary_in_list_test(int64_case).map_err(|e| {
             datafusion_common::DataFusionError::Execution(format!(
-                "Dictionary test '{}' failed: {}",
-                test_name, e
+                "Dictionary test '{test_name}' failed: {e}"
             ))
         })?;
 
         let test_name = float64_case.name;
         run_dictionary_in_list_test(float64_case).map_err(|e| {
             datafusion_common::DataFusionError::Execution(format!(
-                "Dictionary test '{}' failed: {}",
-                test_name, e
+                "Dictionary test '{test_name}' failed: {e}"
             ))
         })?;
 
@@ -2867,8 +2865,7 @@ mod tests {
         let test_name = dedup_case.name;
         run_dictionary_in_list_test(dedup_case).map_err(|e| {
             datafusion_common::DataFusionError::Execution(format!(
-                "Dictionary test '{}' failed: {}",
-                test_name, e
+                "Dictionary test '{test_name}' failed: {e}"
             ))
         })?;
 
