@@ -406,6 +406,7 @@ where
     <T as TryFrom<usize>>::Error: Debug,
     T: ArrowNativeType,
 {
+    // Clear the buffer before producing new results
     input_indices.clear();
     match_indices.clear();
     let one = T::try_from(1).unwrap();
