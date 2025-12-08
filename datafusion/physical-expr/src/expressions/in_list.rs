@@ -2833,6 +2833,41 @@ mod tests {
             ))
         })?;
 
+        // Additional test: Dictionary deduplication with repeated keys
+        // This tests that multiple rows with the same key (pointing to the same value)
+        // are evaluated correctly
+        let dedup_case = DictionaryInListTestCase {
+            _name: "dictionary_deduplication",
+            dict_type: DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Utf8),
+            ),
+            // Keys: [0, 1, 0, 1, null] - keys 0 and 1 are repeated
+            // This creates data: ["a", "d", "a", "d", null]
+            dict_keys: vec![Some(0), Some(1), Some(0), Some(1), None],
+            dict_values: Arc::new(StringArray::from(vec![Some("a"), Some("d")])),
+            list_values_no_null: vec![lit("a"), lit("b")],
+            list_values_with_null: vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))],
+            // Test 1: a IN ("a", "b") → [true, false, true, false, null]
+            // Rows 0 and 2 both have key 0 → "a", so both are true
+            expected_1: vec![Some(true), Some(false), Some(true), Some(false), None],
+            // Test 2: a NOT IN ("a", "b") → [false, true, false, true, null]
+            expected_2: vec![Some(false), Some(true), Some(false), Some(true), None],
+            // Test 3: a IN ("a", "b", NULL) → [true, null, true, null, null]
+            // "d" becomes null due to NULL in list
+            expected_3: vec![Some(true), None, Some(true), None, None],
+            // Test 4: a NOT IN ("a", "b", NULL) → [false, null, false, null, null]
+            expected_4: vec![Some(false), None, Some(false), None, None],
+            dict_needle_test: None,
+        };
+
+        run_dictionary_in_list_test(dedup_case).map_err(|e| {
+            datafusion_common::DataFusionError::Execution(format!(
+                "Dictionary deduplication test failed: {}",
+                e
+            ))
+        })?;
+
         // Additional test for Float64 NaN in IN list
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Float64));
