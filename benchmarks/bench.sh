@@ -686,19 +686,8 @@ run_tpch_mem() {
 run_tpcds() {
     TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
-    # Check if TPCDS data directory exists
-    if [ ! -d "${TPCDS_DIR}" ]; then
-        echo "Creating TPC-DS data directory: ${TPCDS_DIR}" >&2
-        echo "" >&2
-        echo "Please prepare TPC-DS data first by following instructions:" >&2
-        echo "  ./bench.sh data tpcds" >&2
-        echo "" >&2
-        exit 1
-    fi
-
-    # Check if directory contains parquet files
-    if ! find "${TPCDS_DIR}" -name "*.parquet" -print -quit | grep -q .; then
-        echo "Error: TPC-DS data directory exists but contains no parquet files: ${TPCDS_DIR}" >&2
+    # Check if TPCDS data directory and representative file exists
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
         echo "" >&2
         echo "Please prepare TPC-DS data first by following instructions:" >&2
         echo "  ./bench.sh data tpcds" >&2
