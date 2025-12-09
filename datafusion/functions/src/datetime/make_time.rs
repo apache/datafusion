@@ -116,18 +116,9 @@ impl ScalarUDFImpl for MakeTimeFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let args = args.args;
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
+        let [hours, minutes, seconds] = take_function_args(self.name(), args.args)?;
 
-        let [hours, minutes, seconds] = take_function_args(self.name(), args)?;
-
+        // match postgresql behaviour which returns null for any null input
         if matches!(hours, ColumnarValue::Scalar(ScalarValue::Null))
             || matches!(minutes, ColumnarValue::Scalar(ScalarValue::Null))
             || matches!(seconds, ColumnarValue::Scalar(ScalarValue::Null))
@@ -139,69 +130,50 @@ impl ScalarUDFImpl for MakeTimeFunc {
         let minutes = minutes.cast_to(&Int32, None)?;
         let seconds = seconds.cast_to(&Int32, None)?;
 
-        let scalar_value_fn = |col: &ColumnarValue| -> Result<i32> {
-            let ColumnarValue::Scalar(s) = col else {
-                return exec_err!("Expected scalar value");
-            };
-            let ScalarValue::Int32(Some(i)) = s else {
-                return exec_err!("Unable to parse time from null/empty value");
-            };
-            Ok(*i)
-        };
-
-        let value = if let Some(array_size) = len {
-            let to_primitive_array_fn =
-                |col: &ColumnarValue| -> Result<PrimitiveArray<Int32Type>> {
-                    match col {
-                        ColumnarValue::Array(a) => {
-                            Ok(a.as_primitive::<Int32Type>().to_owned())
-                        }
-                        _ => {
-                            let v = scalar_value_fn(col)?;
-                            Ok(PrimitiveArray::<Int32Type>::from_value(v, array_size))
-                        }
-                    }
-                };
-
-            let hours = to_primitive_array_fn(&hours)?;
-            let minutes = to_primitive_array_fn(&minutes)?;
-            let seconds = to_primitive_array_fn(&seconds)?;
-
-            let mut builder: PrimitiveBuilder<Time32SecondType> =
-                PrimitiveArray::builder(array_size);
-            for i in 0..array_size {
-                // match postgresql behaviour which returns null for any null input
-                if hours.is_null(i) || minutes.is_null(i) || seconds.is_null(i) {
-                    builder.append_null();
-                } else {
-                    make_time_inner(
-                        hours.value(i),
-                        minutes.value(i),
-                        seconds.value(i),
-                        |seconds: i32| builder.append_value(seconds),
-                    )?;
-                }
+        match (hours, minutes, seconds) {
+            (
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(hours))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(minutes))),
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(seconds))),
+            ) => {
+                let mut value = 0;
+                make_time_inner(hours, minutes, seconds, |seconds: i32| value = seconds)?;
+                Ok(ColumnarValue::Scalar(ScalarValue::Time32Second(Some(
+                    value,
+                ))))
             }
+            (hours, minutes, seconds) => {
+                let len = args.number_rows;
+                let hours = hours.into_array(len)?;
+                let minutes = minutes.into_array(len)?;
+                let seconds = seconds.into_array(len)?;
 
-            let arr = builder.finish();
+                let hours = hours.as_primitive::<Int32Type>();
+                let minutes = minutes.as_primitive::<Int32Type>();
+                let seconds = seconds.as_primitive::<Int32Type>();
 
-            ColumnarValue::Array(Arc::new(arr))
-        } else {
-            // For scalar only columns the operation is faster without using the PrimitiveArray.
-            // Also, keep the output as scalar since all inputs are scalar.
-            let mut value = 0;
-            make_time_inner(
-                scalar_value_fn(&hours)?,
-                scalar_value_fn(&minutes)?,
-                scalar_value_fn(&seconds)?,
-                |seconds: i32| value = seconds,
-            )?;
+                let mut builder: PrimitiveBuilder<Time32SecondType> =
+                    PrimitiveArray::builder(len);
 
-            ColumnarValue::Scalar(ScalarValue::Time32Second(Some(value)))
-        };
+                for i in 0..len {
+                    // match postgresql behaviour which returns null for any null input
+                    if hours.is_null(i) || minutes.is_null(i) || seconds.is_null(i) {
+                        builder.append_null();
+                    } else {
+                        make_time_inner(
+                            hours.value(i),
+                            minutes.value(i),
+                            seconds.value(i),
+                            |seconds: i32| builder.append_value(seconds),
+                        )?;
+                    }
+                }
 
-        Ok(value)
+                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+            }
+        }
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -410,6 +382,8 @@ mod tests {
             1,
         )
         .expect("that make_time parsed values without error");
+
+        println!("{:?}", res);
 
         assert!(matches!(
             res,

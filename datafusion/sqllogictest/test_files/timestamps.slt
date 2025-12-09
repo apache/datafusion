@@ -2940,6 +2940,21 @@ select make_time(null, null, null);
 NULL
 
 query D
+select make_time(null, 1, 23);
+----
+NULL
+
+query D
+select make_time(22, null, 23);
+----
+NULL
+
+query D
+select make_time(22, 1, null);
+----
+NULL
+
+query D
 select make_time('22', '01', '27');
 ----
 22:01:27
@@ -2996,6 +3011,11 @@ select make_time(arrow_cast(22, 'Int32'), arrow_cast(1, 'Int32'), arrow_cast(27,
 
 query D
 select make_time(arrow_cast(22, 'Int64'), arrow_cast(1, 'Int64'), arrow_cast(27, 'Int64'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'Utf8'), arrow_cast('1', 'Utf8'), arrow_cast('27', 'Utf8'));
 ----
 22:01:27
 
@@ -3122,20 +3142,11 @@ select make_time(22, -1, 23);
 query error DataFusion error: Execution error: Second value '-1' is out of range
 select make_time(22, 13, -1);
 
-query error DataFusion error: Execution error: Unable to parse time from null/empty value
-select make_time(null, 1, 23);
-
 query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 select make_time('', 1, 23);
 
-query error DataFusion error: Execution error: Unable to parse time from null/empty value
-select make_time(22, null, 23);
-
 query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 select make_time(22, '', 27);
-
-query error DataFusion error: Execution error: Unable to parse time from null/empty value
-select make_time(22, 1, null);
 
 query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 select make_time(22, 1, '');
