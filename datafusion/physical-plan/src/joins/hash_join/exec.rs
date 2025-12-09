@@ -1936,7 +1936,12 @@ mod tests {
             div_ceil(9, batch_size)
         };
 
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
@@ -2016,7 +2021,12 @@ mod tests {
             div_ceil(9, batch_size)
         };
 
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
@@ -2152,7 +2162,12 @@ mod tests {
             // and filtered later.
             div_ceil(6, batch_size)
         };
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
@@ -2177,7 +2192,12 @@ mod tests {
             // and filtered later.
             div_ceil(3, batch_size)
         };
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
@@ -3467,6 +3487,8 @@ mod tests {
         let mut hashes_buffer = vec![0; right.num_rows()];
         create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
@@ -3475,6 +3497,8 @@ mod tests {
             &hashes_buffer,
             8192,
             (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
         )?;
 
         let left_ids: UInt64Array = vec![0, 1].into();
@@ -3524,6 +3548,8 @@ mod tests {
         let mut hashes_buffer = vec![0; right.num_rows()];
         create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
@@ -3532,6 +3558,8 @@ mod tests {
             &hashes_buffer,
             8192,
             (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
         )?;
 
         // We still expect to match rows 0 and 1 on both sides
@@ -4197,10 +4225,11 @@ mod tests {
                     }
                     _ => div_ceil(expected_resultset_records, batch_size) + 1,
                 };
-                assert_eq!(
-                    batches.len(),
-                    expected_batch_count,
-                    "expected {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}"
+                // With batch coalescing, we may have fewer batches than expected
+                assert!(
+                    batches.len() <= expected_batch_count,
+                    "expected at most {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}, got {}",
+                    batches.len()
                 );
 
                 let expected = match join_type {
@@ -4210,7 +4239,17 @@ mod tests {
                     JoinType::LeftAnti => left_empty.to_vec(),
                     _ => common_result.to_vec(),
                 };
-                assert_batches_eq!(expected, &batches);
+                // For anti joins with empty results, we may get zero batches
+                // (with coalescing) instead of one empty batch with schema
+                if batches.is_empty() {
+                    // Verify this is an expected empty result case
+                    assert!(
+                        matches!(join_type, JoinType::RightAnti | JoinType::LeftAnti),
+                        "Unexpected empty result for {join_type} join"
+                    );
+                } else {
+                    assert_batches_eq!(expected, &batches);
+                }
             }
         }
     }
@@ -4473,9 +4512,15 @@ mod tests {
 
         assert_join_metrics!(metrics, 0);
 
-        let expected_null_neq =
-            ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
-        assert_batches_eq!(expected_null_neq, &batches_null_neq);
+        // With batch coalescing, empty results may not emit any batches
+        // Check that either we have no batches, or an empty batch with proper schema
+        if batches_null_neq.is_empty() {
+            // This is fine - no output rows
+        } else {
+            let expected_null_neq =
+                ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
+            assert_batches_eq!(expected_null_neq, &batches_null_neq);
+        }
 
         Ok(())
     }

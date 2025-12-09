@@ -20,6 +20,7 @@
 
 use std::sync::Arc;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
@@ -28,7 +29,7 @@ use datafusion_physical_plan::aggregates::{concat_slices, AggregateExec};
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 
 /// This optimizer rule checks ordering requirements of aggregate expressions.
 ///
@@ -48,7 +49,7 @@ use crate::{OptimizerContext, PhysicalOptimizerRule};
 pub struct OptimizeAggregateOrder {}
 
 impl OptimizeAggregateOrder {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -64,15 +65,15 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
     /// # Arguments
     ///
     /// * `plan` - The root of the execution plan to optimize.
-    /// * `context` - Optimizer context containing configuration options.
+    /// * `_config` - Configuration options (currently unused).
     ///
     /// # Returns
     ///
     /// A `Result` containing the potentially optimized execution plan or an error.
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _context: &OptimizerContext,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
             if let Some(aggr_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
