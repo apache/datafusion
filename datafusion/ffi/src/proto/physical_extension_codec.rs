@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use abi_stable::StableAbi;
-use async_trait::async_trait;
 use datafusion_common::error::Result;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
@@ -320,7 +319,6 @@ impl Clone for FFI_PhysicalExtensionCodec {
     }
 }
 
-#[async_trait]
 impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
     fn try_decode(
         &self,
@@ -414,7 +412,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::exec_err;
+    use datafusion_common::{exec_err, Result};
     use datafusion_execution::TaskContext;
     use datafusion_expr::ptr_eq::arc_ptr_eq;
     use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF, WindowUDFImpl};
@@ -440,7 +438,7 @@ pub(crate) mod tests {
             buf: &[u8],
             _inputs: &[Arc<dyn ExecutionPlan>],
             _ctx: &TaskContext,
-        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        ) -> Result<Arc<dyn ExecutionPlan>> {
             if buf[0] != Self::MAGIC_NUMBER {
                 return exec_err!(
                     "TestExtensionCodec input buffer does not start with magic number"
@@ -458,7 +456,7 @@ pub(crate) mod tests {
             &self,
             node: Arc<dyn ExecutionPlan>,
             buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        ) -> Result<()> {
             buf.push(Self::MAGIC_NUMBER);
 
             let Some(_) = node.as_any().downcast_ref::<EmptyExec>() else {
@@ -470,11 +468,7 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn try_decode_udf(
-            &self,
-            _name: &str,
-            buf: &[u8],
-        ) -> datafusion_common::Result<Arc<ScalarUDF>> {
+        fn try_decode_udf(&self, _name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
             if buf[0] != Self::MAGIC_NUMBER {
                 return exec_err!(
                     "TestExtensionCodec input buffer does not start with magic number"
@@ -488,11 +482,7 @@ pub(crate) mod tests {
             Ok(Arc::new(ScalarUDF::from(AbsFunc::new())))
         }
 
-        fn try_encode_udf(
-            &self,
-            node: &ScalarUDF,
-            buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
@@ -505,11 +495,7 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn try_decode_udaf(
-            &self,
-            _name: &str,
-            buf: &[u8],
-        ) -> datafusion_common::Result<Arc<AggregateUDF>> {
+        fn try_decode_udaf(&self, _name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
             if buf[0] != Self::MAGIC_NUMBER {
                 return exec_err!(
                     "TestExtensionCodec input buffer does not start with magic number"
@@ -523,11 +509,7 @@ pub(crate) mod tests {
             Ok(Arc::new(AggregateUDF::from(Sum::new())))
         }
 
-        fn try_encode_udaf(
-            &self,
-            node: &AggregateUDF,
-            buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
@@ -540,11 +522,7 @@ pub(crate) mod tests {
             Ok(())
         }
 
-        fn try_decode_udwf(
-            &self,
-            _name: &str,
-            buf: &[u8],
-        ) -> datafusion_common::Result<Arc<WindowUDF>> {
+        fn try_decode_udwf(&self, _name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
             if buf[0] != Self::MAGIC_NUMBER {
                 return exec_err!(
                     "TestExtensionCodec input buffer does not start with magic number"
@@ -561,11 +539,7 @@ pub(crate) mod tests {
             ))))
         }
 
-        fn try_encode_udwf(
-            &self,
-            node: &WindowUDF,
-            buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
             buf.push(Self::MAGIC_NUMBER);
 
             let udf = node.inner();
@@ -590,8 +564,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn roundtrip_ffi_physical_extension_codec_exec_plan() -> datafusion_common::Result<()>
-    {
+    fn roundtrip_ffi_physical_extension_codec_exec_plan() -> Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
         let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
@@ -614,7 +587,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn roundtrip_ffi_physical_extension_codec_udf() -> datafusion_common::Result<()> {
+    fn roundtrip_ffi_physical_extension_codec_udf() -> Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
@@ -635,7 +608,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn roundtrip_ffi_physical_extension_codec_udaf() -> datafusion_common::Result<()> {
+    fn roundtrip_ffi_physical_extension_codec_udaf() -> Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
@@ -656,7 +629,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn roundtrip_ffi_physical_extension_codec_udwf() -> datafusion_common::Result<()> {
+    fn roundtrip_ffi_physical_extension_codec_udwf() -> Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 

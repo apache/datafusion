@@ -21,7 +21,6 @@ use std::sync::Arc;
 use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use abi_stable::StableAbi;
 use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
 use datafusion_catalog::TableProvider;
 use datafusion_common::error::Result;
 use datafusion_common::{not_impl_err, TableReference};
@@ -339,7 +338,6 @@ impl Clone for FFI_LogicalExtensionCodec {
     }
 }
 
-#[async_trait]
 impl LogicalExtensionCodec for ForeignLogicalExtensionCodec {
     fn try_decode(
         &self,
@@ -474,7 +472,7 @@ mod tests {
     use arrow::array::record_batch;
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_catalog::{MemTable, TableProvider};
-    use datafusion_common::{exec_err, TableReference};
+    use datafusion_common::{exec_err, Result, TableReference};
     use datafusion_datasource::file_format::FileFormatFactory;
     use datafusion_execution::TaskContext;
     use datafusion_expr::ptr_eq::arc_ptr_eq;
@@ -502,15 +500,11 @@ mod tests {
             _buf: &[u8],
             _inputs: &[LogicalPlan],
             _ctx: &TaskContext,
-        ) -> datafusion_common::Result<Extension> {
+        ) -> Result<Extension> {
             unimplemented!()
         }
 
-        fn try_encode(
-            &self,
-            _node: &Extension,
-            _buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
             unimplemented!()
         }
 
@@ -520,7 +514,7 @@ mod tests {
             _table_ref: &TableReference,
             schema: SchemaRef,
             _ctx: &TaskContext,
-        ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+        ) -> Result<Arc<dyn TableProvider>> {
             if buf[0] != Self::MAGIC_NUMBER {
                 return exec_err!(
                     "TestExtensionCodec input buffer does not start with magic number"
@@ -543,11 +537,11 @@ mod tests {
             _table_ref: &TableReference,
             node: Arc<dyn TableProvider>,
             buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        ) -> Result<()> {
             buf.push(Self::MAGIC_NUMBER);
 
             if !node.as_any().is::<MemTable>() {
-                return exec_err!("TestExtensionCodec only expects Abs UDF");
+                return exec_err!("TestExtensionCodec only expects MemTable");
             };
 
             if node.schema() != create_test_table().schema() {
@@ -563,7 +557,7 @@ mod tests {
             &self,
             _buf: &[u8],
             _ctx: &TaskContext,
-        ) -> datafusion_common::Result<Arc<dyn FileFormatFactory>> {
+        ) -> Result<Arc<dyn FileFormatFactory>> {
             unimplemented!()
         }
 
@@ -571,62 +565,37 @@ mod tests {
             &self,
             _buf: &mut Vec<u8>,
             _node: Arc<dyn FileFormatFactory>,
-        ) -> datafusion_common::Result<()> {
+        ) -> Result<()> {
             unimplemented!()
         }
 
-        fn try_decode_udf(
-            &self,
-            name: &str,
-            buf: &[u8],
-        ) -> datafusion_common::Result<Arc<ScalarUDF>> {
+        fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
             PhysicalExtensionCodec::try_decode_udf(self, name, buf)
         }
 
-        fn try_encode_udf(
-            &self,
-            node: &ScalarUDF,
-            buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
             PhysicalExtensionCodec::try_encode_udf(self, node, buf)
         }
 
-        fn try_decode_udaf(
-            &self,
-            name: &str,
-            buf: &[u8],
-        ) -> datafusion_common::Result<Arc<AggregateUDF>> {
+        fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
             PhysicalExtensionCodec::try_decode_udaf(self, name, buf)
         }
 
-        fn try_encode_udaf(
-            &self,
-            node: &AggregateUDF,
-            buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
             PhysicalExtensionCodec::try_encode_udaf(self, node, buf)
         }
 
-        fn try_decode_udwf(
-            &self,
-            name: &str,
-            buf: &[u8],
-        ) -> datafusion_common::Result<Arc<WindowUDF>> {
+        fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
             PhysicalExtensionCodec::try_decode_udwf(self, name, buf)
         }
 
-        fn try_encode_udwf(
-            &self,
-            node: &WindowUDF,
-            buf: &mut Vec<u8>,
-        ) -> datafusion_common::Result<()> {
+        fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
             PhysicalExtensionCodec::try_encode_udwf(self, node, buf)
         }
     }
 
     #[test]
-    fn roundtrip_ffi_logical_extension_codec_table_provider(
-    ) -> datafusion_common::Result<()> {
+    fn roundtrip_ffi_logical_extension_codec_table_provider() -> Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
         let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
@@ -652,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_ffi_logical_extension_codec_udf() -> datafusion_common::Result<()> {
+    fn roundtrip_ffi_logical_extension_codec_udf() -> Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
@@ -673,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_ffi_logical_extension_codec_udaf() -> datafusion_common::Result<()> {
+    fn roundtrip_ffi_logical_extension_codec_udaf() -> Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
@@ -694,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_ffi_logical_extension_codec_udwf() -> datafusion_common::Result<()> {
+    fn roundtrip_ffi_logical_extension_codec_udwf() -> Result<()> {
         let codec = Arc::new(TestExtensionCodec {});
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
