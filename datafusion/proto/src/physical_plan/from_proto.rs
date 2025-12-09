@@ -74,11 +74,11 @@ impl From<&protobuf::PhysicalColumn> for Column {
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn parse_physical_sort_expr(
+pub fn parse_physical_sort_expr<C: PhysicalExtensionCodec + ?Sized>(
     proto: &protobuf::PhysicalSortExprNode,
     ctx: &TaskContext,
     input_schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<PhysicalSortExpr> {
     if let Some(expr) = &proto.expr {
         let expr = parse_physical_expr(expr.as_ref(), ctx, input_schema, codec)?;
@@ -101,11 +101,11 @@ pub fn parse_physical_sort_expr(
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn parse_physical_sort_exprs(
+pub fn parse_physical_sort_exprs<C: PhysicalExtensionCodec + ?Sized>(
     proto: &[protobuf::PhysicalSortExprNode],
     ctx: &TaskContext,
     input_schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<Vec<PhysicalSortExpr>> {
     proto
         .iter()
@@ -123,11 +123,11 @@ pub fn parse_physical_sort_exprs(
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn parse_physical_window_expr(
+pub fn parse_physical_window_expr<C: PhysicalExtensionCodec + ?Sized>(
     proto: &protobuf::PhysicalWindowExprNode,
     ctx: &TaskContext,
     input_schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<Arc<dyn WindowExpr>> {
     let window_node_expr = parse_physical_exprs(&proto.args, ctx, input_schema, codec)?;
     let partition_by =
@@ -182,11 +182,11 @@ pub fn parse_physical_window_expr(
     )
 }
 
-pub fn parse_physical_exprs<'a, I>(
+pub fn parse_physical_exprs<'a, I, C: PhysicalExtensionCodec + ?Sized>(
     protos: I,
     ctx: &TaskContext,
     input_schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<Vec<Arc<dyn PhysicalExpr>>>
 where
     I: IntoIterator<Item = &'a protobuf::PhysicalExprNode>,
@@ -206,11 +206,28 @@ where
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn parse_physical_expr(
+/// Parse a physical expression from protobuf.
+///
+/// This function routes through [`PhysicalExtensionCodec::deserialize_physical_expr`],
+/// allowing custom codecs to intercept every expression node.
+pub fn parse_physical_expr<C: PhysicalExtensionCodec + ?Sized>(
     proto: &protobuf::PhysicalExprNode,
     ctx: &TaskContext,
     input_schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    codec.deserialize_physical_expr(proto, ctx, input_schema)
+}
+
+/// Implementation of physical expression deserialization.
+///
+/// This function contains the actual deserialization logic. It should be called from
+/// trait default implementations to enable the decorator pattern.
+pub fn parse_physical_expr_impl<C: PhysicalExtensionCodec + ?Sized>(
+    proto: &protobuf::PhysicalExprNode,
+    ctx: &TaskContext,
+    input_schema: &Schema,
+    codec: &C,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = proto
         .expr_type
@@ -412,23 +429,23 @@ pub fn parse_physical_expr(
     Ok(pexpr)
 }
 
-fn parse_required_physical_expr(
+fn parse_required_physical_expr<C: PhysicalExtensionCodec + ?Sized>(
     expr: Option<&protobuf::PhysicalExprNode>,
     ctx: &TaskContext,
     field: &str,
     input_schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     expr.map(|e| parse_physical_expr(e, ctx, input_schema, codec))
         .transpose()?
         .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
 }
 
-pub fn parse_protobuf_hash_partitioning(
+pub fn parse_protobuf_hash_partitioning<C: PhysicalExtensionCodec + ?Sized>(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
     ctx: &TaskContext,
     input_schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<Option<Partitioning>> {
     match partitioning {
         Some(hash_part) => {
@@ -444,11 +461,11 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
-pub fn parse_protobuf_partitioning(
+pub fn parse_protobuf_partitioning<C: PhysicalExtensionCodec + ?Sized>(
     partitioning: Option<&protobuf::Partitioning>,
     ctx: &TaskContext,
     input_schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<Option<Partitioning>> {
     match partitioning {
         Some(protobuf::Partitioning { partition_method }) => match partition_method {
@@ -513,10 +530,10 @@ pub fn parse_table_schema_from_proto(
     Ok(TableSchema::new(file_schema, table_partition_cols))
 }
 
-pub fn parse_protobuf_file_scan_config(
+pub fn parse_protobuf_file_scan_config<C: PhysicalExtensionCodec + ?Sized>(
     proto: &protobuf::FileScanExecConf,
     ctx: &TaskContext,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
     file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;

@@ -53,9 +53,9 @@ use crate::protobuf::{
 use super::PhysicalExtensionCodec;
 
 #[expect(clippy::needless_pass_by_value)]
-pub fn serialize_physical_aggr_expr(
+pub fn serialize_physical_aggr_expr<C: PhysicalExtensionCodec + ?Sized>(
     aggr_expr: Arc<AggregateFunctionExpr>,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<protobuf::PhysicalExprNode> {
     let expressions = serialize_physical_exprs(&aggr_expr.expressions(), codec)?;
     let order_bys =
@@ -79,10 +79,10 @@ pub fn serialize_physical_aggr_expr(
     })
 }
 
-fn serialize_physical_window_aggr_expr(
+fn serialize_physical_window_aggr_expr<C: PhysicalExtensionCodec + ?Sized>(
     aggr_expr: &AggregateFunctionExpr,
     _window_frame: &WindowFrame,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<(physical_window_expr_node::WindowFunction, Option<Vec<u8>>)> {
     // Distinct and ignore_nulls are now supported in window expressions
 
@@ -96,9 +96,9 @@ fn serialize_physical_window_aggr_expr(
     ))
 }
 
-pub fn serialize_physical_window_expr(
+pub fn serialize_physical_window_expr<C: PhysicalExtensionCodec + ?Sized>(
     window_expr: &Arc<dyn WindowExpr>,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<protobuf::PhysicalWindowExprNode> {
     let expr = window_expr.as_any();
     let args = window_expr.expressions().to_vec();
@@ -175,9 +175,9 @@ pub fn serialize_physical_window_expr(
     })
 }
 
-pub fn serialize_physical_sort_exprs<I>(
+pub fn serialize_physical_sort_exprs<I, C: PhysicalExtensionCodec + ?Sized>(
     sort_exprs: I,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<Vec<PhysicalSortExprNode>>
 where
     I: IntoIterator<Item = PhysicalSortExpr>,
@@ -188,9 +188,9 @@ where
         .collect()
 }
 
-pub fn serialize_physical_sort_expr(
+pub fn serialize_physical_sort_expr<C: PhysicalExtensionCodec + ?Sized>(
     sort_expr: PhysicalSortExpr,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<PhysicalSortExprNode> {
     let PhysicalSortExpr { expr, options } = sort_expr;
     let expr = serialize_physical_expr(&expr, codec)?;
@@ -201,9 +201,9 @@ pub fn serialize_physical_sort_expr(
     })
 }
 
-pub fn serialize_physical_exprs<'a, I>(
+pub fn serialize_physical_exprs<'a, I, C: PhysicalExtensionCodec + ?Sized>(
     values: I,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<Vec<protobuf::PhysicalExprNode>>
 where
     I: IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
@@ -218,9 +218,20 @@ where
 ///
 /// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
 /// serialization of udfs requiring specialized serialization (see [`PhysicalExtensionCodec::try_encode_udf`])
-pub fn serialize_physical_expr(
+pub fn serialize_physical_expr<C: PhysicalExtensionCodec + ?Sized>(
     value: &Arc<dyn PhysicalExpr>,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
+) -> Result<protobuf::PhysicalExprNode> {
+    codec.serialize_physical_expr(value)
+}
+
+/// Implementation of physical expression serialization.
+///
+/// This function contains the actual serialization logic. It should be called from
+/// trait default implementations to enable the decorator pattern.
+pub fn serialize_physical_expr_impl<C: PhysicalExtensionCodec + ?Sized>(
+    value: &Arc<dyn PhysicalExpr>,
+    codec: &C,
 ) -> Result<protobuf::PhysicalExprNode> {
     // Snapshot the expr in case it has dynamic predicate state so
     // it can be serialized
@@ -407,9 +418,9 @@ pub fn serialize_physical_expr(
     }
 }
 
-pub fn serialize_partitioning(
+pub fn serialize_partitioning<C: PhysicalExtensionCodec + ?Sized>(
     partitioning: &Partitioning,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<protobuf::Partitioning> {
     let serialized_partitioning = match partitioning {
         Partitioning::RoundRobinBatch(partition_count) => protobuf::Partitioning {
@@ -437,10 +448,10 @@ pub fn serialize_partitioning(
     Ok(serialized_partitioning)
 }
 
-fn serialize_when_then_expr(
+fn serialize_when_then_expr<C: PhysicalExtensionCodec + ?Sized>(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<protobuf::PhysicalWhenThen> {
     Ok(protobuf::PhysicalWhenThen {
         when_expr: Some(serialize_physical_expr(when_expr, codec)?),
@@ -497,9 +508,9 @@ impl TryFrom<&[PartitionedFile]> for protobuf::FileGroup {
     }
 }
 
-pub fn serialize_file_scan_config(
+pub fn serialize_file_scan_config<C: PhysicalExtensionCodec + ?Sized>(
     conf: &FileScanConfig,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<protobuf::FileScanExecConf> {
     let file_groups = conf
         .file_groups
@@ -572,9 +583,9 @@ pub fn serialize_file_scan_config(
     })
 }
 
-pub fn serialize_maybe_filter(
+pub fn serialize_maybe_filter<C: PhysicalExtensionCodec + ?Sized>(
     expr: Option<Arc<dyn PhysicalExpr>>,
-    codec: &dyn PhysicalExtensionCodec,
+    codec: &C,
 ) -> Result<protobuf::MaybeFilter> {
     match expr {
         None => Ok(protobuf::MaybeFilter { expr: None }),
