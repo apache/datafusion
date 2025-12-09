@@ -291,6 +291,7 @@ async fn test_unsupported_table_update() -> Result<()> {
     ctx.register_table("empty_t", Arc::new(empty_table))?;
 
     let result = ctx.sql("UPDATE empty_t SET value = 1 WHERE id = 1").await;
+
     assert!(result.is_err() || result.unwrap().collect().await.is_err());
     Ok(())
 }

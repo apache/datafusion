@@ -24,7 +24,12 @@ use std::sync::Arc;
 
 use crate::TableProvider;
 
-use arrow::datatypes::SchemaRef;
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, RecordBatch as ArrowRecordBatch, UInt64Array,
+};
+use arrow::compute::kernels::zip::zip;
+use arrow::compute::{and, filter_record_batch};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
@@ -34,10 +39,14 @@ use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, SortExpr, TableType};
-use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
+use datafusion_physical_expr::{
+    create_physical_expr, create_physical_sort_exprs, LexOrdering,
+};
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    common, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties,
 };
 use datafusion_session::Session;
 
@@ -294,5 +303,321 @@ impl TableProvider for MemTable {
 
     fn get_column_default(&self, column: &str) -> Option<&Expr> {
         self.column_defaults.get(column)
+    }
+
+    async fn delete_from(
+        &self,
+        state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Early exit if table has no partitions
+        if self.batches.is_empty() {
+            return Ok(Arc::new(DmlResultExec::new(0)));
+        }
+
+        *self.sort_order.lock() = vec![];
+
+        let mut total_deleted: u64 = 0;
+        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+
+        for partition_data in &self.batches {
+            let mut partition = partition_data.write().await;
+            let mut new_batches = Vec::with_capacity(partition.len());
+
+            for batch in partition.iter() {
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+
+                let filter_mask = if filters.is_empty() {
+                    BooleanArray::from(vec![true; batch.num_rows()])
+                } else {
+                    let mut combined_mask: Option<BooleanArray> = None;
+
+                    for filter_expr in &filters {
+                        let physical_expr = create_physical_expr(
+                            filter_expr,
+                            &df_schema,
+                            state.execution_props(),
+                        )?;
+
+                        let result = physical_expr.evaluate(batch)?;
+                        let array = result.into_array(batch.num_rows())?;
+                        let bool_array = array
+                            .as_any()
+                            .downcast_ref::<BooleanArray>()
+                            .ok_or_else(|| {
+                                datafusion_common::DataFusionError::Internal(
+                                    "Filter did not evaluate to boolean".to_string(),
+                                )
+                            })?
+                            .clone();
+
+                        combined_mask = Some(match combined_mask {
+                            Some(existing) => and(&existing, &bool_array)?,
+                            None => bool_array,
+                        });
+                    }
+
+                    combined_mask.unwrap_or_else(|| {
+                        BooleanArray::from(vec![true; batch.num_rows()])
+                    })
+                };
+
+                let delete_count =
+                    filter_mask.iter().filter(|v| v == &Some(true)).count();
+                total_deleted += delete_count as u64;
+
+                // Keep rows where predicate is false or NULL (SQL three-valued logic)
+                let keep_mask: BooleanArray =
+                    filter_mask.iter().map(|v| Some(v != Some(true))).collect();
+                let filtered_batch = filter_record_batch(batch, &keep_mask)?;
+
+                if filtered_batch.num_rows() > 0 {
+                    new_batches.push(filtered_batch);
+                }
+            }
+
+            *partition = new_batches;
+        }
+
+        Ok(Arc::new(DmlResultExec::new(total_deleted)))
+    }
+
+    async fn update(
+        &self,
+        state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Early exit if table has no partitions
+        if self.batches.is_empty() {
+            return Ok(Arc::new(DmlResultExec::new(0)));
+        }
+
+        // Validate column names upfront with clear error messages
+        let available_columns: Vec<&str> = self
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        for (column_name, _) in &assignments {
+            if self.schema.field_with_name(column_name).is_err() {
+                return plan_err!(
+                    "UPDATE failed: column '{}' does not exist. Available columns: {}",
+                    column_name,
+                    available_columns.join(", ")
+                );
+            }
+        }
+
+        let assignment_map: HashMap<&str, &Expr> = assignments
+            .iter()
+            .map(|(name, expr)| (name.as_str(), expr))
+            .collect();
+
+        *self.sort_order.lock() = vec![];
+
+        let mut total_updated: u64 = 0;
+        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+
+        for partition_data in &self.batches {
+            let mut partition = partition_data.write().await;
+            let mut new_batches = Vec::with_capacity(partition.len());
+
+            for batch in partition.iter() {
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+
+                let filter_mask = if filters.is_empty() {
+                    BooleanArray::from(vec![true; batch.num_rows()])
+                } else {
+                    let mut combined_mask: Option<BooleanArray> = None;
+
+                    for filter_expr in &filters {
+                        let physical_expr = create_physical_expr(
+                            filter_expr,
+                            &df_schema,
+                            state.execution_props(),
+                        )?;
+
+                        let result = physical_expr.evaluate(batch)?;
+                        let array = result.into_array(batch.num_rows())?;
+                        let bool_array = array
+                            .as_any()
+                            .downcast_ref::<BooleanArray>()
+                            .ok_or_else(|| {
+                                datafusion_common::DataFusionError::Internal(
+                                    "Filter did not evaluate to boolean".to_string(),
+                                )
+                            })?
+                            .clone();
+
+                        combined_mask = Some(match combined_mask {
+                            Some(existing) => and(&existing, &bool_array)?,
+                            None => bool_array,
+                        });
+                    }
+
+                    combined_mask.unwrap_or_else(|| {
+                        BooleanArray::from(vec![true; batch.num_rows()])
+                    })
+                };
+
+                let update_count =
+                    filter_mask.iter().filter(|v| v == &Some(true)).count();
+                total_updated += update_count as u64;
+
+                if update_count == 0 {
+                    new_batches.push(batch.clone());
+                    continue;
+                }
+
+                // Normalize mask: only true (not NULL) triggers update
+                let update_mask: BooleanArray =
+                    filter_mask.iter().map(|v| Some(v == Some(true))).collect();
+
+                let mut new_columns: Vec<ArrayRef> =
+                    Vec::with_capacity(batch.num_columns());
+
+                for field in self.schema.fields() {
+                    let column_name = field.name();
+                    let original_column =
+                        batch.column_by_name(column_name).ok_or_else(|| {
+                            datafusion_common::DataFusionError::Internal(format!(
+                                "Column '{column_name}' not found in batch"
+                            ))
+                        })?;
+
+                    let new_column = if let Some(value_expr) =
+                        assignment_map.get(column_name.as_str())
+                    {
+                        let physical_expr = create_physical_expr(
+                            value_expr,
+                            &df_schema,
+                            state.execution_props(),
+                        )?;
+
+                        let new_values = physical_expr.evaluate(batch)?;
+                        let new_array = new_values.into_array(batch.num_rows())?;
+
+                        // Convert to &dyn Array which implements Datum
+                        let new_arr: &dyn Array = new_array.as_ref();
+                        let orig_arr: &dyn Array = original_column.as_ref();
+                        zip(&update_mask, &new_arr, &orig_arr)?
+                    } else {
+                        Arc::clone(original_column)
+                    };
+
+                    new_columns.push(new_column);
+                }
+
+                let updated_batch =
+                    ArrowRecordBatch::try_new(Arc::clone(&self.schema), new_columns)?;
+                new_batches.push(updated_batch);
+            }
+
+            *partition = new_batches;
+        }
+
+        Ok(Arc::new(DmlResultExec::new(total_updated)))
+    }
+}
+
+/// Returns a single row with the count of affected rows.
+#[derive(Debug)]
+struct DmlResultExec {
+    rows_affected: u64,
+    schema: SchemaRef,
+    properties: PlanProperties,
+}
+
+impl DmlResultExec {
+    fn new(rows_affected: u64) -> Self {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "count",
+            DataType::UInt64,
+            false,
+        )]));
+
+        let properties = PlanProperties::new(
+            datafusion_physical_expr::EquivalenceProperties::new(Arc::clone(&schema)),
+            Partitioning::UnknownPartitioning(1),
+            datafusion_physical_plan::execution_plan::EmissionType::Final,
+            datafusion_physical_plan::execution_plan::Boundedness::Bounded,
+        );
+
+        Self {
+            rows_affected,
+            schema,
+            properties,
+        }
+    }
+}
+
+impl DisplayAs for DmlResultExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
+                write!(f, "DmlResultExec: rows_affected={}", self.rows_affected)
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for DmlResultExec {
+    fn name(&self) -> &str {
+        "DmlResultExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
+        // Create a single batch with the count
+        let count_array = UInt64Array::from(vec![self.rows_affected]);
+        let batch = ArrowRecordBatch::try_new(
+            Arc::clone(&self.schema),
+            vec![Arc::new(count_array) as ArrayRef],
+        )?;
+
+        // Create a stream that yields just this one batch
+        let stream = futures::stream::iter(vec![Ok(batch)]);
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.schema),
+            stream,
+        )))
     }
 }
