@@ -3371,7 +3371,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     /// - Perform pre-processing on the proto
     /// - Call the default implementation via `default_parse_physical_expr`
     /// - Perform post-processing on the result
-    /// 
+    ///
     /// [`default_parse_physical_expr`]: crate::physical_plan::from_proto::default_parse_physical_expr
     fn deserialize_physical_expr(
         &self,
@@ -3392,6 +3392,8 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     /// - Perform pre-processing on the expression
     /// - Call the default implementation via `default_serialize_physical_expr`
     /// - Perform post-processing on the result
+    /// 
+    /// [`default_serialize_physical_expr`]: crate::physical_plan::to_proto::default_serialize_physical_expr
     fn serialize_physical_expr(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
