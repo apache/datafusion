@@ -1072,6 +1072,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
                 internal_err!("Not supported")
             }
         }
+        // Other trait methods use default implementations
     }
 
     let exec_plan = DataSourceExec::from_data_source(scan_config);
@@ -1228,6 +1229,7 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
         }
         Ok(())
     }
+    // Other trait methods use default implementations
 }
 
 #[test]

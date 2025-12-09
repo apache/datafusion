@@ -433,6 +433,116 @@ let config = FileScanConfigBuilder::new(url, source)
     .build();
 ```
 
+### `PhysicalExtensionCodec` and `AsExecutionPlan` now use generics for the codec parameter
+
+The `AsExecutionPlan` trait methods and `PhysicalExtensionCodec` helper functions have been updated to use generics instead of trait objects for improved flexibility. This enables custom codecs to intercept and customize the serialization/deserialization of every node in a physical plan tree.
+
+**Who is affected:**
+
+- Users who have implemented the `AsExecutionPlan` trait on custom types
+- Users calling public helper functions in `datafusion_proto::physical_plan::from_proto` or `datafusion_proto::physical_plan::to_proto`
+
+**Breaking changes:**
+
+1. **`AsExecutionPlan` trait methods now use generics:**
+
+   ```diff
+   pub trait AsExecutionPlan {
+   -   fn try_into_physical_plan(
+   +   fn try_into_physical_plan<C: PhysicalExtensionCodec + ?Sized>(
+           &self,
+           ctx: &TaskContext,
+   -       extension_codec: &dyn PhysicalExtensionCodec,
+   +       extension_codec: &C,
+       ) -> Result<Arc<dyn ExecutionPlan>>;
+
+   -   fn try_from_physical_plan(
+   +   fn try_from_physical_plan<C: PhysicalExtensionCodec + ?Sized>(
+           plan: Arc<dyn ExecutionPlan>,
+   -       extension_codec: &dyn PhysicalExtensionCodec,
+   +       extension_codec: &C,
+       ) -> Result<Self>;
+   }
+   ```
+
+2. **New methods added to `PhysicalExtensionCodec` trait (with default implementations):**
+
+   - `deserialize_physical_plan` - intercept plan deserialization
+   - `serialize_physical_plan` - intercept plan serialization
+   - `deserialize_physical_expr` - intercept expression deserialization
+   - `serialize_physical_expr` - intercept expression serialization
+
+   These have default implementations that delegate to the standard logic, so existing implementations continue to work.
+
+3. **Helper functions now use generics:**
+
+   Functions like `parse_physical_expr`, `serialize_physical_expr`, `parse_physical_sort_expr`, etc. now take `codec: &C` where `C: PhysicalExtensionCodec + ?Sized` instead of `codec: &dyn PhysicalExtensionCodec`.
+
+**Migration guide:**
+
+**For `AsExecutionPlan` implementors:**
+
+If you have a custom implementation of `AsExecutionPlan`, update the method signatures:
+
+```diff
+impl AsExecutionPlan for MyProtobufType {
+-   fn try_into_physical_plan(
++   fn try_into_physical_plan<C: PhysicalExtensionCodec + ?Sized>(
+        &self,
+        ctx: &TaskContext,
+-       extension_codec: &dyn PhysicalExtensionCodec,
++       extension_codec: &C,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // implementation unchanged
+    }
+
+-   fn try_from_physical_plan(
++   fn try_from_physical_plan<C: PhysicalExtensionCodec + ?Sized>(
+        plan: Arc<dyn ExecutionPlan>,
+-       extension_codec: &dyn PhysicalExtensionCodec,
++       extension_codec: &C,
+    ) -> Result<Self> {
+        // implementation unchanged
+    }
+}
+```
+
+**For callers of helper functions:**
+
+Code that passes `&dyn PhysicalExtensionCodec` will continue to compile since `&dyn Trait` satisfies `T: Trait + ?Sized`. No changes required for most users.
+
+**For custom codec implementations that want to intercept serialization:**
+
+You can now override the new methods to intercept every plan/expression node:
+
+```rust,ignore
+impl PhysicalExtensionCodec for MyCodec {
+    // ... existing methods ...
+
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Pre-processing on proto...
+
+        // Call default implementation
+        let plan = default_deserialize_physical_plan(proto, ctx, self)?;
+
+        // Post-processing on plan...
+        Ok(plan)
+    }
+
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        // Custom serialization logic...
+        default_serialize_physical_plan(plan, self)
+    }
+}
+```
+
 ### `SchemaAdapterFactory` Fully Removed from Parquet
 
 Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaadapterfactory-and-schemaadapter), `SchemaAdapterFactory` has been fully removed from Parquet scanning. This applies to both:
