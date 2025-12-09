@@ -180,6 +180,9 @@ pub struct FileScanConfig {
     /// and output_partitioning will return Hash partitioning on partition columns.
     /// This allows the optimizer to skip hash repartitioning for aggregates and joins
     /// on partition columns.
+    ///
+    /// If the number of file partitions > target_partitions, the file partitions will be grouped
+    /// in a round-robin fashion such that number of file partitions = target_partitions.
     pub partitioned_by_file_group: bool,
 }
 
@@ -610,7 +613,7 @@ impl DataSource for FileScanConfig {
         repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
     ) -> Result<Option<Arc<dyn DataSource>>> {
-        // When files are grouped by partition values, we cannot not allow byte-range
+        // When files are grouped by partition values, we cannot allow byte-range
         // splitting. It would mix rows from different partition values across
         // file groups, breaking the Hash partitioning.
         if self.partitioned_by_file_group {

@@ -967,8 +967,12 @@ config_namespace! {
 
         /// Minimum number of distinct partition values required to group files by their
         /// Hive partition column values (enabling Hash partitioning declaration).
-        /// Set to 0 to disable. When enabled and the threshold is met, allows the optimizer
-        /// to skip hash repartitioning for aggregates and joins on partition columns.
+        ///
+        /// How the option is used:
+        ///     - preserve_file_partitions=0: Disable it.
+        ///     - preserve_file_partitions=1: Always enable it.
+        ///     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.
+        ///     This threshold preserves I/O parallelism when file partitioning is below it.
         ///
         /// Note: This may reduce parallelism at the I/O level if the number of distinct
         /// partitions is less than the target_partitions.

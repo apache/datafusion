@@ -504,6 +504,8 @@ impl FileGroup {
                 .collect()
         } else {
             // Merge into max_target_partitions buckets using round-robin.
+            // This maintains grouping by partition value as we are merging groups which already
+            // contain all values for a partition key.
             let mut target_groups: Vec<Vec<PartitionedFile>> =
                 vec![vec![]; max_target_partitions];
 
@@ -1231,6 +1233,10 @@ mod test {
         };
 
         // Case 1: fewer partitions than target
+        // File a and b have partition value p1.
+        // File c has partition value p2.
+        // Grouping by partition value should not redistribute any files since the number of partition
+        // values <= max_target_partitions.
         let fg = FileGroup::new(vec![
             pfile_with_pv("a", "p1"),
             pfile_with_pv("b", "p1"),
@@ -1242,6 +1248,8 @@ mod test {
         assert_eq!(groups[1].len(), 1);
 
         // Case 2: more partitions than target
+        // Each file has a single partition value. The number of partition values > max_target_partitions, so
+        // they should be round-robin distributed into groups.
         let fg = FileGroup::new(vec![
             pfile_with_pv("a", "p1"),
             pfile_with_pv("b", "p2"),
@@ -1251,5 +1259,8 @@ mod test {
         ]);
         let groups = fg.group_by_partition_values(3);
         assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].len(), 2);
+        assert_eq!(groups[1].len(), 2);
+        assert_eq!(groups[2].len(), 1);
     }
 }

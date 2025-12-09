@@ -42,7 +42,7 @@ set datafusion.execution.target_partitions = 3;
 # Each partition has data sorted by timestamp
 # Partition: f_dkey=A
 query I
-COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES 
+COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 95.5),
     (TIMESTAMP '2023-01-01T09:00:10', 102.3),
     (TIMESTAMP '2023-01-01T09:00:20', 98.7),
@@ -58,7 +58,7 @@ STORED AS PARQUET;
 
 # Partition: f_dkey=B
 query I
-COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES 
+COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 75.2),
     (TIMESTAMP '2023-01-01T09:00:10', 82.4),
     (TIMESTAMP '2023-01-01T09:00:20', 78.9),
@@ -74,7 +74,7 @@ STORED AS PARQUET;
 
 # Partition: f_dkey=C
 query I
-COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES 
+COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 300.5),
     (TIMESTAMP '2023-01-01T09:00:10', 285.7),
     (TIMESTAMP '2023-01-01T09:00:20', 310.2),
@@ -90,7 +90,7 @@ STORED AS PARQUET;
 
 # Create dimension table (single file for CollectLeft joins)
 query I
-COPY (SELECT column1 as d_dkey, column2 as env, column3 as service, column4 as host FROM (VALUES 
+COPY (SELECT column1 as d_dkey, column2 as env, column3 as service, column4 as host FROM (VALUES
     ('A', 'dev', 'log', 'ma'),
     ('B', 'prod', 'log', 'ma'),
     ('C', 'prod', 'log', 'vim'),
@@ -104,7 +104,7 @@ STORED AS PARQUET;
 # Create high-cardinality fact table (5 partitions > 3 target_partitions)
 # For testing partition merging with consistent hashing
 query I
-COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES 
+COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 100.0)
 ))
 TO 'test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=A/data.parquet'
@@ -113,7 +113,7 @@ STORED AS PARQUET;
 1
 
 query I
-COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES 
+COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 200.0)
 ))
 TO 'test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=B/data.parquet'
@@ -122,7 +122,7 @@ STORED AS PARQUET;
 1
 
 query I
-COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES 
+COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 300.0)
 ))
 TO 'test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=C/data.parquet'
@@ -131,7 +131,7 @@ STORED AS PARQUET;
 1
 
 query I
-COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES 
+COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 400.0)
 ))
 TO 'test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=D/data.parquet'
@@ -140,7 +140,7 @@ STORED AS PARQUET;
 1
 
 query I
-COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES 
+COPY (SELECT column1 as timestamp, column2 as value FROM (VALUES
     (TIMESTAMP '2023-01-01T09:00:00', 500.0)
 ))
 TO 'test_files/scratch/preserve_file_partitioning/high_cardinality/f_dkey=E/data.parquet'
@@ -493,9 +493,8 @@ C 2023-01-01T09:00:20 310.2 3
 
 ##########
 # TEST 9: High-Cardinality Partitions (more partitions than target_partitions)
-# When num_partitions > target_partitions (5 > 3), files are merged using
+# Since num_partitions > target_partitions (5 > 3), files are merged using
 # round-robin assignment to ensure exactly target_partitions groups are created.
-# This enables Hash partitioning to be recognized and RepartitionExec eliminated.
 ##########
 
 # First verify results without optimization
