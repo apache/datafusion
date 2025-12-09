@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::*;
 use arrow::compute::kernels::bitwise;
-use arrow::datatypes::{Field ,Int16Type, Int32Type, Int64Type, Int8Type , DataType , FieldRef};
-use arrow::{array::*};
+use arrow::datatypes::{
+    DataType, Field, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type,
+};
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature , ReturnFieldArgs};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;
 use std::{any::Any, sync::Arc};
 
@@ -68,9 +70,7 @@ impl ScalarUDFImpl for SparkBitwiseNot {
         plan_err!("SparkBitwiseNot: return_type() is not used; return_field_from_args() is implemented")
     }
 
-    
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-
         if args.arg_fields.len() != 1 {
             return plan_err!("bitwise_not expects exactly 1 argument");
         }
@@ -80,7 +80,6 @@ impl ScalarUDFImpl for SparkBitwiseNot {
         let out_dt = input_field.data_type().clone();
         let out_nullable = input_field.is_nullable();
 
-        
         Ok(Arc::new(Field::new("bitwise_not", out_dt, out_nullable)))
     }
 
@@ -124,12 +123,11 @@ pub fn spark_bitwise_not(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::{DataType, Field};
     use std::sync::Arc;
-    use arrow::datatypes::{Field, DataType};
 
     use datafusion_expr::ReturnFieldArgs;
 
