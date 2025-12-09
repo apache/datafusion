@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical expression schema rewriting utilities
+//! Physical expression schema rewriting utilities: [`PhysicalExprAdapter`],
+//! [`PhysicalExprAdapterFactory`], default implementations,
+//! and [`replace_columns_with_literals`].
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,29 +66,19 @@ pub fn replace_columns_with_literals(
     .data()
 }
 
-/// Trait for adapting physical expressions to match a target schema.
+/// Trait for adapting [`PhysicalExpr`] expressions to match a target schema.
 ///
-/// This is used in file scans to rewrite expressions so that they can be evaluated
-/// against the physical schema of the file being scanned. It allows for handling
-/// differences between logical and physical schemas, such as type mismatches or missing columns.
+/// This is used in file scans to rewrite expressions so that they can be
+/// evaluated against the physical schema of the file being scanned. It allows
+/// for handling differences between logical and physical schemas, such as type
+/// mismatches or missing columns common in [Schema evolution] scenarios.
 ///
-/// ## Overview
+/// [Schema evolution]: https://www.dremio.com/wiki/schema-evolution/
 ///
-/// The `PhysicalExprAdapter` allows rewriting physical expressions to match different schemas, including:
+/// ## Default Implementations
 ///
-/// - **Type casting**: When logical and physical schemas have different types, expressions are
-///   automatically wrapped with cast operations. For example, `lit(ScalarValue::Int32(123)) = int64_column`
-///   gets rewritten to `lit(ScalarValue::Int32(123)) = cast(int64_column, 'Int32')`.
-///   Note that this does not attempt to simplify such expressions - that is done by shared simplifiers.
-///
-/// - **Missing columns**: When a column exists in the logical schema but not in the physical schema,
-///   references to it are replaced with null literals.
-///
-/// - **Struct field access**: Expressions like `struct_column.field_that_is_missing_in_schema` are
-///   rewritten to `null` when the field doesn't exist in the physical schema.
-///
-/// - **Partition columns**: Partition column references can be replaced with their literal values
-///   when scanning specific partitions.
+/// The default implementation [`DefaultPhysicalExprAdapter`]  handles common
+/// cases.
 ///
 /// ## Custom Implementations
 ///
@@ -155,9 +147,15 @@ pub trait PhysicalExprAdapter: Send + Sync + std::fmt::Debug {
     ///
     /// Returns:
     /// - `Arc<dyn PhysicalExpr>`: The rewritten physical expression that can be evaluated against the physical schema.
+    ///
+    /// See Also:
+    /// - [`replace_columns_with_literals`]: for replacing partition column references with their literal values.
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>>;
 }
 
+/// Creates instances of [`PhysicalExprAdapter`] for given logical and physical schemas.
+///
+/// See [`DefaultPhysicalExprAdapterFactory`] for the default implementation.
 pub trait PhysicalExprAdapterFactory: Send + Sync + std::fmt::Debug {
     /// Create a new instance of the physical expression adapter.
     fn create(
@@ -183,15 +181,35 @@ impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
     }
 }
 
-/// Default implementation for rewriting physical expressions to match different schemas.
+/// Default implementation of [`PhysicalExprAdapter`] for rewriting physical
+/// expressions to match different schemas.
+///
+/// ## Overview
+///
+///  [`DefaultPhysicalExprAdapter`] rewrites physical expressions to match
+///  different schemas, including:
+///
+/// - **Type casting**: When logical and physical schemas have different types, expressions are
+///   automatically wrapped with cast operations. For example, `lit(ScalarValue::Int32(123)) = int64_column`
+///   gets rewritten to `lit(ScalarValue::Int32(123)) = cast(int64_column, 'Int32')`.
+///   Note that this does not attempt to simplify such expressions - that is done by shared simplifiers.
+///
+/// - **Missing columns**: When a column exists in the logical schema but not in the physical schema,
+///   references to it are replaced with null literals.
+///
+/// - **Struct field access**: Expressions like `struct_column.field_that_is_missing_in_schema` are
+///   rewritten to `null` when the field doesn't exist in the physical schema.
+///
+/// - **Default column values**: Partition column references can be replaced with their literal values
+///   when scanning specific partitions. See [`replace_columns_with_literals`] for more details.
 ///
 /// # Example
 ///
 /// ```rust
-/// use datafusion_physical_expr_adapter::{DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory};
-/// use arrow::datatypes::Schema;
-/// use std::sync::Arc;
-///
+/// # use datafusion_physical_expr_adapter::{DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory};
+/// # use arrow::datatypes::Schema;
+/// # use std::sync::Arc;
+/// #
 /// # fn example(
 /// #     predicate: std::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>,
 /// #     physical_file_schema: &Schema,

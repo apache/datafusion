@@ -137,6 +137,26 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
+        // Replace any partition column references in the predicate
+        // with their literal values from this file's partition values.
+        //
+        // For example, given
+        // 1. `region` is a partition column,
+        // 2. predicate `host IN ('us-east-1', 'eu-central-1')`:
+        // 3. The file path is `/data/region=us-west-2/...`
+        //    (that is the partition column value is `us-west-2`)
+        //
+        // The predicate would be rewritten to
+        // ```sql
+        // 'us-west-2` IN ('us-east-1', 'eu-central-1')
+        // ```
+        // which can be further simplified to `FALSE`, meaning
+        // the file can be skipped entirely.
+        //
+        // While this particular optimization is done during logical planning,
+        // there are other cases where partition columns may appear in more
+        // complex predicates that cannot be simplified until we are about to
+        // open the file (such as dynamic predicates)
         let mut predicate = {
             let partition_values: HashMap<&str, &ScalarValue> = self
                 .table_schema
@@ -190,12 +210,22 @@ impl FileOpener for ParquetOpener {
             let mut file_pruner = predicate
                 .as_ref()
                 .filter(|p| {
-                    // Make a FilePruner only if there is either a dynamic expr in the predicate or the file has file-level statistics.
-                    // File-level statistics may allow us to prune the file without loading any row groups or metadata.
-                    // If there is a dynamic filter we may be able to prune the file later as the dynamic filter is updated.
-                    // This does allow the case where there is a dynamic filter but no statistics, in which case
-                    // the only thing that could get pruned is a dynamic filter that references partition columns.
-                    // While rare this is possible e.g. `select * from table order by partition_col limit 10` could hit this condition.
+                    // Make a FilePruner only if there is either
+                    // 1. a dynamic expr in the predicate
+                    // 2. the file has file-level statistics.
+                    //
+                    // File-level statistics may prune the file without loading
+                    // any row groups or metadata.
+                    //
+                    // Dynamic filters may prune the file after initial
+                    // planning, as the dynamic filter is updated during
+                    // execution.
+                    //
+                    // The case where there is a dynamic filter but no
+                    // statistics corresponds to a dynamic filter that
+                    // references partition columns. While rare, this is possible
+                    // e.g. `select * from table order by partition_col limit
+                    // 10` could hit this condition.
                     is_dynamic_physical_expr(p) || partitioned_file.has_statistics()
                 })
                 .and_then(|p| {
