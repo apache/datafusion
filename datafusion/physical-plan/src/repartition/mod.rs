@@ -1559,9 +1559,9 @@ impl PerPartitionStream {
                 return Poll::Ready(None);
             }
 
-            let _timer = cloned_time.timer();
             match ready!(self.poll_next_inner(cx)) {
                 Some(Ok(batch)) => {
+                    let _timer = cloned_time.timer();
                     if let Err(err) = coalescer.push_batch(batch) {
                         return Poll::Ready(Some(Err(err)));
                     }
@@ -1571,6 +1571,7 @@ impl PerPartitionStream {
                 }
                 None => {
                     completed = true;
+                    let _timer = cloned_time.timer();
                     if let Err(err) = coalescer.finish() {
                         return Poll::Ready(Some(Err(err)));
                     }
