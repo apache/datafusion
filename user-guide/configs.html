@@ -805,6 +805,14 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>131072</p></td>
 <td><p>The maximum estimated size in rows for one input side of a HashJoin will be collected into a single partition</p></td>
 </tr>
+<tr class="row-even"><td><p>datafusion.optimizer.hash_join_inlist_pushdown_max_size</p></td>
+<td><p>131072</p></td>
+<td><p>Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering. Build sides larger than this will use hash table lookups instead. Set to 0 to always use hash table lookups. InList pushdown can be more efficient for small build sides because it can result in better statistics pruning as well as use any bloom filters present on the scan side. InList expressions are also more transparent and easier to serialize over the network in distributed uses of DataFusion. On the other hand InList pushdown requires making a copy of the data and thus adds some overhead to the build side and uses more memory. This setting is per-partition, so we may end up using <code class="docutils literal notranslate"><span class="pre">hash_join_inlist_pushdown_max_size</span></code> * <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> memory. The default is 128kB per partition. This should allow point lookup joins (e.g. joining on a unique primary key) to use InList pushdown in most cases but avoids excessive memory usage or overhead for larger joins.</p></td>
+</tr>
+<tr class="row-odd"><td><p>datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values</p></td>
+<td><p>150</p></td>
+<td><p>Maximum number of distinct values (rows) in the build side of a hash join to be pushed down as an InList expression for dynamic filtering. Build sides with more rows than this will use hash table lookups instead. Set to 0 to always use hash table lookups. This provides an additional limit beyond <code class="docutils literal notranslate"><span class="pre">hash_join_inlist_pushdown_max_size</span></code> to prevent very large IN lists that might not provide much benefit over hash table lookups. This uses the deduplicated row count once the build side has been evaluated. The default is 150 values per partition. This is inspired by Trino’s <code class="docutils literal notranslate"><span class="pre">max-filter-keys-per-column</span></code> setting. See: <a class="reference external" href="https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds">https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds</a></p></td>
+</tr>
 <tr class="row-even"><td><p>datafusion.optimizer.default_filter_selectivity</p></td>
 <td><p>20</p></td>
 <td><p>The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).</p></td>
