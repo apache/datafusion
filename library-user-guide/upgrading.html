@@ -524,6 +524,59 @@ which is <a class="reference external" href="https://github.com/apache/datafusio
 </div>
 <p>Note that <code class="docutils literal notranslate"><span class="pre">FileScanConfig::statistics()</span></code> automatically marks statistics as inexact when filters are present, ensuring correctness when filters are pushed down.</p>
 </section>
+<section id="partition-column-handling-moved-out-of-physicalexpradapter">
+<h3>Partition column handling moved out of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code><a class="headerlink" href="#partition-column-handling-moved-out-of-physicalexpradapter" title="Link to this heading">#</a></h3>
+<p>Partition column replacement is now a separate preprocessing step performed before expression rewriting via <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code>. This change provides better separation of concerns and makes the adapter more focused on schema differences rather than partition value substitution.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who have custom implementations of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> that handle partition columns</p></li>
+<li><p>Users who directly use the <code class="docutils literal notranslate"><span class="pre">FilePruner</span></code> API</p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new()</span></code> signature changed: the <code class="docutils literal notranslate"><span class="pre">partition_fields</span></code> parameter has been removed since partition column handling is now done separately</p></li>
+<li><p>Partition column replacement must now be done via <code class="docutils literal notranslate"><span class="pre">replace_columns_with_literals()</span></code> before expressions are passed to the adapter</p></li>
+</ol>
+<p><strong>Migration guide:</strong></p>
+<p>If you have code that creates a <code class="docutils literal notranslate"><span class="pre">FilePruner</span></code> with partition fields:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_pruning</span><span class="p">::</span><span class="n">FilePruner</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">pruner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FilePruner</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span>
+<span class="w">    </span><span class="n">predicate</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">partition_fields</span><span class="p">,</span><span class="w">  </span><span class="c1">// This parameter is removed</span>
+<span class="w">    </span><span class="n">file_stats</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_pruning</span><span class="p">::</span><span class="n">FilePruner</span><span class="p">;</span>
+
+<span class="c1">// Partition fields are no longer needed</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">pruner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FilePruner</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span>
+<span class="w">    </span><span class="n">predicate</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_stats</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>If you have custom code that relies on <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code> to handle partition columns, you must now call <code class="docutils literal notranslate"><span class="pre">replace_columns_with_literals()</span></code> separately:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Adapter handled partition column replacement internally</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">adapted_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">adapter</span><span class="p">.</span><span class="n">rewrite</span><span class="p">(</span><span class="n">expr</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_expr_adapter</span><span class="p">::</span><span class="n">replace_columns_with_literals</span><span class="p">;</span>
+
+<span class="c1">// Replace partition columns first</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">expr_with_literals</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">replace_columns_with_literals</span><span class="p">(</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">partition_values</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="c1">// Then apply the adapter</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">adapted_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">adapter</span><span class="p">.</span><span class="n">rewrite</span><span class="p">(</span><span class="n">expr_with_literals</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="planner-now-requires-explicit-opt-in-for-within-group-syntax">
 <h3>Planner now requires explicit opt-in for WITHIN GROUP syntax<a class="headerlink" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax" title="Link to this heading">#</a></h3>
 <p>The SQL planner now enforces the aggregate UDF contract more strictly: the
@@ -1948,6 +2001,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#removal-of-pyarrow-feature">Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptive-filter-representation-in-parquet-filter-pushdown">Adaptive filter representation in Parquet filter pushdown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partition-column-handling-moved-out-of-physicalexpradapter">Partition column handling moved out of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax">Planner now requires explicit opt-in for WITHIN GROUP syntax</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-cacheaccessor-trait">API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait</a></li>

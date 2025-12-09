@@ -165,6 +165,70 @@ Statistics are now accessed through `FileScanConfig` instead of `FileSource`:
 
 Note that `FileScanConfig::statistics()` automatically marks statistics as inexact when filters are present, ensuring correctness when filters are pushed down.
 
+### Partition column handling moved out of `PhysicalExprAdapter`
+
+Partition column replacement is now a separate preprocessing step performed before expression rewriting via `PhysicalExprAdapter`. This change provides better separation of concerns and makes the adapter more focused on schema differences rather than partition value substitution.
+
+**Who is affected:**
+
+- Users who have custom implementations of `PhysicalExprAdapterFactory` that handle partition columns
+- Users who directly use the `FilePruner` API
+
+**Breaking changes:**
+
+1. `FilePruner::try_new()` signature changed: the `partition_fields` parameter has been removed since partition column handling is now done separately
+2. Partition column replacement must now be done via `replace_columns_with_literals()` before expressions are passed to the adapter
+
+**Migration guide:**
+
+If you have code that creates a `FilePruner` with partition fields:
+
+**Before:**
+
+```rust,ignore
+use datafusion_pruning::FilePruner;
+
+let pruner = FilePruner::try_new(
+    predicate,
+    file_schema,
+    partition_fields,  // This parameter is removed
+    file_stats,
+)?;
+```
+
+**After:**
+
+```rust,ignore
+use datafusion_pruning::FilePruner;
+
+// Partition fields are no longer needed
+let pruner = FilePruner::try_new(
+    predicate,
+    file_schema,
+    file_stats,
+)?;
+```
+
+If you have custom code that relies on `PhysicalExprAdapter` to handle partition columns, you must now call `replace_columns_with_literals()` separately:
+
+**Before:**
+
+```rust,ignore
+// Adapter handled partition column replacement internally
+let adapted_expr = adapter.rewrite(expr)?;
+```
+
+**After:**
+
+```rust,ignore
+use datafusion_physical_expr_adapter::replace_columns_with_literals;
+
+// Replace partition columns first
+let expr_with_literals = replace_columns_with_literals(expr, &partition_values)?;
+// Then apply the adapter
+let adapted_expr = adapter.rewrite(expr_with_literals)?;
+```
+
 ### Planner now requires explicit opt-in for WITHIN GROUP syntax
 
 The SQL planner now enforces the aggregate UDF contract more strictly: the
