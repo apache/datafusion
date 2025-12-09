@@ -618,6 +618,70 @@ a table reference.</p>
 </table>
 </div>
 </section>
+<section id="statistics-cache">
+<h2><code class="docutils literal notranslate"><span class="pre">statistics_cache</span></code><a class="headerlink" href="#statistics-cache" title="Link to this heading">#</a></h2>
+<p>Similarly to the <code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code>, the <code class="docutils literal notranslate"><span class="pre">statistics_cache</span></code> function can be used to show information
+about the File Statistics Cache that is used by the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html"><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code></a> implementation in DataFusion.
+For the statistics to be collected, the config <code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code> must be
+enabled.</p>
+<p>You can inspect the statistics cache by querying the <code class="docutils literal notranslate"><span class="pre">statistics_cache</span></code> function. For example:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">statistics_cache</span><span class="p">();</span>
+<span class="o">+</span><span class="c1">------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">path</span><span class="w">             </span><span class="o">|</span><span class="w"> </span><span class="n">file_modified</span><span class="w">       </span><span class="o">|</span><span class="w"> </span><span class="n">file_size_bytes</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">e_tag</span><span class="w">                  </span><span class="o">|</span><span class="w"> </span><span class="k">version</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">num_rows</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="n">num_columns</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">table_size_bytes</span><span class="w">   </span><span class="o">|</span><span class="w"> </span><span class="n">statistics_size_bytes</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">...</span><span class="o">/</span><span class="n">hits</span><span class="p">.</span><span class="n">parquet</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">2022</span><span class="o">-</span><span class="mi">06</span><span class="o">-</span><span class="mi">25</span><span class="n">T22</span><span class="p">:</span><span class="mi">22</span><span class="p">:</span><span class="mi">22</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">14779976446</span><span class="w">     </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="o">-</span><span class="mi">5</span><span class="n">e24d1ee16380</span><span class="o">-</span><span class="mi">370</span><span class="n">f48</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">    </span><span class="o">|</span><span class="w"> </span><span class="n">Exact</span><span class="p">(</span><span class="mi">99997497</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">105</span><span class="w">         </span><span class="o">|</span><span class="w"> </span><span class="n">Exact</span><span class="p">(</span><span class="mi">36445943240</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">0</span><span class="w">                     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+</span>
+</pre></div>
+</div>
+<p>The columns of the returned table are:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>column_name</p></th>
+<th class="head"><p>data_type</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>path</p></td>
+<td><p>Utf8</p></td>
+<td><p>File path relative to the object store / filesystem root</p></td>
+</tr>
+<tr class="row-odd"><td><p>file_modified</p></td>
+<td><p>Timestamp</p></td>
+<td><p>Last modified time of the file</p></td>
+</tr>
+<tr class="row-even"><td><p>file_size_bytes</p></td>
+<td><p>UInt64</p></td>
+<td><p>Size of the file in bytes</p></td>
+</tr>
+<tr class="row-odd"><td><p>e_tag</p></td>
+<td><p>Utf8</p></td>
+<td><p><a class="reference external" href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag">Entity Tag</a> (ETag) of the file if available</p></td>
+</tr>
+<tr class="row-even"><td><p>version</p></td>
+<td><p>Utf8</p></td>
+<td><p>Version of the file if available (for object stores that support versioning)</p></td>
+</tr>
+<tr class="row-odd"><td><p>num_rows</p></td>
+<td><p>Utf8</p></td>
+<td><p>Number of rows in the table</p></td>
+</tr>
+<tr class="row-even"><td><p>num_columns</p></td>
+<td><p>UInt64</p></td>
+<td><p>Number of columns in the table</p></td>
+</tr>
+<tr class="row-odd"><td><p>table_size_bytes</p></td>
+<td><p>Utf8</p></td>
+<td><p>Size of the table, in bytes</p></td>
+</tr>
+<tr class="row-even"><td><p>statistics_size_bytes</p></td>
+<td><p>UInt64</p></td>
+<td><p>Size of the cached statistics in memory</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 </section>
 
 
@@ -669,6 +733,7 @@ a table reference.</p>
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-metadata"><code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#metadata-cache"><code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-cache"><code class="docutils literal notranslate"><span class="pre">statistics_cache</span></code></a></li>
 </ul>
   </nav></div>
 
