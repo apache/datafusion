@@ -653,7 +653,8 @@ impl DataSource for FileScanConfig {
                 let projected_schema = match self.projected_schema() {
                     Ok(schema) => schema,
                     Err(_) => {
-                        return Partitioning::UnknownPartitioning(self.file_groups.len())
+                        debug!("Could not get projected schema, falling back to UnknownPartitioning.");
+                        return Partitioning::UnknownPartitioning(self.file_groups.len());
                     }
                 };
 

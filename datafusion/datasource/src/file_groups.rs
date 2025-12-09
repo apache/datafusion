@@ -18,6 +18,8 @@
 //! Logic for managing groups of [`PartitionedFile`]s in DataFusion
 
 use crate::{FileRange, PartitionedFile};
+use arrow::compute::SortOptions;
+use datafusion_common::utils::compare_rows;
 use datafusion_common::Statistics;
 use itertools::Itertools;
 use std::cmp::{Ordering, min};
@@ -494,8 +496,14 @@ impl FileGroup {
 
         // Sort for deterministic bucket assignment across query executions.
         let mut sorted_partitions: Vec<_> = partition_groups.into_iter().collect();
-        sorted_partitions
-            .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+        let sort_options =
+            vec![
+                SortOptions::default();
+                sorted_partitions.first().map(|(k, _)| k.len()).unwrap_or(0)
+            ];
+        sorted_partitions.sort_by(|a, b| {
+            compare_rows(&a.0, &b.0, &sort_options).unwrap_or(Ordering::Equal)
+        });
 
         if num_unique_partitions <= max_target_partitions {
             sorted_partitions
