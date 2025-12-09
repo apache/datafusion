@@ -546,7 +546,7 @@ impl FileOpener for ParquetOpener {
                         // In these cases it may make sense for the logical schema to be `NOT NULL`.
                         // RecordBatch::try_new_with_options checks that if the schema is NOT NULL
                         // the array cannot contain nulls, amongst other checks.
-                        let (_, arrays, num_rows) = b.into_parts();
+                        let (_stream_schema, arrays, num_rows) = b.into_parts();
                         let options =
                             RecordBatchOptions::new().with_row_count(Some(num_rows));
                         RecordBatch::try_new_with_options(
