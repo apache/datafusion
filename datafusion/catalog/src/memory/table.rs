@@ -37,7 +37,7 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_expr::dml::{DmlCapabilities, InsertOp};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
     create_physical_expr, create_physical_sort_exprs, LexOrdering,
@@ -303,10 +303,6 @@ impl TableProvider for MemTable {
 
     fn get_column_default(&self, column: &str) -> Option<&Expr> {
         self.column_defaults.get(column)
-    }
-
-    fn dml_capabilities(&self) -> DmlCapabilities {
-        DmlCapabilities::ALL
     }
 
     async fn delete_from(

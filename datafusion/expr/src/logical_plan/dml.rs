@@ -123,10 +123,8 @@ impl CopyTo {
 ///   [`TableProvider::insert_into`]
 ///
 /// * `DELETE` - Removes rows from the table. Calls [`TableProvider::delete_from`]
-///   if the provider returns [`DmlCapabilities`] with `delete = true`.
 ///
 /// * `UPDATE` - Modifies existing rows in the table. Calls [`TableProvider::update`]
-///   if the provider returns [`DmlCapabilities`] with `update = true`.
 ///
 /// * `CREATE TABLE AS SELECT` - Creates a new table and populates it with data
 ///   from a query. This is similar to the `INSERT` operation, but it creates a new
@@ -138,7 +136,6 @@ impl CopyTo {
 /// [`TableProvider::insert_into`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.insert_into
 /// [`TableProvider::delete_from`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.delete_from
 /// [`TableProvider::update`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.update
-/// [`DmlCapabilities`]: crate::dml::DmlCapabilities
 #[derive(Clone)]
 pub struct DmlStatement {
     /// The table name
@@ -291,103 +288,10 @@ impl Display for InsertOp {
     }
 }
 
-/// DML operations supported by a table.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct DmlCapabilities {
-    pub delete: bool,
-    pub update: bool,
-}
-
-impl DmlCapabilities {
-    pub const NONE: Self = Self {
-        delete: false,
-        update: false,
-    };
-
-    pub const ALL: Self = Self {
-        delete: true,
-        update: true,
-    };
-
-    pub const DELETE_ONLY: Self = Self {
-        delete: true,
-        update: false,
-    };
-
-    pub const UPDATE_ONLY: Self = Self {
-        delete: false,
-        update: true,
-    };
-
-    pub fn supports_any(&self) -> bool {
-        self.delete || self.update
-    }
-}
-
-impl Display for DmlCapabilities {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let caps: Vec<&str> = [
-            self.delete.then_some("DELETE"),
-            self.update.then_some("UPDATE"),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-
-        if caps.is_empty() {
-            write!(f, "NONE")
-        } else {
-            write!(f, "{}", caps.join(", "))
-        }
-    }
-}
-
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
         Schema::new(vec![Field::new("count", DataType::UInt64, false)])
             .try_into()
             .unwrap(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dml_capabilities_constants() {
-        assert!(!DmlCapabilities::NONE.delete);
-        assert!(!DmlCapabilities::NONE.update);
-
-        assert!(DmlCapabilities::ALL.delete);
-        assert!(DmlCapabilities::ALL.update);
-
-        assert!(DmlCapabilities::DELETE_ONLY.delete);
-        assert!(!DmlCapabilities::DELETE_ONLY.update);
-
-        assert!(!DmlCapabilities::UPDATE_ONLY.delete);
-        assert!(DmlCapabilities::UPDATE_ONLY.update);
-    }
-
-    #[test]
-    fn test_dml_capabilities_supports_any() {
-        assert!(!DmlCapabilities::NONE.supports_any());
-        assert!(DmlCapabilities::ALL.supports_any());
-        assert!(DmlCapabilities::DELETE_ONLY.supports_any());
-        assert!(DmlCapabilities::UPDATE_ONLY.supports_any());
-    }
-
-    #[test]
-    fn test_dml_capabilities_display() {
-        assert_eq!(format!("{}", DmlCapabilities::NONE), "NONE");
-        assert_eq!(format!("{}", DmlCapabilities::ALL), "DELETE, UPDATE");
-        assert_eq!(format!("{}", DmlCapabilities::DELETE_ONLY), "DELETE");
-        assert_eq!(format!("{}", DmlCapabilities::UPDATE_ONLY), "UPDATE");
-    }
-
-    #[test]
-    fn test_dml_capabilities_default() {
-        let caps = DmlCapabilities::default();
-        assert_eq!(caps, DmlCapabilities::NONE);
-    }
 }
