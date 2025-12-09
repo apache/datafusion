@@ -277,8 +277,10 @@ impl PhysicalExprAdapterFactory for ShreddedJsonRewriterFactory {
         physical_file_schema: SchemaRef,
     ) -> Arc<dyn PhysicalExprAdapter> {
         let default_factory = DefaultPhysicalExprAdapterFactory;
-        let default_adapter = default_factory
-            .create(logical_file_schema.clone(), physical_file_schema.clone());
+        let default_adapter = default_factory.create(
+            Arc::clone(&logical_file_schema),
+            Arc::clone(&physical_file_schema),
+        );
 
         Arc::new(ShreddedJsonRewriter {
             physical_file_schema,

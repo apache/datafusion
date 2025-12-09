@@ -90,6 +90,13 @@ impl FilePruner {
     }
 
     pub fn should_prune(&mut self) -> Result<bool> {
+        // Check if the predicate has changed since last invocation by tracking
+        // its "generation". Dynamic filter expressions can change their values
+        // during query execution, so we use generation tracking to detect when
+        // the predicate has been updated and needs to be rebuilt.
+        //
+        // If the generation hasn't changed, we can skip rebuilding the pruning
+        // predicate, which is an expensive operation involving expression analysis.
         let new_generation = snapshot_generation(&self.predicate);
         if let Some(current_generation) = self.predicate_generation.as_mut() {
             if *current_generation == new_generation {

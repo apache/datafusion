@@ -158,18 +158,24 @@ impl FileOpener for ParquetOpener {
         // complex predicates that cannot be simplified until we are about to
         // open the file (such as dynamic predicates)
         let mut predicate = {
-            let partition_values: HashMap<&str, &ScalarValue> = self
-                .table_schema
-                .table_partition_cols()
-                .iter()
-                .zip(partitioned_file.partition_values.iter())
-                .map(|(field, value)| (field.name().as_str(), value))
-                .collect();
+            // Only replace partition columns if there are partition values.
+            // For non-partitioned tables, skip the clone and replacement traversal.
+            if partitioned_file.partition_values.is_empty() {
+                self.predicate.clone()
+            } else {
+                let partition_values: HashMap<&str, &ScalarValue> = self
+                    .table_schema
+                    .table_partition_cols()
+                    .iter()
+                    .zip(partitioned_file.partition_values.iter())
+                    .map(|(field, value)| (field.name().as_str(), value))
+                    .collect();
 
-            self.predicate
-                .clone()
-                .map(|p| replace_columns_with_literals(p, &partition_values))
-                .transpose()?
+                self.predicate
+                    .clone()
+                    .map(|p| replace_columns_with_literals(p, &partition_values))
+                    .transpose()?
+            }
         };
 
         let projection = Arc::clone(&self.projection);
@@ -908,7 +914,7 @@ mod test {
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
-                table_schema: TableSchema::from_file_schema(schema.clone()),
+                table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
                 parquet_file_reader_factory: Arc::new(

@@ -206,7 +206,7 @@ impl TableProvider for DefaultValueTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::clone(&self.schema)
     }
 
     fn table_type(&self) -> TableType {
@@ -227,7 +227,7 @@ impl TableProvider for DefaultValueTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = self.schema.clone();
+        let schema = Arc::clone(&self.schema);
         let df_schema = DFSchema::try_from(schema.clone())?;
         let filter = state.create_physical_expr(
             conjunction(filters.iter().cloned()).unwrap_or_else(|| lit(true)),
@@ -280,8 +280,10 @@ impl PhysicalExprAdapterFactory for DefaultValuePhysicalExprAdapterFactory {
         physical_file_schema: SchemaRef,
     ) -> Arc<dyn PhysicalExprAdapter> {
         let default_factory = DefaultPhysicalExprAdapterFactory;
-        let default_adapter = default_factory
-            .create(logical_file_schema.clone(), physical_file_schema.clone());
+        let default_adapter = default_factory.create(
+            Arc::clone(&logical_file_schema),
+            Arc::clone(&physical_file_schema),
+        );
 
         Arc::new(DefaultValuePhysicalExprAdapter {
             logical_file_schema,
