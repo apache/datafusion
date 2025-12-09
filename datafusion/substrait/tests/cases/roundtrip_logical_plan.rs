@@ -18,7 +18,6 @@
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::functions_nested::map::map;
-use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
@@ -35,8 +34,9 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
-    EmptyRelation, Extension, InvariantLevel, LogicalPlan, PartitionEvaluator,
-    Repartition, UserDefinedLogicalNode, Values, Volatility,
+    col, lit, EmptyRelation, Extension, InvariantLevel, LogicalPlan, LogicalPlanBuilder,
+    PartitionEvaluator, RecursiveQuery, Repartition, UserDefinedLogicalNode, Values,
+    Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -2101,11 +2101,6 @@ async fn create_all_type_context() -> Result<SessionContext> {
 
 #[tokio::test]
 async fn roundtrip_recursive_query() -> Result<()> {
-    use datafusion::logical_expr::{
-        col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
-    };
-    use std::sync::Arc;
-
     let ctx = create_context().await?;
 
     // Build a simple RecursiveQuery manually
@@ -2150,11 +2145,6 @@ async fn roundtrip_recursive_query() -> Result<()> {
 
 #[tokio::test]
 async fn serialize_recursive_query_with_empty_name_errors() -> Result<()> {
-    use datafusion::logical_expr::{
-        col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
-    };
-    use std::sync::Arc;
-
     let ctx = create_context().await?;
 
     let empty_plan = LogicalPlanBuilder::empty(false).build()?;
@@ -2209,11 +2199,6 @@ fn decode_recursive_scan_detail_malformed_bytes_errors() {
 
 #[tokio::test]
 async fn roundtrip_recursive_query_distinct() -> Result<()> {
-    use datafusion::logical_expr::{
-        col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
-    };
-    use std::sync::Arc;
-
     let ctx = create_context().await?;
 
     // Build a RecursiveQuery with is_distinct=true
@@ -2258,11 +2243,6 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
-    use datafusion::logical_expr::{
-        col, lit, LogicalPlan, LogicalPlanBuilder, RecursiveQuery,
-    };
-    use std::sync::Arc;
-
     let ctx = create_context().await?;
 
     // Build a RecursiveQuery with specific child plan structures

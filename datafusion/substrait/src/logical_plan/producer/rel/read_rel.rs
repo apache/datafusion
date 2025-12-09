@@ -21,8 +21,9 @@ use crate::logical_plan::producer::{
 use crate::logical_plan::recursive::{
     encode_recursive_scan_detail, RECURSIVE_SCAN_TYPE_URL,
 };
-use datafusion::catalog::cte_worktable::CteWorkTable;
-use datafusion::catalog::default_table_source::DefaultTableSource;
+use datafusion::catalog::{
+    cte_worktable::CteWorkTable, default_table_source::DefaultTableSource,
+};
 use datafusion::common::{substrait_datafusion_err, DFSchema, ToDFSchema};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
@@ -282,14 +283,18 @@ pub fn from_values(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::producer::DefaultSubstraitProducer;
-    use crate::logical_plan::recursive::decode_recursive_scan_detail;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::catalog::cte_worktable::CteWorkTable;
-    use datafusion::catalog::default_table_source::DefaultTableSource;
-    use datafusion::common::DFSchema;
-    use datafusion::execution::SessionStateBuilder;
-    use datafusion::logical_expr::TableScan as DFTableScan;
+    use crate::logical_plan::{
+        producer::DefaultSubstraitProducer, recursive::decode_recursive_scan_detail,
+    };
+    use datafusion::{
+        arrow::datatypes::{DataType, Field, Schema},
+        catalog::{
+            cte_worktable::CteWorkTable, default_table_source::DefaultTableSource,
+        },
+        common::DFSchema,
+        execution::SessionStateBuilder,
+        logical_expr::TableScan as DFTableScan,
+    };
 
     #[test]
     fn from_table_scan_sets_advanced_extension_for_cte_work_table(

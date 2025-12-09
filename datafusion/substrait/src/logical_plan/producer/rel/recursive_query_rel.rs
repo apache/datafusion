@@ -15,15 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::SubstraitProducer;
-use crate::logical_plan::recursive::{
-    encode_recursive_query_detail, RECURSIVE_QUERY_TYPE_URL,
+use crate::logical_plan::{
+    producer::SubstraitProducer,
+    recursive::{encode_recursive_query_detail, RECURSIVE_QUERY_TYPE_URL},
 };
 use datafusion::logical_expr::RecursiveQuery;
 use pbjson_types::Any as ProtoAny;
-use substrait::proto::rel_common::{self, EmitKind};
-use substrait::proto::{ExtensionMultiRel, Rel, RelCommon};
-
+use substrait::proto::{
+    rel_common::{self, EmitKind},
+    ExtensionMultiRel, Rel, RelCommon,
+};
 /// Serializes DataFusion RecursiveQuery into Substrait ExtensionMultiRel.
 ///
 /// RecursiveQuery has two child plans (static_term and recursive_term) plus metadata

@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::SubstraitConsumer;
-use crate::logical_plan::recursive::decode_recursive_query_detail;
-use datafusion::common::substrait_err;
-use datafusion::logical_expr::{LogicalPlan, RecursiveQuery};
+use crate::logical_plan::{
+    consumer::SubstraitConsumer, recursive::decode_recursive_query_detail,
+};
+use datafusion::{
+    common::substrait_err,
+    logical_expr::{LogicalPlan, RecursiveQuery},
+};
 use std::sync::Arc;
 use substrait::proto::ExtensionMultiRel;
-
 /// Deserializes Substrait ExtensionMultiRel back into DataFusion RecursiveQuery.
 ///
 /// RecursiveQuery is encoded as ExtensionMultiRel with exactly two inputs:
