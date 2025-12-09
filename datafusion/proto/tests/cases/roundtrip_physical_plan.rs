@@ -2313,41 +2313,6 @@ async fn roundtrip_async_func_exec() -> Result<()> {
         }
     }
 
-    #[derive(Debug)]
-    struct TestAsyncUDFPhysicalCodec {}
-    impl PhysicalExtensionCodec for TestAsyncUDFPhysicalCodec {
-        fn try_decode(
-            &self,
-            _buf: &[u8],
-            _inputs: &[Arc<dyn ExecutionPlan>],
-            _ctx: &TaskContext,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            not_impl_err!(
-                "TestAsyncUDFPhysicalCodec should not be called to decode an extension"
-            )
-        }
-
-        fn try_encode(
-            &self,
-            _node: Arc<dyn ExecutionPlan>,
-            _buf: &mut Vec<u8>,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-            if name == "test_async_udf" {
-                Ok(Arc::new(TestAsyncUDF::new().into()))
-            } else {
-                not_impl_err!("TestAsyncUDFPhysicalCodec unrecognized UDF {name}")
-            }
-        }
-
-        fn try_encode_udf(&self, _node: &ScalarUDF, _buf: &mut Vec<u8>) -> Result<()> {
-            Ok(())
-        }
-    }
-
     let ctx = SessionContext::new();
     let async_udf = AsyncScalarUDF::new(Arc::new(TestAsyncUDF::new()));
     ctx.register_udf(async_udf.into_scalar_udf());
@@ -2358,8 +2323,7 @@ async fn roundtrip_async_func_exec() -> Result<()> {
         .create_physical_plan()
         .await?;
 
-    let codec = TestAsyncUDFPhysicalCodec {};
-    roundtrip_test_and_return(physical_plan, &ctx, &codec)?;
+    roundtrip_test_with_context(physical_plan, &ctx)?;
 
     Ok(())
 }
