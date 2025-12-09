@@ -204,44 +204,38 @@ physical_plan
 10)│      FinalPartitioned     │
 11)└─────────────┬─────────────┘
 12)┌─────────────┴─────────────┐
-13)│    CoalesceBatchesExec    │
+13)│      RepartitionExec      │
 14)│    --------------------   │
-15)│     target_batch_size:    │
-16)│            8192           │
-17)└─────────────┬─────────────┘
-18)┌─────────────┴─────────────┐
-19)│      RepartitionExec      │
-20)│    --------------------   │
-21)│ partition_count(in->out): │
-22)│           4 -> 4          │
-23)│                           │
-24)│    partitioning_scheme:   │
-25)│  Hash([string_col@0], 4)  │
-26)└─────────────┬─────────────┘
-27)┌─────────────┴─────────────┐
-28)│       AggregateExec       │
-29)│    --------------------   │
-30)│           aggr:           │
-31)│   sum(table1.bigint_col)  │
-32)│                           │
-33)│    group_by: string_col   │
-34)│       mode: Partial       │
-35)└─────────────┬─────────────┘
-36)┌─────────────┴─────────────┐
-37)│      RepartitionExec      │
-38)│    --------------------   │
-39)│ partition_count(in->out): │
-40)│           1 -> 4          │
-41)│                           │
-42)│    partitioning_scheme:   │
-43)│     RoundRobinBatch(4)    │
-44)└─────────────┬─────────────┘
-45)┌─────────────┴─────────────┐
-46)│       DataSourceExec      │
-47)│    --------------------   │
-48)│          files: 1         │
-49)│        format: csv        │
-50)└───────────────────────────┘
+15)│ partition_count(in->out): │
+16)│           4 -> 4          │
+17)│                           │
+18)│    partitioning_scheme:   │
+19)│  Hash([string_col@0], 4)  │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│       AggregateExec       │
+23)│    --------------------   │
+24)│           aggr:           │
+25)│   sum(table1.bigint_col)  │
+26)│                           │
+27)│    group_by: string_col   │
+28)│       mode: Partial       │
+29)└─────────────┬─────────────┘
+30)┌─────────────┴─────────────┐
+31)│      RepartitionExec      │
+32)│    --------------------   │
+33)│ partition_count(in->out): │
+34)│           1 -> 4          │
+35)│                           │
+36)│    partitioning_scheme:   │
+37)│     RoundRobinBatch(4)    │
+38)└─────────────┬─────────────┘
+39)┌─────────────┴─────────────┐
+40)│       DataSourceExec      │
+41)│    --------------------   │
+42)│          files: 1         │
+43)│        format: csv        │
+44)└───────────────────────────┘
 
 
 # Limit
@@ -1294,33 +1288,27 @@ physical_plan
 25)│      FinalPartitioned     ││      FinalPartitioned     │
 26)└─────────────┬─────────────┘└─────────────┬─────────────┘
 27)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-28)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
+28)│      RepartitionExec      ││      RepartitionExec      │
 29)│    --------------------   ││    --------------------   │
-30)│     target_batch_size:    ││     target_batch_size:    │
-31)│            8192           ││            8192           │
-32)└─────────────┬─────────────┘└─────────────┬─────────────┘
-33)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-34)│      RepartitionExec      ││      RepartitionExec      │
-35)│    --------------------   ││    --------------------   │
-36)│ partition_count(in->out): ││ partition_count(in->out): │
-37)│           1 -> 4          ││           1 -> 4          │
-38)│                           ││                           │
-39)│    partitioning_scheme:   ││    partitioning_scheme:   │
-40)│     Hash([name@0], 4)     ││     Hash([name@0], 4)     │
+30)│ partition_count(in->out): ││ partition_count(in->out): │
+31)│           1 -> 4          ││           1 -> 4          │
+32)│                           ││                           │
+33)│    partitioning_scheme:   ││    partitioning_scheme:   │
+34)│     Hash([name@0], 4)     ││     Hash([name@0], 4)     │
+35)└─────────────┬─────────────┘└─────────────┬─────────────┘
+36)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+37)│       AggregateExec       ││       AggregateExec       │
+38)│    --------------------   ││    --------------------   │
+39)│       group_by: name      ││       group_by: name      │
+40)│       mode: Partial       ││       mode: Partial       │
 41)└─────────────┬─────────────┘└─────────────┬─────────────┘
 42)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-43)│       AggregateExec       ││       AggregateExec       │
+43)│       DataSourceExec      ││       DataSourceExec      │
 44)│    --------------------   ││    --------------------   │
-45)│       group_by: name      ││       group_by: name      │
-46)│       mode: Partial       ││       mode: Partial       │
-47)└─────────────┬─────────────┘└─────────────┬─────────────┘
-48)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-49)│       DataSourceExec      ││       DataSourceExec      │
-50)│    --------------------   ││    --------------------   │
-51)│         bytes: 296        ││         bytes: 288        │
-52)│       format: memory      ││       format: memory      │
-53)│          rows: 1          ││          rows: 1          │
-54)└───────────────────────────┘└───────────────────────────┘
+45)│         bytes: 296        ││         bytes: 288        │
+46)│       format: memory      ││       format: memory      │
+47)│          rows: 1          ││          rows: 1          │
+48)└───────────────────────────┘└───────────────────────────┘
 
 # Test explain tree for UnionExec
 query TT

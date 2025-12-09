@@ -98,11 +98,10 @@ physical_plan
 02)--SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST], first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST], first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
+05)--------RepartitionExec: partitioning=Hash([c1@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[first_value(aggregate_test_100.c3) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST], first_value(aggregate_test_100.c2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST]]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
 
 # ON expressions are not a sub-set of the ORDER BY expressions
 query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
