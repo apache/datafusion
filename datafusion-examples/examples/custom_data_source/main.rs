@@ -34,6 +34,7 @@
 //! - `default_column_values` — implement custom default value handling for missing columns using field metadata and PhysicalExprAdapter
 //! - `file_stream_provider` — run a query on FileStreamProvider which implements StreamProvider for reading and writing to arbitrary stream sources/sinks
 
+mod adapter_serialization;
 mod csv_json_opener;
 mod csv_sql_streaming;
 mod custom_datasource;
@@ -42,13 +43,12 @@ mod custom_file_format;
 mod default_column_values;
 mod file_stream_provider;
 
-use datafusion::error::{DataFusionError, Result};
-use strum::{IntoEnumIterator, VariantNames};
-use strum_macros::{Display, EnumIter, EnumString, VariantNames};
+use std::str::FromStr;
 
-#[derive(EnumIter, EnumString, Display, VariantNames)]
-#[strum(serialize_all = "snake_case")]
+use datafusion::error::{DataFusionError, Result};
+
 enum ExampleKind {
+    AdapterSerialization,
     All,
     CsvJsonOpener,
     CsvSqlStreaming,
@@ -59,18 +59,82 @@ enum ExampleKind {
     FileStreamProvider,
 }
 
+impl AsRef<str> for ExampleKind {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::AdapterSerialization => "adapter_serialization",
+            Self::All => "all",
+            Self::CsvJsonOpener => "csv_json_opener",
+            Self::CsvSqlStreaming => "csv_sql_streaming",
+            Self::CustomDatasource => "custom_datasource",
+            Self::CustomFileCasts => "custom_file_casts",
+            Self::CustomFileFormat => "custom_file_format",
+            Self::DefaultColumnValues => "default_column_values",
+            Self::FileStreamProvider => "file_stream_provider",
+        }
+    }
+}
+
+impl FromStr for ExampleKind {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "adapter_serialization" => Ok(Self::AdapterSerialization),
+            "all" => Ok(Self::All),
+            "csv_json_opener" => Ok(Self::CsvJsonOpener),
+            "csv_sql_streaming" => Ok(Self::CsvSqlStreaming),
+            "custom_datasource" => Ok(Self::CustomDatasource),
+            "custom_file_casts" => Ok(Self::CustomFileCasts),
+            "custom_file_format" => Ok(Self::CustomFileFormat),
+            "default_column_values" => Ok(Self::DefaultColumnValues),
+            "file_stream_provider" => Ok(Self::FileStreamProvider),
+            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
+        }
+    }
+}
+
 impl ExampleKind {
+    const ALL_VARIANTS: [Self; 9] = [
+        Self::AdapterSerialization,
+        Self::All,
+        Self::CsvJsonOpener,
+        Self::CsvSqlStreaming,
+        Self::CustomDatasource,
+        Self::CustomFileCasts,
+        Self::CustomFileFormat,
+        Self::DefaultColumnValues,
+        Self::FileStreamProvider,
+    ];
+
+    const RUNNABLE_VARIANTS: [Self; 8] = [
+        Self::AdapterSerialization,
+        Self::CsvJsonOpener,
+        Self::CsvSqlStreaming,
+        Self::CustomDatasource,
+        Self::CustomFileCasts,
+        Self::CustomFileFormat,
+        Self::DefaultColumnValues,
+        Self::FileStreamProvider,
+    ];
+
     const EXAMPLE_NAME: &str = "custom_data_source";
 
-    fn runnable() -> impl Iterator<Item = ExampleKind> {
-        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
+    fn variants() -> Vec<&'static str> {
+        Self::ALL_VARIANTS
+            .iter()
+            .map(|example| example.as_ref())
+            .collect()
     }
 
     async fn run(&self) -> Result<()> {
         match self {
+            ExampleKind::AdapterSerialization => {
+                adapter_serialization::adapter_serialization().await?
+            }
             ExampleKind::All => {
-                for example in ExampleKind::runnable() {
-                    println!("Running example: {example}");
+                for example in ExampleKind::RUNNABLE_VARIANTS {
+                    println!("Running example: {}", example.as_ref());
                     Box::pin(example.run()).await?;
                 }
             }
@@ -103,14 +167,14 @@ async fn main() -> Result<()> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::VARIANTS.join("|")
+        ExampleKind::variants().join("|")
     );
 
-    let example: ExampleKind = std::env::args()
-        .nth(1)
-        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
-        .parse()
-        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
+    let arg = std::env::args().nth(1).ok_or_else(|| {
+        eprintln!("{usage}");
+        DataFusionError::Execution("Missing argument".to_string())
+    })?;
 
+    let example = arg.parse::<ExampleKind>()?;
     example.run().await
 }
