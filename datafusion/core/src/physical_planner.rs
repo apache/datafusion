@@ -603,18 +603,14 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    let capabilities = provider.table_provider.dml_capabilities();
-                    if !capabilities.delete {
-                        return plan_err!(
-                            "Table '{}' does not support DELETE operations",
-                            table_name
-                        );
-                    }
                     let filters = extract_dml_filters(input)?;
                     provider
                         .table_provider
                         .delete_from(session_state, filters)
-                        .await?
+                        .await
+                        .map_err(|e| {
+                            e.context(format!("DELETE operation on table '{table_name}'"))
+                        })?
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -631,13 +627,6 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    let capabilities = provider.table_provider.dml_capabilities();
-                    if !capabilities.update {
-                        return plan_err!(
-                            "Table '{}' does not support UPDATE operations",
-                            table_name
-                        );
-                    }
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
                     let filters = extract_dml_filters(input)?;
@@ -646,7 +635,10 @@ impl DefaultPhysicalPlanner {
                     provider
                         .table_provider
                         .update(session_state, assignments, filters)
-                        .await?
+                        .await
+                        .map_err(|e| {
+                            e.context(format!("UPDATE operation on table '{table_name}'"))
+                        })?
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
