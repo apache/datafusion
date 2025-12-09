@@ -115,7 +115,7 @@ pub async fn from_read_rel(
                 },
             };
 
-            if let Some(recursive_name) = recursive_table_name {
+            let table_source = if let Some(recursive_name) = recursive_table_name {
                 let table_name = table_reference.table();
                 if table_name != recursive_name {
                     return substrait_err!(
@@ -124,36 +124,27 @@ pub async fn from_read_rel(
                 }
 
                 let schema = Arc::new(substrait_schema.as_arrow().clone());
-                let table_source = provider_as_source(Arc::new(CteWorkTable::new(
+                provider_as_source(Arc::new(CteWorkTable::new(
                     recursive_name.as_str(),
                     schema,
-                )));
-
-                read_with_source(
-                    consumer,
-                    table_reference,
-                    substrait_schema,
-                    &read.projection,
-                    &read.filter,
-                    table_source,
-                )
-                .await
+                )))
             } else {
                 let provider = match consumer.resolve_table_ref(&table_reference).await? {
                     Some(provider) => provider,
                     None => return plan_err!("No table named '{table_reference}'"),
                 };
+                provider_as_source(provider)
+            };
 
-                read_with_source(
-                    consumer,
-                    table_reference,
-                    substrait_schema,
-                    &read.projection,
-                    &read.filter,
-                    provider_as_source(provider),
-                )
-                .await
-            }
+            read_with_source(
+                consumer,
+                table_reference,
+                substrait_schema,
+                &read.projection,
+                &read.filter,
+                table_source,
+            )
+            .await
         }
         Some(ReadType::VirtualTable(vt)) => {
             if vt.values.is_empty() && vt.expressions.is_empty() {
