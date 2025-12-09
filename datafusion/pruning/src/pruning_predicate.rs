@@ -43,7 +43,6 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
@@ -1096,29 +1095,21 @@ fn rewrite_expr_to_prunable(
     } else if let Some(cast) = column_expr_any.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
         let arrow_schema = schema.as_arrow();
-        let from_type = cast.expr().data_type(arrow_schema)?;
-        verify_support_type_for_prune(&from_type, cast.cast_type())?;
+        let to_type = cast.target_field().data_type();
         let (left, op, right) =
-            rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, schema)?;
-        let left = Arc::new(phys_expr::CastExpr::new(
-            left,
-            cast.cast_type().clone(),
-            None,
-        ));
-        Ok((left, op, right))
-    } else if let Some(cast_col) = column_expr_any.downcast_ref::<CastColumnExpr>() {
-        // `cast_column(col) op lit()` - same as CastExpr but uses CastColumnExpr
-        let arrow_schema = schema.as_arrow();
-        let from_type = cast_col.expr().data_type(arrow_schema)?;
-        let to_type = cast_col.target_field().data_type();
-        verify_support_type_for_prune(&from_type, to_type)?;
-        let (left, op, right) =
-            rewrite_expr_to_prunable(cast_col.expr(), op, scalar_expr, schema)?;
+            rewrite_expr_to_prunable(cast.expr(), op, scalar_expr, schema.clone())?;
+        let input_field = left.return_field(arrow_schema)?;
+        verify_support_type_for_prune(input_field.data_type(), to_type)?;
         // Predicate pruning / statistics generally don't support struct columns yet.
         // In the future we may want to support pruning on nested fields, in which case we probably need to
         // do something more sophisticated here.
         // But for now since we don't support pruning on nested fields, we can just cast to the target type directly.
-        let left = Arc::new(phys_expr::CastExpr::new(left, to_type.clone(), None));
+        let left = Arc::new(phys_expr::CastExpr::new(
+            left,
+            input_field,
+            Arc::clone(cast.target_field()),
+            None,
+        ));
         Ok((left, op, right))
     } else if let Some(try_cast) =
         column_expr_any.downcast_ref::<phys_expr::TryCastExpr>()

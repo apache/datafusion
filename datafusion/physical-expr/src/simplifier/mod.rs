@@ -93,7 +93,8 @@ impl<'a> TreeNodeRewriter for PhysicalExprSimplifier<'a> {
 mod tests {
     use super::*;
     use crate::expressions::{
-        col, in_list, lit, BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr,
+        cast_with_options, col, in_list, lit, BinaryExpr, CastExpr, Literal, NotExpr,
+        TryCastExpr,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
@@ -150,7 +151,8 @@ mod tests {
 
         // Create: cast(c2 as INT32) != INT32(99)
         let column_expr = col("c2", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int32, None));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Int32, None).unwrap();
         let literal_expr = lit(ScalarValue::Int32(Some(99)));
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::NotEq, literal_expr));
@@ -177,12 +179,12 @@ mod tests {
 
         // Create nested expression: (cast(c1 as INT64) > INT64(5)) OR (cast(c2 as INT32) <= INT32(10))
         let c1_expr = col("c1", &schema).unwrap();
-        let c1_cast = Arc::new(CastExpr::new(c1_expr, DataType::Int64, None));
+        let c1_cast = cast_with_options(c1_expr, &schema, DataType::Int64, None).unwrap();
         let c1_literal = lit(ScalarValue::Int64(Some(5)));
         let c1_binary = Arc::new(BinaryExpr::new(c1_cast, Operator::Gt, c1_literal));
 
         let c2_expr = col("c2", &schema).unwrap();
-        let c2_cast = Arc::new(CastExpr::new(c2_expr, DataType::Int32, None));
+        let c2_cast = cast_with_options(c2_expr, &schema, DataType::Int32, None).unwrap();
         let c2_literal = lit(ScalarValue::Int32(Some(10)));
         let c2_binary = Arc::new(BinaryExpr::new(c2_cast, Operator::LtEq, c2_literal));
 

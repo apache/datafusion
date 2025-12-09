@@ -390,7 +390,7 @@ mod tests {
         convert_to_sort_reqs, create_test_params, create_test_schema, parse_sort_expr,
     };
     use crate::equivalence::{convert_to_sort_exprs, ProjectionMapping};
-    use crate::expressions::{col, BinaryExpr, CastExpr, Column};
+    use crate::expressions::{cast_with_options, col, BinaryExpr, Column};
     use crate::projection::tests::output_schema;
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
@@ -941,7 +941,7 @@ mod tests {
         let col_a = col("a", schema.as_ref())?;
         let col_b = col("b", schema.as_ref())?;
         let col_c = col("c", schema.as_ref())?;
-        let cast_c = Arc::new(CastExpr::new(col_c, DataType::Date32, None)) as _;
+        let cast_c = cast_with_options(col_c, schema.as_ref(), DataType::Date32, None)?;
 
         let cases = vec![
             TestCase {

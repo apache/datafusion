@@ -100,6 +100,15 @@ impl ScalarUDFImpl for DummyUDF {
     }
 }
 
+fn make_cast(name: &str, index: usize) -> Arc<CastExpr> {
+    Arc::new(CastExpr::new(
+        Arc::new(Column::new(name, index)),
+        Arc::new(Field::new(name, DataType::Int32, true)),
+        Arc::new(Field::new(name, DataType::Float32, true)),
+        None,
+    ))
+}
+
 #[test]
 fn test_update_matching_exprs() -> Result<()> {
     let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
@@ -108,11 +117,7 @@ fn test_update_matching_exprs() -> Result<()> {
             Operator::Divide,
             Arc::new(Column::new("e", 5)),
         )),
-        Arc::new(CastExpr::new(
-            Arc::new(Column::new("a", 3)),
-            DataType::Float32,
-            None,
-        )),
+        make_cast("a", 3),
         Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
         Arc::new(ScalarFunctionExpr::new(
             "scalar_expr",
@@ -174,11 +179,7 @@ fn test_update_matching_exprs() -> Result<()> {
             Operator::Divide,
             Arc::new(Column::new("e", 4)),
         )),
-        Arc::new(CastExpr::new(
-            Arc::new(Column::new("a", 0)),
-            DataType::Float32,
-            None,
-        )),
+        make_cast("a", 0),
         Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 5)))),
         Arc::new(ScalarFunctionExpr::new(
             "scalar_expr",
@@ -247,11 +248,7 @@ fn test_update_projected_exprs() -> Result<()> {
             Operator::Divide,
             Arc::new(Column::new("e", 5)),
         )),
-        Arc::new(CastExpr::new(
-            Arc::new(Column::new("a", 3)),
-            DataType::Float32,
-            None,
-        )),
+        make_cast("a", 3),
         Arc::new(NegativeExpr::new(Arc::new(Column::new("f", 4)))),
         Arc::new(ScalarFunctionExpr::new(
             "scalar_expr",
@@ -313,11 +310,7 @@ fn test_update_projected_exprs() -> Result<()> {
             Operator::Divide,
             Arc::new(Column::new("e", 4)),
         )),
-        Arc::new(CastExpr::new(
-            Arc::new(Column::new("a", 0)),
-            DataType::Float32,
-            None,
-        )),
+        make_cast("a", 0),
         Arc::new(NegativeExpr::new(Arc::new(Column::new("f_new", 5)))),
         Arc::new(ScalarFunctionExpr::new(
             "scalar_expr",

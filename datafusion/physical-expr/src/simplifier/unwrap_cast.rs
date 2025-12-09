@@ -145,7 +145,7 @@ fn try_unwrap_cast_comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit};
+    use crate::expressions::{cast_with_options, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -184,7 +184,8 @@ mod tests {
 
         // Create: cast(c1 as INT64) > INT64(10)
         let column_expr = col("c1", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Int64, None).unwrap();
         let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
@@ -217,7 +218,8 @@ mod tests {
 
         // Create: INT64(10) < cast(c1 as INT64)
         let column_expr = col("c1", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Int64, None).unwrap();
         let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(literal_expr, Operator::Lt, cast_expr));
@@ -242,7 +244,8 @@ mod tests {
 
         // Create: cast(f1 as FLOAT64) > FLOAT64(10.5)
         let column_expr = col("f1", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Float64, None));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Float64, None).unwrap();
         let literal_expr = lit(10.5f64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
@@ -259,7 +262,8 @@ mod tests {
         let schema = test_schema();
 
         let column_expr = col("c1", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Int64, None).unwrap();
         let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
@@ -280,11 +284,9 @@ mod tests {
 
         // Create: Decimal128(400) <= cast(decimal_col as Decimal128(22, 2))
         let column_expr = col("decimal_col", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(
-            column_expr,
-            DataType::Decimal128(22, 2),
-            None,
-        ));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Decimal128(22, 2), None)
+                .unwrap();
         let literal_expr = lit(ScalarValue::Decimal128(Some(400), 22, 2));
         let binary_expr =
             Arc::new(BinaryExpr::new(literal_expr, Operator::LtEq, cast_expr));
@@ -334,7 +336,8 @@ mod tests {
         for (original_op, expected_op) in operators {
             // Create: INT64(100) op cast(int_col as INT64)
             let column_expr = col("int_col", &schema).unwrap();
-            let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+            let cast_expr =
+                cast_with_options(column_expr, &schema, DataType::Int64, None).unwrap();
             let literal_expr = lit(100i64);
             let binary_expr =
                 Arc::new(BinaryExpr::new(literal_expr, original_op, cast_expr));
@@ -390,11 +393,13 @@ mod tests {
 
             // Case 1: cast(column) > literal
             let column_expr = col("decimal_col", &schema).unwrap();
-            let cast_expr = Arc::new(CastExpr::new(
+            let cast_expr = cast_with_options(
                 Arc::clone(&column_expr),
+                &schema,
                 DataType::Decimal128(cast_p, cast_s),
                 None,
-            ));
+            )
+            .unwrap();
             let literal_expr = lit(ScalarValue::Decimal128(Some(value), cast_p, cast_s));
             let binary_expr =
                 Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
@@ -403,11 +408,13 @@ mod tests {
             assert!(result.transformed);
 
             // Case 2: literal < cast(column)
-            let cast_expr = Arc::new(CastExpr::new(
+            let cast_expr = cast_with_options(
                 column_expr,
+                &schema,
                 DataType::Decimal128(cast_p, cast_s),
                 None,
-            ));
+            )
+            .unwrap();
             let literal_expr = lit(ScalarValue::Decimal128(Some(value), cast_p, cast_s));
             let binary_expr =
                 Arc::new(BinaryExpr::new(literal_expr, Operator::Lt, cast_expr));
@@ -424,7 +431,8 @@ mod tests {
 
         // Create: cast(int_col as INT64) = NULL
         let column_expr = col("int_col", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Int64, None).unwrap();
         let null_literal = lit(ScalarValue::Int64(None));
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, null_literal));
@@ -473,15 +481,14 @@ mod tests {
         // Create: cast(int_col as INT64) > INT64(10) AND cast(int_col as INT64) < INT64(20)
         let column_expr = col("int_col", &schema).unwrap();
 
-        let cast1 = Arc::new(CastExpr::new(
-            Arc::clone(&column_expr),
-            DataType::Int64,
-            None,
-        ));
+        let cast1 =
+            cast_with_options(Arc::clone(&column_expr), &schema, DataType::Int64, None)
+                .unwrap();
         let lit1 = lit(10i64);
         let compare1 = Arc::new(BinaryExpr::new(cast1, Operator::Gt, lit1));
 
-        let cast2 = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let cast2 =
+            cast_with_options(column_expr, &schema, DataType::Int64, None).unwrap();
         let lit2 = lit(20i64);
         let compare2 = Arc::new(BinaryExpr::new(cast2, Operator::Lt, lit2));
 
@@ -554,7 +561,8 @@ mod tests {
         // Create: INT64(10) + cast(int_col as INT64)
         // The Plus operator cannot be swapped, so this should not be transformed
         let column_expr = col("int_col", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Int64, None).unwrap();
         let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(literal_expr, Operator::Plus, cast_expr));
@@ -574,7 +582,8 @@ mod tests {
         // Create: cast(small_int as INT64) > INT64(1000)
         // This should NOT be unwrapped because 1000 cannot fit in Int8 (max value is 127)
         let column_expr = col("small_int", &schema).unwrap();
-        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Int64, None));
+        let cast_expr =
+            cast_with_options(column_expr, &schema, DataType::Int64, None).unwrap();
         let literal_expr = lit(1000i64); // Value too large for Int8
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));
@@ -593,12 +602,12 @@ mod tests {
         // Create a more complex expression with nested casts
         // (cast(c1 as INT64) > INT64(10)) AND (cast(c2 as INT32) = INT32(20))
         let c1_expr = col("c1", &schema).unwrap();
-        let c1_cast = Arc::new(CastExpr::new(c1_expr, DataType::Int64, None));
+        let c1_cast = cast_with_options(c1_expr, &schema, DataType::Int64, None).unwrap();
         let c1_literal = lit(10i64);
         let c1_binary = Arc::new(BinaryExpr::new(c1_cast, Operator::Gt, c1_literal));
 
         let c2_expr = col("c2", &schema).unwrap();
-        let c2_cast = Arc::new(CastExpr::new(c2_expr, DataType::Int32, None));
+        let c2_cast = cast_with_options(c2_expr, &schema, DataType::Int32, None).unwrap();
         let c2_literal = lit(20i32);
         let c2_binary = Arc::new(BinaryExpr::new(c2_cast, Operator::Eq, c2_literal));
 

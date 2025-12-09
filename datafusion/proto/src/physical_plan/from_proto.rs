@@ -331,17 +331,23 @@ pub fn parse_physical_expr(
                 .map(|e| parse_physical_expr(e.as_ref(), ctx, input_schema, codec))
                 .transpose()?,
         )?),
-        ExprType::Cast(e) => Arc::new(CastExpr::new(
-            parse_required_physical_expr(
+        ExprType::Cast(e) => {
+            let expr = parse_required_physical_expr(
                 e.expr.as_deref(),
                 ctx,
                 "expr",
                 input_schema,
                 codec,
-            )?,
-            convert_required!(e.arrow_type)?,
-            None,
-        )),
+            )?;
+            let input_field = expr.return_field(input_schema)?;
+            let target_field = Arc::new(
+                input_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(convert_required!(e.arrow_type)?),
+            );
+            Arc::new(CastExpr::new(expr, input_field, target_field, None))
+        }
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(
                 e.expr.as_deref(),

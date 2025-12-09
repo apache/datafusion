@@ -22,11 +22,12 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
+use arrow::array::{new_null_array, Array, ArrayRef};
 use arrow::compute::{can_cast_types, CastOptions};
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{nested_struct::cast_column, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -46,8 +47,10 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
 pub struct CastExpr {
     /// The expression to cast
     pub expr: Arc<dyn PhysicalExpr>,
-    /// The data type to cast to
-    cast_type: DataType,
+    /// The logical field of the input column.
+    input_field: FieldRef,
+    /// The field metadata describing the desired output column.
+    target_field: FieldRef,
     /// Cast options
     cast_options: CastOptions<'static>,
 }
@@ -56,7 +59,8 @@ pub struct CastExpr {
 impl PartialEq for CastExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
-            && self.cast_type.eq(&other.cast_type)
+            && self.input_field.eq(&other.input_field)
+            && self.target_field.eq(&other.target_field)
             && self.cast_options.eq(&other.cast_options)
     }
 }
@@ -64,7 +68,8 @@ impl PartialEq for CastExpr {
 impl Hash for CastExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
-        self.cast_type.hash(state);
+        self.input_field.hash(state);
+        self.target_field.hash(state);
         self.cast_options.hash(state);
     }
 }
@@ -73,12 +78,14 @@ impl CastExpr {
     /// Create a new CastExpr
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
-        cast_type: DataType,
+        input_field: FieldRef,
+        target_field: FieldRef,
         cast_options: Option<CastOptions<'static>>,
     ) -> Self {
         Self {
             expr,
-            cast_type,
+            input_field,
+            target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
         }
     }
@@ -88,9 +95,19 @@ impl CastExpr {
         &self.expr
     }
 
+    /// The field metadata describing the resolved input column.
+    pub fn input_field(&self) -> &FieldRef {
+        &self.input_field
+    }
+
+    /// Field metadata describing the output column after casting.
+    pub fn target_field(&self) -> &FieldRef {
+        &self.target_field
+    }
+
     /// The data type to cast to
     pub fn cast_type(&self) -> &DataType {
-        &self.cast_type
+        self.target_field.data_type()
     }
 
     /// The cast options
@@ -123,13 +140,28 @@ impl CastExpr {
 
     /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
     pub fn is_bigger_cast(&self, src: &DataType) -> bool {
-        Self::check_bigger_cast(&self.cast_type, src)
+        Self::check_bigger_cast(self.target_field.data_type(), src)
+    }
+
+    fn cast_array(&self, array: &ArrayRef) -> Result<ArrayRef> {
+        if matches!(self.target_field.data_type(), Struct(_))
+            && matches!(array.data_type(), Null)
+        {
+            return Ok(new_null_array(self.target_field.data_type(), array.len()));
+        }
+
+        cast_column(array, self.target_field.as_ref(), &self.cast_options)
     }
 }
 
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CAST({} AS {:?})", self.expr, self.cast_type)
+        write!(
+            f,
+            "CAST({} AS {:?})",
+            self.expr,
+            self.target_field.data_type()
+        )
     }
 }
 
@@ -140,26 +172,39 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.cast_type.clone())
+        Ok(self.target_field.data_type().clone())
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        self.expr.nullable(input_schema)
+        // Nullability is defined by the target field metadata to allow
+        // callers to enforce a particular nullability when rewriting schemas.
+        // This may differ from the input expression's nullability (for example
+        // when filling missing struct fields with nulls).
+        let _ = input_schema; // reserved for future schema dependent logic
+        Ok(self.target_field.is_nullable())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        value.cast_to(&self.cast_type, Some(&self.cast_options))
+        match value {
+            ColumnarValue::Array(array) => {
+                let casted = self.cast_array(&array)?;
+                Ok(ColumnarValue::Array(casted))
+            }
+            ColumnarValue::Scalar(scalar) => {
+                let as_array = scalar.to_array_of_size(1)?;
+                let casted = self.cast_array(&as_array)?;
+                Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                    casted.as_ref(),
+                    0,
+                )?))
+            }
+        }
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        Ok(self
-            .expr
-            .return_field(input_schema)?
-            .as_ref()
-            .clone()
-            .with_data_type(self.cast_type.clone())
-            .into())
+        let _ = input_schema;
+        Ok(Arc::clone(&self.target_field))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -172,14 +217,15 @@ impl PhysicalExpr for CastExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(CastExpr::new(
             Arc::clone(&children[0]),
-            self.cast_type.clone(),
+            Arc::clone(&self.input_field),
+            Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
         )))
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Cast current node's interval to the right type:
-        children[0].cast_to(&self.cast_type, &self.cast_options)
+        children[0].cast_to(self.target_field.data_type(), &self.cast_options)
     }
 
     fn propagate_constraints(
@@ -199,7 +245,7 @@ impl PhysicalExpr for CastExpr {
     /// under the same datatype family.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         let source_datatype = children[0].range.data_type();
-        let target_type = &self.cast_type;
+        let target_type = self.target_field.data_type();
 
         let unbounded = Interval::make_unbounded(target_type)?;
         if (source_datatype.is_numeric() || source_datatype == Boolean)
@@ -216,7 +262,7 @@ impl PhysicalExpr for CastExpr {
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CAST(")?;
         self.expr.fmt_sql(f)?;
-        write!(f, " AS {:?}", self.cast_type)?;
+        write!(f, " AS {:?}", self.target_field.data_type())?;
 
         write!(f, ")")
     }
@@ -232,11 +278,25 @@ pub fn cast_with_options(
     cast_type: DataType,
     cast_options: Option<CastOptions<'static>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let expr_type = expr.data_type(input_schema)?;
-    if expr_type == cast_type {
+    let input_field = expr.return_field(input_schema)?;
+    let expr_type = input_field.data_type();
+    let target_field: FieldRef = Arc::new(
+        input_field
+            .as_ref()
+            .clone()
+            .with_data_type(cast_type.clone()),
+    );
+    let target_type = target_field.data_type();
+
+    if expr_type == target_type {
         Ok(Arc::clone(&expr))
-    } else if can_cast_types(&expr_type, &cast_type) {
-        Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
+    } else if matches!(target_type, Struct(_)) || can_cast_types(expr_type, target_type) {
+        Ok(Arc::new(CastExpr::new(
+            expr,
+            input_field,
+            target_field,
+            cast_options,
+        )))
     } else {
         not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
     }
@@ -814,5 +874,228 @@ mod tests {
         assert_eq!(sql_string, "CAST(b AS Int32)");
 
         Ok(())
+    }
+
+    mod struct_casts {
+        use super::*;
+        use crate::expressions::{Column, Literal};
+        use arrow::array::{
+            Array, ArrayRef, BooleanArray, Int32Array, StringArray, StructArray,
+        };
+        use arrow::datatypes::{Field, Fields, SchemaRef};
+        use datafusion_common::{
+            cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
+            Result as DFResult, ScalarValue,
+        };
+        use datafusion_expr_common::columnar_value::ColumnarValue;
+
+        fn make_schema(field: &Field) -> SchemaRef {
+            Arc::new(Schema::new(vec![field.clone()]))
+        }
+
+        fn make_struct_array(fields: Fields, arrays: Vec<ArrayRef>) -> StructArray {
+            StructArray::new(fields, arrays, None)
+        }
+
+        #[test]
+        fn cast_primitive_array() -> DFResult<()> {
+            let input_field = Field::new("a", Int32, true);
+            let target_field = Field::new("a", Int64, true);
+            let schema = make_schema(&input_field);
+
+            let values = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
+
+            let column = Arc::new(Column::new_with_schema("a", schema.as_ref())?);
+            let expr = CastExpr::new(
+                column,
+                Arc::new(input_field.clone()),
+                Arc::new(target_field.clone()),
+                None,
+            );
+
+            let result = expr.evaluate(&batch)?;
+            let ColumnarValue::Array(array) = result else {
+                panic!("expected array");
+            };
+            let casted = as_int64_array(array.as_ref())?;
+            assert_eq!(casted.value(0), 1);
+            assert!(casted.is_null(1));
+            assert_eq!(casted.value(2), 3);
+            Ok(())
+        }
+
+        #[test]
+        fn cast_struct_array_missing_child() -> DFResult<()> {
+            let source_a = Field::new("a", Int32, true);
+            let source_b = Field::new("b", Utf8, true);
+            let input_field = Field::new(
+                "s",
+                Struct(
+                    vec![Arc::new(source_a.clone()), Arc::new(source_b.clone())].into(),
+                ),
+                true,
+            );
+            let target_a = Field::new("a", Int64, true);
+            let target_c = Field::new("c", Utf8, true);
+            let target_field = Field::new(
+                "s",
+                Struct(
+                    vec![Arc::new(target_a.clone()), Arc::new(target_c.clone())].into(),
+                ),
+                true,
+            );
+
+            let schema = make_schema(&input_field);
+            let struct_array = make_struct_array(
+                vec![Arc::new(source_a.clone()), Arc::new(source_b.clone())].into(),
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1), None])) as ArrayRef,
+                    Arc::new(StringArray::from(vec![Some("alpha"), Some("beta")]))
+                        as ArrayRef,
+                ],
+            );
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(struct_array) as Arc<_>],
+            )?;
+
+            let column = Arc::new(Column::new_with_schema("s", schema.as_ref())?);
+            let expr = CastExpr::new(
+                column,
+                Arc::new(input_field.clone()),
+                Arc::new(target_field.clone()),
+                None,
+            );
+
+            let result = expr.evaluate(&batch)?;
+            let ColumnarValue::Array(array) = result else {
+                panic!("expected array");
+            };
+            let struct_array = as_struct_array(array.as_ref())?;
+            let cast_a =
+                as_int64_array(struct_array.column_by_name("a").unwrap().as_ref())?;
+            assert_eq!(cast_a.value(0), 1);
+            assert!(cast_a.is_null(1));
+
+            let cast_c =
+                as_string_array(struct_array.column_by_name("c").unwrap().as_ref())?;
+            assert!(cast_c.is_null(0));
+            assert!(cast_c.is_null(1));
+            Ok(())
+        }
+
+        #[test]
+        fn cast_nested_struct_array() -> DFResult<()> {
+            let inner_source = Field::new(
+                "inner",
+                Struct(vec![Arc::new(Field::new("x", Int32, true))].into()),
+                true,
+            );
+            let outer_field = Field::new(
+                "root",
+                Struct(vec![Arc::new(inner_source.clone())].into()),
+                true,
+            );
+
+            let inner_target = Field::new(
+                "inner",
+                Struct(
+                    vec![
+                        Arc::new(Field::new("x", Int64, true)),
+                        Arc::new(Field::new("y", Boolean, true)),
+                    ]
+                    .into(),
+                ),
+                true,
+            );
+            let target_field = Field::new(
+                "root",
+                Struct(vec![Arc::new(inner_target.clone())].into()),
+                true,
+            );
+
+            let schema = make_schema(&outer_field);
+
+            let inner_struct = make_struct_array(
+                vec![Arc::new(Field::new("x", Int32, true))].into(),
+                vec![Arc::new(Int32Array::from(vec![Some(7), None])) as ArrayRef],
+            );
+            let outer_struct = make_struct_array(
+                vec![Arc::new(inner_source.clone())].into(),
+                vec![Arc::new(inner_struct) as ArrayRef],
+            );
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(outer_struct) as ArrayRef],
+            )?;
+
+            let column = Arc::new(Column::new_with_schema("root", schema.as_ref())?);
+            let expr = CastExpr::new(
+                column,
+                Arc::new(outer_field.clone()),
+                Arc::new(target_field.clone()),
+                None,
+            );
+
+            let result = expr.evaluate(&batch)?;
+            let ColumnarValue::Array(array) = result else {
+                panic!("expected array");
+            };
+            let struct_array = as_struct_array(array.as_ref())?;
+            let inner =
+                as_struct_array(struct_array.column_by_name("inner").unwrap().as_ref())?;
+            let x = as_int64_array(inner.column_by_name("x").unwrap().as_ref())?;
+            assert_eq!(x.value(0), 7);
+            assert!(x.is_null(1));
+            let y = inner.column_by_name("y").unwrap();
+            let y = y
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .expect("boolean array");
+            assert!(y.is_null(0));
+            assert!(y.is_null(1));
+            Ok(())
+        }
+
+        #[test]
+        fn cast_struct_scalar() -> DFResult<()> {
+            let source_field = Field::new("a", Int32, true);
+            let input_field = Field::new(
+                "s",
+                Struct(vec![Arc::new(source_field.clone())].into()),
+                true,
+            );
+            let target_field = Field::new(
+                "s",
+                Struct(vec![Arc::new(Field::new("a", UInt8, true))].into()),
+                true,
+            );
+
+            let schema = make_schema(&input_field);
+            let scalar_struct = StructArray::new(
+                vec![Arc::new(source_field.clone())].into(),
+                vec![Arc::new(Int32Array::from(vec![Some(9)])) as ArrayRef],
+                None,
+            );
+            let literal =
+                Arc::new(Literal::new(ScalarValue::Struct(Arc::new(scalar_struct))));
+            let expr = CastExpr::new(
+                literal,
+                Arc::new(input_field.clone()),
+                Arc::new(target_field.clone()),
+                None,
+            );
+
+            let batch = RecordBatch::new_empty(Arc::clone(&schema));
+            let result = expr.evaluate(&batch)?;
+            let ColumnarValue::Scalar(ScalarValue::Struct(array)) = result else {
+                panic!("expected struct scalar");
+            };
+            let casted = array.column_by_name("a").unwrap();
+            let casted = as_uint8_array(casted.as_ref())?;
+            assert_eq!(casted.value(0), 9);
+            Ok(())
+        }
     }
 }
