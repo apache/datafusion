@@ -26,8 +26,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, SharedBuildAccumulator,
+    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -86,7 +87,7 @@ use futures::TryStreamExt;
 use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
-const HASH_JOIN_SEED: RandomState =
+pub(crate) const HASH_JOIN_SEED: RandomState =
     RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
 /// HashTable and input data for the left (build side) of a join
@@ -112,6 +113,9 @@ pub(super) struct JoinLeftData {
     /// If the partition is empty (no rows) this will be None.
     /// If the partition has some rows this will be Some with the bounds for each join key column.
     pub(super) bounds: Option<PartitionBounds>,
+    /// Membership testing strategy for filter pushdown
+    /// Contains either InList values for small build sides or hash table reference for large build sides
+    pub(super) membership: PushdownStrategy,
 }
 
 impl JoinLeftData {
@@ -133,6 +137,11 @@ impl JoinLeftData {
     /// returns a reference to the visited indices bitmap
     pub(super) fn visited_indices_bitmap(&self) -> &SharedBitmapBuilder {
         &self.visited_indices_bitmap
+    }
+
+    /// returns a reference to the InList values for filter pushdown
+    pub(super) fn membership(&self) -> &PushdownStrategy {
+        &self.membership
     }
 
     /// Decrements the counter of running threads, and returns `true`
@@ -929,6 +938,16 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_size,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_distinct_values,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -947,6 +966,16 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_size,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_distinct_values,
                 ))
             }
             PartitionMode::Auto => {
@@ -1346,6 +1375,8 @@ async fn collect_left_input(
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
     should_compute_dynamic_filters: bool,
+    max_inlist_size: usize,
+    max_inlist_distinct_values: usize,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1469,6 +1500,29 @@ async fn collect_left_input(
     // Convert Box to Arc for sharing with SharedBuildAccumulator
     let hash_map: Arc<dyn JoinHashMapType> = hashmap.into();
 
+    let membership = if num_rows == 0 {
+        PushdownStrategy::Empty
+    } else {
+        // If the build side is small enough we can use IN list pushdown.
+        // If it's too big we fall back to pushing down a reference to the hash table.
+        // See `PushdownStrategy` for more details.
+        let estimated_size = left_values
+            .iter()
+            .map(|arr| arr.get_array_memory_size())
+            .sum::<usize>();
+        if left_values.is_empty()
+            || left_values[0].is_empty()
+            || estimated_size > max_inlist_size
+            || hash_map.len() > max_inlist_distinct_values
+        {
+            PushdownStrategy::HashTable(Arc::clone(&hash_map))
+        } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
+            PushdownStrategy::InList(in_list_values)
+        } else {
+            PushdownStrategy::HashTable(Arc::clone(&hash_map))
+        }
+    };
+
     let data = JoinLeftData {
         hash_map,
         batch,
@@ -1477,6 +1531,7 @@ async fn collect_left_input(
         probe_threads_counter: AtomicUsize::new(probe_threads_count),
         _reservation: reservation,
         bounds,
+        membership,
     };
 
     Ok(data)

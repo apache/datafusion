@@ -47,12 +47,15 @@ arrow-schema = { workspace = true }
 async-ffi = { version = "0.5.0", features = ["abi_stable"] }
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false }
+datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
+datafusion-physical-plan = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-proto-common = { workspace = true }
 futures = { workspace = true }
@@ -63,6 +66,10 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-functions = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
+datafusion-functions-window = { workspace = true }
 doc-comment = { workspace = true }
 
 [features]
