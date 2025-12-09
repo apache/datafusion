@@ -87,7 +87,7 @@ impl ScalarUDFImpl for SparkBitGet {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // Spark marks bit_get as null-intolerant: result is nullable only if an input can be null
+        // Spark derives nullability for BinaryExpression from its children
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(self.name(), DataType::Int8, nullable)))
     }
