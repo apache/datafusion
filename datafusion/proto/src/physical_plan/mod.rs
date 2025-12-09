@@ -3371,6 +3371,8 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     /// - Perform pre-processing on the proto
     /// - Call the default implementation via `default_parse_physical_expr`
     /// - Perform post-processing on the result
+    /// 
+    /// [`default_parse_physical_expr`]: crate::physical_plan::from_proto::default_parse_physical_expr
     fn deserialize_physical_expr(
         &self,
         proto: &protobuf::PhysicalExprNode,
