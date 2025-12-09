@@ -141,6 +141,7 @@ pub struct SelectBuilder {
     distinct: Option<ast::Distinct>,
     top: Option<ast::Top>,
     projection: Vec<ast::SelectItem>,
+    projection_set: bool,
     into: Option<ast::SelectInto>,
     from: Vec<TableWithJoinsBuilder>,
     lateral_views: Vec<ast::LateralView>,
@@ -168,15 +169,17 @@ impl SelectBuilder {
     }
     pub fn projection(&mut self, value: Vec<ast::SelectItem>) -> &mut Self {
         self.projection = value;
+        self.projection_set = true;
         self
     }
     pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
         let ret = self.projection.clone();
         self.projection.clear();
+        self.projection_set = false;
         ret
     }
     pub fn already_projected(&self) -> bool {
-        !self.projection.is_empty()
+        self.projection_set
     }
     pub fn into(&mut self, value: Option<ast::SelectInto>) -> &mut Self {
         self.into = value;
@@ -328,6 +331,7 @@ impl SelectBuilder {
             distinct: Default::default(),
             top: Default::default(),
             projection: Default::default(),
+            projection_set: false,
             into: Default::default(),
             from: Default::default(),
             lateral_views: Default::default(),

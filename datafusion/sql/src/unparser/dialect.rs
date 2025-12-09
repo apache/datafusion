@@ -218,6 +218,11 @@ pub trait Dialect: Send + Sync {
     fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, _unit: TimeUnit) -> String {
         dt.to_string()
     }
+
+    /// Whether the dialect supports an empty select list such as `SELECT FROM table`.
+    fn supports_empty_select_list(&self) -> bool {
+        false
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -286,6 +291,10 @@ impl Dialect for PostgreSqlDialect {
     }
 
     fn requires_derived_table_alias(&self) -> bool {
+        true
+    }
+
+    fn supports_empty_select_list(&self) -> bool {
         true
     }
 
