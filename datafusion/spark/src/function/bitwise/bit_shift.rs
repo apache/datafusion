@@ -21,7 +21,8 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, ArrowPrimitiveType, AsArray, Int32Array, PrimitiveArray};
 use arrow::compute;
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Int32Type, Int64Type, UInt32Type, UInt64Type,
+    ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int64Type, UInt32Type,
+    UInt64Type,
 };
 use datafusion_common::types::{
     logical_int16, logical_int32, logical_int64, logical_int8, logical_uint16,
@@ -30,8 +31,8 @@ use datafusion_common::types::{
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -275,8 +276,14 @@ impl ScalarUDFImpl for SparkBitShift {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        let data_type = args.arg_fields[0].data_type().clone();
+        Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -284,5 +291,60 @@ impl ScalarUDFImpl for SparkBitShift {
             shift_inner(arr, self.name(), self.bit_shift_type)
         };
         make_scalar_function(inner, vec![])(&args.args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_expr::ReturnFieldArgs;
+
+    #[test]
+    fn test_bit_shift_nullability() -> Result<()> {
+        let func = SparkBitShift::left();
+
+        let non_nullable_value: FieldRef =
+            Arc::new(Field::new("value", DataType::Int64, false));
+        let non_nullable_shift: FieldRef =
+            Arc::new(Field::new("shift", DataType::Int32, false));
+
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[
+                Arc::clone(&non_nullable_value),
+                Arc::clone(&non_nullable_shift),
+            ],
+            scalar_arguments: &[None, None],
+        })?;
+
+        assert_eq!(out.data_type(), non_nullable_value.data_type());
+        assert!(
+            !out.is_nullable(),
+            "shift result should be non-nullable when both inputs are non-nullable"
+        );
+
+        let nullable_value: FieldRef =
+            Arc::new(Field::new("value", DataType::Int64, true));
+        let out_nullable_value = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&nullable_value), Arc::clone(&non_nullable_shift)],
+            scalar_arguments: &[None, None],
+        })?;
+        assert!(
+            out_nullable_value.is_nullable(),
+            "shift result should be nullable when value is nullable"
+        );
+
+        let nullable_shift: FieldRef =
+            Arc::new(Field::new("shift", DataType::Int32, true));
+        let out_nullable_shift = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[non_nullable_value, nullable_shift],
+            scalar_arguments: &[None, None],
+        })?;
+        assert!(
+            out_nullable_shift.is_nullable(),
+            "shift result should be nullable when shift is nullable"
+        );
+
+        Ok(())
     }
 }

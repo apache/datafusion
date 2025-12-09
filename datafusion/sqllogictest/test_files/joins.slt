@@ -5151,3 +5151,66 @@ set datafusion.explain.physical_plan_only = false;
 
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+# Test hash join with columns named c0, c1, c2
+# These names match the internal naming pattern in inlist_builder.rs
+# Regression test for https://github.com/apache/datafusion/pull/18393#discussion_r2601145291
+
+statement ok
+CREATE TABLE t1_c_source(c0 INT, c1 VARCHAR, c2 INT) AS VALUES
+(1, 'a', 100),
+(2, 'b', 200),
+(3, 'c', 300);
+
+statement ok
+CREATE TABLE t2_c_source(c0 INT, c1 VARCHAR) AS VALUES
+(1, 'x'),
+(3, 'z');
+
+query I
+COPY t1_c_source TO 'test_files/scratch/joins/t1_c.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY t2_c_source TO 'test_files/scratch/joins/t2_c.parquet' STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE t1_c(c0 INT, c1 VARCHAR, c2 INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/joins/t1_c.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t2_c(c0 INT, c1 VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/joins/t2_c.parquet';
+
+# Test single-column join with column named c0
+query ITI rowsort
+SELECT t1.c0, t1.c1, t1.c2
+FROM t1_c t1
+INNER JOIN t2_c t2 ON t1.c0 = t2.c0;
+----
+1 a 100
+3 c 300
+
+# Test multi-column join with columns named c0, c1
+query ITI rowsort
+SELECT t1.c0, t1.c1, t1.c2
+FROM t1_c t1
+INNER JOIN t2_c t2 ON t1.c0 = t2.c0 AND t1.c1 = t2.c1;
+----
+
+statement ok
+DROP TABLE t1_c_source;
+
+statement ok
+DROP TABLE t2_c_source;
+
+statement ok
+DROP TABLE t1_c;
+
+statement ok
+DROP TABLE t2_c;
