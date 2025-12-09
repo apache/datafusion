@@ -255,11 +255,6 @@ pub trait Dialect: Send + Sync {
     /// -- Fallback for other databases:
     /// SELECT 1 FROM users WHERE active = true;
     /// ```
-    ///
-    /// # References
-    ///
-    /// - PostgreSQL: <https://www.postgresql.org/docs/current/queries-select-lists.html>
-    /// - Note: Empty select lists are not part of the SQL standard (SQL-92/99/2003/2011)
     fn supports_empty_select_list(&self) -> bool {
         false
     }
