@@ -232,6 +232,8 @@ let adapted_expr = adapter.rewrite(expr_with_literals)?;
 ### `build_row_filter` signature simplified
 
 The `build_row_filter` function in `datafusion-datasource-parquet` has been simplified to take a single schema parameter instead of two.
+The expectation is now that the filter has been adapted to the physical file schema (the arrow representation of the parquet file's schema) before being passed to this function
+using a `PhysicalExprAdapter` for example.
 
 **Who is affected:**
 
