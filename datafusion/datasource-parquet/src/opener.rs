@@ -23,7 +23,7 @@ use crate::{
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
 };
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -66,8 +66,8 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 pub(super) struct ParquetOpener {
     /// Execution partition index
     pub partition_index: usize,
-    /// Column indexes in `table_schema` needed by the query
-    pub projection: Arc<[usize]>,
+    /// Projection to apply on top of the table schema (i.e. can reference partition columns).
+    pub projection: ProjectionExprs,
     /// Target number of rows in each output RecordBatch
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
@@ -137,7 +137,7 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
-        // Replace any partition column references in the predicate
+        // Build partition values map for replacing partition column references
         // with their literal values from this file's partition values.
         //
         // For example, given
@@ -157,29 +157,36 @@ impl FileOpener for ParquetOpener {
         // there are other cases where partition columns may appear in more
         // complex predicates that cannot be simplified until we are about to
         // open the file (such as dynamic predicates)
-        let mut predicate = {
-            // Only replace partition columns if there are partition values.
-            // For non-partitioned tables, skip the clone and replacement traversal.
-            if partitioned_file.partition_values.is_empty() {
-                self.predicate.clone()
-            } else {
-                let partition_values: HashMap<&str, &ScalarValue> = self
-                    .table_schema
-                    .table_partition_cols()
-                    .iter()
-                    .zip(partitioned_file.partition_values.iter())
-                    .map(|(field, value)| (field.name().as_str(), value))
-                    .collect();
+        let partition_values: HashMap<&str, &ScalarValue> = self
+            .table_schema
+            .table_partition_cols()
+            .iter()
+            .zip(partitioned_file.partition_values.iter())
+            .map(|(field, value)| (field.name().as_str(), value))
+            .collect();
 
-                self.predicate
-                    .clone()
-                    .map(|p| replace_columns_with_literals(p, &partition_values))
-                    .transpose()?
-            }
+        // Apply partition column replacement to projection expressions
+        let mut projection = self.projection.clone();
+        if !partition_values.is_empty() {
+            projection = projection.try_map_exprs(|expr| {
+                replace_columns_with_literals(Arc::clone(&expr), &partition_values)
+            })?;
+        }
+
+        // Calculate the output schema after projection (uses full table schema since projection may reference partition columns)
+        let logical_file_schema = Arc::clone(self.table_schema.file_schema());
+        let output_schema =
+            Arc::new(projection.project_schema(self.table_schema.table_schema())?);
+
+        // Apply partition column replacement to predicate
+        let mut predicate = if partition_values.is_empty() {
+            self.predicate.clone()
+        } else {
+            self.predicate
+                .clone()
+                .map(|p| replace_columns_with_literals(p, &partition_values))
+                .transpose()?
         };
-
-        let projection = Arc::clone(&self.projection);
-        let logical_file_schema = Arc::clone(self.table_schema.table_schema());
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -358,8 +365,6 @@ impl FileOpener for ParquetOpener {
                 reader_metadata,
             );
 
-            let mut projection =
-                ProjectionExprs::from_indices(&projection, &logical_file_schema);
             if let Some(expr_adapter_factory) = expr_adapter_factory {
                 let adapter = expr_adapter_factory.create(
                     Arc::clone(&logical_file_schema),
@@ -507,6 +512,9 @@ impl FileOpener for ParquetOpener {
             let predicate_cache_records = file_metrics.predicate_cache_records.clone();
 
             let stream_schema = Arc::clone(stream.schema());
+            // Check if we need to replace the schema to handle things like differing nullability or metadata.
+            // See note below about file vs. output schema.
+            let replace_schema = !stream_schema.eq(&output_schema);
 
             // Rebase column indices to match the narrowed stream schema.
             // The projection expressions have indices based on physical_file_schema,
@@ -517,13 +525,34 @@ impl FileOpener for ParquetOpener {
             let projector = projection.make_projector(&stream_schema)?;
 
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
-                b.and_then(|b| {
+                b.and_then(|mut b| {
                     copy_arrow_reader_metrics(
                         &arrow_reader_metrics,
                         &predicate_cache_inner_records,
                         &predicate_cache_records,
                     );
-                    projector.project_batch(&b)
+                    b = projector.project_batch(&b)?;
+                    if replace_schema {
+                        // Ensure the output batch has the expected schema.
+                        // This handles things like schema level and field level metadata, which may not be present
+                        // in the physical file schema.
+                        // It is also possible for nullability to differ; some writers create files with
+                        // OPTIONAL fields even when there are no nulls in the data.
+                        // In these cases it may make sense for the logical schema to be `NOT NULL`.
+                        // RecordBatch::try_new_with_options checks that if the schema is NOT NULL
+                        // the array cannot contain nulls, amongst other checks.
+                        let (_, arrays, num_rows) = b.into_parts();
+                        let options =
+                            RecordBatchOptions::new().with_row_count(Some(num_rows));
+                        RecordBatch::try_new_with_options(
+                            Arc::clone(&output_schema),
+                            arrays,
+                            &options,
+                        )
+                        .map_err(Into::into)
+                    } else {
+                        Ok(b)
+                    }
                 })
             });
 
@@ -826,7 +855,8 @@ mod test {
     use datafusion_datasource::{file_stream::FileOpener, PartitionedFile, TableSchema};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical, PhysicalExpr,
+        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
+        projection::ProjectionExprs, PhysicalExpr,
     };
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -910,7 +940,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0, 1]),
+                projection: ProjectionExprs::from_indices(&[0, 1], &schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -978,7 +1008,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &file_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1065,7 +1095,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &file_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1155,7 +1185,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &file_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
@@ -1253,7 +1283,7 @@ mod test {
         let make_opener = |predicate| {
             ParquetOpener {
                 partition_index: 0,
-                projection: Arc::new([0]),
+                projection: ProjectionExprs::from_indices(&[0], &file_schema),
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
