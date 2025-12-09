@@ -23,7 +23,7 @@ use core::num::FpCategory;
 
 use arrow::{
     array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray},
-    datatypes::DataType,
+    datatypes::{DataType, Field, FieldRef},
 };
 use bigdecimal::{
     num_bigint::{BigInt, Sign},
@@ -34,8 +34,8 @@ use datafusion_common::{
     exec_datafusion_err, exec_err, plan_err, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 
 /// Spark-compatible `format_string` expression
@@ -84,6 +84,17 @@ impl ScalarUDFImpl for FormatStringFunc {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(arg_types[0].clone()),
             _ => plan_err!("The format_string function expects the first argument to be Utf8, LargeUtf8 or Utf8View")
         }
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types: Vec<DataType> = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
+        let data_type = self.return_type(&arg_types)?;
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
