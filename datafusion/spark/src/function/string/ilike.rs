@@ -20,7 +20,9 @@ use arrow::compute::ilike;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
 use std::sync::Arc;
@@ -237,10 +239,7 @@ mod tests {
         // Test with both arguments nullable
         let result = ilike
             .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &[
-                    Arc::clone(&nullable_field1),
-                    Arc::clone(&nullable_field2),
-                ],
+                arg_fields: &[Arc::clone(&nullable_field1), Arc::clone(&nullable_field2)],
                 scalar_arguments: &[None, None],
             })
             .unwrap();
