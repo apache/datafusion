@@ -451,7 +451,7 @@ async fn write_parquet(
 fn extract_adapter_tag(factory: &dyn PhysicalExprAdapterFactory) -> Option<String> {
     // In a real implementation, you'd use a trait method or downcast
     // For this example, we parse the debug string
-    let debug_str = format!("{:?}", factory);
+    let debug_str = format!("{factory:?}");
     if debug_str.contains("MetadataAdapterFactory") {
         // Extract tag from debug output: MetadataAdapterFactory { tag: "v1" }
         if let Some(start) = debug_str.find("tag: \"") {

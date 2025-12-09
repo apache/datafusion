@@ -225,11 +225,11 @@ pub fn serialize_physical_expr<C: PhysicalExtensionCodec + ?Sized>(
     codec.serialize_physical_expr(value)
 }
 
-/// Implementation of physical expression serialization.
+/// Default implementation of physical expression serialization.
 ///
 /// This function contains the actual serialization logic. It should be called from
 /// trait default implementations to enable the decorator pattern.
-pub fn serialize_physical_expr_impl<C: PhysicalExtensionCodec + ?Sized>(
+pub fn default_serialize_physical_expr<C: PhysicalExtensionCodec + ?Sized>(
     value: &Arc<dyn PhysicalExpr>,
     codec: &C,
 ) -> Result<protobuf::PhysicalExprNode> {

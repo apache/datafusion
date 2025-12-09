@@ -3365,11 +3365,11 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     ///
     /// This method enables interception of physical expression deserialization, allowing
     /// custom processing before or after the default deserialization logic. The default
-    /// implementation delegates to [`parse_physical_expr_impl`].
+    /// implementation delegates to [`default_parse_physical_expr`].
     ///
     /// Users can override this method to:
     /// - Perform pre-processing on the proto
-    /// - Call the default implementation via `parse_physical_expr_impl`
+    /// - Call the default implementation via `default_parse_physical_expr`
     /// - Perform post-processing on the result
     fn deserialize_physical_expr(
         &self,
@@ -3377,24 +3377,24 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         ctx: &TaskContext,
         input_schema: &arrow::datatypes::Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        from_proto::parse_physical_expr_impl(proto, ctx, input_schema, self)
+        from_proto::default_parse_physical_expr(proto, ctx, input_schema, self)
     }
 
     /// Serialize a physical expression to protobuf.
     ///
     /// This method enables interception of physical expression serialization, allowing
     /// custom processing before or after the default serialization logic. The default
-    /// implementation delegates to [`serialize_physical_expr_impl`].
+    /// implementation delegates to [`default_serialize_physical_expr`].
     ///
     /// Users can override this method to:
     /// - Perform pre-processing on the expression
-    /// - Call the default implementation via `serialize_physical_expr_impl`
+    /// - Call the default implementation via `default_serialize_physical_expr`
     /// - Perform post-processing on the result
     fn serialize_physical_expr(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<protobuf::PhysicalExprNode> {
-        to_proto::serialize_physical_expr_impl(expr, self)
+        to_proto::default_serialize_physical_expr(expr, self)
     }
 }
 

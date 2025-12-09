@@ -206,7 +206,6 @@ where
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-/// Parse a physical expression from protobuf.
 ///
 /// This function routes through [`PhysicalExtensionCodec::deserialize_physical_expr`],
 /// allowing custom codecs to intercept every expression node.
@@ -219,11 +218,11 @@ pub fn parse_physical_expr<C: PhysicalExtensionCodec + ?Sized>(
     codec.deserialize_physical_expr(proto, ctx, input_schema)
 }
 
-/// Implementation of physical expression deserialization.
+/// Default implementation of physical expression deserialization.
 ///
 /// This function contains the actual deserialization logic. It should be called from
 /// trait default implementations to enable the decorator pattern.
-pub fn parse_physical_expr_impl<C: PhysicalExtensionCodec + ?Sized>(
+pub fn default_parse_physical_expr<C: PhysicalExtensionCodec + ?Sized>(
     proto: &protobuf::PhysicalExprNode,
     ctx: &TaskContext,
     input_schema: &Schema,
