@@ -321,24 +321,26 @@ impl FileOpener for ParquetOpener {
                 }
             }
 
-            // Adapt the predicate to the physical file schema.
+            // Adapt the projection & filter predicate to the physical file schema.
             // This evaluates missing columns and inserts any necessary casts.
             if let Some(expr_adapter_factory) = expr_adapter_factory.as_ref() {
+                // After rewriting to the file schema, further simplifications may be possible.
+                // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+                // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
+                // Additionally, if any casts were inserted we can move casts from the column to the literal side:
+                // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
+                let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+                let rewriter = expr_adapter_factory.create(
+                    Arc::clone(&logical_file_schema),
+                    Arc::clone(&physical_file_schema),
+                );
                 predicate = predicate
-                    .map(|p| {
-                        let expr = expr_adapter_factory
-                            .create(
-                                Arc::clone(&logical_file_schema),
-                                Arc::clone(&physical_file_schema),
-                            )
-                            .rewrite(p)?;
-                        // After rewriting to the file schema, further simplifications may be possible.
-                        // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
-                        // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
-                        PhysicalExprSimplifier::new(&physical_file_schema).simplify(expr)
-                    })
+                    .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
                     .transpose()?;
                 predicate_file_schema = Arc::clone(&physical_file_schema);
+                // Adapt projections to the physical file schema as well
+                projection = projection
+                    .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
             }
 
             // Build predicates for this specific file
