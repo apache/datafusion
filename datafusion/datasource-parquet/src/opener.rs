@@ -27,15 +27,17 @@ use arrow::array::RecordBatch;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr_adapter::replace_columns_with_literals;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::datatypes::{FieldRef, SchemaRef, TimeUnit};
+use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 
-use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_datasource::PartitionedFile;
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
@@ -51,7 +53,6 @@ use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use itertools::Itertools;
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
@@ -73,11 +74,8 @@ pub(super) struct ParquetOpener {
     pub limit: Option<usize>,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
-    /// Schema of the output table without partition columns.
-    /// This is the schema we coerce the physical file schema into.
-    pub logical_file_schema: SchemaRef,
-    /// Partition columns
-    pub partition_fields: Vec<FieldRef>,
+    /// Table schema, including partition columns.
+    pub table_schema: TableSchema,
     /// Optional hint for how large the initial request to read parquet metadata
     /// should be
     pub metadata_size_hint: Option<usize>,
@@ -139,10 +137,49 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
+        // Replace any partition column references in the predicate
+        // with their literal values from this file's partition values.
+        //
+        // For example, given
+        // 1. `region` is a partition column,
+        // 2. predicate `host IN ('us-east-1', 'eu-central-1')`:
+        // 3. The file path is `/data/region=us-west-2/...`
+        //    (that is the partition column value is `us-west-2`)
+        //
+        // The predicate would be rewritten to
+        // ```sql
+        // 'us-west-2` IN ('us-east-1', 'eu-central-1')
+        // ```
+        // which can be further simplified to `FALSE`, meaning
+        // the file can be skipped entirely.
+        //
+        // While this particular optimization is done during logical planning,
+        // there are other cases where partition columns may appear in more
+        // complex predicates that cannot be simplified until we are about to
+        // open the file (such as dynamic predicates)
+        let mut predicate = {
+            // Only replace partition columns if there are partition values.
+            // For non-partitioned tables, skip the clone and replacement traversal.
+            if partitioned_file.partition_values.is_empty() {
+                self.predicate.clone()
+            } else {
+                let partition_values: HashMap<&str, &ScalarValue> = self
+                    .table_schema
+                    .table_partition_cols()
+                    .iter()
+                    .zip(partitioned_file.partition_values.iter())
+                    .map(|(field, value)| (field.name().as_str(), value))
+                    .collect();
+
+                self.predicate
+                    .clone()
+                    .map(|p| replace_columns_with_literals(p, &partition_values))
+                    .transpose()?
+            }
+        };
+
         let projection = Arc::clone(&self.projection);
-        let mut predicate = self.predicate.clone();
-        let logical_file_schema = Arc::clone(&self.logical_file_schema);
-        let partition_fields = self.partition_fields.clone();
+        let logical_file_schema = Arc::clone(self.table_schema.table_schema());
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -155,7 +192,7 @@ impl FileOpener for ParquetOpener {
             .global_counter("num_predicate_creation_errors");
 
         let expr_adapter_factory = self.expr_adapter_factory.clone();
-        let mut predicate_file_schema = Arc::clone(&self.logical_file_schema);
+        let mut predicate_file_schema = Arc::clone(self.table_schema.file_schema());
 
         let enable_page_index = self.enable_page_index;
         #[cfg(feature = "parquet_encryption")]
@@ -178,20 +215,33 @@ impl FileOpener for ParquetOpener {
             // we can end the stream early.
             let mut file_pruner = predicate
                 .as_ref()
-                .map(|p| {
-                    Ok::<_, DataFusionError>(
-                        (is_dynamic_physical_expr(p) | partitioned_file.has_statistics())
-                            .then_some(FilePruner::new(
-                                Arc::clone(p),
-                                &logical_file_schema,
-                                partition_fields.clone(),
-                                partitioned_file.clone(),
-                                predicate_creation_errors.clone(),
-                            )?),
-                    )
+                .filter(|p| {
+                    // Make a FilePruner only if there is either
+                    // 1. a dynamic expr in the predicate
+                    // 2. the file has file-level statistics.
+                    //
+                    // File-level statistics may prune the file without loading
+                    // any row groups or metadata.
+                    //
+                    // Dynamic filters may prune the file after initial
+                    // planning, as the dynamic filter is updated during
+                    // execution.
+                    //
+                    // The case where there is a dynamic filter but no
+                    // statistics corresponds to a dynamic filter that
+                    // references partition columns. While rare, this is possible
+                    // e.g. `select * from table order by partition_col limit
+                    // 10` could hit this condition.
+                    is_dynamic_physical_expr(p) || partitioned_file.has_statistics()
                 })
-                .transpose()?
-                .flatten();
+                .and_then(|p| {
+                    FilePruner::try_new(
+                        Arc::clone(p),
+                        &logical_file_schema,
+                        &partitioned_file,
+                        predicate_creation_errors.clone(),
+                    )
+                });
 
             if let Some(file_pruner) = &mut file_pruner {
                 if file_pruner.should_prune()? {
@@ -266,17 +316,11 @@ impl FileOpener for ParquetOpener {
             if let Some(expr_adapter_factory) = expr_adapter_factory.as_ref() {
                 predicate = predicate
                     .map(|p| {
-                        let partition_values = partition_fields
-                            .iter()
-                            .cloned()
-                            .zip(partitioned_file.partition_values.clone())
-                            .collect_vec();
                         let expr = expr_adapter_factory
                             .create(
                                 Arc::clone(&logical_file_schema),
                                 Arc::clone(&physical_file_schema),
                             )
-                            .with_partition_values(partition_values)
                             .rewrite(p)?;
                         // After rewriting to the file schema, further simplifications may be possible.
                         // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
@@ -317,18 +361,10 @@ impl FileOpener for ParquetOpener {
             let mut projection =
                 ProjectionExprs::from_indices(&projection, &logical_file_schema);
             if let Some(expr_adapter_factory) = expr_adapter_factory {
-                let adapter = expr_adapter_factory
-                    .create(
-                        Arc::clone(&logical_file_schema),
-                        Arc::clone(&physical_file_schema),
-                    )
-                    .with_partition_values(
-                        partition_fields
-                            .iter()
-                            .cloned()
-                            .zip(partitioned_file.partition_values.clone())
-                            .collect_vec(),
-                    );
+                let adapter = expr_adapter_factory.create(
+                    Arc::clone(&logical_file_schema),
+                    Arc::clone(&physical_file_schema),
+                );
                 projection = projection.try_map_exprs(|expr| adapter.rewrite(expr))?;
             }
             let indices = projection.column_indices();
@@ -550,6 +586,7 @@ impl<S> EarlyStoppingStream<S> {
         }
     }
 }
+
 impl<S> EarlyStoppingStream<S>
 where
     S: Stream<Item = Result<RecordBatch>> + Unpin,
@@ -786,7 +823,7 @@ mod test {
         record_batch, stats::Precision, ColumnStatistics, DataFusionError, ScalarValue,
         Statistics,
     };
-    use datafusion_datasource::{file_stream::FileOpener, PartitionedFile};
+    use datafusion_datasource::{file_stream::FileOpener, PartitionedFile, TableSchema};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
         expressions::DynamicFilterPhysicalExpr, planner::logical2physical, PhysicalExpr,
@@ -877,13 +914,12 @@ mod test {
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
-                logical_file_schema: schema.clone(),
+                table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
                 parquet_file_reader_factory: Arc::new(
                     DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
                 ),
-                partition_fields: vec![],
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
                 force_filter_selections: false,
@@ -946,17 +982,15 @@ mod test {
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
-                logical_file_schema: file_schema.clone(),
+                table_schema: TableSchema::new(
+                    file_schema.clone(),
+                    vec![Arc::new(Field::new("part", DataType::Int32, false))],
+                ),
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
                 parquet_file_reader_factory: Arc::new(
                     DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
                 ),
-                partition_fields: vec![Arc::new(Field::new(
-                    "part",
-                    DataType::Int32,
-                    false,
-                ))],
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
                 force_filter_selections: false,
@@ -1035,17 +1069,15 @@ mod test {
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
-                logical_file_schema: file_schema.clone(),
+                table_schema: TableSchema::new(
+                    file_schema.clone(),
+                    vec![Arc::new(Field::new("part", DataType::Int32, false))],
+                ),
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
                 parquet_file_reader_factory: Arc::new(
                     DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
                 ),
-                partition_fields: vec![Arc::new(Field::new(
-                    "part",
-                    DataType::Int32,
-                    false,
-                ))],
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
                 force_filter_selections: false,
@@ -1127,17 +1159,15 @@ mod test {
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
-                logical_file_schema: file_schema.clone(),
+                table_schema: TableSchema::new(
+                    file_schema.clone(),
+                    vec![Arc::new(Field::new("part", DataType::Int32, false))],
+                ),
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
                 parquet_file_reader_factory: Arc::new(
                     DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
                 ),
-                partition_fields: vec![Arc::new(Field::new(
-                    "part",
-                    DataType::Int32,
-                    false,
-                ))],
                 pushdown_filters: true, // note that this is true!
                 reorder_filters: true,
                 force_filter_selections: false,
@@ -1206,10 +1236,18 @@ mod test {
             u64::try_from(data_size).unwrap(),
         );
         file.partition_values = vec![ScalarValue::Int32(Some(1))];
+        file.statistics = Some(Arc::new(
+            Statistics::default().add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(3))))
+                    .with_null_count(Precision::Exact(0)),
+            ),
+        ));
 
         let table_schema = Arc::new(Schema::new(vec![
-            Field::new("part", DataType::Int32, false),
             Field::new("a", DataType::Int32, false),
+            Field::new("part", DataType::Int32, false),
         ]));
 
         let make_opener = |predicate| {
@@ -1219,17 +1257,15 @@ mod test {
                 batch_size: 1024,
                 limit: None,
                 predicate: Some(predicate),
-                logical_file_schema: file_schema.clone(),
+                table_schema: TableSchema::new(
+                    file_schema.clone(),
+                    vec![Arc::new(Field::new("part", DataType::Int32, false))],
+                ),
                 metadata_size_hint: None,
                 metrics: ExecutionPlanMetricsSet::new(),
                 parquet_file_reader_factory: Arc::new(
                     DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
                 ),
-                partition_fields: vec![Arc::new(Field::new(
-                    "part",
-                    DataType::Int32,
-                    false,
-                ))],
                 pushdown_filters: false, // note that this is false!
                 reorder_filters: false,
                 force_filter_selections: false,
@@ -1246,16 +1282,37 @@ mod test {
             }
         };
 
-        // Filter should NOT match the stats but the file is never attempted to be pruned because the filters are not dynamic
-        let expr = col("part").eq(lit(2));
+        // This filter could prune based on statistics, but since it's not dynamic it's not applied for pruning
+        // (the assumption is this happened already at planning time)
+        let expr = col("a").eq(lit(42));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
-        assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
 
-        // If we make the filter dynamic, it should prune
+        // If we make the filter dynamic, it should prune.
+        // This allows dynamic filters to prune partitions/files even if they are populated late into execution.
+        let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
+        let opener = make_opener(predicate);
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
+
+        // If we have a filter that touches partition columns only and is dynamic, it should prune even if there are no stats.
+        file.statistics = Some(Arc::new(Statistics::new_unknown(&file_schema)));
+        let expr = col("part").eq(lit(2));
+        let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
+        let opener = make_opener(predicate);
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 0);
+        assert_eq!(num_rows, 0);
+
+        // Similarly a filter that combines partition and data columns should prune even if there are no stats.
+        let expr = col("part").eq(lit(2)).and(col("a").eq(lit(42)));
         let predicate = make_dynamic_expr(logical2physical(&expr, &table_schema));
         let opener = make_opener(predicate);
         let stream = opener.open(file.clone()).unwrap().await.unwrap();
