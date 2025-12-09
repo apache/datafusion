@@ -58,7 +58,9 @@ impl GenerateSeriesFunction {
             signature: Signature::coercible(
                 vec![integer.clone(), integer.clone()],
                 datafusion_expr::Volatility::Immutable,
-            ),
+            )
+            .with_parameter_names(vec!["start", "stop"])
+            .expect("valid parameter names"),
         }
     }
 }

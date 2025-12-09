@@ -248,25 +248,76 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let input_schema = input_plan.schema();
 
-        let func_args: Vec<datafusion_expr::Expr> = args
+        // Parse arguments with names preserved
+        let results: Result<Vec<(datafusion_expr::Expr, Option<String>)>> = args
             .iter()
             .map(|arg| match arg {
-                sqlparser::ast::FunctionArg::Unnamed(
-                    sqlparser::ast::FunctionArgExpr::Expr(expr),
-                )
-                | sqlparser::ast::FunctionArg::Named {
+                sqlparser::ast::FunctionArg::Named {
+                    name,
                     arg: sqlparser::ast::FunctionArgExpr::Expr(expr),
                     ..
-                } => self.sql_expr_to_logical_expr(
-                    expr.clone(),
-                    input_schema.as_ref(),
-                    planner_context,
-                ),
+                } => {
+                    let e = self.sql_expr_to_logical_expr(
+                        expr.clone(),
+                        input_schema.as_ref(),
+                        planner_context,
+                    )?;
+                    let arg_name = crate::utils::normalize_ident(name.clone());
+                    Ok((e, Some(arg_name)))
+                }
+                sqlparser::ast::FunctionArg::Unnamed(
+                    sqlparser::ast::FunctionArgExpr::Expr(expr),
+                ) => {
+                    let e = self.sql_expr_to_logical_expr(
+                        expr.clone(),
+                        input_schema.as_ref(),
+                        planner_context,
+                    )?;
+                    Ok((e, None))
+                }
                 _ => plan_err!("Unsupported function argument: {arg:?}"),
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect();
+        let pairs = results?;
+        let (func_args, arg_names): (Vec<datafusion_expr::Expr>, Vec<Option<String>>) =
+            pairs.into_iter().unzip();
 
-        let arg_types: Vec<arrow::datatypes::DataType> = func_args
+        // Resolve arguments if any are named
+        let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+            // Get arg types to create a temporary source for signature access
+            let arg_types: Vec<arrow::datatypes::DataType> = func_args
+                .iter()
+                .map(|e| e.get_type(input_schema.as_ref()))
+                .collect::<Result<Vec<_>>>()?;
+
+            let temp_source = self
+                .context_provider
+                .get_batched_table_function_source(func_name, &arg_types)?
+                .ok_or_else(|| {
+                    datafusion_common::plan_datafusion_err!(
+                        "Failed to get source for batched table function '{}'",
+                        func_name
+                    )
+                })?;
+
+            if let Some(param_names) = &temp_source.signature().parameter_names {
+                datafusion_expr::arguments::resolve_function_arguments(
+                    param_names,
+                    func_args,
+                    arg_names,
+                )?
+            } else {
+                return plan_err!(
+                    "Batched table function '{}' does not support named arguments",
+                    func_name
+                );
+            }
+        } else {
+            func_args
+        };
+
+        // Now get arg types from resolved arguments
+        let arg_types: Vec<arrow::datatypes::DataType> = resolved_args
             .iter()
             .map(|e| e.get_type(input_schema.as_ref()))
             .collect::<Result<Vec<_>>>()?;
@@ -303,7 +354,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 input: Arc::new(input_plan.clone()),
                 function_name: func_name.to_string(),
                 source,
-                args: func_args,
+                args: resolved_args,
                 schema: Arc::new(combined_schema),
                 table_function_schema: Arc::new(qualified_func_schema),
                 projection: None,

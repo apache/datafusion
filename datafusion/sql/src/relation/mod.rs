@@ -164,24 +164,79 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             .cloned()
                             .unwrap_or_else(DFSchema::empty);
 
-                        let args = func_args
+                        // Parse arguments with names preserved
+                        let results: Result<Vec<(Expr, Option<String>)>> = func_args
                             .args
                             .into_iter()
                             .map(|arg| match arg {
-                                FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
-                                | FunctionArg::Named {
+                                FunctionArg::Named {
+                                    name,
                                     arg: FunctionArgExpr::Expr(expr),
                                     ..
-                                } => self.sql_expr_to_logical_expr(
-                                    expr,
-                                    &schema,
-                                    planner_context,
-                                ),
+                                } => {
+                                    let e = self.sql_expr_to_logical_expr(
+                                        expr,
+                                        &schema,
+                                        planner_context,
+                                    )?;
+                                    let arg_name = crate::utils::normalize_ident(name);
+                                    Ok((e, Some(arg_name)))
+                                }
+                                FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                                    let e = self.sql_expr_to_logical_expr(
+                                        expr,
+                                        &schema,
+                                        planner_context,
+                                    )?;
+                                    Ok((e, None))
+                                }
                                 _ => plan_err!("Unsupported function argument: {arg:?}"),
                             })
-                            .collect::<Result<Vec<Expr>>>()?;
+                            .collect();
+                        let pairs = results?;
+                        let (func_args, arg_names): (Vec<Expr>, Vec<Option<String>>) =
+                            pairs.into_iter().unzip();
 
-                        let arg_types: Vec<arrow::datatypes::DataType> = args
+                        // Resolve arguments if any are named
+                        let has_named = arg_names.iter().any(|name| name.is_some());
+                        let resolved_args = if has_named {
+                            // Get arg types to create a temporary source for signature access
+                            let arg_types: Vec<arrow::datatypes::DataType> = func_args
+                                .iter()
+                                .map(|e| e.get_type(&schema))
+                                .collect::<Result<Vec<_>>>()?;
+
+                            let temp_source = self
+                                .context_provider
+                                .get_batched_table_function_source(&tbl_func_name, &arg_types)?
+                                .ok_or_else(|| {
+                                    plan_datafusion_err!(
+                                        "Failed to get source for batched table function '{}'",
+                                        tbl_func_name
+                                    )
+                                })?;
+
+                            let sig_param_names =
+                                temp_source.signature().parameter_names.clone();
+
+                            if let Some(param_names) = sig_param_names.as_ref() {
+                                datafusion_expr::arguments::resolve_function_arguments(
+                                    param_names,
+                                    func_args,
+                                    arg_names,
+                                )?
+                            } else {
+                                return plan_err!(
+                                    "Batched table function '{}' does not support named arguments",
+                                    tbl_func_name
+                                );
+                            }
+                        } else {
+                            func_args
+                        };
+
+                        // Now get arg types from resolved arguments
+                        let arg_types: Vec<arrow::datatypes::DataType> = resolved_args
                             .iter()
                             .map(|e| e.get_type(&schema))
                             .collect::<Result<Vec<_>>>()?;
@@ -215,7 +270,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             StandaloneBatchedTableFunction {
                                 function_name: tbl_func_name.clone(),
                                 source,
-                                args,
+                                args: resolved_args,
                                 schema: Arc::clone(&qualified_func_schema),
                                 projection: None,
                                 projected_schema: qualified_func_schema,
@@ -347,30 +402,88 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let tbl_func_ref = self.object_name_to_table_reference(name)?;
                 let func_name = tbl_func_ref.table();
 
-                if self.context_provider.is_batched_table_function(func_name) {
+                let is_batched =
+                    self.context_provider.is_batched_table_function(func_name);
+
+                if is_batched {
                     // Standalone batched table function
                     let schema = planner_context
                         .outer_query_schema()
                         .cloned()
                         .unwrap_or_else(DFSchema::empty);
 
-                    let func_args = args
+                    // Parse arguments with names preserved
+                    let results: Result<Vec<(Expr, Option<String>)>> = args
                         .into_iter()
                         .map(|arg| match arg {
-                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr))
-                            | FunctionArg::Named {
+                            FunctionArg::Named {
+                                name,
                                 arg: FunctionArgExpr::Expr(expr),
                                 ..
-                            } => self.sql_expr_to_logical_expr(
-                                expr,
-                                &schema,
-                                planner_context,
-                            ),
+                            } => {
+                                let e = self.sql_expr_to_logical_expr(
+                                    expr,
+                                    &schema,
+                                    planner_context,
+                                )?;
+                                let arg_name = crate::utils::normalize_ident(name);
+                                Ok((e, Some(arg_name)))
+                            }
+                            FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                                let e = self.sql_expr_to_logical_expr(
+                                    expr,
+                                    &schema,
+                                    planner_context,
+                                )?;
+                                Ok((e, None))
+                            }
                             _ => plan_err!("Unsupported function argument: {arg:?}"),
                         })
-                        .collect::<Result<Vec<Expr>>>()?;
+                        .collect();
+                    let pairs = results?;
+                    let (func_args, arg_names): (Vec<Expr>, Vec<Option<String>>) =
+                        pairs.into_iter().unzip();
 
-                    let arg_types: Vec<arrow::datatypes::DataType> = func_args
+                    // Resolve arguments if any are named
+                    let has_named = arg_names.iter().any(|name| name.is_some());
+                    let resolved_args = if has_named {
+                        // Get arg types to create a temporary source for signature access
+                        let arg_types: Vec<arrow::datatypes::DataType> = func_args
+                            .iter()
+                            .map(|e| e.get_type(&schema))
+                            .collect::<Result<Vec<_>>>()?;
+
+                        let temp_source = self
+                            .context_provider
+                            .get_batched_table_function_source(func_name, &arg_types)?
+                            .ok_or_else(|| {
+                                plan_datafusion_err!(
+                                    "Failed to get source for batched table function '{}'",
+                                    func_name
+                                )
+                            })?;
+
+                        let sig_param_names =
+                            temp_source.signature().parameter_names.clone();
+
+                        if let Some(param_names) = sig_param_names.as_ref() {
+                            datafusion_expr::arguments::resolve_function_arguments(
+                                param_names,
+                                func_args,
+                                arg_names,
+                            )?
+                        } else {
+                            return plan_err!(
+                                "Batched table function '{}' does not support named arguments",
+                                func_name
+                            );
+                        }
+                    } else {
+                        func_args
+                    };
+
+                    // Now get arg types from resolved arguments
+                    let arg_types: Vec<arrow::datatypes::DataType> = resolved_args
                         .iter()
                         .map(|e| e.get_type(&schema))
                         .collect::<Result<Vec<_>>>()?;
@@ -402,7 +515,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         StandaloneBatchedTableFunction {
                             function_name: func_name.to_string(),
                             source,
-                            args: func_args,
+                            args: resolved_args,
                             schema: Arc::clone(&qualified_func_schema),
                             projection: None,
                             projected_schema: qualified_func_schema,
