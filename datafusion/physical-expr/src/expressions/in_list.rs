@@ -961,8 +961,7 @@ mod tests {
                     );
 
                     eprintln!(
-                        "Test '{}': exercised (false, true) branch (no nulls, negated)",
-                        test_name
+                        "Test '{test_name}': exercised (false, true) branch (no nulls, negated)",
                     );
                 }
             }
