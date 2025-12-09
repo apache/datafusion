@@ -245,7 +245,7 @@ impl StaticFilter for Int32StaticFilter {
 
         let result = match (has_nulls, negated) {
             (true, false) => {
-                // Either needle or haystack has nulls, not negated
+                // needle has nulls, not negated
                 BooleanArray::from_iter(v.iter().map(|value| match value {
                     None => None,
                     Some(v) => {
@@ -260,7 +260,7 @@ impl StaticFilter for Int32StaticFilter {
                 }))
             }
             (true, true) => {
-                // Either needle or haystack has nulls, negated
+                // needle has nulls, negated
                 BooleanArray::from_iter(v.iter().map(|value| match value {
                     None => None,
                     Some(v) => {
@@ -315,15 +315,26 @@ fn evaluate_list(
 
 /// Try to evaluate a list of expressions as constants.
 ///
-/// Returns an ArrayRef if all expressions are constants (can be evaluated on an
-/// empty RecordBatch), otherwise returns an error. This is used to detect when
-/// a list contains only literals, casts of literals, or other constant expressions.
+/// Returns:
+/// - `Ok(Some(ArrayRef))` if all expressions are constants (can be evaluated on an empty RecordBatch)
+/// - `Ok(None)` if the list contains non-constant expressions
+/// - `Err(...)` only for actual errors (not for non-constant expressions)
+///
+/// This is used to detect when a list contains only literals, casts of literals,
+/// or other constant expressions.
 fn try_evaluate_constant_list(
     list: &[Arc<dyn PhysicalExpr>],
     schema: &Schema,
-) -> Result<ArrayRef> {
+) -> Result<Option<ArrayRef>> {
     let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
-    evaluate_list(list, &batch)
+    match evaluate_list(list, &batch) {
+        Ok(array) => Ok(Some(array)),
+        Err(_) => {
+            // Non-constant expressions can't be evaluated on an empty batch
+            // This is not an error, just means we can't use a static filter
+            Ok(None)
+        }
+    }
 }
 
 impl InListExpr {
@@ -387,13 +398,15 @@ impl InListExpr {
         ))
     }
 
-    /// Create a new InList expression with a static filter for constant list expressions.
+    /// Create a new InList expression, using a static filter when possible.
     ///
-    /// This validates data types, evaluates the list as constants, and uses specialized
-    /// StaticFilter implementations for better performance (e.g., Int32StaticFilter for Int32).
+    /// This validates data types and attempts to create a static filter for constant
+    /// list expressions. Uses specialized StaticFilter implementations for better
+    /// performance (e.g., Int32StaticFilter for Int32).
     ///
-    /// Returns an error if data types don't match or if the list contains non-constant expressions.
-    pub fn try_from_static_filter(
+    /// Returns an error if data types don't match. If the list contains non-constant
+    /// expressions, falls back to dynamic evaluation at runtime.
+    pub fn try_new(
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
@@ -412,30 +425,13 @@ impl InListExpr {
             );
         }
 
-        match try_evaluate_constant_list(&list, schema) {
-            Ok(in_array) => Ok(Self::new(
-                expr,
-                list,
-                negated,
-                Some(instantiate_static_filter(in_array)?),
-            )),
-            Err(_) => {
-                // Fall back to non-static filter if list contains non-constant expressions
-                // Still need to validate types
-                let expr_data_type = expr.data_type(schema)?;
-                for list_expr in list.iter() {
-                    let list_expr_data_type = list_expr.data_type(schema)?;
-                    assert_or_internal_err!(
-                        DFSchema::datatype_is_logically_equal(
-                            &expr_data_type,
-                            &list_expr_data_type
-                        ),
-                        "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
-                    );
-                }
-                Ok(Self::new(expr, list, negated, None))
-            }
-        }
+        // Try to create a static filter if all list expressions are constants
+        let static_filter = match try_evaluate_constant_list(&list, schema)? {
+            Some(in_array) => Some(instantiate_static_filter(in_array)?),
+            None => None, // Non-constant expressions, fall back to dynamic evaluation
+        };
+
+        Ok(Self::new(expr, list, negated, static_filter))
     }
 }
 impl std::fmt::Display for InListExpr {
@@ -638,9 +634,7 @@ pub fn in_list(
     negated: &bool,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(InListExpr::try_from_static_filter(
-        expr, list, *negated, schema,
-    )?))
+    Ok(Arc::new(InListExpr::try_new(expr, list, *negated, schema)?))
 }
 
 #[cfg(test)]
@@ -739,14 +733,25 @@ mod tests {
     /// and list expressions are already the correct types and don't require casting.
     macro_rules! in_list_raw {
         ($BATCH:expr, $LIST:expr, $NEGATED:expr, $EXPECTED:expr, $COL:expr, $SCHEMA:expr) => {{
-            let expr = in_list($COL, $LIST, $NEGATED, $SCHEMA).unwrap();
+            let col_expr = $COL;
+            let expr = in_list(Arc::clone(&col_expr), $LIST, $NEGATED, $SCHEMA).unwrap();
             let result = expr
                 .evaluate(&$BATCH)?
                 .into_array($BATCH.num_rows())
                 .expect("Failed to convert to array");
             let result = as_boolean_array(&result);
             let expected = &BooleanArray::from($EXPECTED);
-            assert_eq!(expected, result);
+            assert_eq!(
+                expected,
+                result,
+                "Failed for: {}\n{}: {:?}",
+                fmt_sql(expr.as_ref()),
+                fmt_sql(col_expr.as_ref()),
+                col_expr
+                    .evaluate(&$BATCH)?
+                    .into_array($BATCH.num_rows())
+                    .unwrap()
+            );
         }};
     }
 
@@ -755,38 +760,40 @@ mod tests {
     /// Each test case represents a data type with:
     /// - `value_in`: A value that appears in both the test array and the IN list (matches → true)
     /// - `value_not_in`: A value that appears in the test array but NOT in the IN list (doesn't match → false)
-    /// - `value_in_list`: A value that appears in the IN list but not in the array (filler value)
-    /// - `null_value`: A null scalar value for NULL handling tests
+    /// - `other_list_values`: Additional values in the IN list besides `value_in`
+    /// - `null_value`: Optional null scalar value for NULL handling tests. When None, tests
+    ///   without nulls are run, exercising the `(false, false)` and `(false, true)` branches.
     struct InListPrimitiveTestCase {
         name: &'static str,
         value_in: ScalarValue,
         value_not_in: ScalarValue,
-        value_in_list: ScalarValue,
-        null_value: ScalarValue,
+        other_list_values: Vec<ScalarValue>,
+        null_value: Option<ScalarValue>,
     }
 
     /// Generic test data struct for primitive types.
     ///
-    /// Holds the three test values needed for IN LIST tests, allowing the data
+    /// Holds test values needed for IN LIST tests, allowing the data
     /// to be declared explicitly and reused across multiple types.
     #[derive(Clone)]
     struct PrimitiveTestCaseData<T> {
         value_in: T,
         value_not_in: T,
-        value_in_list: T,
+        other_list_values: Vec<T>,
     }
 
     /// Helper to create test cases for any primitive type using generic data.
     ///
     /// Uses TryInto for flexible type conversion, allowing test data to be
     /// declared in any convertible type (e.g., i32 for all integer types).
+    /// Creates a test case WITH null support (for null handling tests).
     fn primitive_test_case<T, D, F>(
         name: &'static str,
         constructor: F,
         data: PrimitiveTestCaseData<D>,
     ) -> InListPrimitiveTestCase
     where
-        D: TryInto<T>,
+        D: TryInto<T> + Clone,
         <D as TryInto<T>>::Error: Debug,
         F: Fn(Option<T>) -> ScalarValue,
         T: Clone,
@@ -795,111 +802,170 @@ mod tests {
             name,
             value_in: constructor(Some(data.value_in.try_into().unwrap())),
             value_not_in: constructor(Some(data.value_not_in.try_into().unwrap())),
-            value_in_list: constructor(Some(data.value_in_list.try_into().unwrap())),
-            null_value: constructor(None),
+            other_list_values: data
+                .other_list_values
+                .into_iter()
+                .map(|v| constructor(Some(v.try_into().unwrap())))
+                .collect(),
+            null_value: Some(constructor(None)),
+        }
+    }
+
+    /// Helper to create test cases WITHOUT null support.
+    /// These test cases exercise the `(false, true)` branch (no nulls, negated).
+    fn primitive_test_case_no_nulls<T, D, F>(
+        name: &'static str,
+        constructor: F,
+        data: PrimitiveTestCaseData<D>,
+    ) -> InListPrimitiveTestCase
+    where
+        D: TryInto<T> + Clone,
+        <D as TryInto<T>>::Error: Debug,
+        F: Fn(Option<T>) -> ScalarValue,
+        T: Clone,
+    {
+        InListPrimitiveTestCase {
+            name,
+            value_in: constructor(Some(data.value_in.try_into().unwrap())),
+            value_not_in: constructor(Some(data.value_not_in.try_into().unwrap())),
+            other_list_values: data
+                .other_list_values
+                .into_iter()
+                .map(|v| constructor(Some(v.try_into().unwrap())))
+                .collect(),
+            null_value: None,
         }
     }
 
     /// Runs test cases for multiple types, providing detailed SQL error messages on failure.
     ///
-    /// For each test case, runs 4 standard IN LIST scenarios and provides context
-    /// about the test data and expected behavior when assertions fail.
+    /// For each test case, runs IN LIST scenarios based on whether null_value is Some or None:
+    /// - With null_value (Some): 4 tests including null handling
+    /// - Without null_value (None): 2 tests exercising the no-nulls paths
     fn run_test_cases(test_cases: Vec<InListPrimitiveTestCase>) -> Result<()> {
         for test_case in test_cases {
             let test_name = test_case.name;
 
             // Get the data type from the scalar value
             let data_type = test_case.value_in.data_type();
-            let schema = Schema::new(vec![Field::new("a", data_type.clone(), true)]);
 
-            // Create array from scalar values: [value_in, value_not_in, None]
-            let array = ScalarValue::iter_to_array(vec![
-                test_case.value_in.clone(),
-                test_case.value_not_in.clone(),
-                test_case.null_value.clone(),
-            ])?;
-
-            let col_a = col("a", &schema)?;
-            let batch =
-                RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::clone(&array)])?;
-
-            // Helper to format SQL-like representation for error messages
-            let _format_sql = |negated: bool, with_null: bool| -> String {
-                let not_str = if negated { "NOT " } else { "" };
-                let null_str = if with_null {
-                    format!(", {}", test_case.null_value)
-                } else {
-                    String::new()
-                };
-                format!(
-                    "Test '{}': a {}IN ({}, {}{})\n  where a = [{}, {}, NULL]",
-                    test_name,
-                    not_str,
-                    test_case.value_in,
-                    test_case.value_in_list,
-                    null_str,
-                    test_case.value_in,
-                    test_case.value_not_in
-                )
+            // Build the base list: [value_in, ...other_list_values]
+            let build_base_list = || -> Vec<Arc<dyn PhysicalExpr>> {
+                let mut list = vec![lit(test_case.value_in.clone())];
+                list.extend(test_case.other_list_values.iter().map(|v| lit(v.clone())));
+                list
             };
 
-            // Test 1: a IN (value_in, value_in_list) → [true, false, null]
-            let list = vec![
-                lit(test_case.value_in.clone()),
-                lit(test_case.value_in_list.clone()),
-            ];
-            in_list!(
-                batch,
-                list,
-                &false,
-                vec![Some(true), Some(false), None],
-                Arc::clone(&col_a),
-                &schema
-            );
+            match &test_case.null_value {
+                Some(null_val) => {
+                    // Tests WITH nulls in the needle array
+                    let schema =
+                        Schema::new(vec![Field::new("a", data_type.clone(), true)]);
 
-            // Test 2: a NOT IN (value_in, value_in_list) → [false, true, null]
-            let list = vec![
-                lit(test_case.value_in.clone()),
-                lit(test_case.value_in_list.clone()),
-            ];
-            in_list!(
-                batch,
-                list,
-                &true,
-                vec![Some(false), Some(true), None],
-                Arc::clone(&col_a),
-                &schema
-            );
+                    // Create array from scalar values: [value_in, value_not_in, None]
+                    let array = ScalarValue::iter_to_array(vec![
+                        test_case.value_in.clone(),
+                        test_case.value_not_in.clone(),
+                        null_val.clone(),
+                    ])?;
 
-            // Test 3: a IN (value_in, value_in_list, NULL) → [true, null, null]
-            let list = vec![
-                lit(test_case.value_in.clone()),
-                lit(test_case.value_in_list.clone()),
-                lit(test_case.null_value.clone()),
-            ];
-            in_list!(
-                batch,
-                list,
-                &false,
-                vec![Some(true), None, None],
-                Arc::clone(&col_a),
-                &schema
-            );
+                    let col_a = col("a", &schema)?;
+                    let batch = RecordBatch::try_new(
+                        Arc::new(schema.clone()),
+                        vec![Arc::clone(&array)],
+                    )?;
 
-            // Test 4: a NOT IN (value_in, value_in_list, NULL) → [false, null, null]
-            let list = vec![
-                lit(test_case.value_in),
-                lit(test_case.value_in_list),
-                lit(test_case.null_value),
-            ];
-            in_list!(
-                batch,
-                list,
-                &true,
-                vec![Some(false), None, None],
-                Arc::clone(&col_a),
-                &schema
-            );
+                    // Test 1: a IN (list) → [true, false, null]
+                    let list = build_base_list();
+                    in_list!(
+                        batch,
+                        list,
+                        &false,
+                        vec![Some(true), Some(false), None],
+                        Arc::clone(&col_a),
+                        &schema
+                    );
+
+                    // Test 2: a NOT IN (list) → [false, true, null]
+                    let list = build_base_list();
+                    in_list!(
+                        batch,
+                        list,
+                        &true,
+                        vec![Some(false), Some(true), None],
+                        Arc::clone(&col_a),
+                        &schema
+                    );
+
+                    // Test 3: a IN (list, NULL) → [true, null, null]
+                    let mut list = build_base_list();
+                    list.push(lit(null_val.clone()));
+                    in_list!(
+                        batch,
+                        list,
+                        &false,
+                        vec![Some(true), None, None],
+                        Arc::clone(&col_a),
+                        &schema
+                    );
+
+                    // Test 4: a NOT IN (list, NULL) → [false, null, null]
+                    let mut list = build_base_list();
+                    list.push(lit(null_val.clone()));
+                    in_list!(
+                        batch,
+                        list,
+                        &true,
+                        vec![Some(false), None, None],
+                        Arc::clone(&col_a),
+                        &schema
+                    );
+                }
+                None => {
+                    // Tests WITHOUT nulls - exercises the (false, false) and (false, true) branches
+                    let schema =
+                        Schema::new(vec![Field::new("a", data_type.clone(), false)]);
+
+                    // Create array from scalar values: [value_in, value_not_in] (no NULL)
+                    let array = ScalarValue::iter_to_array(vec![
+                        test_case.value_in.clone(),
+                        test_case.value_not_in.clone(),
+                    ])?;
+
+                    let col_a = col("a", &schema)?;
+                    let batch = RecordBatch::try_new(
+                        Arc::new(schema.clone()),
+                        vec![Arc::clone(&array)],
+                    )?;
+
+                    // Test 1: a IN (list) → [true, false] - exercises (false, false) branch
+                    let list = build_base_list();
+                    in_list!(
+                        batch,
+                        list,
+                        &false,
+                        vec![Some(true), Some(false)],
+                        Arc::clone(&col_a),
+                        &schema
+                    );
+
+                    // Test 2: a NOT IN (list) → [false, true] - exercises (false, true) branch
+                    let list = build_base_list();
+                    in_list!(
+                        batch,
+                        list,
+                        &true,
+                        vec![Some(false), Some(true)],
+                        Arc::clone(&col_a),
+                        &schema
+                    );
+
+                    eprintln!(
+                        "Test '{}': exercised (false, true) branch (no nulls, negated)",
+                        test_name
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -907,16 +973,17 @@ mod tests {
 
     /// Test IN LIST for all integer types (Int8/16/32/64, UInt8/16/32/64).
     ///
-    /// Test data: values 0 (in list), 2 (not in list), 1 (filler)
+    /// Test data: 0 (in list), 2 (not in list), [1, 3, 5] (other list values)
     #[test]
     fn in_list_int_types() -> Result<()> {
         let int_data = PrimitiveTestCaseData {
             value_in: 0,
             value_not_in: 2,
-            value_in_list: 1,
+            other_list_values: vec![1, 3, 5],
         };
 
         run_test_cases(vec![
+            // Tests WITH nulls
             primitive_test_case("int8", ScalarValue::Int8, int_data.clone()),
             primitive_test_case("int16", ScalarValue::Int16, int_data.clone()),
             primitive_test_case("int32", ScalarValue::Int32, int_data.clone()),
@@ -924,19 +991,21 @@ mod tests {
             primitive_test_case("uint8", ScalarValue::UInt8, int_data.clone()),
             primitive_test_case("uint16", ScalarValue::UInt16, int_data.clone()),
             primitive_test_case("uint32", ScalarValue::UInt32, int_data.clone()),
-            primitive_test_case("uint64", ScalarValue::UInt64, int_data),
+            primitive_test_case("uint64", ScalarValue::UInt64, int_data.clone()),
+            // Tests WITHOUT nulls - exercises (false, true) branch
+            primitive_test_case_no_nulls("int32_no_nulls", ScalarValue::Int32, int_data),
         ])
     }
 
     /// Test IN LIST for all string types (Utf8, LargeUtf8, Utf8View).
     ///
-    /// Test data: "a" (in list), "d" (not in list), "b" (filler)
+    /// Test data: "a" (in list), "d" (not in list), ["b", "c"] (other list values)
     #[test]
     fn in_list_string_types() -> Result<()> {
         let string_data = PrimitiveTestCaseData {
             value_in: "a",
             value_not_in: "d",
-            value_in_list: "b",
+            other_list_values: vec!["b", "c"],
         };
 
         run_test_cases(vec![
@@ -952,13 +1021,13 @@ mod tests {
 
     /// Test IN LIST for all binary types (Binary, LargeBinary, BinaryView).
     ///
-    /// Test data: [1,2,3] (in list), [1,2,2] (not in list), [4,5,6] (filler)
+    /// Test data: [1,2,3] (in list), [1,2,2] (not in list), [[4,5,6], [7,8,9]] (other list values)
     #[test]
     fn in_list_binary_types() -> Result<()> {
         let binary_data = PrimitiveTestCaseData {
             value_in: vec![1_u8, 2, 3],
             value_not_in: vec![1_u8, 2, 2],
-            value_in_list: vec![4_u8, 5, 6],
+            other_list_values: vec![vec![4_u8, 5, 6], vec![7_u8, 8, 9]],
         };
 
         run_test_cases(vec![
@@ -974,13 +1043,13 @@ mod tests {
 
     /// Test IN LIST for date types (Date32, Date64).
     ///
-    /// Test data: 0 (in list), 2 (not in list), 1 (filler)
+    /// Test data: 0 (in list), 2 (not in list), [1, 3] (other list values)
     #[test]
     fn in_list_date_types() -> Result<()> {
         let date_data = PrimitiveTestCaseData {
             value_in: 0,
             value_not_in: 2,
-            value_in_list: 1,
+            other_list_values: vec![1, 3],
         };
 
         run_test_cases(vec![
@@ -991,29 +1060,35 @@ mod tests {
 
     /// Test IN LIST for Decimal128 type.
     ///
-    /// Test data: 0 (in list), 200 (not in list), 100 (filler) with precision=10, scale=2
+    /// Test data: 0 (in list), 200 (not in list), [100, 300] (other list values) with precision=10, scale=2
     #[test]
     fn in_list_decimal() -> Result<()> {
         run_test_cases(vec![InListPrimitiveTestCase {
             name: "decimal128",
             value_in: ScalarValue::Decimal128(Some(0), 10, 2),
             value_not_in: ScalarValue::Decimal128(Some(200), 10, 2),
-            value_in_list: ScalarValue::Decimal128(Some(100), 10, 2),
-            null_value: ScalarValue::Decimal128(None, 10, 2),
+            other_list_values: vec![
+                ScalarValue::Decimal128(Some(100), 10, 2),
+                ScalarValue::Decimal128(Some(300), 10, 2),
+            ],
+            null_value: Some(ScalarValue::Decimal128(None, 10, 2)),
         }])
     }
 
     /// Test IN LIST for timestamp types.
     ///
-    /// Test data: 0 (in list), 2000 (not in list), 1000 (filler)
+    /// Test data: 0 (in list), 2000 (not in list), [1000, 3000] (other list values)
     #[test]
     fn in_list_timestamp_types() -> Result<()> {
         run_test_cases(vec![InListPrimitiveTestCase {
             name: "timestamp_nanosecond",
             value_in: ScalarValue::TimestampNanosecond(Some(0), None),
             value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
-            value_in_list: ScalarValue::TimestampNanosecond(Some(1000), None),
-            null_value: ScalarValue::TimestampNanosecond(None, None),
+            other_list_values: vec![
+                ScalarValue::TimestampNanosecond(Some(1000), None),
+                ScalarValue::TimestampNanosecond(Some(3000), None),
+            ],
+            null_value: Some(ScalarValue::TimestampNanosecond(None, None)),
         }])
     }
 
@@ -2586,21 +2661,22 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", dict_type.clone(), false)]);
         let col_a = col("a", &schema)?;
 
-        // Create IN list with Int32 literals: (1, 2, 3)
-        let list = vec![lit(1i32), lit(2i32), lit(3i32)];
+        // Create IN list with Int32 literals: (100, 200, 300)
+        let list = vec![lit(100i32), lit(200i32), lit(300i32)];
 
         // Create InListExpr via in_list() - this uses Int32StaticFilter for Int32 lists
         let expr = in_list(col_a, list, &false, &schema)?;
 
-        // Create dictionary-encoded batch with values [1, 2, 5]
-        // Dictionary: keys [0, 1, 2] -> values [1, 2, 5]
+        // Create dictionary-encoded batch with values [100, 200, 500]
+        // Dictionary: keys [0, 1, 2] -> values [100, 200, 500]
+        // Using values clearly distinct from keys to avoid confusion
         let keys = Int8Array::from(vec![0, 1, 2]);
-        let values = Int32Array::from(vec![1, 2, 5]);
+        let values = Int32Array::from(vec![100, 200, 500]);
         let dict_array: ArrayRef =
             Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![dict_array])?;
 
-        // Expected: [1 IN (1,2,3), 2 IN (1,2,3), 5 IN (1,2,3)] = [true, true, false]
+        // Expected: [100 IN (100,200,300), 200 IN (100,200,300), 500 IN (100,200,300)] = [true, true, false]
         let result = expr.evaluate(&batch)?.into_array(3)?;
         let result = as_boolean_array(&result);
         assert_eq!(result, &BooleanArray::from(vec![true, true, false]));
