@@ -20,18 +20,18 @@ use std::sync::Arc;
 use crate::expressions::Literal;
 use crate::intervals::cp_solver::PropagationResult;
 use crate::physical_expr::PhysicalExpr;
-use crate::utils::{build_dag, ExprTreeNode};
+use crate::utils::{ExprTreeNode, build_dag};
 
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::statistics::Distribution;
 use datafusion_expr_common::interval_arithmetic::Interval;
 
+use petgraph::Outgoing;
 use petgraph::adj::DefaultIx;
 use petgraph::prelude::Bfs;
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::DfsPostOrder;
-use petgraph::Outgoing;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute statistics/distributions for expressions hierarchically.
@@ -205,7 +205,7 @@ impl ExprStatisticsGraph {
 mod tests {
     use std::sync::Arc;
 
-    use crate::expressions::{binary, try_cast, Column};
+    use crate::expressions::{Column, binary, try_cast};
     use crate::intervals::cp_solver::PropagationResult;
     use crate::statistics::stats_solver::ExprStatisticsGraph;
 

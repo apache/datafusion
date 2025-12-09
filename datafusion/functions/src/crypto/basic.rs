@@ -27,8 +27,8 @@ use datafusion_common::cast::as_binary_array;
 
 use arrow::compute::StringArrayType;
 use datafusion_common::{
-    exec_err, internal_err, plan_err, utils::take_function_args, DataFusionError, Result,
-    ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err,
+    utils::take_function_args,
 };
 use datafusion_expr::ColumnarValue;
 use md5::Md5;
@@ -305,7 +305,7 @@ pub fn digest_process(
                 other => {
                     return exec_err!(
                         "Unsupported data type {other:?} for function {digest_algorithm}"
-                    )
+                    );
                 }
             };
             Ok(ColumnarValue::Array(output))
