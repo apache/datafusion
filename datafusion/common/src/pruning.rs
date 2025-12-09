@@ -447,7 +447,7 @@ impl PruningStatistics for PrunableStatistics {
 /// that is returned even if a later statistics has more complete information.
 #[deprecated(
     since = "52.0.0",
-    note = "This struct is no longer used internally. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+    note = "This struct is no longer used internally. It may be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first. Please open an issue if you have a use case for it."
 )]
 pub struct CompositePruningStatistics {
     pub statistics: Vec<Box<dyn PruningStatistics>>,
