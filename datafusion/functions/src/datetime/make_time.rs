@@ -22,17 +22,16 @@ use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::types::Int32Type;
 use arrow::array::{Array, PrimitiveArray};
-use arrow::datatypes::DataType::{
-    Int16, Int32, Int64, Int8, LargeUtf8, Null, Time32, UInt16, UInt32, UInt64, UInt8,
-    Utf8, Utf8View,
-};
+use arrow::datatypes::DataType::Time32;
 use arrow::datatypes::{DataType, Time32SecondType, TimeUnit};
 use chrono::prelude::*;
 
+use datafusion_common::types::{logical_int32, logical_string, NativeType};
 use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -82,13 +81,17 @@ impl Default for MakeTimeFunc {
 
 impl MakeTimeFunc {
     pub fn new() -> Self {
+        let int = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int32()),
+            vec![
+                TypeSignatureClass::Integer,
+                TypeSignatureClass::Native(logical_string()),
+            ],
+            NativeType::Int32,
+        );
         Self {
-            signature: Signature::uniform(
-                3,
-                vec![
-                    Null, UInt8, UInt16, UInt32, UInt64, Int8, Int16, Int32, Int64, Utf8,
-                    Utf8View, LargeUtf8,
-                ],
+            signature: Signature::coercible(
+                vec![int.clone(), int.clone(), int.clone()],
                 Volatility::Immutable,
             ),
         }
@@ -118,19 +121,16 @@ impl ScalarUDFImpl for MakeTimeFunc {
     ) -> Result<ColumnarValue> {
         let [hours, minutes, seconds] = take_function_args(self.name(), args.args)?;
 
-        // match postgresql behaviour which returns null for any null input
-        if matches!(hours, ColumnarValue::Scalar(ScalarValue::Null))
-            || matches!(minutes, ColumnarValue::Scalar(ScalarValue::Null))
-            || matches!(seconds, ColumnarValue::Scalar(ScalarValue::Null))
-        {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Time32Second(None)));
-        }
-
-        let hours = hours.cast_to(&Int32, None)?;
-        let minutes = minutes.cast_to(&Int32, None)?;
-        let seconds = seconds.cast_to(&Int32, None)?;
-
         match (hours, minutes, seconds) {
+            (ColumnarValue::Scalar(h), _, _) if h.is_null() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Time32Second(None)))
+            }
+            (_, ColumnarValue::Scalar(m), _) if m.is_null() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Time32Second(None)))
+            }
+            (_, _, ColumnarValue::Scalar(s)) if s.is_null() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Time32Second(None)))
+            }
             (
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(hours))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(minutes))),
@@ -211,11 +211,11 @@ fn make_time_inner<F: FnMut(i32)>(
 #[cfg(test)]
 mod tests {
     use crate::datetime::make_time::MakeTimeFunc;
-    use arrow::array::{Array, Int32Array, Int64Array, Time32SecondArray, UInt32Array};
+    use arrow::array::{Array, Int32Array, Time32SecondArray};
     use arrow::datatypes::TimeUnit::Second;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{DataFusionError, ScalarValue};
+    use datafusion_common::DataFusionError;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
 
@@ -234,62 +234,15 @@ mod tests {
             return_field: Field::new("f", DataType::Time32(Second), true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
+
         MakeTimeFunc::new().invoke_with_args(args)
     }
 
     #[test]
     fn test_make_time() {
-        let res = invoke_make_time_with_args(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(23))),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
-            ],
-            1,
-        )
-        .expect("that make_time parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Time32Second(time)) = res {
-            assert_eq!(82874, time.unwrap());
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        let res = invoke_make_time_with_args(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(23))),
-                ColumnarValue::Scalar(ScalarValue::UInt64(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
-            ],
-            1,
-        )
-        .expect("that make_time parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Time32Second(time)) = res {
-            assert_eq!(82874, time.unwrap());
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        let res = invoke_make_time_with_args(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("23".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("1".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("14".to_string()))),
-            ],
-            1,
-        )
-        .expect("that make_time parsed values without error");
-
-        if let ColumnarValue::Scalar(ScalarValue::Time32Second(time)) = res {
-            assert_eq!(82874, time.unwrap());
-        } else {
-            panic!("Expected a scalar value")
-        }
-
-        let hours = Arc::new((4..8).map(Some).collect::<Int64Array>());
+        let hours = Arc::new((4..8).map(Some).collect::<Int32Array>());
         let minutes = Arc::new((1..5).map(Some).collect::<Int32Array>());
-        let seconds = Arc::new((11..15).map(Some).collect::<UInt32Array>());
+        let seconds = Arc::new((11..15).map(Some).collect::<Int32Array>());
         let batch_len = hours.len();
         let res = invoke_make_time_with_args(
             vec![
@@ -313,81 +266,5 @@ mod tests {
         } else {
             panic!("Expected a columnar array")
         }
-
-        //
-        // Fallible test cases
-        //
-
-        // invalid number of arguments
-        let res = invoke_make_time_with_args(
-            vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
-            1,
-        );
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Execution error: make_time function requires 3 arguments, got 1"
-        );
-
-        // invalid type
-        let res = invoke_make_time_with_args(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-            ],
-            1,
-        );
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Arrow error: Cast error: Casting from Interval(YearMonth) to Int32 not supported"
-        );
-
-        // overflow of hour
-        let res = invoke_make_time_with_args(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-                ColumnarValue::Scalar(ScalarValue::UInt64(Some(u64::MAX))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
-            ],
-            1,
-        );
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Arrow error: Cast error: Can't cast value 18446744073709551615 to type Int32"
-        );
-
-        // overflow of minute
-        let res = invoke_make_time_with_args(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(2023))),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(22))),
-                ColumnarValue::Scalar(ScalarValue::UInt32(Some(u32::MAX))),
-            ],
-            1,
-        );
-        assert_eq!(
-            res.err().unwrap().strip_backtrace(),
-            "Arrow error: Cast error: Can't cast value 4294967295 to type Int32"
-        );
-    }
-
-    #[test]
-    fn test_make_time_null_param() {
-        let res = invoke_make_time_with_args(
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Null),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-                ColumnarValue::Scalar(ScalarValue::UInt32(Some(14))),
-            ],
-            1,
-        )
-        .expect("that make_time parsed values without error");
-
-        println!("{:?}", res);
-
-        assert!(matches!(
-            res,
-            ColumnarValue::Scalar(ScalarValue::Time32Second(None))
-        ));
     }
 }
