@@ -82,7 +82,11 @@ impl ScalarUDFImpl for SparkDateSub {
                 .iter()
                 .any(|arg| matches!(arg, Some(sv) if sv.is_null()));
 
-        Ok(Arc::new(Field::new(self.name(), DataType::Date32, nullable)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Date32,
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
