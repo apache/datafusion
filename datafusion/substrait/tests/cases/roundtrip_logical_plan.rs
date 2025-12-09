@@ -1915,6 +1915,15 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     Ok(())
 }
 
+/// Helper to convert a logical plan to Substrait and back without optimization.
+async fn plan_to_substrait_and_back(
+    plan: &LogicalPlan,
+    ctx: &SessionContext,
+) -> Result<LogicalPlan> {
+    let proto = to_substrait_plan(plan, &ctx.state())?;
+    from_substrait_plan(&ctx.state(), &proto).await
+}
+
 async fn roundtrip_logical_plan_with_ctx(
     plan: LogicalPlan,
     ctx: SessionContext,
@@ -2124,8 +2133,7 @@ async fn roundtrip_recursive_query() -> Result<()> {
     });
 
     // Convert to substrait and back
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = plan_to_substrait_and_back(&plan, &ctx).await?;
 
     // The deserialized plan may have projection wrappers, unwrap to find RecursiveQuery
     let recursive_query = match plan2 {
@@ -2222,8 +2230,7 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
     });
 
     // Convert to substrait and back
-    let proto = to_substrait_plan(&plan, &ctx.state())?;
-    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = plan_to_substrait_and_back(&plan, &ctx).await?;
 
     // The deserialized plan may have projection wrappers, unwrap to find RecursiveQuery
     let recursive_query = match plan2 {
@@ -2268,8 +2275,7 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
     });
 
     // Convert to substrait and back
-    let proto = to_substrait_plan(&original_plan, &ctx.state())?;
-    let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    let roundtrip_plan = plan_to_substrait_and_back(&original_plan, &ctx).await?;
 
     // Extract the RecursiveQuery from potential projection wrapper
     let roundtrip_rq = match roundtrip_plan {
