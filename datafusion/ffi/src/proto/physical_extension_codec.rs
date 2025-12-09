@@ -430,6 +430,11 @@ pub(crate) mod tests {
 
     impl TestExtensionCodec {
         pub(crate) const MAGIC_NUMBER: u8 = 127;
+        pub(crate) const EMPTY_EXEC_SERIALIZED: u8 = 1;
+        pub(crate) const ABS_FUNC_SERIALIZED: u8 = 2;
+        pub(crate) const SUM_UDAF_SERIALIZED: u8 = 3;
+        pub(crate) const RANK_UDWF_SERIALIZED: u8 = 4;
+        pub(crate) const MEMTABLE_SERIALIZED: u8 = 5;
     }
 
     impl PhysicalExtensionCodec for TestExtensionCodec {
@@ -445,8 +450,8 @@ pub(crate) mod tests {
                 );
             }
 
-            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
-                return exec_err!("TestExtensionCodec unable to decode udf");
+            if buf.len() != 2 || buf[1] != Self::EMPTY_EXEC_SERIALIZED {
+                return exec_err!("TestExtensionCodec unable to decode execution plan");
             }
 
             Ok(create_test_exec())
@@ -463,7 +468,7 @@ pub(crate) mod tests {
                 return exec_err!("TestExtensionCodec only expects EmptyExec");
             };
 
-            buf.push(Self::MAGIC_NUMBER);
+            buf.push(Self::EMPTY_EXEC_SERIALIZED);
 
             Ok(())
         }
@@ -475,7 +480,7 @@ pub(crate) mod tests {
                 );
             }
 
-            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
+            if buf.len() != 2 || buf[1] != Self::ABS_FUNC_SERIALIZED {
                 return exec_err!("TestExtensionCodec unable to decode udf");
             }
 
@@ -490,7 +495,7 @@ pub(crate) mod tests {
                 return exec_err!("TestExtensionCodec only expects Abs UDF");
             };
 
-            buf.push(Self::MAGIC_NUMBER);
+            buf.push(Self::ABS_FUNC_SERIALIZED);
 
             Ok(())
         }
@@ -502,7 +507,7 @@ pub(crate) mod tests {
                 );
             }
 
-            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
+            if buf.len() != 2 || buf[1] != Self::SUM_UDAF_SERIALIZED {
                 return exec_err!("TestExtensionCodec unable to decode udaf");
             }
 
@@ -517,7 +522,7 @@ pub(crate) mod tests {
                 return exec_err!("TestExtensionCodec only expects Sum UDAF");
             };
 
-            buf.push(Self::MAGIC_NUMBER);
+            buf.push(Self::SUM_UDAF_SERIALIZED);
 
             Ok(())
         }
@@ -529,7 +534,7 @@ pub(crate) mod tests {
                 );
             }
 
-            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
+            if buf.len() != 2 || buf[1] != Self::RANK_UDWF_SERIALIZED {
                 return exec_err!("TestExtensionCodec unable to decode udwf");
             }
 
@@ -551,7 +556,7 @@ pub(crate) mod tests {
                 return exec_err!("TestExtensionCodec only expects my_rank UDWF name");
             }
 
-            buf.push(Self::MAGIC_NUMBER);
+            buf.push(Self::RANK_UDWF_SERIALIZED);
 
             Ok(())
         }

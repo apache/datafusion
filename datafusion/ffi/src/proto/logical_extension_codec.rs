@@ -525,7 +525,7 @@ mod tests {
                 return exec_err!("Incorrect test table schema");
             }
 
-            if buf.len() != 2 || buf[1] != Self::MAGIC_NUMBER {
+            if buf.len() != 2 || buf[1] != Self::MEMTABLE_SERIALIZED {
                 return exec_err!("TestExtensionCodec unable to decode table provider");
             }
 
@@ -548,7 +548,7 @@ mod tests {
                 return exec_err!("Unexpected schema for encoding.");
             }
 
-            buf.push(Self::MAGIC_NUMBER);
+            buf.push(Self::MEMTABLE_SERIALIZED);
 
             Ok(())
         }
