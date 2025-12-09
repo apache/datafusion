@@ -176,25 +176,26 @@ pub(crate) struct FilterCandidate {
     required_bytes: usize,
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
-    /// The projection to read from the file schema to get the columns
-    /// required to evaluate the filter expression.
+    /// Column indices into the parquet file schema required to evaluate this filter.
     projection: Vec<usize>,
-    /// The projected table schema that this filter references
+    /// The Arrow schema containing only the columns required by this filter,
+    /// projected from the file's Arrow schema.
     filter_schema: SchemaRef,
 }
 
 /// Helper to build a `FilterCandidate`.
 ///
-/// This will do several things
+/// This will do several things:
 /// 1. Determine the columns required to evaluate the expression
 /// 2. Calculate data required to estimate the cost of evaluating the filter
 ///
-/// Note that this does *not* handle any adaptation of the data schema to the expression schema,
-/// it is assumed that the expression has already been adapted to the file schema before being passed in here,
-/// generally using [`PhysicalExprAdapter`](datafusion_physical_expr_adapter::PhysicalExprAdapter).
+/// Note: This does *not* handle any adaptation of the expression to the file schema.
+/// The expression must already be adapted before being passed in here, generally using
+/// [`PhysicalExprAdapter`](datafusion_physical_expr_adapter::PhysicalExprAdapter).
 struct FilterCandidateBuilder {
     expr: Arc<dyn PhysicalExpr>,
-    /// The schema of this parquet file.
+    /// The Arrow schema of this parquet file (the result of converting the
+    /// parquet schema to Arrow, potentially with type coercions applied).
     file_schema: SchemaRef,
 }
 
@@ -233,42 +234,42 @@ impl FilterCandidateBuilder {
     }
 }
 
-// a struct that implements TreeNodeRewriter to traverse a PhysicalExpr tree structure to determine
-// if any column references in the expression would prevent it from being predicate-pushed-down.
-// if non_primitive_columns || projected_columns, it can't be pushed down.
-// can't be reused between calls to `rewrite`; each construction must be used only once.
+/// Traverses a `PhysicalExpr` tree to determine if any column references would
+/// prevent the expression from being pushed down to the parquet decoder.
+///
+/// An expression cannot be pushed down if it references:
+/// - Non-primitive columns (like structs or lists)
+/// - Columns that don't exist in the file schema
 struct PushdownChecker<'schema> {
     /// Does the expression require any non-primitive columns (like structs)?
     non_primitive_columns: bool,
-    /// Does the expression reference any columns that are in the table
-    /// schema but not in the file schema?
-    /// This includes partition columns and projected columns.
+    /// Does the expression reference any columns not present in the file schema?
     projected_columns: bool,
-    // Indices into the table schema of the columns required to evaluate the expression
+    /// Indices into the file schema of columns required to evaluate the expression.
     required_columns: BTreeSet<usize>,
-    table_schema: &'schema Schema,
+    /// The Arrow schema of the parquet file.
+    file_schema: &'schema Schema,
 }
 
 impl<'schema> PushdownChecker<'schema> {
-    fn new(table_schema: &'schema Schema) -> Self {
+    fn new(file_schema: &'schema Schema) -> Self {
         Self {
             non_primitive_columns: false,
             projected_columns: false,
             required_columns: BTreeSet::default(),
-            table_schema,
+            file_schema,
         }
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        if let Ok(idx) = self.table_schema.index_of(column_name) {
+        if let Ok(idx) = self.file_schema.index_of(column_name) {
             self.required_columns.insert(idx);
-            if DataType::is_nested(self.table_schema.field(idx).data_type()) {
+            if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                 self.non_primitive_columns = true;
                 return Some(TreeNodeRecursion::Jump);
             }
         } else {
-            // If the column does not exist in the (un-projected) table schema then
-            // it must be a projected column.
+            // Column does not exist in the file schema, so we can't push this down.
             self.projected_columns = true;
             return Some(TreeNodeRecursion::Jump);
         }
@@ -296,25 +297,34 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     }
 }
 
-// Checks if a given expression can be pushed down into `DataSourceExec` as opposed to being evaluated
-// post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns all the
-// columns in the given expression so that they can be used in the parquet scanning, along with the
-// expression rewritten as defined in [`PushdownChecker::f_up`]
+/// Checks if a given expression can be pushed down to the parquet decoder.
+///
+/// Returns `Some(column_indices)` if the expression can be pushed down,
+/// where `column_indices` are the indices into the file schema of all columns
+/// required to evaluate the expression.
+///
+/// Returns `None` if the expression cannot be pushed down (e.g., references
+/// non-primitive types or columns not in the file).
 fn pushdown_columns(
     expr: &Arc<dyn PhysicalExpr>,
-    table_schema: &Schema,
+    file_schema: &Schema,
 ) -> Result<Option<Vec<usize>>> {
-    let mut checker = PushdownChecker::new(table_schema);
+    let mut checker = PushdownChecker::new(file_schema);
     expr.visit(&mut checker)?;
     Ok((!checker.prevents_pushdown())
         .then_some(checker.required_columns.into_iter().collect()))
 }
 
-/// Recurses through expr as a tree, finds all `column`s, and checks if any of them would prevent
-/// this expression from being predicate pushed down. If any of them would, this returns false.
-/// Otherwise, true.
-/// Note that the schema passed in here is *not* the physical file schema (as it is not available at that point in time);
-/// it is the schema of the table that this expression is being evaluated against minus any projected columns and partition columns.
+/// Checks if a predicate expression can be pushed down to the parquet decoder.
+///
+/// Returns `true` if all columns referenced by the expression:
+/// - Exist in the provided schema
+/// - Are primitive types (not structs, lists, etc.)
+///
+/// # Arguments
+/// * `expr` - The filter expression to check
+/// * `file_schema` - The Arrow schema of the parquet file (or table schema when
+///   the file schema is not yet available during planning)
 pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
@@ -352,20 +362,27 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
     Ok(false)
 }
 
-/// Build a [`RowFilter`] from the given predicate `Expr` if possible
+/// Build a [`RowFilter`] from the given predicate expression if possible.
 ///
-/// # returns
-/// * `Ok(Some(row_filter))` if the expression can be used as RowFilter
-/// * `Ok(None)` if the expression cannot be used as an RowFilter
+/// # Arguments
+/// * `expr` - The filter predicate, already adapted to reference columns in `file_schema`
+/// * `file_schema` - The Arrow schema of the parquet file (the result of converting
+///   the parquet schema to Arrow, potentially with type coercions applied)
+/// * `metadata` - Parquet file metadata used for cost estimation
+/// * `reorder_predicates` - If true, reorder predicates to minimize I/O
+/// * `file_metrics` - Metrics for tracking filter performance
+///
+/// # Returns
+/// * `Ok(Some(row_filter))` if the expression can be used as a RowFilter
+/// * `Ok(None)` if the expression cannot be used as a RowFilter
 /// * `Err(e)` if an error occurs while building the filter
 ///
-/// Note that the returned `RowFilter` may not contains all conjuncts in the
-/// original expression. This is because some conjuncts may not be able to be
-/// evaluated as an `ArrowPredicate` and will be ignored.
+/// Note: The returned `RowFilter` may not contain all conjuncts from the original
+/// expression. Conjuncts that cannot be evaluated as an `ArrowPredicate` are ignored.
 ///
 /// For example, if the expression is `a = 1 AND b = 2 AND c = 3` and `b = 2`
-/// can not be evaluated for some reason, the returned `RowFilter` will contain
-/// `a = 1` and `c = 3`.
+/// cannot be evaluated for some reason, the returned `RowFilter` will contain
+/// only `a = 1` and `c = 3`.
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
