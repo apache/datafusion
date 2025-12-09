@@ -329,11 +329,11 @@ impl FileOpener for ParquetOpener {
                 // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
                 // Additionally, if any casts were inserted we can move casts from the column to the literal side:
                 // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
-                let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
                 let rewriter = expr_adapter_factory.create(
                     Arc::clone(&logical_file_schema),
                     Arc::clone(&physical_file_schema),
                 );
+                let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
                 predicate = predicate
                     .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
                     .transpose()?;
