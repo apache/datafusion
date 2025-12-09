@@ -115,6 +115,9 @@ pub async fn from_read_rel(
                 },
             };
 
+            // Determine the table source: for recursive CTEs, create a CteWorkTable that serves
+            // as a placeholder for the recursive reference during query execution. For regular
+            // tables, resolve the table reference through the catalog.
             let table_source = if let Some(recursive_name) = recursive_table_name {
                 let table_name = table_reference.table();
                 if table_name != recursive_name {
