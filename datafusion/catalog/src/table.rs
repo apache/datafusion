@@ -31,9 +31,6 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
-
-// Re-export DmlCapabilities for convenience
-pub use datafusion_expr::dml::DmlCapabilities;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// A table which can be queried and modified.
