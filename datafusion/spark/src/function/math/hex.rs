@@ -256,10 +256,6 @@ pub fn compute_hex(
                         .iter()
                         .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                         .collect::<Result<_, _>>()?,
-                    DataType::LargeBinary => as_large_binary_array(dict.values())?
-                        .iter()
-                        .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                        .collect::<Result<_, _>>()?,
                     _ => exec_err!(
                         "hex got an unexpected argument type: {}",
                         array.data_type()
