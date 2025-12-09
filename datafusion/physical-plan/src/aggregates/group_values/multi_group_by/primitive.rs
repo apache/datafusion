@@ -192,16 +192,29 @@ where
                         u64::MAX,
                     )
                 };
-
-                if nullability_eq == 0 {
+                
+                // If given `nullability_eq` and `both_valid` we can have all the data we need: 
+                // eq | nullability_eq | both_valid | result
+                // T  | T              | T          | F
+                // T  | T              | F          | T
+                // T  | F              | T          | <impossible>
+                // T  | F              | F          | T
+                // F  | T              | T          | T
+                // F  | T              | F          | T
+                // F  | F              | T          | <impossible>
+                // F  | F              | F          | T
+                if !(eq & nullability_eq & both_valid) == u64::MAX {
+                    // eq | nullability_eq | both_valid | result
+                    // T  | T              | T          | <impossible>
+                    // T  | T              | F          | T
+                    // T  | F              | T          | <impossible>
+                    // T  | F              | F          | F
+                    // F  | T              | T          | F
+                    // F  | T              | F          | F
+                    // F  | F              | T          | <impossible>
+                    // F  | F              | F          | F
                     index += 64;
-                    return 0;
-                }
-
-                // if all nullability match and they both nulls than its the same value
-                if nullability_eq == u64::MAX && both_valid == 0 {
-                    index += 64;
-                    return eq;
+                    return eq & nullability_eq & !both_valid;
                 }
 
                 // TODO - we can maybe get only from the first set bit until the last set bit
