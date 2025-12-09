@@ -73,7 +73,7 @@ use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::{internal_datafusion_err, Result};
+use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
@@ -196,22 +196,11 @@ struct FilterCandidateBuilder {
     expr: Arc<dyn PhysicalExpr>,
     /// The schema of this parquet file.
     file_schema: SchemaRef,
-    /// The schema of the table (merged schema) -- columns may be in different
-    /// order than in the file and have columns that are not in the file schema
-    table_schema: SchemaRef,
 }
 
 impl FilterCandidateBuilder {
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        file_schema: Arc<Schema>,
-        table_schema: Arc<Schema>,
-    ) -> Self {
-        Self {
-            expr,
-            file_schema,
-            table_schema,
-        }
+    pub fn new(expr: Arc<dyn PhysicalExpr>, file_schema: Arc<Schema>) -> Self {
+        Self { expr, file_schema }
     }
 
     /// Attempt to build a `FilterCandidate` from the expression
@@ -222,45 +211,24 @@ impl FilterCandidateBuilder {
     /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
     /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
-        let Some(required_indices_into_table_schema) =
-            pushdown_columns(&self.expr, &self.table_schema)?
+        let Some(required_column_indices) =
+            pushdown_columns(&self.expr, &self.file_schema)?
         else {
             return Ok(None);
         };
 
-        let projected_table_schema = Arc::new(
-            self.table_schema
-                .project(&required_indices_into_table_schema)?,
-        );
+        let projected_schema =
+            Arc::new(self.file_schema.project(&required_column_indices)?);
 
-        // Compute the projection into the file schema by matching column names
-        let mut projection_into_file_schema: Vec<usize> = projected_table_schema
-            .fields()
-            .iter()
-            .filter_map(|f| self.file_schema.index_of(f.name()).ok())
-            .collect();
-        // Sort and remove duplicates
-        let original_len = projection_into_file_schema.len();
-        projection_into_file_schema.sort_unstable();
-        projection_into_file_schema.dedup();
-        if projection_into_file_schema.len() < original_len {
-            // This should not happen, as we built projected_table_schema from
-            // the table schema which should not have duplicate column names.
-            return Err(internal_datafusion_err!(
-                "Duplicate column names found when building filter candidate: {:?}",
-                projection_into_file_schema
-            ));
-        }
-
-        let required_bytes = size_of_columns(&projection_into_file_schema, metadata)?;
-        let can_use_index = columns_sorted(&projection_into_file_schema, metadata)?;
+        let required_bytes = size_of_columns(&required_column_indices, metadata)?;
+        let can_use_index = columns_sorted(&required_column_indices, metadata)?;
 
         Ok(Some(FilterCandidate {
             expr: self.expr,
             required_bytes,
             can_use_index,
-            projection: projection_into_file_schema,
-            filter_schema: Arc::clone(&projected_table_schema),
+            projection: required_column_indices,
+            filter_schema: projected_schema,
         }))
     }
 }
@@ -400,8 +368,7 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 /// `a = 1` and `c = 3`.
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
-    physical_file_schema: &SchemaRef,
-    predicate_file_schema: &SchemaRef,
+    file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
@@ -418,12 +385,8 @@ pub fn build_row_filter(
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .map(|expr| {
-            FilterCandidateBuilder::new(
-                Arc::clone(expr),
-                Arc::clone(physical_file_schema),
-                Arc::clone(predicate_file_schema),
-            )
-            .build(metadata)
+            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
+                .build(metadata)
         })
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -516,10 +479,9 @@ mod test {
 
         let table_schema = Arc::new(table_schema.clone());
 
-        let candidate =
-            FilterCandidateBuilder::new(expr, table_schema.clone(), table_schema)
-                .build(metadata)
-                .expect("building candidate");
+        let candidate = FilterCandidateBuilder::new(expr, table_schema)
+            .build(metadata)
+            .expect("building candidate");
 
         assert!(candidate.is_none());
     }
@@ -553,12 +515,10 @@ mod test {
             .create(Arc::new(table_schema.clone()), Arc::clone(&file_schema))
             .rewrite(expr)
             .expect("rewriting expression");
-        let table_schema = Arc::new(table_schema.clone());
-        let candidate =
-            FilterCandidateBuilder::new(expr, file_schema.clone(), table_schema.clone())
-                .build(&metadata)
-                .expect("building candidate")
-                .expect("candidate expected");
+        let candidate = FilterCandidateBuilder::new(expr, file_schema.clone())
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
@@ -591,10 +551,10 @@ mod test {
         let expr = logical2physical(&expr, &table_schema);
         // Rewrite the expression to add CastExpr for type coercion
         let expr = DefaultPhysicalExprAdapterFactory {}
-            .create(table_schema.clone(), Arc::clone(&file_schema))
+            .create(Arc::new(table_schema), Arc::clone(&file_schema))
             .rewrite(expr)
             .expect("rewriting expression");
-        let candidate = FilterCandidateBuilder::new(expr, file_schema, table_schema)
+        let candidate = FilterCandidateBuilder::new(expr, file_schema)
             .build(&metadata)
             .expect("building candidate")
             .expect("candidate expected");

@@ -335,7 +335,6 @@ impl FileOpener for ParquetOpener {
             predicate = predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
                 .transpose()?;
-            let predicate_file_schema = Arc::clone(&physical_file_schema);
             // Adapt projections to the physical file schema as well
             projection = projection
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
@@ -343,7 +342,7 @@ impl FileOpener for ParquetOpener {
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
-                &predicate_file_schema,
+                &physical_file_schema,
                 &predicate_creation_errors,
             );
 
@@ -376,7 +375,6 @@ impl FileOpener for ParquetOpener {
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &physical_file_schema,
-                    &predicate_file_schema,
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
