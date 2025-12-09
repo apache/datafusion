@@ -63,7 +63,7 @@ use crate::filter_pushdown::{
 };
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::Stream;
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, StreamExt, TryStreamExt};
 use log::trace;
 use parking_lot::Mutex;
 
@@ -1558,26 +1558,22 @@ impl PerPartitionStream {
             if completed {
                 return Poll::Ready(None);
             }
-            let inner_poll = self.poll_next_inner(cx);
-            let _timer = cloned_time.timer();
 
-            match inner_poll {
-                Poll::Pending => {
-                    return Poll::Pending;
-                }
-                Poll::Ready(None) => {
-                    completed = true;
-                    if let Err(err) = coalescer.finish() {
-                        return Poll::Ready(Some(Err(err)));
-                    }
-                }
-                Poll::Ready(Some(Ok(batch))) => {
+            let _timer = cloned_time.timer();
+            match ready!(self.poll_next_inner(cx)) {
+                Some(Ok(batch)) => {
                     if let Err(err) = coalescer.push_batch(batch) {
                         return Poll::Ready(Some(Err(err)));
                     }
                 }
-                Poll::Ready(Some(err)) => {
+                Some(err) => {
                     return Poll::Ready(Some(err));
+                }
+                None => {
+                    completed = true;
+                    if let Err(err) = coalescer.finish() {
+                        return Poll::Ready(Some(Err(err)));
+                    }
                 }
             }
         }
