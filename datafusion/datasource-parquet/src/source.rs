@@ -502,7 +502,7 @@ impl FileSource for ParquetSource {
         let expr_adapter_factory = base_config
             .expr_adapter_factory
             .clone()
-            .or_else(|| Some(Arc::new(DefaultPhysicalExprAdapterFactory) as _));
+            .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory) as _);
 
         let parquet_file_reader_factory =
             self.parquet_file_reader_factory.clone().unwrap_or_else(|| {

@@ -104,7 +104,7 @@ pub(super) struct ParquetOpener {
     #[cfg(feature = "parquet_encryption")]
     pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Rewrite expressions in the context of the file schema
-    pub(crate) expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    pub(crate) expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     /// Optional factory to create file decryption properties dynamically
     #[cfg(feature = "parquet_encryption")]
     pub encryption_factory:
@@ -201,8 +201,7 @@ impl FileOpener for ParquetOpener {
         let predicate_creation_errors = MetricBuilder::new(&self.metrics)
             .global_counter("num_predicate_creation_errors");
 
-        let expr_adapter_factory = self.expr_adapter_factory.clone();
-        let mut predicate_file_schema = Arc::clone(self.table_schema.file_schema());
+        let expr_adapter_factory = Arc::clone(&self.expr_adapter_factory);
 
         let enable_page_index = self.enable_page_index;
         #[cfg(feature = "parquet_encryption")]
@@ -323,25 +322,23 @@ impl FileOpener for ParquetOpener {
 
             // Adapt the projection & filter predicate to the physical file schema.
             // This evaluates missing columns and inserts any necessary casts.
-            if let Some(expr_adapter_factory) = expr_adapter_factory.as_ref() {
-                // After rewriting to the file schema, further simplifications may be possible.
-                // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
-                // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
-                // Additionally, if any casts were inserted we can move casts from the column to the literal side:
-                // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
-                let rewriter = expr_adapter_factory.create(
-                    Arc::clone(&logical_file_schema),
-                    Arc::clone(&physical_file_schema),
-                );
-                let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
-                predicate = predicate
-                    .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
-                    .transpose()?;
-                predicate_file_schema = Arc::clone(&physical_file_schema);
-                // Adapt projections to the physical file schema as well
-                projection = projection
-                    .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
-            }
+            // After rewriting to the file schema, further simplifications may be possible.
+            // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+            // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
+            // Additionally, if any casts were inserted we can move casts from the column to the literal side:
+            // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
+            let rewriter = expr_adapter_factory.create(
+                Arc::clone(&logical_file_schema),
+                Arc::clone(&physical_file_schema),
+            );
+            let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
+            predicate = predicate
+                .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
+                .transpose()?;
+            let predicate_file_schema = Arc::clone(&physical_file_schema);
+            // Adapt projections to the physical file schema as well
+            projection = projection
+                .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
 
             // Build predicates for this specific file
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
@@ -370,13 +367,6 @@ impl FileOpener for ParquetOpener {
                 reader_metadata,
             );
 
-            if let Some(expr_adapter_factory) = expr_adapter_factory {
-                let adapter = expr_adapter_factory.create(
-                    Arc::clone(&logical_file_schema),
-                    Arc::clone(&physical_file_schema),
-                );
-                projection = projection.try_map_exprs(|expr| adapter.rewrite(expr))?;
-            }
             let indices = projection.column_indices();
 
             let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
@@ -964,7 +954,7 @@ mod test {
                 coerce_int96: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
-                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
@@ -1035,7 +1025,7 @@ mod test {
                 coerce_int96: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
-                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
@@ -1122,7 +1112,7 @@ mod test {
                 coerce_int96: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
-                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
@@ -1212,7 +1202,7 @@ mod test {
                 coerce_int96: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
-                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
@@ -1310,7 +1300,7 @@ mod test {
                 coerce_int96: None,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
-                expr_adapter_factory: Some(Arc::new(DefaultPhysicalExprAdapterFactory)),
+                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
