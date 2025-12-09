@@ -41,11 +41,11 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 ///
 /// Some use cases for this include:
 /// - Partition column pruning: When scanning partitioned data, partition column references
-/// can be replaced with their literal values for the specific partition being scanned.
+///   can be replaced with their literal values for the specific partition being scanned.
 /// - Constant folding: In some cases, columns that can be proven to be constant
-/// from statistical analysis may be replaced with their literal values to optimize expression evaluation.
+///   from statistical analysis may be replaced with their literal values to optimize expression evaluation.
 /// - Filling in non-null default values: in a custom [`PhysicalExprAdapter`] implementation,
-/// column references can be replaced with default literal values instead of nulls.
+///   column references can be replaced with default literal values instead of nulls.
 ///
 /// # Arguments
 /// - `expr`: The physical expression in which to replace column references.
