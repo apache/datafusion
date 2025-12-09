@@ -1109,9 +1109,9 @@ dependencies = [
 
 [[package]]
 name = "bollard"
-version = "0.19.3"
+version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec7646ee90964aa59e9f832a67182791396a19a5b1d76eb17599a8310a7e2e09"
+checksum = "87a52479c9237eb04047ddb94788c41ca0d26eaff8b697ecfbb4c32f7fdc3b1b"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -1996,7 +1996,7 @@ dependencies = [
  "regex",
  "rstest",
  "rustyline",
- "testcontainers",
+ "testcontainers 0.25.2",
  "testcontainers-modules",
  "tokio",
  "url",
@@ -2739,7 +2739,7 @@ dependencies = [
  "sqllogictest",
  "sqlparser",
  "tempfile",
- "testcontainers",
+ "testcontainers 0.25.2",
  "testcontainers-modules",
  "thiserror",
  "tokio",
@@ -3005,6 +3005,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "etcetera"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de48cc4d1c1d97a20fd819def54b890cadde72ed3ad0c614822a0a433361be96"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.0",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3025,6 +3035,17 @@ dependencies = [
  "cfg-if",
  "rustix",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "ferroid"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0e9414a6ae93ef993ce40a1e02944f13d4508e2bf6f1ced1580ce6910f08253"
+dependencies = [
+ "portable-atomic",
+ "rand 0.9.2",
+ "web-time",
 ]
 
 [[package]]
@@ -6196,7 +6217,7 @@ dependencies = [
  "bytes",
  "docker_credential",
  "either",
- "etcetera",
+ "etcetera 0.10.0",
  "futures",
  "log",
  "memchr",
@@ -6214,12 +6235,42 @@ dependencies = [
 ]
 
 [[package]]
-name = "testcontainers-modules"
-version = "0.13.0"
+name = "testcontainers"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1966329d5bb3f89d33602d2db2da971fb839f9297dad16527abf4564e2ae0a6d"
+checksum = "a347cac4368ba4f1871743adb27dc14829024d26b1763572404726b0b9943eb8"
 dependencies = [
- "testcontainers",
+ "astral-tokio-tar",
+ "async-trait",
+ "bollard",
+ "bytes",
+ "docker_credential",
+ "either",
+ "etcetera 0.11.0",
+ "ferroid",
+ "futures",
+ "itertools 0.14.0",
+ "log",
+ "memchr",
+ "parse-display",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
+name = "testcontainers-modules"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e75e78ff453128a2c7da9a5d5a3325ea34ea214d4bf51eab3417de23a4e5147"
+dependencies = [
+ "testcontainers 0.26.0",
 ]
 
 [[package]]
