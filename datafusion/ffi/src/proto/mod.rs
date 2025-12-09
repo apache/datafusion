@@ -15,15 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion benchmark runner
-pub mod cancellation;
-pub mod clickbench;
-pub mod h2o;
-pub mod hj;
-pub mod imdb;
-pub mod nlj;
-pub mod smj;
-pub mod sort_tpch;
-pub mod tpcds;
-pub mod tpch;
-pub mod util;
+pub mod logical_extension_codec;
+pub mod physical_extension_codec;
