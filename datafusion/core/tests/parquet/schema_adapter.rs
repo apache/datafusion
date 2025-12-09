@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{record_batch, RecordBatch};
-use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
@@ -122,17 +122,6 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
             })
             .data()?;
         self.inner.rewrite(expr)
-    }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        assert!(
-            partition_values.is_empty(),
-            "Partition values are not supported in this test"
-        );
-        Arc::new(self.clone())
     }
 }
 

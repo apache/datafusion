@@ -32,65 +32,38 @@
 mod dataframe;
 mod deserialize_to_struct;
 
-use std::str::FromStr;
-
 use datafusion::error::{DataFusionError, Result};
+use strum::{IntoEnumIterator, VariantNames};
+use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
+#[derive(EnumIter, EnumString, Display, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 enum ExampleKind {
     All,
     Dataframe,
     DeserializeToStruct,
 }
 
-impl AsRef<str> for ExampleKind {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::All => "all",
-            Self::Dataframe => "dataframe",
-            Self::DeserializeToStruct => "deserialize_to_struct",
-        }
-    }
-}
-
-impl FromStr for ExampleKind {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "all" => Ok(Self::All),
-            "dataframe" => Ok(Self::Dataframe),
-            "deserialize_to_struct" => Ok(Self::DeserializeToStruct),
-            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
-        }
-    }
-}
-
 impl ExampleKind {
-    const ALL_VARIANTS: [Self; 3] =
-        [Self::All, Self::Dataframe, Self::DeserializeToStruct];
-
-    const RUNNABLE_VARIANTS: [Self; 2] = [Self::Dataframe, Self::DeserializeToStruct];
-
     const EXAMPLE_NAME: &str = "dataframe";
 
-    fn variants() -> Vec<&'static str> {
-        Self::ALL_VARIANTS
-            .iter()
-            .map(|example| example.as_ref())
-            .collect()
+    fn runnable() -> impl Iterator<Item = ExampleKind> {
+        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
     }
 
     async fn run(&self) -> Result<()> {
         match self {
             ExampleKind::All => {
-                for example in ExampleKind::RUNNABLE_VARIANTS {
-                    println!("Running example: {}", example.as_ref());
+                for example in ExampleKind::runnable() {
+                    println!("Running example: {example}");
                     Box::pin(example.run()).await?;
                 }
             }
-            ExampleKind::Dataframe => dataframe::dataframe_example().await?,
+            ExampleKind::Dataframe => {
+                dataframe::dataframe_example().await?;
+            }
             ExampleKind::DeserializeToStruct => {
-                deserialize_to_struct::deserialize_to_struct().await?
+                deserialize_to_struct::deserialize_to_struct().await?;
             }
         }
         Ok(())
@@ -102,14 +75,14 @@ async fn main() -> Result<()> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::variants().join("|")
+        ExampleKind::VARIANTS.join("|")
     );
 
-    let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{usage}");
-        DataFusionError::Execution("Missing argument".to_string())
-    })?;
+    let example: ExampleKind = std::env::args()
+        .nth(1)
+        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .parse()
+        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
-    let example = arg.parse::<ExampleKind>()?;
     example.run().await
 }

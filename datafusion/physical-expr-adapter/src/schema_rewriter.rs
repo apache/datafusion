@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical expression schema rewriting utilities
+//! Physical expression schema rewriting utilities: [`PhysicalExprAdapter`],
+//! [`PhysicalExprAdapterFactory`], default implementations,
+//! and [`replace_columns_with_literals`].
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
     Result, ScalarValue, exec_err,
     nested_struct::validate_struct_compatibility,
@@ -34,29 +37,52 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-/// Trait for adapting physical expressions to match a target schema.
+/// Replace column references in the given physical expression with literal values.
 ///
-/// This is used in file scans to rewrite expressions so that they can be evaluated
-/// against the physical schema of the file being scanned. It allows for handling
-/// differences between logical and physical schemas, such as type mismatches or missing columns.
+/// Some use cases for this include:
+/// - Partition column pruning: When scanning partitioned data, partition column references
+///   can be replaced with their literal values for the specific partition being scanned.
+/// - Constant folding: In some cases, columns that can be proven to be constant
+///   from statistical analysis may be replaced with their literal values to optimize expression evaluation.
+/// - Filling in non-null default values: in a custom [`PhysicalExprAdapter`] implementation,
+///   column references can be replaced with default literal values instead of nulls.
 ///
-/// ## Overview
+/// # Arguments
+/// - `expr`: The physical expression in which to replace column references.
+/// - `replacements`: A mapping from column names to their corresponding literal `ScalarValue`s.
 ///
-/// The `PhysicalExprAdapter` allows rewriting physical expressions to match different schemas, including:
+/// # Returns
+/// - `Result<Arc<dyn PhysicalExpr>>`: The rewritten physical expression with columns replaced by literals.
+pub fn replace_columns_with_literals(
+    expr: Arc<dyn PhysicalExpr>,
+    replacements: &HashMap<&str, &ScalarValue>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform(|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>()
+            && let Some(replacement_value) = replacements.get(column.name())
+        {
+            return Ok(Transformed::yes(expressions::lit(
+                (*replacement_value).clone(),
+            )));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .data()
+}
+
+/// Trait for adapting [`PhysicalExpr`] expressions to match a target schema.
 ///
-/// - **Type casting**: When logical and physical schemas have different types, expressions are
-///   automatically wrapped with cast operations. For example, `lit(ScalarValue::Int32(123)) = int64_column`
-///   gets rewritten to `lit(ScalarValue::Int32(123)) = cast(int64_column, 'Int32')`.
-///   Note that this does not attempt to simplify such expressions - that is done by shared simplifiers.
+/// This is used in file scans to rewrite expressions so that they can be
+/// evaluated against the physical schema of the file being scanned. It allows
+/// for handling differences between logical and physical schemas, such as type
+/// mismatches or missing columns common in [Schema evolution] scenarios.
 ///
-/// - **Missing columns**: When a column exists in the logical schema but not in the physical schema,
-///   references to it are replaced with null literals.
+/// [Schema evolution]: https://www.dremio.com/wiki/schema-evolution/
 ///
-/// - **Struct field access**: Expressions like `struct_column.field_that_is_missing_in_schema` are
-///   rewritten to `null` when the field doesn't exist in the physical schema.
+/// ## Default Implementations
 ///
-/// - **Partition columns**: Partition column references can be replaced with their literal values
-///   when scanning specific partitions.
+/// The default implementation [`DefaultPhysicalExprAdapter`]  handles common
+/// cases.
 ///
 /// ## Custom Implementations
 ///
@@ -93,17 +119,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 ///             Ok(Transformed::no(expr))
 ///         }).data()
 ///     }
-///
-///     fn with_partition_values(
-///         &self,
-///         partition_values: Vec<(FieldRef, ScalarValue)>,
-///     ) -> Arc<dyn PhysicalExprAdapter> {
-///         // For simplicity, this example ignores partition values
-///         Arc::new(CustomPhysicalExprAdapter {
-///             logical_file_schema: self.logical_file_schema.clone(),
-///             physical_file_schema: self.physical_file_schema.clone(),
-///         })
-///     }
 /// }
 ///
 /// #[derive(Debug)]
@@ -136,14 +151,15 @@ pub trait PhysicalExprAdapter: Send + Sync + std::fmt::Debug {
     ///
     /// Returns:
     /// - `Arc<dyn PhysicalExpr>`: The rewritten physical expression that can be evaluated against the physical schema.
+    ///
+    /// See Also:
+    /// - [`replace_columns_with_literals`]: for replacing partition column references with their literal values.
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>>;
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter>;
 }
 
+/// Creates instances of [`PhysicalExprAdapter`] for given logical and physical schemas.
+///
+/// See [`DefaultPhysicalExprAdapterFactory`] for the default implementation.
 pub trait PhysicalExprAdapterFactory: Send + Sync + std::fmt::Debug {
     /// Create a new instance of the physical expression adapter.
     fn create(
@@ -165,20 +181,39 @@ impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
         Arc::new(DefaultPhysicalExprAdapter {
             logical_file_schema,
             physical_file_schema,
-            partition_values: Vec::new(),
         })
     }
 }
 
-/// Default implementation for rewriting physical expressions to match different schemas.
+/// Default implementation of [`PhysicalExprAdapter`] for rewriting physical
+/// expressions to match different schemas.
+///
+/// ## Overview
+///
+///  [`DefaultPhysicalExprAdapter`] rewrites physical expressions to match
+///  different schemas, including:
+///
+/// - **Type casting**: When logical and physical schemas have different types, expressions are
+///   automatically wrapped with cast operations. For example, `lit(ScalarValue::Int32(123)) = int64_column`
+///   gets rewritten to `lit(ScalarValue::Int32(123)) = cast(int64_column, 'Int32')`.
+///   Note that this does not attempt to simplify such expressions - that is done by shared simplifiers.
+///
+/// - **Missing columns**: When a column exists in the logical schema but not in the physical schema,
+///   references to it are replaced with null literals.
+///
+/// - **Struct field access**: Expressions like `struct_column.field_that_is_missing_in_schema` are
+///   rewritten to `null` when the field doesn't exist in the physical schema.
+///
+/// - **Default column values**: Partition column references can be replaced with their literal values
+///   when scanning specific partitions. See [`replace_columns_with_literals`] for more details.
 ///
 /// # Example
 ///
 /// ```rust
-/// use datafusion_physical_expr_adapter::{DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory};
-/// use arrow::datatypes::Schema;
-/// use std::sync::Arc;
-///
+/// # use datafusion_physical_expr_adapter::{DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory};
+/// # use arrow::datatypes::Schema;
+/// # use std::sync::Arc;
+/// #
 /// # fn example(
 /// #     predicate: std::sync::Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>,
 /// #     physical_file_schema: &Schema,
@@ -194,7 +229,6 @@ impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
 pub struct DefaultPhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
-    partition_values: Vec<(FieldRef, ScalarValue)>,
 }
 
 impl DefaultPhysicalExprAdapter {
@@ -206,7 +240,6 @@ impl DefaultPhysicalExprAdapter {
         Self {
             logical_file_schema,
             physical_file_schema,
-            partition_values: Vec::new(),
         }
     }
 }
@@ -216,27 +249,15 @@ impl PhysicalExprAdapter for DefaultPhysicalExprAdapter {
         let rewriter = DefaultPhysicalExprAdapterRewriter {
             logical_file_schema: &self.logical_file_schema,
             physical_file_schema: &self.physical_file_schema,
-            partition_fields: &self.partition_values,
         };
         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
-    }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(DefaultPhysicalExprAdapter {
-            partition_values,
-            ..self.clone()
-        })
     }
 }
 
 struct DefaultPhysicalExprAdapterRewriter<'a> {
     logical_file_schema: &'a Schema,
     physical_file_schema: &'a Schema,
-    partition_fields: &'a [(FieldRef, ScalarValue)],
 }
 
 impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
@@ -347,10 +368,6 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
         {
             Ok(field) => field,
             Err(e) => {
-                // If the column is a partition field, we can use the partition value
-                if let Some(partition_value) = self.get_partition_value(column.name()) {
-                    return Ok(Transformed::yes(expressions::lit(partition_value)));
-                }
                 // This can be hit if a custom rewrite injected a reference to a column that doesn't exist in the logical schema.
                 // For example, a pre-computed column that is kept only in the physical schema.
                 // If the column exists in the physical schema, we can still use it.
@@ -445,13 +462,6 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
         ));
 
         Ok(Transformed::yes(cast_expr))
-    }
-
-    fn get_partition_value(&self, column_name: &str) -> Option<ScalarValue> {
-        self.partition_fields
-            .iter()
-            .find(|(field, _)| field.name() == column_name)
-            .map(|(_, value)| value.clone())
     }
 }
 
@@ -698,30 +708,51 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_partition_column() -> Result<()> {
-        let (physical_schema, logical_schema) = create_test_schema();
-
-        let partition_field =
-            Arc::new(Field::new("partition_col", DataType::Utf8, false));
+    fn test_replace_columns_with_literals() -> Result<()> {
         let partition_value = ScalarValue::Utf8(Some("test_value".to_string()));
-        let partition_values = vec![(partition_field, partition_value)];
+        let replacements = HashMap::from([("partition_col", &partition_value)]);
 
-        let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
-        let adapter = adapter.with_partition_values(partition_values);
-
-        let column_expr = Arc::new(Column::new("partition_col", 0));
-        let result = adapter.rewrite(column_expr)?;
+        let column_expr =
+            Arc::new(Column::new("partition_col", 0)) as Arc<dyn PhysicalExpr>;
+        let result = replace_columns_with_literals(column_expr, &replacements)?;
 
         // Should be replaced with the partition value
-        if let Some(literal) = result.as_any().downcast_ref::<expressions::Literal>() {
-            assert_eq!(
-                *literal.value(),
-                ScalarValue::Utf8(Some("test_value".to_string()))
-            );
-        } else {
-            panic!("Expected literal expression");
-        }
+        let literal = result
+            .as_any()
+            .downcast_ref::<expressions::Literal>()
+            .expect("Expected literal expression");
+        assert_eq!(*literal.value(), partition_value);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_columns_with_literals_no_match() -> Result<()> {
+        let value = ScalarValue::Utf8(Some("test_value".to_string()));
+        let replacements = HashMap::from([("other_col", &value)]);
+
+        let column_expr =
+            Arc::new(Column::new("partition_col", 0)) as Arc<dyn PhysicalExpr>;
+        let result = replace_columns_with_literals(column_expr, &replacements)?;
+
+        assert!(result.as_any().downcast_ref::<Column>().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_columns_with_literals_nested_expr() -> Result<()> {
+        let value_a = ScalarValue::Int64(Some(10));
+        let value_b = ScalarValue::Int64(Some(20));
+        let replacements = HashMap::from([("a", &value_a), ("b", &value_b)]);
+
+        let expr = Arc::new(expressions::BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let result = replace_columns_with_literals(expr, &replacements)?;
+        assert_eq!(result.to_string(), "10 + 20");
 
         Ok(())
     }
@@ -996,7 +1027,6 @@ mod tests {
         let rewriter = DefaultPhysicalExprAdapterRewriter {
             logical_file_schema: &logical_schema,
             physical_file_schema: &physical_schema,
-            partition_fields: &[],
         };
 
         // Test that when a field exists in physical schema, it returns None

@@ -30,5 +30,5 @@ pub mod schema_rewriter;
 
 pub use schema_rewriter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
-    PhysicalExprAdapterFactory,
+    PhysicalExprAdapterFactory, replace_columns_with_literals,
 };

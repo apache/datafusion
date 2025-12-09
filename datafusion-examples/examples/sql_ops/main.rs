@@ -36,10 +36,12 @@ mod dialect;
 mod frontend;
 mod query;
 
-use std::str::FromStr;
-
 use datafusion::error::{DataFusionError, Result};
+use strum::{IntoEnumIterator, VariantNames};
+use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
+#[derive(EnumIter, EnumString, Display, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 enum ExampleKind {
     All,
     Analysis,
@@ -48,59 +50,18 @@ enum ExampleKind {
     Query,
 }
 
-impl AsRef<str> for ExampleKind {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::All => "all",
-            Self::Analysis => "analysis",
-            Self::Dialect => "dialect",
-            Self::Frontend => "frontend",
-            Self::Query => "query",
-        }
-    }
-}
-
-impl FromStr for ExampleKind {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "all" => Ok(Self::All),
-            "analysis" => Ok(Self::Analysis),
-            "dialect" => Ok(Self::Dialect),
-            "frontend" => Ok(Self::Frontend),
-            "query" => Ok(Self::Query),
-            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
-        }
-    }
-}
-
 impl ExampleKind {
-    const ALL_VARIANTS: [Self; 5] = [
-        Self::All,
-        Self::Analysis,
-        Self::Dialect,
-        Self::Frontend,
-        Self::Query,
-    ];
-
-    const RUNNABLE_VARIANTS: [Self; 4] =
-        [Self::Analysis, Self::Dialect, Self::Frontend, Self::Query];
-
     const EXAMPLE_NAME: &str = "sql_ops";
 
-    fn variants() -> Vec<&'static str> {
-        Self::ALL_VARIANTS
-            .iter()
-            .map(|example| example.as_ref())
-            .collect()
+    fn runnable() -> impl Iterator<Item = ExampleKind> {
+        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
     }
 
     async fn run(&self) -> Result<()> {
         match self {
             ExampleKind::All => {
-                for example in ExampleKind::RUNNABLE_VARIANTS {
-                    println!("Running example: {}", example.as_ref());
+                for example in ExampleKind::runnable() {
+                    println!("Running example: {example}");
                     Box::pin(example.run()).await?;
                 }
             }
@@ -118,14 +79,14 @@ async fn main() -> Result<()> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::variants().join("|")
+        ExampleKind::VARIANTS.join("|")
     );
 
-    let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{usage}");
-        DataFusionError::Execution("Missing argument".to_string())
-    })?;
+    let example: ExampleKind = std::env::args()
+        .nth(1)
+        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .parse()
+        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
-    let example = arg.parse::<ExampleKind>()?;
     example.run().await
 }
