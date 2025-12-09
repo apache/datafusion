@@ -1,4 +1,4 @@
-// Licensed to the Apache Software Foundation (ASF) under one
+﻿// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, sync::Arc};
-
 use arrow::array::{Array, AsArray, BooleanArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::datatypes::DataType::Boolean;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
+use std::any::Any;
+use std::sync::Arc;
 
 /// Spark-compatible `luhn_check` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#luhn_check>
@@ -70,6 +70,10 @@ impl ScalarUDFImpl for SparkLuhnCheck {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(Boolean)
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), Boolean, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -151,3 +155,4 @@ fn luhn_check_impl(input: &str) -> bool {
 
     digits_processed > 0 && sum.is_multiple_of(10)
 }
+
