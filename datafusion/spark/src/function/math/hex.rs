@@ -18,9 +18,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
-};
 use arrow::array::{Array, StringArray};
 use arrow::datatypes::DataType;
 use arrow::{
@@ -28,13 +25,18 @@ use arrow::{
     datatypes::Int32Type,
 };
 use datafusion_common::cast::as_string_view_array;
+use datafusion_common::types::{
+    logical_binary, logical_int64, logical_string, NativeType,
+};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
     exec_err, DataFusionError,
 };
-use datafusion_expr::Signature;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
 use std::fmt::Write;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
@@ -52,8 +54,33 @@ impl Default for SparkHex {
 
 impl SparkHex {
     pub fn new() -> Self {
+        let int64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![TypeSignatureClass::Integer, TypeSignatureClass::Numeric],
+            NativeType::Int64,
+        );
+        let string = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_string()),
+            vec![TypeSignatureClass::Native(logical_string())],
+            NativeType::String,
+        );
+        let binary = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_binary()),
+            vec![TypeSignatureClass::Binary],
+            NativeType::String,
+        );
+
+        let variants = vec![
+            // accepts numeric types
+            TypeSignature::Coercible(vec![int64]),
+            // accepts string types (Utf8, Utf8View, LargeUtf8)
+            TypeSignature::Coercible(vec![string]),
+            // accepts binary types (Binary, LargeBinary, FixedSizeBinary)
+            TypeSignature::Coercible(vec![binary]),
+        ];
+
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(variants, Volatility::Immutable),
             aliases: vec![],
         }
     }
@@ -88,56 +115,6 @@ impl ScalarUDFImpl for SparkHex {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    fn coerce_types(
-        &self,
-        arg_types: &[DataType],
-    ) -> datafusion_common::Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("hex", (1, 1), arg_types.len()));
-        }
-        match &arg_types[0] {
-            DataType::Int64
-            | DataType::Utf8
-            | DataType::Utf8View
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary => Ok(vec![arg_types[0].clone()]),
-            DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-                DataType::Int64
-                | DataType::Utf8
-                | DataType::Utf8View
-                | DataType::LargeUtf8
-                | DataType::Binary
-                | DataType::LargeBinary => Ok(vec![arg_types[0].clone()]),
-                other => {
-                    if other.is_numeric() {
-                        Ok(vec![DataType::Dictionary(
-                            key_type.clone(),
-                            Box::new(DataType::Int64),
-                        )])
-                    } else {
-                        Err(unsupported_data_type_exec_err(
-                            "hex",
-                            "Numeric, String, or Binary",
-                            &arg_types[0],
-                        ))
-                    }
-                }
-            },
-            other => {
-                if other.is_numeric() {
-                    Ok(vec![DataType::Int64])
-                } else {
-                    Err(unsupported_data_type_exec_err(
-                        "hex",
-                        "Numeric, String, or Binary",
-                        &arg_types[0],
-                    ))
-                }
-            }
-        }
     }
 }
 
@@ -420,5 +397,22 @@ mod test {
         ]);
 
         assert_eq!(string_array, &expected_array);
+    }
+
+    #[test]
+    fn test_hex_multiple_arguments() {
+        let int_array1 = Int64Array::from(vec![Some(1), Some(2)]);
+        let int_array2 = Int64Array::from(vec![Some(3), Some(4)]);
+        let columnar_value1 = ColumnarValue::Array(Arc::new(int_array1));
+        let columnar_value2 = ColumnarValue::Array(Arc::new(int_array2));
+
+        let result = super::spark_hex(&[columnar_value1, columnar_value2]);
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains(" hex function requires 1 argument, got 2"),
+            "Expected error message about argument count, got: {error_msg}",
+        );
     }
 }
