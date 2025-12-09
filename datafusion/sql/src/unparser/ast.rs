@@ -140,8 +140,14 @@ impl Default for QueryBuilder {
 pub struct SelectBuilder {
     distinct: Option<ast::Distinct>,
     top: Option<ast::Top>,
-    /// Projection items. None means not set, Some(vec![]) means empty projection,
-    /// Some(vec![...]) means non-empty projection.
+    /// Projection items for the SELECT clause.
+    ///
+    /// This field uses `Option` to distinguish between three distinct states:
+    /// - `None`: No projection has been set (not yet initialized)
+    /// - `Some(vec![])`: Empty projection explicitly set (generates `SELECT FROM ...` or `SELECT 1 FROM ...`)
+    /// - `Some(vec![...])`: Non-empty projection with specific columns/expressions
+    ///
+    /// Use `projection()` to set this field and `already_projected()` to check if it has been set.
     projection: Option<Vec<ast::SelectItem>>,
     into: Option<ast::SelectInto>,
     from: Vec<TableWithJoinsBuilder>,
@@ -175,7 +181,29 @@ impl SelectBuilder {
     pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
         self.projection.take().unwrap_or_default()
     }
-    /// Returns true if projection has been explicitly set via projection().
+    /// Returns true if a projection has been explicitly set via `projection()`.
+    ///
+    /// This method is used to determine whether the SELECT clause has already been
+    /// defined, which helps avoid creating duplicate projection nodes during query
+    /// unparsing. It returns `true` for both empty and non-empty projections.
+    ///
+    /// # Returns
+    ///
+    /// - `true` if `projection()` has been called (regardless of whether it was empty or not)
+    /// - `false` if no projection has been set yet
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut builder = SelectBuilder::default();
+    /// assert!(!builder.already_projected());
+    ///
+    /// builder.projection(vec![]);
+    /// assert!(builder.already_projected()); // true even for empty projection
+    ///
+    /// builder.projection(vec![SelectItem::Wildcard(...)]);
+    /// assert!(builder.already_projected()); // true for non-empty projection
+    /// ```
     pub fn already_projected(&self) -> bool {
         self.projection.is_some()
     }

@@ -220,6 +220,46 @@ pub trait Dialect: Send + Sync {
     }
 
     /// Whether the dialect supports an empty select list such as `SELECT FROM table`.
+    ///
+    /// An empty select list returns rows without any column data, which is useful for:
+    /// - Counting rows: `SELECT FROM users WHERE active = true` (combined with `COUNT(*)`)
+    /// - Testing row existence without retrieving column data
+    /// - Performance optimization when only row counts or existence checks are needed
+    ///
+    /// # Supported Databases
+    ///
+    /// - **PostgreSQL**: Fully supported. Returns rows with zero columns.
+    /// - **DataFusion**: Supported natively.
+    ///
+    /// # Unsupported Databases
+    ///
+    /// Most other SQL databases require at least one column in the SELECT list:
+    /// - MySQL
+    /// - SQLite
+    /// - SQL Server
+    /// - Oracle
+    /// - DuckDB
+    ///
+    /// For these databases, the unparser falls back to `SELECT 1 FROM table`.
+    ///
+    /// # Default
+    ///
+    /// Returns `false` for maximum compatibility across SQL dialects.
+    ///
+    /// # Example SQL Output
+    ///
+    /// ```sql
+    /// -- When supported (PostgreSQL/DataFusion):
+    /// SELECT FROM users WHERE active = true;
+    ///
+    /// -- Fallback for other databases:
+    /// SELECT 1 FROM users WHERE active = true;
+    /// ```
+    ///
+    /// # References
+    ///
+    /// - PostgreSQL: <https://www.postgresql.org/docs/current/queries-select-lists.html>
+    /// - Note: Empty select lists are not part of the SQL standard (SQL-92/99/2003/2011)
     fn supports_empty_select_list(&self) -> bool {
         false
     }
