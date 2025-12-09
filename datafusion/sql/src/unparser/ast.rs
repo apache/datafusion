@@ -140,8 +140,9 @@ impl Default for QueryBuilder {
 pub struct SelectBuilder {
     distinct: Option<ast::Distinct>,
     top: Option<ast::Top>,
-    projection: Vec<ast::SelectItem>,
-    projection_set: bool,
+    /// Projection items. None means not set, Some(vec![]) means empty projection,
+    /// Some(vec![...]) means non-empty projection.
+    projection: Option<Vec<ast::SelectItem>>,
     into: Option<ast::SelectInto>,
     from: Vec<TableWithJoinsBuilder>,
     lateral_views: Vec<ast::LateralView>,
@@ -168,18 +169,15 @@ impl SelectBuilder {
         self
     }
     pub fn projection(&mut self, value: Vec<ast::SelectItem>) -> &mut Self {
-        self.projection = value;
-        self.projection_set = true;
+        self.projection = Some(value);
         self
     }
     pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
-        let ret = self.projection.clone();
-        self.projection.clear();
-        self.projection_set = false;
-        ret
+        self.projection.take().unwrap_or_default()
     }
+    /// Returns true if projection has been explicitly set via projection().
     pub fn already_projected(&self) -> bool {
-        self.projection_set
+        self.projection.is_some()
     }
     pub fn into(&mut self, value: Option<ast::SelectInto>) -> &mut Self {
         self.into = value;
@@ -293,7 +291,7 @@ impl SelectBuilder {
             distinct: self.distinct.clone(),
             top_before_distinct: false,
             top: self.top.clone(),
-            projection: self.projection.clone(),
+            projection: self.projection.clone().unwrap_or_default(),
             into: self.into.clone(),
             from: self
                 .from
@@ -330,8 +328,7 @@ impl SelectBuilder {
         Self {
             distinct: Default::default(),
             top: Default::default(),
-            projection: Default::default(),
-            projection_set: false,
+            projection: None,
             into: Default::default(),
             from: Default::default(),
             lateral_views: Default::default(),

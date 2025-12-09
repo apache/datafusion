@@ -98,6 +98,16 @@ pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement> {
 }
 
 impl Unparser<'_> {
+    /// Generates appropriate projection expression for empty projection lists.
+    /// Returns an empty vec for dialects supporting empty select lists,
+    /// or a dummy literal `1` for other dialects.
+    fn empty_projection_fallback(&self) -> Vec<Expr> {
+        if self.dialect.supports_empty_select_list() {
+            Vec::new()
+        } else {
+            vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
+        }
+    }
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         let mut plan = normalize_union_schema(plan)?;
         if !self.dialect.supports_qualify() {
@@ -1104,14 +1114,8 @@ impl Unparser<'_> {
                 if !already_projected {
                     if let Some(project_vec) = &table_scan.projection {
                         if project_vec.is_empty() {
-                            if self.dialect.supports_empty_select_list() {
-                                builder = builder.project(Vec::<Expr>::new())?;
-                            } else {
-                                builder = builder.project(vec![Expr::Literal(
-                                    ScalarValue::Int64(Some(1)),
-                                    None,
-                                )])?;
-                            }
+                            builder =
+                                builder.project(self.empty_projection_fallback())?;
                         } else {
                             let project_columns = project_vec
                                 .iter()
