@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::cache::CacheAccessor;
-use crate::cache::cache_unit::DefaultFilesMetadataCache;
+use crate::cache::DefaultFilesMetadataCache;
 use datafusion_common::{Result, Statistics};
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -24,6 +24,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::time::Duration;
+
+use super::list_files_cache::DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT;
 
 /// A cache for [`Statistics`].
 ///
@@ -41,9 +44,19 @@ pub type FileStatisticsCache =
 /// command on the local filesystem. This operation can be expensive,
 /// especially when done over remote object stores.
 ///
-/// See [`crate::runtime_env::RuntimeEnv`] for more details
-pub type ListFilesCache =
-    Arc<dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>>;
+/// See [`crate::runtime_env::RuntimeEnv`] for more details.
+pub trait ListFilesCache:
+    CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>
+{
+    /// Returns the cache's memory limit in bytes.
+    fn cache_limit(&self) -> usize;
+
+    /// Returns the TTL (time-to-live) for cache entries, if configured.
+    fn cache_ttl(&self) -> Option<Duration>;
+
+    /// Updates the cache with a new memory limit in bytes.
+    fn update_cache_limit(&self, limit: usize);
+}
 
 /// Generic file-embedded metadata used with [`FileMetadataCache`].
 ///
@@ -109,7 +122,7 @@ impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
     }
 }
 
-impl Debug for dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta> {
+impl Debug for dyn ListFilesCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
     }
@@ -131,7 +144,7 @@ impl Debug for dyn FileMetadataCache {
 #[derive(Debug)]
 pub struct CacheManager {
     file_statistic_cache: Option<FileStatisticsCache>,
-    list_files_cache: Option<ListFilesCache>,
+    list_files_cache: Option<Arc<dyn ListFilesCache>>,
     file_metadata_cache: Arc<dyn FileMetadataCache>,
 }
 
@@ -166,8 +179,20 @@ impl CacheManager {
     }
 
     /// Get the cache for storing the result of listing [`ObjectMeta`]s under the same path.
-    pub fn get_list_files_cache(&self) -> Option<ListFilesCache> {
+    pub fn get_list_files_cache(&self) -> Option<Arc<dyn ListFilesCache>> {
         self.list_files_cache.clone()
+    }
+
+    /// Get the memory limit of the list files cache.
+    pub fn get_list_files_cache_limit(&self) -> usize {
+        self.list_files_cache
+            .as_ref()
+            .map_or(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, |c| c.cache_limit())
+    }
+
+    /// Get the TTL (time-to-live) of the list files cache.
+    pub fn get_list_files_cache_ttl(&self) -> Option<Duration> {
+        self.list_files_cache.as_ref().and_then(|c| c.cache_ttl())
     }
 
     /// Get the file embedded metadata cache.
@@ -185,17 +210,24 @@ pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 
 #[derive(Clone)]
 pub struct CacheManagerConfig {
-    /// Enable cache of files statistics when listing files.
-    /// Avoid get same file statistics repeatedly in same datafusion session.
-    /// Default is disable. Fow now only supports Parquet files.
+    /// Enable caching of file statistics when listing files.
+    /// Enabling the cache avoids repeatedly reading file statistics in a DataFusion session.
+    /// Default is disabled. Currently only Parquet files are supported.
     pub table_files_statistics_cache: Option<FileStatisticsCache>,
-    /// Enable cache of file metadata when listing files.
-    /// This setting avoids listing file meta of the same path repeatedly
-    /// in same session, which may be expensive in certain situations (e.g. remote object storage).
+    /// Enable caching of file metadata when listing files.
+    /// Enabling the cache avoids repeat list and object metadata fetch operations, which may be
+    /// expensive in certain situations (e.g. remote object storage), for objects under paths that
+    /// are cached.
     /// Note that if this option is enabled, DataFusion will not see any updates to the underlying
-    /// location.  
-    /// Default is disable.
-    pub list_files_cache: Option<ListFilesCache>,
+    /// storage for at least `list_files_cache_ttl` duration.
+    /// Default is disabled.
+    pub list_files_cache: Option<Arc<dyn ListFilesCache>>,
+    /// Limit of the `list_files_cache`, in bytes. Default: 1MiB.
+    pub list_files_cache_limit: usize,
+    /// The duration the list files cache will consider an entry valid after insertion. Note that
+    /// changes to the underlying storage system, such as adding or removing data, will not be
+    /// visible until an entry expires. Default: None (infinite).
+    pub list_files_cache_ttl: Option<Duration>,
     /// Cache of file-embedded metadata, used to avoid reading it multiple times when processing a
     /// data file (e.g., Parquet footer and page metadata).
     /// If not provided, the [`CacheManager`] will create a [`DefaultFilesMetadataCache`].
@@ -209,6 +241,8 @@ impl Default for CacheManagerConfig {
         Self {
             table_files_statistics_cache: Default::default(),
             list_files_cache: Default::default(),
+            list_files_cache_limit: DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
+            list_files_cache_ttl: None,
             file_metadata_cache: Default::default(),
             metadata_cache_limit: DEFAULT_METADATA_CACHE_LIMIT,
         }
@@ -228,10 +262,29 @@ impl CacheManagerConfig {
     }
 
     /// Set the cache for listing files.
-    ///     
+    ///
     /// Default is `None` (disabled).
-    pub fn with_list_files_cache(mut self, cache: Option<ListFilesCache>) -> Self {
+    pub fn with_list_files_cache(
+        mut self,
+        cache: Option<Arc<dyn ListFilesCache>>,
+    ) -> Self {
         self.list_files_cache = cache;
+        self
+    }
+
+    /// Sets the limit of the list files cache, in bytes.
+    ///
+    /// Default: 1MiB (1,048,576 bytes).
+    pub fn with_list_files_cache_limit(mut self, limit: usize) -> Self {
+        self.list_files_cache_limit = limit;
+        self
+    }
+
+    /// Sets the TTL (time-to-live) for entries in the list files cache.
+    ///
+    /// Default: None (infinite).
+    pub fn with_list_files_cache_ttl(mut self, ttl: Duration) -> Self {
+        self.list_files_cache_ttl = Some(ttl);
         self
     }
 

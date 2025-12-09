@@ -482,6 +482,11 @@ impl SessionContext {
         self.state.write().append_optimizer_rule(optimizer_rule);
     }
 
+    /// Removes an optimizer rule by name, returning `true` if it existed.
+    pub fn remove_optimizer_rule(&self, name: &str) -> bool {
+        self.state.write().remove_optimizer_rule(name)
+    }
+
     /// Adds an analyzer rule to the end of the existing rules.
     ///
     /// See [`SessionState`] for more control of when the rule is applied.
@@ -2608,5 +2613,50 @@ mod tests {
                 _ => Ok(None),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn remove_optimizer_rule() -> Result<()> {
+        let get_optimizer_rules = |ctx: &SessionContext| {
+            ctx.state()
+                .optimizer()
+                .rules
+                .iter()
+                .map(|r| r.name().to_owned())
+                .collect::<HashSet<_>>()
+        };
+
+        let ctx = SessionContext::new();
+        assert!(get_optimizer_rules(&ctx).contains("simplify_expressions"));
+
+        // default plan
+        let plan = ctx
+            .sql("select 1 + 1")
+            .await?
+            .into_optimized_plan()?
+            .to_string();
+        assert_snapshot!(plan, @r"
+        Projection: Int64(2) AS Int64(1) + Int64(1)
+          EmptyRelation: rows=1
+        ");
+
+        assert!(ctx.remove_optimizer_rule("simplify_expressions"));
+        assert!(!get_optimizer_rules(&ctx).contains("simplify_expressions"));
+
+        // plan without the simplify_expressions rule
+        let plan = ctx
+            .sql("select 1 + 1")
+            .await?
+            .into_optimized_plan()?
+            .to_string();
+        assert_snapshot!(plan, @r"
+        Projection: Int64(1) + Int64(1)
+          EmptyRelation: rows=1
+        ");
+
+        // attempting to remove a non-existing rule returns false
+        assert!(!ctx.remove_optimizer_rule("simplify_expressions"));
+
+        Ok(())
     }
 }

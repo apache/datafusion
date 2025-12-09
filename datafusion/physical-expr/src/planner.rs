@@ -19,22 +19,22 @@ use std::sync::Arc;
 
 use crate::ScalarFunctionExpr;
 use crate::{
-    expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
+    expressions::{self, Column, Literal, binary, like, similar_to},
 };
 
 use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
+    DFSchema, Result, ScalarValue, ToDFSchema, exec_err, not_impl_err, plan_err,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
-use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
+use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::{
-    binary_expr, lit, Between, BinaryExpr, Expr, Like, Operator, TryCast,
+    Between, BinaryExpr, Expr, Like, Operator, TryCast, binary_expr, lit,
 };
 
 /// [PhysicalExpr] evaluate DataFusion expressions such as `A + 1`, or `CAST(c1

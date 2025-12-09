@@ -40,6 +40,23 @@ directly on the `Field`. For example:
 + let field = Arc::clone(df_schema.field("my_column"));
 ```
 
+### ListingTableProvider now caches `LIST` commands
+
+In prior versions, `ListingTableProvider` would issue `LIST` commands to
+the underlying object store each time it needed to list files for a query.
+To improve performance, `ListingTableProvider` now caches the results of
+`LIST` commands for the lifetime of the `ListingTableProvider` instance.
+
+Note that by default the cache has no expiration time, so if files are added or removed
+from the underlying object store, the `ListingTableProvider` will not see
+those changes until the `ListingTableProvider` instance is dropped and recreated.
+
+You will be able to configure the maximum cache size and cache expiration time via a configuration option:
+
+See <https://github.com/apache/datafusion/issues/19056> for more details.
+
+Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
+
 ### Removal of `pyarrow` feature
 
 The `pyarrow` feature flag has been removed. This feature has been migrated to
@@ -352,103 +369,16 @@ let config = FileScanConfigBuilder::new(url, source)
     .build();
 ```
 
-**Handling projections in `FileSource`:**
+### `SchemaAdapterFactory` Fully Removed from Parquet
 
-### `PhysicalOptimizerRule::optimize` deprecated in favor of `optimize_plan`
+Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaadapterfactory-and-schemaadapter), `SchemaAdapterFactory` has been fully removed from Parquet scanning. This applies to both:
 
-The `PhysicalOptimizerRule` trait has been updated to provide optimizer rules with access to broader session context. A new method `optimize_plan` has been added that accepts an `OptimizerContext` parameter, and the existing `optimize` method has been deprecated.
+- **Predicate pushdown / row filtering** (deprecated in 49.0.0)
+- **Projections** (newly removed in 52.0.0)
 
-**Who is affected:**
+If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
 
-- Users who have implemented custom `PhysicalOptimizerRule` implementations
-
-**Breaking changes:**
-
-1. **New `optimize_plan` method**: This is the preferred method for implementing optimization rules. It provides access to the full `SessionConfig` through `OptimizerContext`, rather than just `ConfigOptions`.
-
-2. **`optimize` method deprecated**: The old `optimize` method that takes `&ConfigOptions` is now deprecated and will be removed in DataFusion 58.0.0.
-
-**Migration guide:**
-
-If you have a custom `PhysicalOptimizerRule` implementation, update it to implement `optimize_plan` instead of `optimize`:
-
-**Before:**
-
-```rust
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
-use datafusion_physical_plan::ExecutionPlan;
-use std::sync::Arc;
-
-#[derive(Debug)]
-struct MyOptimizerRule;
-
-#[allow(deprecated)]
-impl PhysicalOptimizerRule for MyOptimizerRule {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Use config.optimizer, config.execution, etc.
-        // ... optimization logic ...
-        Ok(plan)
-    }
-
-    fn name(&self) -> &str {
-        "my_optimizer_rule"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-```
-
-**After:**
-
-```rust
-use datafusion::physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
-use datafusion_common::Result;
-use datafusion_physical_plan::ExecutionPlan;
-use std::sync::Arc;
-
-#[derive(Debug)]
-struct MyOptimizerRule;
-
-impl PhysicalOptimizerRule for MyOptimizerRule {
-    fn optimize_plan(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Access ConfigOptions through session_config
-        let _config = context.session_config().options();
-        // Or access extensions through session_config
-        let _extensions = context.session_config().extensions();
-        // ... optimization logic ...
-        Ok(plan)
-    }
-
-    fn name(&self) -> &str {
-        "my_optimizer_rule"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-```
-
-**What is `OptimizerContext`?**
-
-`OptimizerContext` is a new struct that provides context during physical plan optimization, similar to how `TaskContext` provides context during execution. It wraps `SessionConfig`, giving optimizer rules access to:
-
-- Configuration options via `context.session_config().options()`
-- Session extensions via `context.session_config().extensions()`
-
-This enables optimizer rules to access custom extensions registered with the session, which was not possible with the old `&ConfigOptions` parameter.
+See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
 
 ## DataFusion `51.0.0`
 

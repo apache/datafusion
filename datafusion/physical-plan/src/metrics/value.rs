@@ -20,7 +20,7 @@
 use super::CustomMetricValue;
 use chrono::{DateTime, Utc};
 use datafusion_common::instant::Instant;
-use datafusion_execution::memory_pool::{
+use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size,
 };
 use parking_lot::Mutex;
@@ -1034,7 +1034,7 @@ mod tests {
     use std::any::Any;
 
     use chrono::TimeZone;
-    use datafusion_execution::memory_pool::units::MB;
+    use datafusion_common::units::MB;
 
     use super::*;
 
