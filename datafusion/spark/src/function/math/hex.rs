@@ -24,6 +24,7 @@ use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
     datatypes::Int32Type,
 };
+use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::types::{
     logical_binary, logical_int64, logical_string, NativeType,
@@ -56,7 +57,7 @@ impl SparkHex {
     pub fn new() -> Self {
         let int64 = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_int64()),
-            vec![TypeSignatureClass::Integer, TypeSignatureClass::Numeric],
+            vec![TypeSignatureClass::Numeric],
             NativeType::Int64,
         );
         let string = Coercion::new_implicit(
@@ -67,7 +68,7 @@ impl SparkHex {
         let binary = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_binary()),
             vec![TypeSignatureClass::Binary],
-            NativeType::String,
+            NativeType::Binary,
         );
 
         let variants = vec![
@@ -75,8 +76,10 @@ impl SparkHex {
             TypeSignature::Coercible(vec![int64]),
             // accepts string types (Utf8, Utf8View, LargeUtf8)
             TypeSignature::Coercible(vec![string]),
-            // accepts binary types (Binary, LargeBinary, FixedSizeBinary)
+            // accepts binary types (Binary, FixedSizeBinary)
             TypeSignature::Coercible(vec![binary]),
+            // accepts large binary types (LargeBinary)
+            TypeSignature::Exact(vec![DataType::LargeBinary]),
         ];
 
         Self {
@@ -217,6 +220,16 @@ pub fn compute_hex(
 
                 Ok(ColumnarValue::Array(Arc::new(hexed)))
             }
+            DataType::LargeBinary => {
+                let array = as_large_binary_array(array)?;
+
+                let hexed: StringArray = array
+                    .iter()
+                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
+                    .collect::<Result<_, _>>()?;
+
+                Ok(ColumnarValue::Array(Arc::new(hexed)))
+            }
             DataType::FixedSizeBinary(_) => {
                 let array = as_fixed_size_binary_array(array)?;
 
@@ -240,6 +253,10 @@ pub fn compute_hex(
                         .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                         .collect::<Result<_, _>>()?,
                     DataType::Binary => as_binary_array(dict.values())?
+                        .iter()
+                        .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
+                        .collect::<Result<_, _>>()?,
+                    DataType::LargeBinary => as_large_binary_array(dict.values())?
                         .iter()
                         .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
                         .collect::<Result<_, _>>()?,
