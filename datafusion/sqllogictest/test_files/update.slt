@@ -33,7 +33,10 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: CAST(Int64(1) AS Int32) AS a, CAST(Int64(2) AS Utf8View) AS b, Float64(3) AS c, CAST(NULL AS Int32) AS d
 03)----TableScan: t1
-physical_plan_error Error during planning: Table 't1' does not support UPDATE operations
+physical_plan_error
+01)UPDATE operation on table 't1'
+02)caused by
+03)This feature is not implemented: UPDATE not supported for Base table
 
 query TT
 explain update t1 set a=c+1, b=a, c=c+1.0, d=b;
@@ -42,7 +45,10 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: CAST(t1.c + CAST(Int64(1) AS Float64) AS Int32) AS a, CAST(t1.a AS Utf8View) AS b, t1.c + Float64(1) AS c, CAST(t1.b AS Int32) AS d
 03)----TableScan: t1
-physical_plan_error Error during planning: Table 't1' does not support UPDATE operations
+physical_plan_error
+01)UPDATE operation on table 't1'
+02)caused by
+03)This feature is not implemented: UPDATE not supported for Base table
 
 statement ok
 create table t2(a int, b varchar, c double, d int);
@@ -73,7 +79,10 @@ logical_plan
 04)------Cross Join: 
 05)--------TableScan: t1
 06)--------TableScan: t2
-physical_plan_error Error during planning: Table 't1' does not support UPDATE operations
+physical_plan_error
+01)UPDATE operation on table 't1'
+02)caused by
+03)This feature is not implemented: UPDATE not supported for Base table
 
 statement ok
 create table t3(a int, b varchar, c double, d int);
@@ -94,4 +103,7 @@ logical_plan
 05)--------SubqueryAlias: t
 06)----------TableScan: t1
 07)--------TableScan: t2
-physical_plan_error Error during planning: Table 't1' does not support UPDATE operations
+physical_plan_error
+01)UPDATE operation on table 't1'
+02)caused by
+03)This feature is not implemented: UPDATE not supported for Base table

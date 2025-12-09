@@ -34,7 +34,10 @@ explain delete from t1;
 logical_plan
 01)Dml: op=[Delete] table=[t1]
 02)--TableScan: t1
-physical_plan_error Error during planning: Table 't1' does not support DELETE operations
+physical_plan_error
+01)DELETE operation on table 't1'
+02)caused by
+03)This feature is not implemented: DELETE not supported for Base table
 
 
 # Filtered by existing columns
@@ -45,7 +48,10 @@ logical_plan
 01)Dml: op=[Delete] table=[t1]
 02)--Filter: CAST(t1.a AS Int64) = Int64(1) AND t1.b = CAST(Int64(2) AS Utf8View) AND t1.c > CAST(Int64(3) AS Float64) AND CAST(t1.d AS Int64) != Int64(4)
 03)----TableScan: t1
-physical_plan_error Error during planning: Table 't1' does not support DELETE operations
+physical_plan_error
+01)DELETE operation on table 't1'
+02)caused by
+03)This feature is not implemented: DELETE not supported for Base table
 
 
 # Filtered by existing columns, using qualified and unqualified names
@@ -56,7 +62,10 @@ logical_plan
 01)Dml: op=[Delete] table=[t1]
 02)--Filter: CAST(t1.a AS Int64) = Int64(1) AND t1.b = CAST(Int64(2) AS Utf8View) AND t1.c > CAST(Int64(3) AS Float64) AND CAST(t1.d AS Int64) != Int64(4)
 03)----TableScan: t1
-physical_plan_error Error during planning: Table 't1' does not support DELETE operations
+physical_plan_error
+01)DELETE operation on table 't1'
+02)caused by
+03)This feature is not implemented: DELETE not supported for Base table
 
 
 # Filtered by a mix of columns and literal predicates
@@ -67,7 +76,10 @@ logical_plan
 01)Dml: op=[Delete] table=[t1]
 02)--Filter: CAST(t1.a AS Int64) = Int64(1) AND Int64(1) = Int64(1) AND Boolean(true)
 03)----TableScan: t1
-physical_plan_error Error during planning: Table 't1' does not support DELETE operations
+physical_plan_error
+01)DELETE operation on table 't1'
+02)caused by
+03)This feature is not implemented: DELETE not supported for Base table
 
 
 # Deleting by columns that do not exist returns an error
