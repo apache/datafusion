@@ -25,7 +25,7 @@ use std::task::Poll;
 
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::shared_bounds::{
-    PartitionBuildDataReport, SharedBuildAccumulator,
+    PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
     equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
@@ -497,18 +497,31 @@ impl HashJoinStream {
                 PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
             };
 
+            // Determine pushdown strategy based on availability of InList values
+            let pushdown = left_data.membership().clone();
+
+            // Construct the appropriate build data enum variant based on partition mode
             let build_data = match self.mode {
-                PartitionMode::Partitioned => PartitionBuildDataReport::Partitioned {
+                PartitionMode::Partitioned => PartitionBuildData::Partitioned {
                     partition_id: left_side_partition_id,
-                    bounds: left_data.bounds.clone(),
+                    pushdown,
+                    bounds: left_data
+                        .bounds
+                        .clone()
+                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
                 },
-                PartitionMode::CollectLeft => PartitionBuildDataReport::CollectLeft {
-                    bounds: left_data.bounds.clone(),
+                PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
+                    pushdown,
+                    bounds: left_data
+                        .bounds
+                        .clone()
+                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
                 },
                 PartitionMode::Auto => unreachable!(
                     "PartitionMode::Auto should not be present at execution time"
                 ),
             };
+
             self.build_waiter = Some(OnceFut::new(async move {
                 build_accumulator.report_build_data(build_data).await
             }));
