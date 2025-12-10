@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result, TableReference};
+use datafusion_common::{Result, TableReference, plan_err};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};

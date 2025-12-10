@@ -27,18 +27,18 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 use crate::execution_plan::{
-    boundedness_from_children, check_default_invariants, emission_type_from_children,
-    InvariantLevel,
+    InvariantLevel, boundedness_from_children, check_default_invariants,
+    emission_type_from_children,
 };
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::metrics::BaselineMetrics;
-use crate::projection::{make_with_child, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -46,10 +46,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_or_internal_err, exec_err, internal_datafusion_err, Result,
+    Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{calculate_union, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -267,7 +267,12 @@ impl ExecutionPlan for UnionExec {
         mut partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -498,7 +503,12 @@ impl ExecutionPlan for InterleaveExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -591,7 +601,8 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
             let base_field = first_schema.field(i).clone();
 
             // Coerce metadata and nullability across all inputs
-            let merged_field = inputs
+
+            inputs
                 .iter()
                 .enumerate()
                 .map(|(input_idx, input)| {
@@ -613,9 +624,7 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
                 // We can unwrap this because if inputs was empty, this would've already panic'ed when we
                 // indexed into inputs[0].
                 .unwrap()
-                .with_name(base_field.name());
-
-            merged_field
+                .with_name(base_field.name())
         })
         .collect::<Vec<_>>();
 
@@ -973,20 +982,24 @@ mod tests {
     fn test_union_empty_inputs() {
         // Test that UnionExec::try_new fails with empty inputs
         let result = UnionExec::try_new(vec![]);
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("UnionExec requires at least one input"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("UnionExec requires at least one input")
+        );
     }
 
     #[test]
     fn test_union_schema_empty_inputs() {
         // Test that union_schema fails with empty inputs
         let result = union_schema(&[]);
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot create union schema from empty inputs"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot create union schema from empty inputs")
+        );
     }
 
     #[test]

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use crate::stack::StackGuard;
-use datafusion_common::{not_impl_err, Constraints, DFSchema, Result};
+use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
 use datafusion_expr::expr::{Sort, WildcardOptions};
 
 use datafusion_expr::select_expr::SelectExpr;

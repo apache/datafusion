@@ -25,8 +25,8 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{col, lit, ExprFunctionExt, Limit, LogicalPlanBuilder};
 use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
+use datafusion_expr::{ExprFunctionExt, Limit, LogicalPlanBuilder, col, lit};
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
@@ -214,7 +214,7 @@ mod tests {
     use crate::OptimizerContext;
     use datafusion_common::Result;
     use datafusion_expr::{
-        col, logical_plan::builder::LogicalPlanBuilder, table_scan, Expr,
+        Expr, col, logical_plan::builder::LogicalPlanBuilder, table_scan,
     };
     use datafusion_functions_aggregate::sum::sum;
 

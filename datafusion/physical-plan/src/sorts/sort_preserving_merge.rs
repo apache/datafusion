@@ -23,16 +23,16 @@ use std::sync::Arc;
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::projection::{make_with_child, update_ordering, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
-use datafusion_common::{assert_eq_or_internal_err, internal_err, Result};
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use crate::execution_plan::{EvaluationType, SchedulingType};
@@ -304,7 +304,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
             1 => match self.fetch {
                 Some(fetch) => {
                     let stream = self.input.execute(0, context)?;
-                    debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}");
+                    debug!(
+                        "Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}"
+                    );
                     Ok(Box::pin(LimitStream::new(
                         stream,
                         0,
@@ -314,7 +316,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 }
                 None => {
                     let stream = self.input.execute(0, context);
-                    debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch");
+                    debug!(
+                        "Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch"
+                    );
                     stream
                 }
             },
@@ -327,7 +331,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     })
                     .collect::<Result<_>>()?;
 
-                debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
+                debug!(
+                    "Done setting up sender-receiver for SortPreservingMergeExec::execute"
+                );
 
                 let result = StreamingMergeBuilder::new()
                     .with_streams(receivers)
@@ -340,7 +346,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
                     .build()?;
 
-                debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
+                debug!(
+                    "Got stream result from SortPreservingMergeStream::new_from_receivers"
+                );
 
                 Ok(result)
             }
@@ -396,7 +404,7 @@ mod tests {
     use std::fmt::Formatter;
     use std::pin::Pin;
     use std::sync::Mutex;
-    use std::task::{ready, Context, Poll, Waker};
+    use std::task::{Context, Poll, Waker, ready};
     use std::time::Duration;
 
     use super::*;
@@ -408,8 +416,8 @@ mod tests {
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
 
@@ -422,11 +430,11 @@ mod tests {
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_batches_eq, exec_err};
     use datafusion_common_runtime::SpawnedTask;
+    use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_execution::RecordBatchStream;
-    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 

@@ -20,14 +20,14 @@
 use std::vec;
 
 use arrow::datatypes::{
-    DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
+    DECIMAL_DEFAULT_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType,
 };
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
     Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
+    assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
@@ -35,7 +35,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
-    col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
+    ColumnUnnestList, Expr, ExprSchemable, LogicalPlan, col, expr_vec_fmt,
 };
 
 use indexmap::IndexMap;
@@ -124,7 +124,9 @@ impl CheckColumnsSatisfyExprsPurpose {
     }
 
     fn diagnostic_message(&self, expr: &Expr) -> String {
-        format!("'{expr}' must appear in GROUP BY clause because it's not an aggregate expression")
+        format!(
+            "'{expr}' must appear in GROUP BY clause because it's not an aggregate expression"
+        )
     }
 }
 
@@ -223,7 +225,8 @@ pub(crate) fn resolve_positions_to_exprs(
         }
         Expr::Literal(ScalarValue::Int64(Some(position)), _) => plan_err!(
             "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
-            position, select_exprs.len()
+            position,
+            select_exprs.len()
         ),
         _ => Ok(expr),
     }
@@ -292,7 +295,7 @@ pub(crate) fn make_decimal_type(
         (Some(p), Some(s)) => (p as u8, s as i8),
         (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
-            return plan_err!("Cannot specify only scale for decimal data type")
+            return plan_err!("Cannot specify only scale for decimal data type");
         }
         (None, None) => (DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
     };
@@ -675,7 +678,7 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
-        col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,
+        ColumnUnnestList, EmptyRelation, LogicalPlan, col, lit, unnest,
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
@@ -747,13 +750,15 @@ mod tests {
         // Only the bottom most unnest exprs are transformed
         assert_eq!(
             transformed_exprs,
-            vec![col("__unnest_placeholder(3d_col,depth=2)")
-                .alias("UNNEST(UNNEST(3d_col))")
-                .add(
-                    col("__unnest_placeholder(3d_col,depth=2)")
-                        .alias("UNNEST(UNNEST(3d_col))")
-                )
-                .add(col("i64_col"))]
+            vec![
+                col("__unnest_placeholder(3d_col,depth=2)")
+                    .alias("UNNEST(UNNEST(3d_col))")
+                    .add(
+                        col("__unnest_placeholder(3d_col,depth=2)")
+                            .alias("UNNEST(UNNEST(3d_col))")
+                    )
+                    .add(col("i64_col"))
+            ]
         );
         column_unnests_eq(
             vec![
@@ -789,7 +794,9 @@ mod tests {
             ]
         );
         column_unnests_eq(
-            vec!["__unnest_placeholder(3d_col)=>[__unnest_placeholder(3d_col,depth=2)|depth=2, __unnest_placeholder(3d_col,depth=1)|depth=1]"],
+            vec![
+                "__unnest_placeholder(3d_col)=>[__unnest_placeholder(3d_col,depth=2)|depth=2, __unnest_placeholder(3d_col,depth=1)|depth=1]",
+            ],
             &unnest_placeholder_columns,
         );
         // Still reference struct_col in original schema but with alias,
@@ -881,9 +888,11 @@ mod tests {
         // Only transform the unnest children
         assert_eq!(
             transformed_exprs,
-            vec![col("__unnest_placeholder(array_col,depth=1)")
-                .alias("UNNEST(array_col)")
-                .add(lit(1i64))]
+            vec![
+                col("__unnest_placeholder(array_col,depth=1)")
+                    .alias("UNNEST(array_col)")
+                    .add(lit(1i64))
+            ]
         );
 
         // Keep appending to the current vector

@@ -28,29 +28,29 @@ use std::io::BufReader;
 use std::mem::size_of;
 use std::ops::Range;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
-use crate::joins::utils::{compare_join_arrays, JoinFilter};
+use crate::joins::utils::{JoinFilter, compare_join_arrays};
 use crate::metrics::RecordOutput;
 use crate::spill::spill_manager::SpillManager;
 use crate::{PhysicalExpr, RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::{types::UInt64Type, *};
 use arrow::compute::{
-    self, concat_batches, filter_record_batch, is_not_null, take, BatchCoalescer,
-    SortOptions,
+    self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, is_not_null,
+    take,
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::ipc::reader::StreamReader;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, DataFusionError, HashSet, JoinSide, JoinType,
-    NullEquality, Result,
+    DataFusionError, HashSet, JoinSide, JoinType, NullEquality, Result, exec_err,
+    internal_err, not_impl_err,
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::MemoryReservation;

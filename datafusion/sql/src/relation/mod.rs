@@ -21,13 +21,13 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
+    DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err, plan_err,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlannerContext, RelationPlanning,
 };
-use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, expr::Unnest};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
@@ -360,7 +360,8 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
     // 2. RANK / ROW_NUMBER ... => Handled by a `WindowAggr` and its requirements.
     // 3. LIMIT => Handled by a `Sort`, so we need to search for it.
     let mut has_limit = false;
-    let new_plan = plan.transform_down(|c| {
+
+    plan.transform_down(|c| {
         if let LogicalPlan::Limit(_) = c {
             has_limit = true;
             return Ok(Transformed::no(c));
@@ -375,6 +376,5 @@ fn optimize_subquery_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>>
             }
             _ => Ok(Transformed::no(c)),
         }
-    });
-    new_plan
+    })
 }

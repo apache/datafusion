@@ -56,11 +56,11 @@ pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
+use datafusion_common::{ColumnStatistics, Result, exec_datafusion_err};
 use datafusion_common::{ScalarValue, Statistics};
 use futures::{Stream, StreamExt};
-use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+use object_store::{ObjectMeta, path::Path};
 pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
 #[expect(deprecated)]
@@ -578,12 +578,13 @@ mod tests {
 
         // as per documentation, when `ignore_subdirectory` is true, we should ignore files that aren't
         // a direct child of the `url`
-        assert!(url
-            .contains(
+        assert!(
+            url.contains(
                 &Path::parse("/var/data/mytable/mysubfolder/data.parquet").unwrap(),
                 true
             )
-            .not());
+            .not()
+        );
 
         // when we set `ignore_subdirectory` to false, we should not ignore the file
         assert!(url.contains(

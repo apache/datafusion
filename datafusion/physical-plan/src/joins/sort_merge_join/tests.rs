@@ -27,39 +27,39 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    builder::{BooleanBuilder, UInt64Builder},
     BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
     Int32Array, RecordBatch, UInt64Array,
+    builder::{BooleanBuilder, UInt64Builder},
 };
-use arrow::compute::{filter_record_batch, BatchCoalescer, SortOptions};
+use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::JoinType::*;
 use datafusion_common::{
-    assert_batches_eq, assert_contains, JoinType, NullEquality, Result,
+    JoinSide,
+    test_util::{batches_to_sort_string, batches_to_string},
 };
 use datafusion_common::{
-    test_util::{batches_to_sort_string, batches_to_string},
-    JoinSide,
+    JoinType, NullEquality, Result, assert_batches_eq, assert_contains,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use insta::{allow_duplicates, assert_snapshot};
 
 use crate::{
     expressions::Column,
-    joins::sort_merge_join::stream::{get_corrected_filter_mask, JoinedRecordBatches},
+    joins::sort_merge_join::stream::{JoinedRecordBatches, get_corrected_filter_mask},
 };
 
-use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::joins::SortMergeJoinExec;
+use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::test::TestMemoryExec;
 use crate::test::{build_table_i32, build_table_i32_two_cols};
-use crate::{common, ExecutionPlan};
+use crate::{ExecutionPlan, common};
 
 fn build_table(
     a: (&str, &Vec<i32>),

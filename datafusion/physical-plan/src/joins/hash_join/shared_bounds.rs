@@ -21,13 +21,13 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::ExecutionPlan;
+use crate::ExecutionPlanProperties;
+use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{HashExpr, HashTableLookupExpr};
 use crate::joins::utils::JoinHashMapType;
-use crate::joins::PartitionMode;
-use crate::ExecutionPlan;
-use crate::ExecutionPlanProperties;
 
 use ahash::RandomState;
 use arrow::array::ArrayRef;
@@ -37,7 +37,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    lit, BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr,
+    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
@@ -322,17 +322,24 @@ impl SharedBuildAccumulator {
                 left_child.output_partitioning().partition_count()
             }
             // Default value, will be resolved during optimization (does not exist once `execute()` is called; will be replaced by one of the other two)
-            PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
+            PartitionMode::Auto => unreachable!(
+                "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
+            ),
         };
 
         let mode_data = match partition_mode {
             PartitionMode::Partitioned => AccumulatedBuildData::Partitioned {
-                partitions: vec![None; left_child.output_partitioning().partition_count()],
+                partitions: vec![
+                    None;
+                    left_child.output_partitioning().partition_count()
+                ],
             },
-            PartitionMode::CollectLeft => AccumulatedBuildData::CollectLeft {
-                data: None,
-            },
-            PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
+            PartitionMode::CollectLeft => {
+                AccumulatedBuildData::CollectLeft { data: None }
+            }
+            PartitionMode::Auto => unreachable!(
+                "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
+            ),
         };
 
         Self {

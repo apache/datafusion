@@ -25,7 +25,7 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Null},
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

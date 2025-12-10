@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::cache::CacheAccessor;
-use crate::cache::DefaultFilesMetadataCache;
+use crate::cache::cache_unit::DefaultFilesMetadataCache;
+use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -35,8 +36,27 @@ use super::list_files_cache::DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT;
 /// session lifetime.
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
-pub type FileStatisticsCache =
-    Arc<dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>>;
+pub trait FileStatisticsCache:
+    CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>
+{
+    /// Retrieves the information about the entries currently cached.
+    fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry>;
+}
+
+/// Represents information about a cached statistics entry.
+/// This is used to expose the statistics cache contents to outside modules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStatisticsCacheEntry {
+    pub object_meta: ObjectMeta,
+    /// Number of table rows.
+    pub num_rows: Precision<usize>,
+    /// Number of table columns.
+    pub num_columns: usize,
+    /// Total table size, in bytes.
+    pub table_size_bytes: Precision<usize>,
+    /// Size of the statistics entry, in bytes.
+    pub statistics_size_bytes: usize,
+}
 
 /// Cache for storing the [`ObjectMeta`]s that result from listing a path
 ///
@@ -116,7 +136,7 @@ pub struct FileMetadataCacheEntry {
     pub extra: HashMap<String, String>,
 }
 
-impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
+impl Debug for dyn FileStatisticsCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
     }
@@ -143,7 +163,7 @@ impl Debug for dyn FileMetadataCache {
 /// See [`CacheManagerConfig`] for configuration options.
 #[derive(Debug)]
 pub struct CacheManager {
-    file_statistic_cache: Option<FileStatisticsCache>,
+    file_statistic_cache: Option<Arc<dyn FileStatisticsCache>>,
     list_files_cache: Option<Arc<dyn ListFilesCache>>,
     file_metadata_cache: Arc<dyn FileMetadataCache>,
 }
@@ -174,7 +194,7 @@ impl CacheManager {
     }
 
     /// Get the cache of listing files statistics.
-    pub fn get_file_statistic_cache(&self) -> Option<FileStatisticsCache> {
+    pub fn get_file_statistic_cache(&self) -> Option<Arc<dyn FileStatisticsCache>> {
         self.file_statistic_cache.clone()
     }
 
@@ -213,7 +233,7 @@ pub struct CacheManagerConfig {
     /// Enable caching of file statistics when listing files.
     /// Enabling the cache avoids repeatedly reading file statistics in a DataFusion session.
     /// Default is disabled. Currently only Parquet files are supported.
-    pub table_files_statistics_cache: Option<FileStatisticsCache>,
+    pub table_files_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
     /// Enable caching of file metadata when listing files.
     /// Enabling the cache avoids repeat list and object metadata fetch operations, which may be
     /// expensive in certain situations (e.g. remote object storage), for objects under paths that
@@ -255,7 +275,7 @@ impl CacheManagerConfig {
     /// Default is `None` (disabled).
     pub fn with_files_statistics_cache(
         mut self,
-        cache: Option<FileStatisticsCache>,
+        cache: Option<Arc<dyn FileStatisticsCache>>,
     ) -> Self {
         self.table_files_statistics_cache = cache;
         self
