@@ -24,10 +24,10 @@ use arrow::array::{
     new_empty_array,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, exec_err, utils::take_function_args};
+use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -99,8 +99,15 @@ impl ScalarUDFImpl for ArrayRemove {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        Ok(Arc::clone(&args.arg_fields[0]))
     }
 
     fn invoke_with_args(
@@ -187,8 +194,15 @@ impl ScalarUDFImpl for ArrayRemoveN {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        Ok(Arc::clone(&args.arg_fields[0]))
     }
 
     fn invoke_with_args(
@@ -264,8 +278,15 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        Ok(Arc::clone(&args.arg_fields[0]))
     }
 
     fn invoke_with_args(
@@ -415,4 +436,93 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         values,
         list_array.nulls().cloned(),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::remove::{ArrayRemove, ArrayRemoveAll, ArrayRemoveN};
+    use arrow::datatypes::{DataType, Field, FieldRef};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_array_remove_nullability() {
+        for nullability in [true, false] {
+            for item_nullability in [true, false] {
+                let input_field = Arc::new(Field::new(
+                    "num",
+                    DataType::new_list(DataType::Int32, item_nullability),
+                    nullability,
+                ));
+                let args_fields = vec![
+                    Arc::clone(&input_field),
+                    Arc::new(Field::new("a", DataType::Int32, false)),
+                ];
+                let scalar_args = vec![None, Some(&ScalarValue::Int32(Some(1)))];
+
+                let result = ArrayRemove::new()
+                    .return_field_from_args(ReturnFieldArgs {
+                        arg_fields: &args_fields,
+                        scalar_arguments: &scalar_args,
+                    })
+                    .unwrap();
+
+                assert_eq!(result, input_field);
+            }
+        }
+    }
+
+    #[test]
+    fn test_array_remove_n_nullability() {
+        for nullability in [true, false] {
+            for item_nullability in [true, false] {
+                let input_field = Arc::new(Field::new(
+                    "num",
+                    DataType::new_list(DataType::Int32, item_nullability),
+                    nullability,
+                ));
+                let args_fields = vec![
+                    Arc::clone(&input_field),
+                    Arc::new(Field::new("a", DataType::Int32, false)),
+                    Arc::new(Field::new("b", DataType::Int32, false)),
+                ];
+                let scalar_args = vec![
+                    None,
+                    Some(&ScalarValue::Int32(Some(1))),
+                    Some(&ScalarValue::Int32(Some(1))),
+                ];
+
+                let result = ArrayRemoveN::new()
+                    .return_field_from_args(ReturnFieldArgs {
+                        arg_fields: &args_fields,
+                        scalar_arguments: &scalar_args,
+                    })
+                    .unwrap();
+
+                assert_eq!(result, input_field);
+            }
+        }
+    }
+
+    #[test]
+    fn test_array_remove_all_nullability() {
+        for nullability in [true, false] {
+            for item_nullability in [true, false] {
+                let input_field = Arc::new(Field::new(
+                    "num",
+                    DataType::new_list(DataType::Int32, item_nullability),
+                    nullability,
+                ));
+                let result = ArrayRemoveAll::new()
+                    .return_field_from_args(ReturnFieldArgs {
+                        arg_fields: &[Arc::clone(&input_field)],
+                        scalar_arguments: &[None],
+                    })
+                    .unwrap();
+
+                assert_eq!(result, input_field);
+            }
+        }
+    }
 }
