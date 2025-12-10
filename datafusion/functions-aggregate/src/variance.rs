@@ -28,14 +28,13 @@ use arrow::{
     compute::kernels::cast,
     datatypes::i256,
     datatypes::{
-        ArrowNumericType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-        Decimal64Type, DecimalType, Field, DECIMAL256_MAX_PRECISION,
-        DECIMAL256_MAX_SCALE,
+        ArrowNumericType, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType,
+        Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Field,
     },
 };
 use datafusion_common::{
-    downcast_value, exec_err, not_impl_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    DataFusionError, Result, ScalarValue, downcast_value, exec_err, not_impl_err,
+    plan_err,
 };
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
@@ -93,11 +92,7 @@ fn i256_to_f64_lossy(value: i256) -> f64 {
         let chunk_val = u64::from_le_bytes(chunk.try_into().unwrap());
         result = result * SCALE + chunk_val as f64;
     }
-    if negative {
-        -result
-    } else {
-        result
-    }
+    if negative { -result } else { result }
 }
 
 fn decimal_scale(dt: &DataType) -> Option<i8> {
@@ -588,10 +583,10 @@ where
         let array = values[0].as_primitive::<T>();
         self.resize(total_num_groups);
         for (row, group_index) in group_indices.iter().enumerate() {
-            if let Some(filter) = opt_filter {
-                if !filter.is_valid(row) || !filter.value(row) {
-                    continue;
-                }
+            if let Some(filter) = opt_filter
+                && (!filter.is_valid(row) || !filter.value(row))
+            {
+                continue;
             }
             if array.is_null(row) {
                 continue;
