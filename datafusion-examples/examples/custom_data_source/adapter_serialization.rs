@@ -110,7 +110,7 @@ pub async fn adapter_serialization() -> Result<()> {
             .await?
             .with_schema(logical_schema)
             .with_expr_adapter_factory(
-                Arc::clone(&adapter_factory) as Arc<dyn PhysicalExprAdapterFactory>,
+                Arc::clone(&adapter_factory) as Arc<dyn PhysicalExprAdapterFactory>
             );
     let table = ListingTable::try_new(listing_config)?;
     ctx.register_table("my_table", Arc::new(table))?;
@@ -178,7 +178,9 @@ pub async fn adapter_serialization() -> Result<()> {
     );
     println!("  2. Custom metadata can be wrapped as PhysicalExtensionNode");
     println!("  3. Nested serialization (protobuf + JSON) works seamlessly");
-    println!("  4. Both plans produce identical results despite serialization round-trip");
+    println!(
+        "  4. Both plans produce identical results despite serialization round-trip"
+    );
     println!("  5. Adapters are fully preserved through the serialization round-trip");
 
     Ok(())
@@ -306,7 +308,9 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         // We don't need this for the example - we use serialize_physical_plan instead
-        not_impl_err!("try_encode not used - adapter wrapping happens in serialize_physical_plan")
+        not_impl_err!(
+            "try_encode not used - adapter wrapping happens in serialize_physical_plan"
+        )
     }
 
     // Interception point: override serialization to wrap adapters
@@ -396,14 +400,14 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
                     );
 
                     // Decode the inner plan
-                    let inner_proto =
-                        PhysicalPlanNode::decode(&payload.inner_plan_bytes[..]).map_err(
-                            |e| {
-                                datafusion::error::DataFusionError::Plan(format!(
-                                    "Failed to decode inner plan: {e}"
-                                ))
-                            },
-                        )?;
+                    let inner_proto = PhysicalPlanNode::decode(
+                        &payload.inner_plan_bytes[..],
+                    )
+                    .map_err(|e| {
+                        datafusion::error::DataFusionError::Plan(format!(
+                            "Failed to decode inner plan: {e}"
+                        ))
+                    })?;
 
                     // Deserialize the inner plan using default implementation
                     let inner_plan =
