@@ -18,3 +18,4 @@
 pub mod constants;
 pub mod consumer;
 pub mod producer;
+pub mod table_function_extension;

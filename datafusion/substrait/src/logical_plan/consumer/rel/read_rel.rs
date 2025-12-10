@@ -38,15 +38,7 @@ use substrait::proto::{Expression, ReadRel};
 use url::Url;
 
 use crate::logical_plan::constants::TABLE_FUNCTION_TYPE_URL;
-
-#[derive(Clone, PartialEq, Message)]
-struct TableFunctionReadRelExtension {
-    #[prost(string, tag = "1")]
-    name: String,
-
-    #[prost(message, repeated, tag = "2")]
-    arguments: Vec<substrait::proto::expression::Literal>,
-}
+use crate::logical_plan::table_function_extension::TableFunctionReadRelExtension;
 
 struct TableFunctionInvocation {
     name: String,

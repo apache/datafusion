@@ -36,14 +36,7 @@ use substrait::proto::rel::RelType;
 use substrait::proto::{ReadRel, Rel};
 
 use crate::logical_plan::constants::TABLE_FUNCTION_TYPE_URL;
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-struct TableFunctionReadRelExtension {
-    #[prost(string, tag = "1")]
-    pub name: String,
-    #[prost(message, repeated, tag = "2")]
-    pub arguments: Vec<substrait::proto::expression::Literal>,
-}
+use crate::logical_plan::table_function_extension::TableFunctionReadRelExtension;
 
 fn table_function_extension_for_scan(
     producer: &mut impl SubstraitProducer,
