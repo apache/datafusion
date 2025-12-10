@@ -17,11 +17,11 @@
 
 use std::{ffi::c_void, ops::Range};
 
+use super::range::FFI_Range;
+use crate::util::FFIResult;
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
-use abi_stable::{
-    std_types::{RResult, RString, RVec},
-    StableAbi,
-};
+use abi_stable::std_types::RResult;
+use abi_stable::{std_types::RVec, StableAbi};
 use arrow::{array::ArrayRef, error::ArrowError};
 use datafusion::{
     error::{DataFusionError, Result},
@@ -29,8 +29,6 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use prost::Message;
-
-use super::range::FFI_Range;
 
 /// A stable struct for sharing [`PartitionEvaluator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -43,26 +41,25 @@ pub struct FFI_PartitionEvaluator {
         evaluator: &mut Self,
         values: RVec<WrappedArray>,
         num_rows: usize,
-    ) -> RResult<WrappedArray, RString>,
+    ) -> FFIResult<WrappedArray>,
 
     pub evaluate: unsafe extern "C" fn(
         evaluator: &mut Self,
         values: RVec<WrappedArray>,
         range: FFI_Range,
-    ) -> RResult<RVec<u8>, RString>,
+    ) -> FFIResult<RVec<u8>>,
 
     pub evaluate_all_with_rank: unsafe extern "C" fn(
         evaluator: &Self,
         num_rows: usize,
         ranks_in_partition: RVec<FFI_Range>,
-    )
-        -> RResult<WrappedArray, RString>,
+    ) -> FFIResult<WrappedArray>,
 
     pub get_range: unsafe extern "C" fn(
         evaluator: &Self,
         idx: usize,
         n_rows: usize,
-    ) -> RResult<FFI_Range, RString>,
+    ) -> FFIResult<FFI_Range>,
 
     pub is_causal: bool,
 
@@ -106,7 +103,7 @@ unsafe extern "C" fn evaluate_all_fn_wrapper(
     evaluator: &mut FFI_PartitionEvaluator,
     values: RVec<WrappedArray>,
     num_rows: usize,
-) -> RResult<WrappedArray, RString> {
+) -> FFIResult<WrappedArray> {
     let inner = evaluator.inner_mut();
 
     let values_arrays = values
@@ -126,7 +123,7 @@ unsafe extern "C" fn evaluate_fn_wrapper(
     evaluator: &mut FFI_PartitionEvaluator,
     values: RVec<WrappedArray>,
     range: FFI_Range,
-) -> RResult<RVec<u8>, RString> {
+) -> FFIResult<RVec<u8>> {
     let inner = evaluator.inner_mut();
 
     let values_arrays = values
@@ -148,7 +145,7 @@ unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
     evaluator: &FFI_PartitionEvaluator,
     num_rows: usize,
     ranks_in_partition: RVec<FFI_Range>,
-) -> RResult<WrappedArray, RString> {
+) -> FFIResult<WrappedArray> {
     let inner = evaluator.inner();
 
     let ranks_in_partition = ranks_in_partition
@@ -167,7 +164,7 @@ unsafe extern "C" fn get_range_fn_wrapper(
     evaluator: &FFI_PartitionEvaluator,
     idx: usize,
     n_rows: usize,
-) -> RResult<FFI_Range, RString> {
+) -> FFIResult<FFI_Range> {
     let inner = evaluator.inner();
     let range = inner.get_range(idx, n_rows).map(FFI_Range::from);
 
@@ -179,6 +176,7 @@ unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) 
         let private_data =
             Box::from_raw(evaluator.private_data as *mut PartitionEvaluatorPrivateData);
         drop(private_data);
+        evaluator.private_data = std::ptr::null_mut();
     }
 }
 

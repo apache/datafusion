@@ -21,13 +21,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
-    Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array,
+    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    Float16Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array,
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{not_impl_err, utils::take_function_args, Result};
+use datafusion_common::{Result, not_impl_err, utils::take_function_args};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{

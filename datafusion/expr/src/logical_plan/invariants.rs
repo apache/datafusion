@@ -16,16 +16,15 @@
 // under the License.
 
 use datafusion_common::{
-    assert_or_internal_err, plan_err,
+    DFSchemaRef, Result, assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    DFSchemaRef, Result,
 };
 
 use crate::{
+    Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
     expr::{Exists, InSubquery},
     expr_rewriter::strip_outer_reference,
     utils::{collect_subquery_cols, split_conjunction},
-    Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
 };
 
 use super::Extension;
@@ -198,9 +197,12 @@ pub fn check_subquery_expr(
                 }
             }?;
             match outer_plan {
-                LogicalPlan::Projection(_)
-                | LogicalPlan::Filter(_) => Ok(()),
-                LogicalPlan::Aggregate(Aggregate { group_expr, aggr_expr, .. }) => {
+                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => Ok(()),
+                LogicalPlan::Aggregate(Aggregate {
+                    group_expr,
+                    aggr_expr,
+                    ..
+                }) => {
                     if group_expr.contains(expr) && !aggr_expr.contains(expr) {
                         // TODO revisit this validation logic
                         plan_err!(
@@ -212,7 +214,7 @@ pub fn check_subquery_expr(
                 }
                 _ => plan_err!(
                     "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes"
-                )
+                ),
             }?;
         }
         check_correlations_in_subquery(inner_plan)
