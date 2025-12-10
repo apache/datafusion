@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Int64Array;
 use datafusion::prelude::*;
 
 use tempfile::TempDir;
