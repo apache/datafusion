@@ -577,6 +577,44 @@ which is <a class="reference external" href="https://github.com/apache/datafusio
 </pre></div>
 </div>
 </section>
+<section id="build-row-filter-signature-simplified">
+<h3><code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> signature simplified<a class="headerlink" href="#build-row-filter-signature-simplified" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> function in <code class="docutils literal notranslate"><span class="pre">datafusion-datasource-parquet</span></code> has been simplified to take a single schema parameter instead of two.
+The expectation is now that the filter has been adapted to the physical file schema (the arrow representation of the parquet file’s schema) before being passed to this function
+using a <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code> for example.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who call <code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> directly</p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<p>The function signature changed from:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">build_row_filter</span><span class="p">(</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">physical_file_schema</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SchemaRef</span><span class="p">,</span>
+<span class="w">    </span><span class="n">predicate_file_schema</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SchemaRef</span><span class="p">,</span><span class="w">  </span><span class="c1">// removed</span>
+<span class="w">    </span><span class="n">metadata</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ParquetMetaData</span><span class="p">,</span>
+<span class="w">    </span><span class="n">reorder_predicates</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_metrics</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ParquetFileMetrics</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">RowFilter</span><span class="o">&gt;&gt;</span>
+</pre></div>
+</div>
+<p>To:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">build_row_filter</span><span class="p">(</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_schema</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SchemaRef</span><span class="p">,</span>
+<span class="w">    </span><span class="n">metadata</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ParquetMetaData</span><span class="p">,</span>
+<span class="w">    </span><span class="n">reorder_predicates</span><span class="p">:</span><span class="w"> </span><span class="kt">bool</span><span class="p">,</span>
+<span class="w">    </span><span class="n">file_metrics</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ParquetFileMetrics</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">RowFilter</span><span class="o">&gt;&gt;</span>
+</pre></div>
+</div>
+<p><strong>Migration guide:</strong></p>
+<p>Remove the duplicate schema parameter from your call:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- build_row_filter(&amp;predicate, &amp;file_schema, &amp;file_schema, metadata, reorder, metrics)</span>
+<span class="gi">+ build_row_filter(&amp;predicate, &amp;file_schema, metadata, reorder, metrics)</span>
+</pre></div>
+</div>
+</section>
 <section id="planner-now-requires-explicit-opt-in-for-within-group-syntax">
 <h3>Planner now requires explicit opt-in for WITHIN GROUP syntax<a class="headerlink" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax" title="Link to this heading">#</a></h3>
 <p>The SQL planner now enforces the aggregate UDF contract more strictly: the
@@ -2002,6 +2040,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptive-filter-representation-in-parquet-filter-pushdown">Adaptive filter representation in Parquet filter pushdown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partition-column-handling-moved-out-of-physicalexpradapter">Partition column handling moved out of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#build-row-filter-signature-simplified"><code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> signature simplified</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#planner-now-requires-explicit-opt-in-for-within-group-syntax">Planner now requires explicit opt-in for WITHIN GROUP syntax</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-cacheaccessor-trait">API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait</a></li>
