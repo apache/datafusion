@@ -21,20 +21,20 @@
 use std::{any::Any, sync::Arc, task::Poll};
 
 use super::utils::{
-    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
-    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
-    StatefulStreamResult,
+    BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer,
+    OnceAsync, OnceFut, StatefulStreamResult, adjust_right_output_partitioning,
+    reorder_output_after_swap,
 };
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, ProjectionExec,
+    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs,
 };
 use crate::{
-    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, handle_state,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
@@ -42,14 +42,14 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, JoinType, Result, ScalarValue,
+    JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, ready};
 
 /// Data of the left side that is buffered into memory
 #[derive(Debug)]

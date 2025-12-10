@@ -19,8 +19,8 @@
 
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::{
-    logical_plan::{Extension, UserDefinedLogicalNodeCore},
     Expr, LogicalPlan,
+    logical_plan::{Extension, UserDefinedLogicalNodeCore},
 };
 use std::{
     fmt::{self, Debug},

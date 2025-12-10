@@ -30,7 +30,7 @@ use crate::source::{DataSource, DataSourceExec};
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
-    assert_or_internal_err, plan_err, project_schema, Result, ScalarValue,
+    Result, ScalarValue, assert_or_internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::project_orderings;
@@ -42,8 +42,8 @@ use datafusion_physical_plan::projection::{
     all_alias_free_columns, new_projections_for_columns,
 };
 use datafusion_physical_plan::{
-    common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
-    SendableRecordBatchStream, Statistics,
+    ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
+    SendableRecordBatchStream, Statistics, common,
 };
 
 use async_trait::async_trait;
@@ -120,10 +120,10 @@ impl DataSource for MemorySourceConfig {
                     .map_or(String::new(), |limit| format!(", fetch={limit}"));
                 if self.show_sizes {
                     write!(
-                                f,
-                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                                partition_sizes.len(),
-                            )
+                        f,
+                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 } else {
                     write!(
                         f,
@@ -1083,8 +1083,7 @@ mod tests {
         let actual = partitioned_datasrc
             .map(|datasrc| datasrc.output_partitioning().partition_count());
         assert_eq!(
-            actual,
-            partition_cnt,
+            actual, partition_cnt,
             "partitioned datasrc does not match expected, we expected {should_exist}, instead found {actual:?}"
         );
     }
@@ -1270,8 +1269,8 @@ mod tests {
     }
 
     #[test]
-    fn test_repartition_no_sort_information_no_output_ordering_lopsized_batches(
-    ) -> Result<()> {
+    fn test_repartition_no_sort_information_no_output_ordering_lopsized_batches()
+    -> Result<()> {
         let no_sort = vec![];
         let no_output_ordering = None;
 

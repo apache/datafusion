@@ -45,17 +45,17 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{internal_err, JoinSide, Result};
+use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 // Re-exported from datafusion-physical-expr for backwards compatibility
 // We recommend updating your imports to use datafusion-physical-expr directly
 pub use datafusion_physical_expr::projection::{
-    update_expr, ProjectionExpr, ProjectionExprs,
+    ProjectionExpr, ProjectionExprs, update_expr,
 };
 
 use futures::stream::{Stream, StreamExt};
@@ -287,7 +287,12 @@ impl ExecutionPlan for ProjectionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         Ok(Box::pin(ProjectionStream::new(
             self.projector.clone(),
             self.input.execute(partition, context)?,
@@ -1001,11 +1006,11 @@ mod tests {
     use crate::test::exec::StatisticsExec;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::ScalarValue;
+    use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
 
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, Literal};
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, col};
 
     #[test]
     fn test_collect_column_indices() -> Result<()> {

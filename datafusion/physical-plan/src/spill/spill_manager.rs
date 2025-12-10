@@ -23,11 +23,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use std::sync::Arc;
 
-use datafusion_common::{config::SpillCompression, Result};
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_common::{Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
+use datafusion_execution::disk_manager::RefCountedTempFile;
 
-use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
+use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 

@@ -23,12 +23,12 @@ use crate::{
 use arrow::array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{assert_eq_or_internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::stream::StreamExt;
 use log::trace;
@@ -262,15 +262,14 @@ impl AsyncMapper {
         physical_expr.apply(|expr| {
             if let Some(scalar_func_expr) =
                 expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+                && scalar_func_expr.fun().as_async().is_some()
             {
-                if scalar_func_expr.fun().as_async().is_some() {
-                    let next_name = self.next_column_name();
-                    self.async_exprs.push(Arc::new(AsyncFuncExpr::try_new(
-                        next_name,
-                        Arc::clone(expr),
-                        schema,
-                    )?));
-                }
+                let next_name = self.next_column_name();
+                self.async_exprs.push(Arc::new(AsyncFuncExpr::try_new(
+                    next_name,
+                    Arc::clone(expr),
+                    schema,
+                )?));
             }
             Ok(TreeNodeRecursion::Continue)
         })?;

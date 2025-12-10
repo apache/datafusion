@@ -32,9 +32,9 @@ use crate::{
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{assert_eq_or_internal_err, assert_or_internal_err, Result};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_common::{Result, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;

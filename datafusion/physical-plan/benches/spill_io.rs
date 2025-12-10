@@ -22,15 +22,15 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::measurement::WallTime;
 use criterion::{
-    criterion_group, criterion_main, BatchSize, BenchmarkGroup, BenchmarkId, Criterion,
+    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
 use datafusion_common::config::SpillCompression;
 use datafusion_common::human_readable_size;
 use datafusion_common::instant::Instant;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_physical_plan::SpillManager;
 use datafusion_physical_plan::common::collect;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
-use datafusion_physical_plan::SpillManager;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 use tokio::runtime::Runtime;

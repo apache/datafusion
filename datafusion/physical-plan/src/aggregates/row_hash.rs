@@ -21,31 +21,31 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::order::GroupOrdering;
 use super::AggregateExec;
-use crate::aggregates::group_values::{new_group_values, GroupByMetrics, GroupValues};
+use super::order::GroupOrdering;
+use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode,
-    PhysicalGroupBy,
+    AggregateMode, PhysicalGroupBy, create_schema, evaluate_group_by, evaluate_many,
+    evaluate_optional,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, metrics, PhysicalExpr};
+use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, internal_err, DataFusionError,
-    Result,
+    DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_err,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::TaskContext;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::expressions::Column;
@@ -862,7 +862,8 @@ impl Stream for GroupedHashAggregateStream {
                         return Poll::Ready(Some(internal_err!(
                             "AggregateStream was in Done state with {} groups left in hash table. \
                             This is a bug - all groups should have been emitted before entering Done state.",
-                            self.group_values.len())));
+                            self.group_values.len()
+                        )));
                     }
                     // release the memory reservation since sending back output batch itself needs
                     // some memory reservation, so make some room for it.
@@ -1228,13 +1229,12 @@ impl GroupedHashAggregateStream {
     ///
     /// Returns `Some(ExecutionState)` if the state should be changed, None otherwise.
     fn switch_to_skip_aggregation(&mut self) -> Result<Option<ExecutionState>> {
-        if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            if probe.should_skip() {
-                if let Some(batch) = self.emit(EmitTo::All, false)? {
-                    return Ok(Some(ExecutionState::ProducingOutput(batch)));
-                };
-            }
-        }
+        if let Some(probe) = self.skip_aggregation_probe.as_mut()
+            && probe.should_skip()
+            && let Some(batch) = self.emit(EmitTo::All, false)?
+        {
+            return Ok(Some(ExecutionState::ProducingOutput(batch)));
+        };
 
         Ok(None)
     }
@@ -1286,8 +1286,8 @@ mod tests {
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;

@@ -20,20 +20,20 @@
 use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::topk::priority_map::PriorityMap;
 use crate::aggregates::{
-    aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
-    PhysicalGroupBy,
+    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    evaluate_many,
 };
 use crate::metrics::BaselineMetrics;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
-use datafusion_common::internal_datafusion_err;
 use datafusion_common::Result;
+use datafusion_common::internal_datafusion_err;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::{Stream, StreamExt};
-use log::{trace, Level};
+use log::{Level, trace};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
