@@ -19,7 +19,7 @@ extern crate criterion;
 
 use arrow::array::{StringArray, StringViewArray};
 use arrow::datatypes::{DataType, Field};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distr::Alphanumeric;

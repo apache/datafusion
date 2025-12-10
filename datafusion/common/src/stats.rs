@@ -317,6 +317,31 @@ impl Statistics {
         }
     }
 
+    /// Calculates `total_byte_size` based on the schema and `num_rows`.
+    /// If any of the columns has non-primitive width, `total_byte_size` is set to inexact.
+    pub fn calculate_total_byte_size(&mut self, schema: &Schema) {
+        let mut row_size = Some(0);
+        for field in schema.fields() {
+            match field.data_type().primitive_width() {
+                Some(width) => {
+                    row_size = row_size.map(|s| s + width);
+                }
+                None => {
+                    row_size = None;
+                    break;
+                }
+            }
+        }
+        match row_size {
+            None => {
+                self.total_byte_size = self.total_byte_size.to_inexact();
+            }
+            Some(size) => {
+                self.total_byte_size = self.num_rows.multiply(&Precision::Exact(size));
+            }
+        }
+    }
+
     /// Returns an unbounded `ColumnStatistics` for each field in the schema.
     pub fn unknown_column(schema: &Schema) -> Vec<ColumnStatistics> {
         schema
@@ -367,7 +392,7 @@ impl Statistics {
             return self;
         };
 
-        #[allow(clippy::large_enum_variant)]
+        #[expect(clippy::large_enum_variant)]
         enum Slot {
             /// The column is taken and put into the specified statistics location
             Taken(usize),
@@ -961,9 +986,11 @@ mod tests {
             Precision::Exact(ScalarValue::Int64(None)),
         );
         // Overflow returns error
-        assert!(Precision::Exact(ScalarValue::Int32(Some(256)))
-            .cast_to(&DataType::Int8)
-            .is_err());
+        assert!(
+            Precision::Exact(ScalarValue::Int32(Some(256)))
+                .cast_to(&DataType::Int8)
+                .is_err()
+        );
     }
 
     #[test]
@@ -976,8 +1003,6 @@ mod tests {
         // Precision<ScalarValue> is not copy (requires .clone())
         let precision: Precision<ScalarValue> =
             Precision::Exact(ScalarValue::Int64(Some(42)));
-        // Clippy would complain about this if it were Copy
-        #[allow(clippy::redundant_clone)]
         let p2 = precision.clone();
         assert_eq!(precision, p2);
     }
@@ -1215,7 +1240,10 @@ mod tests {
         let items = vec![stats1, stats2];
 
         let e = Statistics::try_merge_iter(&items, &schema).unwrap_err();
-        assert_contains!(e.to_string(), "Error during planning: Cannot merge statistics with different number of columns: 0 vs 1");
+        assert_contains!(
+            e.to_string(),
+            "Error during planning: Cannot merge statistics with different number of columns: 0 vs 1"
+        );
     }
 
     #[test]

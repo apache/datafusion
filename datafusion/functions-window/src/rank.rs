@@ -18,7 +18,6 @@
 //! Implementation of `rank`, `dense_rank`, and `percent_rank` window functions,
 //! which can be evaluated at runtime during query execution.
 
-use crate::define_udwf_and_expr;
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::{Float64Array, UInt64Array};
@@ -26,7 +25,7 @@ use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::utils::get_row_at_idx;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_doc::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
@@ -381,7 +380,7 @@ mod tests {
         test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
     }
 
-    #[allow(clippy::single_range_in_vec_init)]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_without_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(expr, vec![0..8], expected)
     }
@@ -434,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::single_range_in_vec_init)]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_percent_rank() -> Result<()> {
         let r = Rank::percent_rank();
 

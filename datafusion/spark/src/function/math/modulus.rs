@@ -18,9 +18,7 @@
 use arrow::compute::kernels::numeric::add;
 use arrow::compute::kernels::{cmp::lt, numeric::rem, zip::zip};
 use arrow::datatypes::DataType;
-use datafusion_common::{
-    assert_eq_or_internal_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{assert_eq_or_internal_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };

@@ -34,6 +34,7 @@ use crate::{
     table_provider::{FFI_TableProvider, ForeignTableProvider},
 };
 
+use crate::util::FFIResult;
 use datafusion::error::Result;
 
 /// A stable struct for sharing [`SchemaProvider`] across FFI boundaries.
@@ -48,22 +49,21 @@ pub struct FFI_SchemaProvider {
     pub table: unsafe extern "C" fn(
         provider: &Self,
         name: RString,
-    ) -> FfiFuture<
-        RResult<ROption<FFI_TableProvider>, RString>,
-    >,
+    )
+        -> FfiFuture<FFIResult<ROption<FFI_TableProvider>>>,
 
-    pub register_table:
-        unsafe extern "C" fn(
-            provider: &Self,
-            name: RString,
-            table: FFI_TableProvider,
-        ) -> RResult<ROption<FFI_TableProvider>, RString>,
+    pub register_table: unsafe extern "C" fn(
+        provider: &Self,
+        name: RString,
+        table: FFI_TableProvider,
+    )
+        -> FFIResult<ROption<FFI_TableProvider>>,
 
-    pub deregister_table:
-        unsafe extern "C" fn(
-            provider: &Self,
-            name: RString,
-        ) -> RResult<ROption<FFI_TableProvider>, RString>,
+    pub deregister_table: unsafe extern "C" fn(
+        provider: &Self,
+        name: RString,
+    )
+        -> FFIResult<ROption<FFI_TableProvider>>,
 
     pub table_exist: unsafe extern "C" fn(provider: &Self, name: RString) -> bool,
 
@@ -119,7 +119,7 @@ unsafe extern "C" fn table_names_fn_wrapper(
 unsafe extern "C" fn table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
-) -> FfiFuture<RResult<ROption<FFI_TableProvider>, RString>> {
+) -> FfiFuture<FFIResult<ROption<FFI_TableProvider>>> {
     let runtime = provider.runtime();
     let provider = Arc::clone(provider.inner());
 
@@ -137,7 +137,7 @@ unsafe extern "C" fn register_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
     table: FFI_TableProvider,
-) -> RResult<ROption<FFI_TableProvider>, RString> {
+) -> FFIResult<ROption<FFI_TableProvider>> {
     let runtime = provider.runtime();
     let provider = provider.inner();
 
@@ -152,7 +152,7 @@ unsafe extern "C" fn register_table_fn_wrapper(
 unsafe extern "C" fn deregister_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
-) -> RResult<ROption<FFI_TableProvider>, RString> {
+) -> FFIResult<ROption<FFI_TableProvider>> {
     let runtime = provider.runtime();
     let provider = provider.inner();
 
@@ -170,8 +170,10 @@ unsafe extern "C" fn table_exist_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SchemaProvider) {
+    debug_assert!(!provider.private_data.is_null());
     let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
     drop(private_data);
+    provider.private_data = std::ptr::null_mut();
 }
 
 unsafe extern "C" fn clone_fn_wrapper(

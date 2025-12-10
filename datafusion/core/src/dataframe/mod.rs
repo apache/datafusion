@@ -49,6 +49,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -2241,7 +2242,7 @@ impl DataFrame {
             .schema()
             .iter()
             .map(|(qualifier, field)| {
-                if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
+                if qualifier.eq(&qualifier_rename) && field == field_rename {
                     (
                         col(Column::from((qualifier, field)))
                             .alias_qualified(qualifier.cloned(), new_name),
@@ -2413,7 +2414,7 @@ impl DataFrame {
                 .schema()
                 .fields()
                 .iter()
-                .map(|f| f.as_ref().clone())
+                .map(Arc::clone)
                 .collect()
         } else {
             self.find_columns(&columns)?
@@ -2450,7 +2451,7 @@ impl DataFrame {
     }
 
     // Helper to find columns from names
-    fn find_columns(&self, names: &[String]) -> Result<Vec<Field>> {
+    fn find_columns(&self, names: &[String]) -> Result<Vec<FieldRef>> {
         let schema = self.logical_plan().schema();
         names
             .iter()

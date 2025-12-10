@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
+use datafusion_common::{assert_eq_or_internal_err, Result};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
 

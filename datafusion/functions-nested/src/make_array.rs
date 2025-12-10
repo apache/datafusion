@@ -23,18 +23,18 @@ use std::vec;
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray,
-    MutableArrayData, NullArray, OffsetSizeTrait,
+    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
+    NullArray, OffsetSizeTrait, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType::Null, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
+use datafusion_expr::TypeSignature;
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
-use datafusion_expr::TypeSignature;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -125,19 +125,7 @@ impl ScalarUDFImpl for MakeArray {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if let Ok(unified) = try_type_union_resolution_with_struct(arg_types) {
-            return Ok(unified);
-        }
-
-        if let Some(unified) = type_union_resolution(arg_types) {
-            Ok(vec![unified; arg_types.len()])
-        } else {
-            plan_err!(
-                "Failed to unify argument types of {}: [{}]",
-                self.name(),
-                arg_types.iter().join(", ")
-            )
-        }
+        coerce_types_inner(arg_types, self.name())
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -163,7 +151,7 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             SingleRowListArrayBuilder::new(array).build_list_array(),
         ))
     } else {
-        array_array::<i32>(arrays, data_type.clone())
+        array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
     }
 }
 
@@ -207,9 +195,10 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
-fn array_array<O: OffsetSizeTrait>(
+pub fn array_array<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     data_type: DataType,
+    field_name: &str,
 ) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
@@ -252,9 +241,25 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, true)),
+        Arc::new(Field::new(field_name, data_type, true)),
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         None,
     )?))
+}
+
+pub fn coerce_types_inner(arg_types: &[DataType], name: &str) -> Result<Vec<DataType>> {
+    if let Ok(unified) = try_type_union_resolution_with_struct(arg_types) {
+        return Ok(unified);
+    }
+
+    if let Some(unified) = type_union_resolution(arg_types) {
+        Ok(vec![unified; arg_types.len()])
+    } else {
+        plan_err!(
+            "Failed to unify argument types of {}: [{}]",
+            name,
+            arg_types.iter().join(", ")
+        )
+    }
 }

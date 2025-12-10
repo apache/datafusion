@@ -17,7 +17,9 @@
 
 //! Execution plan for reading CSV files
 
+use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_physical_plan::projection::ProjectionExprs;
 use std::any::Any;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
@@ -88,7 +90,7 @@ pub struct CsvSource {
     options: CsvOptions,
     batch_size: Option<usize>,
     table_schema: TableSchema,
-    file_projection: Option<Vec<usize>>,
+    projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
@@ -96,11 +98,12 @@ pub struct CsvSource {
 impl CsvSource {
     /// Returns a [`CsvSource`]
     pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
             options: CsvOptions::default(),
-            table_schema: table_schema.into(),
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
             batch_size: None,
-            file_projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
             schema_adapter_factory: None,
         }
@@ -194,9 +197,7 @@ impl CsvSource {
         if let Some(terminator) = self.terminator() {
             builder = builder.with_terminator(terminator);
         }
-        if let Some(proj) = &self.file_projection {
-            builder = builder.with_projection(proj.clone());
-        }
+        builder = builder.with_projection(self.projection.file_indices.clone());
         if let Some(escape) = self.escape() {
             builder = builder.with_escape(escape)
         }
@@ -243,14 +244,20 @@ impl FileSource for CsvSource {
         &self,
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
-        partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        Arc::new(CsvOpener {
+        partition_index: usize,
+    ) -> Result<Arc<dyn FileOpener>> {
+        let mut opener = Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
             object_store,
-            partition_index: partition,
-        })
+            partition_index,
+        }) as Arc<dyn FileOpener>;
+        opener = ProjectionOpener::try_new(
+            self.projection.clone(),
+            Arc::clone(&opener),
+            self.table_schema.file_schema(),
+        )?;
+        Ok(opener)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -267,10 +274,20 @@ impl FileSource for CsvSource {
         Arc::new(conf)
     }
 
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.file_projection = config.file_column_projection_indices();
-        Arc::new(conf)
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        let new_projection = self.projection.source.try_merge(projection)?;
+        let split_projection =
+            SplitProjection::new(self.table_schema.file_schema(), &new_projection);
+        source.projection = split_projection;
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection.source)
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {

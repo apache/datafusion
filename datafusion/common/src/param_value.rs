@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::error::{_plan_datafusion_err, _plan_err};
-use crate::metadata::{check_metadata_with_storage_equal, ScalarAndMetadata};
+use crate::metadata::{ScalarAndMetadata, check_metadata_with_storage_equal};
 use crate::{Result, ScalarValue};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use std::collections::HashMap;

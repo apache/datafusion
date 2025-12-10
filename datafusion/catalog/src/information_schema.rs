@@ -1167,7 +1167,7 @@ struct InformationSchemaRoutinesBuilder {
 }
 
 impl InformationSchemaRoutinesBuilder {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn add_routine(
         &mut self,
         catalog_name: impl AsRef<str>,
@@ -1301,7 +1301,7 @@ struct InformationSchemaParametersBuilder {
 }
 
 impl InformationSchemaParametersBuilder {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn add_parameter(
         &mut self,
         specific_catalog: impl AsRef<str>,
