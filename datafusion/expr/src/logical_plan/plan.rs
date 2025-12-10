@@ -1587,7 +1587,7 @@ impl LogicalPlan {
     ///
     /// ```
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// use datafusion_expr::{LogicalPlanBuilder, col, lit, logical_plan::table_scan};
     /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
     /// let plan = table_scan(Some("t1"), &schema, None)
     ///     .unwrap()
@@ -1629,7 +1629,7 @@ impl LogicalPlan {
     ///
     /// ```
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// use datafusion_expr::{LogicalPlanBuilder, col, lit, logical_plan::table_scan};
     /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
     /// let plan = table_scan(Some("t1"), &schema, None)
     ///     .unwrap()
@@ -1694,7 +1694,7 @@ impl LogicalPlan {
     ///
     /// ```
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// use datafusion_expr::{LogicalPlanBuilder, col, lit, logical_plan::table_scan};
     /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
     /// let plan = table_scan(Some("t1"), &schema, None)
     ///     .unwrap()
@@ -1752,7 +1752,7 @@ impl LogicalPlan {
     /// ```
     /// ```
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_expr::{col, lit, logical_plan::table_scan, LogicalPlanBuilder};
+    /// use datafusion_expr::{LogicalPlanBuilder, col, lit, logical_plan::table_scan};
     /// let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
     /// let plan = table_scan(Some("t1"), &schema, None)
     ///     .unwrap()

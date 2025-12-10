@@ -142,7 +142,7 @@ impl ScalarUDF {
     ///
     /// # Example
     /// ```no_run
-    /// use datafusion_expr::{col, lit, ScalarUDF};
+    /// use datafusion_expr::{ScalarUDF, col, lit};
     /// # fn my_udf() -> ScalarUDF { unimplemented!() }
     /// let my_func: ScalarUDF = my_udf();
     /// // Create an expr for `my_func(a, 12.3)`

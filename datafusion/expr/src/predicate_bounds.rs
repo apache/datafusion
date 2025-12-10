@@ -45,7 +45,6 @@ use datafusion_expr_common::operator::Operator;
 ///
 /// The function returns a [NullableInterval] that describes the possible boolean values the
 /// predicate can evaluate to.
-///
 pub(super) fn evaluate_bounds(
     predicate: &Expr,
     certainly_null_expr: Option<&Expr>,

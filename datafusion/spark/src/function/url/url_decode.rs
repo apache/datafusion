@@ -64,7 +64,6 @@ impl UrlDecode {
     ///
     /// * `Ok(String)` - The decoded string
     /// * `Err(DataFusionError)` - If the input is malformed or contains invalid UTF-8
-    ///
     fn decode(value: &str) -> Result<String> {
         // Check if the string has valid percent encoding
         Self::validate_percent_encoding(value)?;
@@ -170,7 +169,6 @@ impl ScalarUDFImpl for UrlDecode {
 ///
 /// * `Ok(ArrayRef)` - A new array of the same type containing decoded strings
 /// * `Err(DataFusionError)` - If validation fails or invalid arguments are provided
-///
 fn spark_url_decode(args: &[ArrayRef]) -> Result<ArrayRef> {
     spark_handled_url_decode(args, |x| x)
 }
