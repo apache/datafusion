@@ -1582,7 +1582,7 @@ impl DefaultPhysicalPlanner {
             }
         } else if group_expr.is_empty() {
             // No GROUP BY clause - create empty PhysicalGroupBy
-            Ok(PhysicalGroupBy::new(vec![], vec![], vec![]))
+            Ok(PhysicalGroupBy::new(vec![], vec![], vec![], false))
         } else {
             Ok(PhysicalGroupBy::new_single(
                 group_expr
@@ -1650,10 +1650,12 @@ fn merge_grouping_set_physical_expr(
         merged_sets.push(group)
     }
 
-    Ok(
-        PhysicalGroupBy::new(grouping_set_expr, null_exprs, merged_sets)
-            .with_grouping_sets(true),
-    )
+    Ok(PhysicalGroupBy::new(
+        grouping_set_expr,
+        null_exprs,
+        merged_sets,
+        true,
+    ))
 }
 
 /// Expand and align a CUBE expression. This is a special case of GROUPING SETS
@@ -1695,7 +1697,7 @@ fn create_cube_physical_expr(
         }
     }
 
-    Ok(PhysicalGroupBy::new(all_exprs, null_exprs, groups).with_grouping_sets(true))
+    Ok(PhysicalGroupBy::new(all_exprs, null_exprs, groups, true))
 }
 
 /// Expand and align a ROLLUP expression. This is a special case of GROUPING SETS
@@ -1740,7 +1742,7 @@ fn create_rollup_physical_expr(
         groups.push(group)
     }
 
-    Ok(PhysicalGroupBy::new(all_exprs, null_exprs, groups).with_grouping_sets(true))
+    Ok(PhysicalGroupBy::new(all_exprs, null_exprs, groups, true))
 }
 
 /// For a given logical expr, get a properly typed NULL ScalarValue physical expression
@@ -2831,7 +2833,7 @@ mod tests {
                         true,
                     ],
                 ],
-                is_grouping_sets: true,
+                has_grouping_set: true,
             },
         )
         "#);
@@ -2942,7 +2944,7 @@ mod tests {
                         false,
                     ],
                 ],
-                is_grouping_sets: true,
+                has_grouping_set: true,
             },
         )
         "#);

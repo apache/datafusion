@@ -42,12 +42,12 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, not_impl_err, Constraint, Constraints,
+    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints,
     Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
@@ -178,9 +178,9 @@ pub struct PhysicalGroupBy {
     /// expression in null_expr. If `groups[i][j]` is true, then the
     /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
     groups: Vec<Vec<bool>>,
-    /// True if this grouping is created from a `GROUPING SET` style expression
-    /// (including cube and rollup)
-    is_grouping_sets: bool,
+    /// True when GROUPING SETS/CUBE/ROLLUP are used so `__grouping_id` should
+    /// be included in the output schema.
+    has_grouping_set: bool,
 }
 
 impl PhysicalGroupBy {
@@ -189,19 +189,14 @@ impl PhysicalGroupBy {
         expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
         null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
         groups: Vec<Vec<bool>>,
+        has_grouping_set: bool,
     ) -> Self {
         Self {
             expr,
             null_expr,
             groups,
-            is_grouping_sets: false,
+            has_grouping_set,
         }
-    }
-
-    /// Mark this `PhysicalGroupBy` as coming from `GROUPING SETS`/`CUBE`/`ROLLUP`.
-    pub fn with_grouping_sets(mut self, is_grouping_sets: bool) -> Self {
-        self.is_grouping_sets = is_grouping_sets;
-        self
     }
 
     /// Create a GROUPING SET with only a single group. This is the "standard"
@@ -212,7 +207,7 @@ impl PhysicalGroupBy {
             expr,
             null_expr: vec![],
             groups: vec![vec![false; num_exprs]],
-            is_grouping_sets: false,
+            has_grouping_set: false,
         }
     }
 
@@ -244,31 +239,9 @@ impl PhysicalGroupBy {
         &self.groups
     }
 
-    /// Returns true if this `PhysicalGroupBy` was constructed from grouping sets.
-    pub fn is_grouping_sets(&self) -> bool {
-        self.is_grouping_sets
-    }
-
-    /// Returns the grouping id value if this grouping set requires it.
-    pub fn grouping_id_value(&self) -> Result<Option<ScalarValue>> {
-        if !self.is_grouping_sets {
-            return Ok(None);
-        }
-
-        let data_type = Aggregate::grouping_id_type(self.expr.len());
-        let scalar = match data_type {
-            DataType::UInt8 => ScalarValue::UInt8(Some(0)),
-            DataType::UInt16 => ScalarValue::UInt16(Some(0)),
-            DataType::UInt32 => ScalarValue::UInt32(Some(0)),
-            DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-            _ => {
-                return internal_err!(
-                    "Unexpected grouping id type for grouping sets: {data_type}"
-                )
-            }
-        };
-
-        Ok(Some(scalar))
+    /// Returns true if this grouping uses GROUPING SETS, CUBE or ROLLUP.
+    pub fn has_grouping_set(&self) -> bool {
+        self.has_grouping_set
     }
 
     /// Returns true if this `PhysicalGroupBy` has no group expressions
@@ -278,7 +251,7 @@ impl PhysicalGroupBy {
 
     /// Check whether grouping set is single group
     pub fn is_single(&self) -> bool {
-        self.null_expr.is_empty() && !self.is_grouping_sets
+        !self.has_grouping_set
     }
 
     /// Calculate GROUP BY expressions according to input schema.
@@ -292,7 +265,7 @@ impl PhysicalGroupBy {
     /// The number of expressions in the output schema.
     fn num_output_exprs(&self) -> usize {
         let mut num_exprs = self.expr.len();
-        if !self.is_single() {
+        if self.has_grouping_set {
             num_exprs += 1
         }
         num_exprs
@@ -309,7 +282,7 @@ impl PhysicalGroupBy {
                 .take(num_output_exprs)
                 .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _),
         );
-        if !self.is_single() {
+        if self.has_grouping_set {
             output_exprs.push(Arc::new(Column::new(
                 Aggregate::INTERNAL_GROUPING_ID,
                 self.expr.len(),
@@ -320,11 +293,7 @@ impl PhysicalGroupBy {
 
     /// Returns the number expression as grouping keys.
     pub fn num_group_exprs(&self) -> usize {
-        if self.is_single() {
-            self.expr.len()
-        } else {
-            self.expr.len() + 1
-        }
+        self.expr.len() + usize::from(self.has_grouping_set)
     }
 
     pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
@@ -347,7 +316,7 @@ impl PhysicalGroupBy {
                 .into(),
             );
         }
-        if !self.is_single() {
+        if self.has_grouping_set {
             fields.push(
                 Field::new(
                     Aggregate::INTERNAL_GROUPING_ID,
@@ -383,7 +352,8 @@ impl PhysicalGroupBy {
                 )
                 .collect();
         let num_exprs = expr.len();
-        let groups = if num_exprs == 0 {
+        let groups = if self.expr.is_empty() && !self.has_grouping_set {
+            // No GROUP BY expressions - should have no groups
             vec![]
         } else {
             vec![vec![false; num_exprs]]
@@ -392,9 +362,7 @@ impl PhysicalGroupBy {
             expr,
             null_expr: vec![],
             groups,
-            // Final aggregation receives the grouping id explicitly as part of `expr`
-            // so it should not be treated as a grouping set.
-            is_grouping_sets: false,
+            has_grouping_set: false,
         }
     }
 }
@@ -414,7 +382,7 @@ impl PartialEq for PhysicalGroupBy {
                 .zip(other.null_expr.iter())
                 .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
             && self.groups == other.groups
-            && self.is_grouping_sets == other.is_grouping_sets
+            && self.has_grouping_set == other.has_grouping_set
     }
 }
 
@@ -765,12 +733,12 @@ impl AggregateExec {
         context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
         // no group by at all
-        if self.group_by.is_empty() {
+        if self.group_by.is_empty() && !self.group_by.has_grouping_set() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
                 self,
                 context,
                 partition,
-                self.group_by.grouping_id_value()?,
+                None,
             )?));
         }
 
@@ -801,7 +769,7 @@ impl AggregateExec {
     /// on an AggregateExec.
     pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         // ensure there is a group by
-        if self.group_by.is_empty() {
+        if self.group_expr().is_empty() && !self.group_expr().has_grouping_set() {
             return false;
         }
         // ensure there are no aggregate expressions
@@ -929,7 +897,7 @@ impl AggregateExec {
         };
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.group_by.expr.is_empty() =>
+                if self.group_by.is_empty() && !self.group_by.has_grouping_set() =>
             {
                 let total_byte_size =
                     Self::calculate_scaled_byte_size(child_statistics, 1);
@@ -1999,6 +1967,7 @@ mod tests {
                 vec![true, false],  // (NULL, b)
                 vec![false, false], // (a,b)
             ],
+            true,
         );
 
         let aggregates = vec![Arc::new(
@@ -2148,6 +2117,7 @@ mod tests {
             vec![(col("a", &input_schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
@@ -2493,6 +2463,7 @@ mod tests {
             vec![(col("a", &input_schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         // something that allocates within the aggregator
@@ -2937,6 +2908,7 @@ mod tests {
                 vec![true, false, true],
                 vec![true, true, false],
             ],
+            true,
         );
 
         let aggregates: Vec<Arc<AggregateFunctionExpr>> =
@@ -3299,6 +3271,7 @@ mod tests {
                 vec![false, true],  // (a, NULL)
                 vec![false, false], // (a,b)
             ],
+            true,
         );
         let aggr_schema = create_schema(
             &input_schema,
@@ -3350,6 +3323,7 @@ mod tests {
             vec![(col("a", &schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
