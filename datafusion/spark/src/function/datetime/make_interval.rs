@@ -125,7 +125,9 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        // zero-arg form is a deterministic non-null scalar; any call with args
+        // can emit NULL on overflow or non-finite seconds, so mark those nullable.
+        let nullable = !args.arg_fields.is_empty();
         Ok(Arc::new(Field::new(
             self.name(),
             Interval(MonthDayNano),
@@ -298,7 +300,7 @@ mod tests {
     fn return_field_nullability() -> Result<()> {
         let func = SparkMakeInterval::new();
 
-        // zero-arg form returns constant zero interval (non-nullable)
+        // zero-arg form is a deterministic non-null scalar
         let field = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[],
             scalar_arguments: &[],
@@ -309,7 +311,7 @@ mod tests {
         );
         assert_eq!(field.data_type(), &Interval(MonthDayNano));
 
-        // all inputs non-nullable -> non-nullable output
+        // all inputs non-nullable -> still nullable output due to overflow cases
         let non_nullable_fields: Vec<FieldRef> = vec![
             Field::new("y", DataType::Int32, false).into(),
             Field::new("m", DataType::Int32, false).into(),
@@ -319,10 +321,7 @@ mod tests {
             arg_fields: &non_nullable_fields,
             scalar_arguments: &scalar_arguments,
         })?;
-        assert!(
-            !field.is_nullable(),
-            "make_interval should be non-nullable when all inputs are non-nullable"
-        );
+        assert!(field.is_nullable(), "result should be nullable");
 
         // any nullable input -> nullable output
         let nullable_fields: Vec<FieldRef> = vec![
