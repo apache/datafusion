@@ -651,6 +651,7 @@ fn collect_new_statistics(
                         min_value: Precision::Exact(ScalarValue::Null),
                         sum_value: Precision::Exact(ScalarValue::Null),
                         distinct_count: Precision::Exact(0),
+                        byte_size: input_column_stats[idx].byte_size,
                     };
                 };
                 let (lower, upper) = interval.into_bounds();
@@ -665,6 +666,7 @@ fn collect_new_statistics(
                     min_value,
                     sum_value: Precision::Absent,
                     distinct_count: distinct_count.to_inexact(),
+                    byte_size: input_column_stats[idx].byte_size,
                 }
             },
         )
@@ -1361,6 +1363,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Null),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     min_value: Precision::Exact(ScalarValue::Null),
@@ -1368,6 +1371,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Null),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ]
         );
@@ -1469,6 +1473,7 @@ mod tests {
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
             }],
         };
 

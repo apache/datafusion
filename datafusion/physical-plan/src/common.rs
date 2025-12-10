@@ -262,6 +262,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -269,6 +270,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -302,6 +304,7 @@ mod tests {
                 min_value: Precision::Absent,
                 sum_value: Precision::Absent,
                 null_count: Precision::Exact(3),
+                byte_size: Precision::Absent,
             }],
         };
 
