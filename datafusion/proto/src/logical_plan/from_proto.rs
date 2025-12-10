@@ -528,7 +528,8 @@ pub fn parse_expr(
                 codec,
             )?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::Cast(Cast::new(expr, data_type)))
+            let field = Field::new("", data_type, cast.nullable.unwrap_or(true));
+            Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
         }
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(
@@ -538,7 +539,11 @@ pub fn parse_expr(
                 codec,
             )?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::TryCast(TryCast::new(expr, data_type)))
+            let field = Field::new("", data_type, cast.nullable.unwrap_or(true));
+            Ok(Expr::TryCast(TryCast::new_from_field(
+                expr,
+                Arc::new(field),
+            )))
         }
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr", codec)?,

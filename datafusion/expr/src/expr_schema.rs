@@ -134,8 +134,9 @@ impl ExprSchemable for Expr {
                     .as_ref()
                     .map_or(Ok(DataType::Null), |e| e.get_type(schema))
             }
-            Expr::Cast(Cast { data_type, .. })
-            | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
+            Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
+                Ok(field.data_type().clone())
+            }
             Expr::Unnest(Unnest { expr }) => {
                 let arg_data_type = expr.get_type(schema)?;
                 // Unnest's output type is the inner type of the list
@@ -624,9 +625,18 @@ impl ExprSchemable for Expr {
                 func.return_field_from_args(args)
             }
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
-            Expr::Cast(Cast { expr, data_type }) => expr
+            Expr::Cast(Cast { expr, field }) => expr
                 .to_field(schema)
-                .map(|(_, f)| f.retyped(data_type.clone())),
+                .map(|(_, f)| {
+                    // This currently propagates the nullability of the input
+                    // expression as the resulting physical expression does
+                    // not currently consider the nullability specified here
+                    f.as_ref()
+                        .clone()
+                        .with_data_type(field.data_type().clone())
+                        .with_metadata(f.metadata().clone())
+                })
+                .map(Arc::new),
             Expr::Placeholder(Placeholder {
                 id: _,
                 field: Some(field),
