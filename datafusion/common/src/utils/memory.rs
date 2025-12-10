@@ -157,10 +157,10 @@ fn count_array_data_memory_size(
         } // Otherwise the buffer's memory is already counted
     }
 
-    if let Some(null_buffer) = array_data.nulls() {
-        if counted_buffers.insert(null_buffer.inner().inner().data_ptr()) {
-            *total_size += null_buffer.inner().inner().capacity();
-        }
+    if let Some(null_buffer) = array_data.nulls()
+        && counted_buffers.insert(null_buffer.inner().inner().data_ptr())
+    {
+        *total_size += null_buffer.inner().inner().capacity();
     }
 
     // Count all children `ArrayData` recursively
