@@ -6735,3 +6735,70 @@ async fn test_duplicate_state_fields_for_dfschema_construct() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn write_partitioned_parquet_results_with_prefix() -> Result<()> {
+    // create partitioned input file and context
+    let tmp_dir = TempDir::new()?;
+
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.partitioned_file_prefix_name = "prefix".to_owned();
+    let ctx = SessionContext::new_with_config(config);
+
+    // Create an in memory table with schema C1 and C2, both strings
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8, false),
+        Field::new("c2", DataType::Utf8, false),
+    ]));
+
+    let record_batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["abc", "def"])),
+            Arc::new(StringArray::from(vec!["123", "456"])),
+        ],
+    )?;
+
+    let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![record_batch]])?);
+
+    // Register the table in the context
+    ctx.register_table("test", mem_table)?;
+
+    let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+    let local_url = Url::parse("file://local").unwrap();
+    ctx.register_object_store(&local_url, local);
+
+    // execute a simple query and write the results to parquet
+    let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
+    let out_dir_url = format!("file://{out_dir}");
+
+    // Write the results to parquet with partitioning
+    let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+    let df_write_options =
+        DataFrameWriteOptions::new().with_partition_by(vec![String::from("c2")]);
+
+    df.write_parquet(&out_dir_url, df_write_options, None)
+        .await?;
+
+    // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned with
+    // specified prefix
+    let partitioned_file = format!("{out_dir}/c2=123/prefix*");
+    let filter_df = ctx
+        .read_parquet(&partitioned_file, ParquetReadOptions::default())
+        .await?;
+
+    // Check that the c2 column is gone and that c1 is abc.
+    let results = filter_df.collect().await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-----+
+    | c1  |
+    +-----+
+    | abc |
+    +-----+
+    "###
+    );
+
+    Ok(())
+}
