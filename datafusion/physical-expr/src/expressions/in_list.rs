@@ -91,7 +91,6 @@ impl StaticFilter for ArrayStaticFilter {
         if v.data_type() == &DataType::Null
             || self.in_array.data_type() == &DataType::Null
         {
-            // return Ok(BooleanArray::new(vec![None; v.len()]));
             let nulls = NullBuffer::new_null(v.len());
             return Ok(BooleanArray::new(
                 BooleanBuffer::new_unset(v.len()),
