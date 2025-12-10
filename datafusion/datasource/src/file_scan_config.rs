@@ -653,7 +653,9 @@ impl DataSource for FileScanConfig {
                 let projected_schema = match self.projected_schema() {
                     Ok(schema) => schema,
                     Err(_) => {
-                        debug!("Could not get projected schema, falling back to UnknownPartitioning.");
+                        debug!(
+                            "Could not get projected schema, falling back to UnknownPartitioning."
+                        );
                         return Partitioning::UnknownPartitioning(self.file_groups.len());
                     }
                 };
@@ -2164,5 +2166,108 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_output_partitioning_not_partitioned_by_file_group() {
+        let file_schema = aggr_test_schema();
+        let partition_col =
+            Field::new("date", wrap_partition_type_in_dict(DataType::Utf8), false);
+
+        let config = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            vec![partition_col],
+        );
+
+        // partitioned_by_file_group defaults to false
+        let partitioning = config.output_partitioning();
+        assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
+    }
+
+    #[test]
+    fn test_output_partitioning_no_partition_columns() {
+        let file_schema = aggr_test_schema();
+        let mut config = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            vec![], // No partition columns
+        );
+        config.partitioned_by_file_group = true;
+
+        let partitioning = config.output_partitioning();
+        assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
+    }
+
+    #[test]
+    fn test_output_partitioning_with_partition_columns() {
+        let file_schema = aggr_test_schema();
+
+        // Test single partition column
+        let single_partition_col = vec![Field::new(
+            "date",
+            wrap_partition_type_in_dict(DataType::Utf8),
+            false,
+        )];
+
+        let mut config = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            single_partition_col,
+        );
+        config.partitioned_by_file_group = true;
+        config.file_groups = vec![
+            FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
+            FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
+            FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
+        ];
+
+        let partitioning = config.output_partitioning();
+        match partitioning {
+            Partitioning::Hash(exprs, num_partitions) => {
+                assert_eq!(num_partitions, 3);
+                assert_eq!(exprs.len(), 1);
+                assert_eq!(
+                    exprs[0].as_any().downcast_ref::<Column>().unwrap().name(),
+                    "date"
+                );
+            }
+            _ => panic!("Expected Hash partitioning"),
+        }
+
+        // Test multiple partition columns
+        let multiple_partition_cols = vec![
+            Field::new("year", wrap_partition_type_in_dict(DataType::Utf8), false),
+            Field::new("month", wrap_partition_type_in_dict(DataType::Utf8), false),
+        ];
+
+        config = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            multiple_partition_cols,
+        );
+        config.partitioned_by_file_group = true;
+        config.file_groups = vec![
+            FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
+            FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
+        ];
+
+        let partitioning = config.output_partitioning();
+        match partitioning {
+            Partitioning::Hash(exprs, num_partitions) => {
+                assert_eq!(num_partitions, 2);
+                assert_eq!(exprs.len(), 2);
+                let col_names: Vec<_> = exprs
+                    .iter()
+                    .map(|e| e.as_any().downcast_ref::<Column>().unwrap().name())
+                    .collect();
+                assert_eq!(col_names, vec!["year", "month"]);
+            }
+            _ => panic!("Expected Hash partitioning"),
+        }
     }
 }

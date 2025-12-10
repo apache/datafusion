@@ -19,8 +19,8 @@
 
 use crate::{FileRange, PartitionedFile};
 use arrow::compute::SortOptions;
-use datafusion_common::utils::compare_rows;
 use datafusion_common::Statistics;
+use datafusion_common::utils::compare_rows;
 use itertools::Itertools;
 use std::cmp::{Ordering, min};
 use std::collections::{BinaryHeap, HashMap};
@@ -514,8 +514,7 @@ impl FileGroup {
             // Merge into max_target_partitions buckets using round-robin.
             // This maintains grouping by partition value as we are merging groups which already
             // contain all values for a partition key.
-            let mut target_groups: Vec<Vec<PartitionedFile>> =
-                vec![vec![]; max_target_partitions];
+            let mut target_groups = vec![vec![]; max_target_partitions];
 
             for (idx, (_, files)) in sorted_partitions.into_iter().enumerate() {
                 let bucket = idx % max_target_partitions;
@@ -1207,6 +1206,13 @@ mod test {
         PartitionedFile::new(path, file_size)
     }
 
+    /// Creates a file with partition value with a static size of 10.
+    fn pfile_with_pv(path: &str, pv: &str) -> PartitionedFile {
+        let mut file = pfile(path, 10);
+        file.partition_values = vec![ScalarValue::from(pv)];
+        file
+    }
+
     /// repartition the file groups both with and without preserving order
     /// asserting they return the same value and returns that value
     fn repartition_test(
@@ -1224,7 +1230,7 @@ mod test {
     }
 
     #[test]
-    fn test_group_by_partition_values() {
+    fn test_group_by_partition_values_edge_cases() {
         // Edge cases: empty and zero target
         assert!(FileGroup::default().group_by_partition_values(4).is_empty());
         assert!(
@@ -1232,15 +1238,10 @@ mod test {
                 .group_by_partition_values(0)
                 .is_empty()
         );
+    }
 
-        // Helper to create file with partition value
-        let pfile_with_pv = |path: &str, pv: &str| {
-            let mut f = pfile(path, 10);
-            f.partition_values = vec![ScalarValue::from(pv)];
-            f
-        };
-
-        // Case 1: fewer partitions than target
+    #[test]
+    fn test_group_by_partition_values_less_groups_than_target() {
         // File a and b have partition value p1.
         // File c has partition value p2.
         // Grouping by partition value should not redistribute any files since the number of partition
@@ -1254,8 +1255,10 @@ mod test {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].len(), 2);
         assert_eq!(groups[1].len(), 1);
+    }
 
-        // Case 2: more partitions than target
+    #[test]
+    fn test_group_by_partition_values_more_groups_than_target() {
         // Each file has a single partition value. The number of partition values > max_target_partitions, so
         // they should be round-robin distributed into groups.
         let fg = FileGroup::new(vec![

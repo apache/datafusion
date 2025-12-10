@@ -27,7 +27,8 @@
 //!
 //! When This Optimization Does NOT Help
 //! - GROUP BY non-partition columns: Required Hash distribution doesn't match declared partitioning
-//! - I/O Intensive Queries: Limits the parallilization at I/O level, benefits may not outweigh.
+//! - When the number of distinct file partitioning groups < the number of CPUs available: Reduces
+//!   parallelization, thus may outweigh the pros of reduced shuffles
 //!
 //! Usage
 //! - BENCH_SIZE=small|medium|large cargo bench -p datafusion --bench preserve_file_partitions

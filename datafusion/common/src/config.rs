@@ -974,7 +974,7 @@ config_namespace! {
         ///     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.
         ///     This threshold preserves I/O parallelism when file partitioning is below it.
         ///
-        /// Note: This may reduce parallelism at the I/O level if the number of distinct
+        /// Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct
         /// partitions is less than the target_partitions.
         pub preserve_file_partitions: usize, default = 0
 
