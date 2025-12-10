@@ -1074,6 +1074,44 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
                 internal_err!("Not supported")
             }
         }
+
+        fn deserialize_physical_plan(
+            &self,
+            proto: &datafusion_proto::protobuf::PhysicalPlanNode,
+            ctx: &TaskContext,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            datafusion_proto::physical_plan::default_deserialize_physical_plan(
+                proto, ctx, self,
+            )
+        }
+
+        fn serialize_physical_plan(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+        ) -> Result<datafusion_proto::protobuf::PhysicalPlanNode> {
+            datafusion_proto::physical_plan::default_serialize_physical_plan(plan, self)
+        }
+
+        fn deserialize_physical_expr(
+            &self,
+            proto: &datafusion_proto::protobuf::PhysicalExprNode,
+            ctx: &TaskContext,
+            input_schema: &arrow::datatypes::Schema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            datafusion_proto::physical_plan::default_deserialize_physical_expr(
+                proto,
+                ctx,
+                input_schema,
+                self,
+            )
+        }
+
+        fn serialize_physical_expr(
+            &self,
+            expr: &Arc<dyn PhysicalExpr>,
+        ) -> Result<datafusion_proto::protobuf::PhysicalExprNode> {
+            datafusion_proto::physical_plan::default_serialize_physical_expr(expr, self)
+        }
     }
 
     let exec_plan = DataSourceExec::from_data_source(scan_config);
@@ -1229,6 +1267,44 @@ impl PhysicalExtensionCodec for UDFExtensionCodec {
             })?;
         }
         Ok(())
+    }
+
+    fn deserialize_physical_plan(
+        &self,
+        proto: &datafusion_proto::protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        datafusion_proto::physical_plan::default_deserialize_physical_plan(
+            proto, ctx, self,
+        )
+    }
+
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<datafusion_proto::protobuf::PhysicalPlanNode> {
+        datafusion_proto::physical_plan::default_serialize_physical_plan(plan, self)
+    }
+
+    fn deserialize_physical_expr(
+        &self,
+        proto: &datafusion_proto::protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &arrow::datatypes::Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        datafusion_proto::physical_plan::default_deserialize_physical_expr(
+            proto,
+            ctx,
+            input_schema,
+            self,
+        )
+    }
+
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<datafusion_proto::protobuf::PhysicalExprNode> {
+        datafusion_proto::physical_plan::default_serialize_physical_expr(expr, self)
     }
 }
 
