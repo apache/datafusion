@@ -63,7 +63,6 @@ use std::fmt::Debug;
 ///     ELSE <optional-fallback_literal>
 /// END
 /// ```
-///
 #[derive(Debug)]
 pub(in super::super) struct LiteralLookupTable {
     /// The lookup table to use for evaluating the CASE expression
@@ -252,7 +251,6 @@ pub(super) trait WhenLiteralIndexMap: Debug + Send + Sync {
     ///
     /// the returned vector will be:
     /// - `[0, 2, else_index, 1, 0]`
-    ///
     fn map_to_when_indices(
         &self,
         array: &ArrayRef,

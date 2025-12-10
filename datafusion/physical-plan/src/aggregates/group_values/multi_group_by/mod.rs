@@ -180,7 +180,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// We don't really store the actual `group values` in `hashtable`,
     /// instead we store the `group indices` pointing to values in `GroupValues`.
     /// And we use [`GroupIndexView`] to represent such `group indices` in table.
-    ///
     map: HashTable<(u64, GroupIndexView)>,
 
     /// The size of `map` in bytes

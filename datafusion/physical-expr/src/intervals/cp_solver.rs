@@ -562,11 +562,11 @@ impl ExprIntervalGraph {
     /// use arrow::datatypes::Field;
     /// use arrow::datatypes::Schema;
     /// use datafusion_common::ScalarValue;
-    /// use datafusion_expr::interval_arithmetic::Interval;
     /// use datafusion_expr::Operator;
+    /// use datafusion_expr::interval_arithmetic::Interval;
+    /// use datafusion_physical_expr::PhysicalExpr;
     /// use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
     /// use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-    /// use datafusion_physical_expr::PhysicalExpr;
     /// use std::sync::Arc;
     ///
     /// let expr = Arc::new(BinaryExpr::new(

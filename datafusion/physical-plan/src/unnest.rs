@@ -591,7 +591,7 @@ struct UnnestingResult {
 /// ```
 /// Result:
 /// ```text
-///
+/// 
 ///     ┌────────────────────────────────────────────────┬────────────────────────────────────────────────┐
 ///     │ unnest(i, "recursive" := CAST('t' AS BOOLEAN)) │ unnest(j, "recursive" := CAST('t' AS BOOLEAN)) │
 ///     │                     int32                      │                     int32                      │

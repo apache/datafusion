@@ -57,7 +57,6 @@ impl UrlEncode {
     /// # Returns
     ///
     /// * `Ok(String)` - The encoded string
-    ///
     fn encode(value: &str) -> Result<String> {
         Ok(byte_serialize(value.as_bytes()).collect::<String>())
     }
@@ -104,7 +103,6 @@ impl ScalarUDFImpl for UrlEncode {
 ///
 /// * `Ok(ArrayRef)` - A new array of the same type containing encoded strings
 /// * `Err(DataFusionError)` - If invalid arguments are provided
-///
 fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 {
         return exec_err!("`url_encode` expects 1 argument");
