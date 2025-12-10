@@ -258,64 +258,77 @@ macro_rules! primitive_static_filter {
 
                 let haystack_has_nulls = self.null_count > 0;
 
-                let result = match (v.null_count() > 0, haystack_has_nulls, negated) {
-                    (true, _, false) | (false, true, false) => {
-                        // Either needle or haystack has nulls, not negated
-                        BooleanArray::from_iter(v.iter().map(|value| {
-                            match value {
-                                // SQL three-valued logic: null IN (...) is always null
-                                None => None,
-                                Some(v) => {
-                                    if self.values.contains(&v) {
-                                        Some(true)
-                                    } else if haystack_has_nulls {
-                                        // value not in set, but set has nulls -> null
-                                        None
-                                    } else {
-                                        Some(false)
-                                    }
-                                }
-                            }
-                        }))
+                let needle_values = v.values();
+                let needle_nulls = v.nulls();
+                let needle_has_nulls = v.null_count() > 0;
+
+                // Compute the "contains" result using collect_bool (fast batched approach)
+                // This ignores nulls - we handle them separately
+                let contains_buffer = if negated {
+                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
+                        !self.values.contains(&needle_values[i])
+                    })
+                } else {
+                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
+                        self.values.contains(&needle_values[i])
+                    })
+                };
+
+                // Compute the null mask
+                // Output is null when:
+                // 1. needle value is null, OR
+                // 2. needle value is not in set AND haystack has nulls
+                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
+                    (false, false) => {
+                        // No nulls anywhere
+                        None
                     }
-                    (true, _, true) | (false, true, true) => {
-                        // Either needle or haystack has nulls, negated
-                        BooleanArray::from_iter(v.iter().map(|value| {
-                            match value {
-                                // SQL three-valued logic: null NOT IN (...) is always null
-                                None => None,
-                                Some(v) => {
-                                    if self.values.contains(&v) {
-                                        Some(false)
-                                    } else if haystack_has_nulls {
-                                        // value not in set, but set has nulls -> null
-                                        None
-                                    } else {
-                                        Some(true)
-                                    }
-                                }
-                            }
-                        }))
+                    (true, false) => {
+                        // Only needle has nulls - just use needle's null mask
+                        needle_nulls.cloned()
                     }
-                    (false, false, false) => {
-                        // no nulls anywhere, not negated
-                        let values = v.values();
-                        let mut builder = BooleanBufferBuilder::new(values.len());
-                        for value in values.iter() {
-                            builder.append(self.values.contains(value));
-                        }
-                        BooleanArray::new(builder.finish(), None)
+                    (false, true) => {
+                        // Only haystack has nulls - null where not-in-set
+                        // For IN: null where contains is false
+                        // For NOT IN: null where contains is true (before negation, i.e., where original contains was false)
+                        // Since we already negated contains_buffer for NOT IN, we need to handle this:
+                        // - IN (negated=false): null where !contains_buffer
+                        // - NOT IN (negated=true): null where contains_buffer (which is !original_contains)
+                        // Actually both cases: null where the "not found" condition is true
+                        // For IN: not found = !contains_buffer
+                        // For NOT IN: not found = contains_buffer (since contains_buffer = !original_contains)
+                        // So the validity mask (valid = not null) is:
+                        // - IN: contains_buffer (found = valid)
+                        // - NOT IN: !contains_buffer (found in original = valid, but contains_buffer is negated)
+                        let validity = if negated {
+                            // For NOT IN: we want valid where original contains was true
+                            // contains_buffer = !original_contains, so validity = !contains_buffer
+                            !&contains_buffer
+                        } else {
+                            // For IN: valid where contains is true
+                            contains_buffer.clone()
+                        };
+                        Some(NullBuffer::new(validity))
                     }
-                    (false, false, true) => {
-                        let values = v.values();
-                        let mut builder = BooleanBufferBuilder::new(values.len());
-                        for value in values.iter() {
-                            builder.append(!self.values.contains(value));
-                        }
-                        BooleanArray::new(builder.finish(), None)
+                    (true, true) => {
+                        // Both have nulls - combine needle nulls with haystack-induced nulls
+                        let needle_validity = needle_nulls.map(|n| n.inner().clone())
+                            .unwrap_or_else(|| BooleanBuffer::new_set(needle_values.len()));
+
+                        // Haystack-induced validity (same logic as above)
+                        let haystack_validity = if negated {
+                            !&contains_buffer
+                        } else {
+                            contains_buffer.clone()
+                        };
+
+                        // Combined validity: valid only where both are valid
+                        let combined_validity = &needle_validity & &haystack_validity;
+                        Some(NullBuffer::new(combined_validity))
                     }
                 };
-                Ok(result)
+
+                Ok(BooleanArray::new(contains_buffer, result_nulls))
             }
         }
     };
