@@ -157,7 +157,8 @@ async fn row_count_demuxer(
     let max_buffered_batches = exec_options.max_buffered_batches_per_output_file;
     let minimum_parallel_files = exec_options.minimum_parallel_output_files;
     let mut part_idx = 0;
-    let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
+    let mut write_id = exec_options.partitioned_file_prefix_name.clone();
+    rand::distr::Alphanumeric.append_string(&mut rand::rng(), &mut write_id, 16);
 
     let mut open_file_streams = Vec::with_capacity(minimum_parallel_files);
 
@@ -301,9 +302,10 @@ async fn hive_style_partitions_demuxer(
     file_extension: String,
     keep_partition_by_columns: bool,
 ) -> Result<()> {
-    let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
-
     let exec_options = &context.session_config().options().execution;
+    let mut write_id = exec_options.partitioned_file_prefix_name.clone();
+    rand::distr::Alphanumeric.append_string(&mut rand::rng(), &mut write_id, 16);
+
     let max_buffered_recordbatches = exec_options.max_buffered_batches_per_output_file;
 
     // To support non string partition col types, cast the type to &str first
