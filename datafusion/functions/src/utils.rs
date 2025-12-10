@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, PrimitiveArray,
-};
+use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
 use arrow::datatypes::{
-    validate_decimal32_precision, validate_decimal64_precision, DataType, DecimalType,
+    DataType, DecimalType, validate_decimal32_precision, validate_decimal64_precision,
 };
 use arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
@@ -237,7 +235,7 @@ pub fn decimal32_to_i32(value: i32, precision: u8, scale: i8) -> Result<i32, Arr
     } else {
         validate_decimal32_precision(value, precision, scale)?;
 
-        match i32::from(10).checked_pow(scale as u32) {
+        match 10_i32.checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
                 "Cannot get a power of {scale}"
