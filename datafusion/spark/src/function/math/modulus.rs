@@ -83,15 +83,13 @@ impl ScalarUDFImpl for SparkMod {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        assert_eq_or_internal_err!(
-            arg_types.len(),
-            2,
-            "mod expects exactly two arguments"
-        );
+        internal_err("return_field_from_args should be used instead")
+    }
 
-        // Return the same type as the first argument for simplicity
-        // Arrow's rem function handles type promotion internally
-        Ok(arg_types[0].clone())
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+      let any_nullable = args.input_fields.iter().any(|f| f.is_nullable());
+      let data_type = args.input_fields[0].data_type().clone();
+      Ok(Arc::new(Field::new(args.name, data_type, any_nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
