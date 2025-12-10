@@ -18,7 +18,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::function::error_utils::unsupported_data_types_exec_err;
 use arrow::array::{
     Array, ArrayRef, DurationMicrosecondArray, Float64Array, IntervalMonthDayNanoArray,
     IntervalYearMonthArray,
@@ -30,14 +29,21 @@ use datafusion_common::cast::{
     as_duration_microsecond_array, as_float64_array, as_int32_array,
     as_interval_mdn_array, as_interval_ym_array,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::types::{
+    logical_duration_microsecond, logical_float64, logical_int32, logical_interval_mdn,
+    logical_interval_year_month, NativeType,
+};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::type_coercion::is_signed_numeric;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 use arrow::array::{Int32Array, Int32Builder};
 use arrow::datatypes::TimeUnit::Microsecond;
+use datafusion_expr::Coercion;
 use datafusion_expr::Volatility::Immutable;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -53,8 +59,59 @@ impl Default for SparkWidthBucket {
 
 impl SparkWidthBucket {
     pub fn new() -> Self {
+        let numeric = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
+        let duration = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_duration_microsecond()),
+            vec![TypeSignatureClass::Duration],
+            NativeType::Duration(Microsecond),
+        );
+        let interval_ym = Coercion::new_exact(TypeSignatureClass::Native(
+            logical_interval_year_month(),
+        ));
+        let interval_mdn =
+            Coercion::new_exact(TypeSignatureClass::Native(logical_interval_mdn()));
+        let bucket = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int32()),
+            vec![TypeSignatureClass::Integer],
+            NativeType::Int32,
+        );
+        let type_signature = Signature::one_of(
+            vec![
+                TypeSignature::Coercible(vec![
+                    numeric.clone(),
+                    numeric.clone(),
+                    numeric.clone(),
+                    bucket.clone(),
+                ]),
+                TypeSignature::Coercible(vec![
+                    duration.clone(),
+                    duration.clone(),
+                    duration.clone(),
+                    bucket.clone(),
+                ]),
+                TypeSignature::Coercible(vec![
+                    interval_ym.clone(),
+                    interval_ym.clone(),
+                    interval_ym.clone(),
+                    bucket.clone(),
+                ]),
+                TypeSignature::Coercible(vec![
+                    interval_mdn.clone(),
+                    interval_mdn.clone(),
+                    interval_mdn.clone(),
+                    bucket.clone(),
+                ]),
+            ],
+            Immutable,
+        )
+        .with_parameter_names(vec!["expr", "min", "max", "num_buckets"])
+        .expect("valid parameter names");
         Self {
-            signature: Signature::user_defined(Immutable),
+            signature: type_signature,
         }
     }
 }
@@ -86,63 +143,6 @@ impl ScalarUDFImpl for SparkWidthBucket {
             Ok(value.sort_properties)
         } else {
             Ok(SortProperties::default())
-        }
-    }
-
-    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        use DataType::*;
-
-        let (v, lo, hi, n) = (&types[0], &types[1], &types[2], &types[3]);
-
-        match (v, lo, hi, n) {
-            (a, b, c, &(Int8 | Int16 | Int32 | Int64))
-                if is_signed_numeric(a)
-                    && is_signed_numeric(b)
-                    && is_signed_numeric(c) =>
-            {
-                Ok(vec![Float64, Float64, Float64, Int32])
-            }
-            (
-                &Duration(_),
-                &Duration(_),
-                &Duration(_),
-                &(Int8 | Int16 | Int32 | Int64),
-            ) => Ok(vec![
-                Duration(Microsecond),
-                Duration(Microsecond),
-                Duration(Microsecond),
-                Int32,
-            ]),
-            (
-                &Interval(MonthDayNano),
-                &Interval(MonthDayNano),
-                &Interval(MonthDayNano),
-                &(Int8 | Int16 | Int32 | Int64),
-            ) => Ok(vec![
-                Interval(MonthDayNano),
-                Interval(MonthDayNano),
-                Interval(MonthDayNano),
-                Int32,
-            ]),
-            (
-                &Interval(YearMonth),
-                &Interval(YearMonth),
-                &Interval(YearMonth),
-                &(Int8 | Int16 | Int32 | Int64),
-            ) => Ok(vec![
-                Interval(YearMonth),
-                Interval(YearMonth),
-                Interval(YearMonth),
-                Int32,
-            ]),
-
-            _ => exec_err!(
-                "width_bucket expects a numeric argument, got {} {} {} {}",
-                types[0],
-                types[1],
-                types[2],
-                types[3]
-            ),
         }
     }
 }
@@ -182,20 +182,18 @@ fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
             let min = as_interval_mdn_array(minv)?;
             let max = as_interval_mdn_array(maxv)?;
             let n_bucket = as_int32_array(nb)?;
-            Ok(Arc::new(width_bucket_interval_mdn_exact(v, min, max, n_bucket)))
+            Ok(Arc::new(width_bucket_interval_mdn_exact(
+                v, min, max, n_bucket,
+            )))
         }
 
-
-        other => Err(unsupported_data_types_exec_err(
-            "width_bucket",
-            "Float/Decimal OR Duration OR Interval(YearMonth) for first 3 args; Int for 4th",
-            &[
-                other.clone(),
-                minv.data_type().clone(),
-                maxv.data_type().clone(),
-                nb.data_type().clone(),
-            ],
-        )),
+        other => internal_err!(
+            "width_bucket received unexpected data types: {:?}, {:?}, {:?}, {:?}",
+            other,
+            minv.data_type(),
+            maxv.data_type(),
+            nb.data_type()
+        ),
     }
 }
 
@@ -780,8 +778,7 @@ mod tests {
         let err = width_bucket_kern(&[v, lo, hi, n]).unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("unsupported data types")
-                || msg.contains("Float/Decimal OR Duration OR Interval(YearMonth)"),
+            msg.contains("width_bucket received unexpected data types"),
             "unexpected error: {msg}"
         );
     }

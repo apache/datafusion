@@ -28,10 +28,10 @@ use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
-use std::fs::File;
+use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::sync::Arc;
-use tempfile::tempdir;
+use tempfile::{tempdir, TempDir};
 
 /// This example demonstrates using DataFusion's DataFrame API
 ///
@@ -208,15 +208,26 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
     ctx.register_table("initial_data", Arc::new(mem_table))?;
     let df = ctx.table("initial_data").await?;
 
-    ctx.sql(
-        "create external table
-    test(tablecol1 varchar)
-    stored as parquet
-    location './datafusion-examples/test_table/'",
-    )
-    .await?
-    .collect()
-    .await?;
+    // Create a single temp root with subdirectories
+    let tmp_root = TempDir::new()?;
+    let examples_root = tmp_root.path().join("datafusion-examples");
+    create_dir_all(&examples_root)?;
+    let table_dir = examples_root.join("test_table");
+    let parquet_dir = examples_root.join("test_parquet");
+    let csv_dir = examples_root.join("test_csv");
+    let json_dir = examples_root.join("test_json");
+    create_dir_all(&table_dir)?;
+    create_dir_all(&parquet_dir)?;
+    create_dir_all(&csv_dir)?;
+    create_dir_all(&json_dir)?;
+
+    let create_sql = format!(
+        "CREATE EXTERNAL TABLE test(tablecol1 varchar)
+         STORED AS parquet
+         LOCATION '{}'",
+        table_dir.display()
+    );
+    ctx.sql(&create_sql).await?.collect().await?;
 
     // This is equivalent to INSERT INTO test VALUES ('a'), ('b'), ('c').
     // The behavior of write_table depends on the TableProvider's implementation
@@ -227,7 +238,7 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
 
     df.clone()
         .write_parquet(
-            "./datafusion-examples/test_parquet/",
+            parquet_dir.to_str().unwrap(),
             DataFrameWriteOptions::new(),
             None,
         )
@@ -235,7 +246,7 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
 
     df.clone()
         .write_csv(
-            "./datafusion-examples/test_csv/",
+            csv_dir.to_str().unwrap(),
             // DataFrameWriteOptions contains options which control how data is written
             // such as compression codec
             DataFrameWriteOptions::new(),
@@ -245,7 +256,7 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
 
     df.clone()
         .write_json(
-            "./datafusion-examples/test_json/",
+            json_dir.to_str().unwrap(),
             DataFrameWriteOptions::new(),
             None,
         )

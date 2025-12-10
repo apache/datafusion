@@ -21,48 +21,46 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example proto -- [composed_extension_codec]
+//! cargo run --example proto -- [all|composed_extension_codec]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `composed_extension_codec` — example of using multiple extension codecs for serialization / deserialization
 
 mod composed_extension_codec;
 
-use std::str::FromStr;
-
 use datafusion::error::{DataFusionError, Result};
+use strum::{IntoEnumIterator, VariantNames};
+use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
+#[derive(EnumIter, EnumString, Display, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 enum ExampleKind {
+    All,
     ComposedExtensionCodec,
 }
 
-impl AsRef<str> for ExampleKind {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::ComposedExtensionCodec => "composed_extension_codec",
-        }
-    }
-}
-
-impl FromStr for ExampleKind {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "composed_extension_codec" => Ok(Self::ComposedExtensionCodec),
-            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
-        }
-    }
-}
-
 impl ExampleKind {
-    const ALL: [Self; 1] = [Self::ComposedExtensionCodec];
-
     const EXAMPLE_NAME: &str = "proto";
 
-    fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+    fn runnable() -> impl Iterator<Item = ExampleKind> {
+        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::All => {
+                for example in ExampleKind::runnable() {
+                    println!("Running example: {example}");
+                    Box::pin(example.run()).await?;
+                }
+            }
+            ExampleKind::ComposedExtensionCodec => {
+                composed_extension_codec::composed_extension_codec().await?
+            }
+        }
+        Ok(())
     }
 }
 
@@ -71,19 +69,14 @@ async fn main() -> Result<()> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::variants().join("|")
+        ExampleKind::VARIANTS.join("|")
     );
 
-    let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{usage}");
-        DataFusionError::Execution("Missing argument".to_string())
-    })?;
+    let example: ExampleKind = std::env::args()
+        .nth(1)
+        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .parse()
+        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::ComposedExtensionCodec => {
-            composed_extension_codec::composed_extension_codec().await?
-        }
-    }
-
-    Ok(())
+    example.run().await
 }

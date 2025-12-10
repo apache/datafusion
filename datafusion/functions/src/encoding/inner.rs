@@ -26,15 +26,14 @@ use arrow::{
 };
 use arrow_buffer::{Buffer, OffsetBufferBuilder};
 use base64::{
-    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
     Engine as _,
+    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
-    types::{logical_binary, logical_string, NativeType},
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    types::{NativeType, logical_binary, logical_string},
     utils::take_function_args,
-    DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -326,7 +325,9 @@ impl TryFrom<&ColumnarValue> for Encoding {
                 _ => return exec_err!("Encoding must be a non-null string"),
             },
             ColumnarValue::Array(_) => {
-                return not_impl_err!("Encoding must be a scalar; array specified encoding is not yet supported")
+                return not_impl_err!(
+                    "Encoding must be a scalar; array specified encoding is not yet supported"
+                );
             }
         };
         match encoding {

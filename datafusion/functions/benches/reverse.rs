@@ -19,7 +19,7 @@ extern crate criterion;
 mod helper;
 
 use arrow::datatypes::{DataType, Field};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
