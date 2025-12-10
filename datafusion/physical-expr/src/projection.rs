@@ -37,7 +37,7 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-/// An expressions used by projection operations.
+/// An expression used by projection operations.
 ///
 /// The expression is evaluated and the result is stored in a column
 /// with the name specified by `alias`.
