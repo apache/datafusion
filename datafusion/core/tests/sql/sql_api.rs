@@ -38,32 +38,6 @@ async fn test_window_function() {
 }
 
 #[tokio::test]
-async fn grouping_sets_empty_grouping_id() {
-    let ctx = SessionContext::new();
-    let df = ctx
-        .sql(
-            "SELECT SUM(v1) FROM generate_series(10) AS t1(v1) GROUP BY GROUPING SETS(())",
-        )
-        .await
-        .unwrap();
-
-    let batches = df.collect().await.unwrap();
-    assert_eq!(batches.len(), 1);
-
-    let batch = &batches[0];
-    assert_eq!(batch.num_columns(), 1);
-    assert_eq!(batch.num_rows(), 1);
-
-    let values = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("SUM should produce an Int64Array");
-
-    assert_eq!(values.value(0), 55);
-}
-
-#[tokio::test]
 async fn unsupported_ddl_returns_error() {
     // Verify SessionContext::with_sql_options errors appropriately
     let ctx = SessionContext::new();

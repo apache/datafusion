@@ -218,3 +218,9 @@ query I
 SELECT COUNT(*) FROM test GROUP BY GROUPING SETS (());
 ----
 2
+
+# grouping_sets_with_empty_set
+query I
+SELECT SUM(v1) FROM generate_series(10) AS t1(v1) GROUP BY GROUPING SETS(())
+----
+55
