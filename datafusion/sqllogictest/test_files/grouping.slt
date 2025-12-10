@@ -212,3 +212,9 @@ select c1, grouping(c1, c2) from test group by CUBE(c1);
 
 statement error zero arguments
 select c1, grouping() from test group by CUBE(c1);
+
+# grouping_sets_with_empty_set
+query I
+SELECT COUNT(*) FROM test GROUP BY GROUPING SETS (());
+----
+2

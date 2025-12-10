@@ -17,6 +17,5 @@
 
 mod coop;
 mod datasource_split;
-mod grouping_sets;
 mod logical_plan;
 mod register_arrow;
