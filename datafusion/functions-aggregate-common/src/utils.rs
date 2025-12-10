@@ -31,6 +31,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use std::hash::Hash;
 use std::sync::Arc;
 
 /// Convert scalar values from an accumulator into arrays.
@@ -74,7 +75,7 @@ pub fn get_sort_options(ordering_req: &LexOrdering) -> Vec<SortOptions> {
 #[derive(Copy, Clone, Debug)]
 pub struct Hashable<T>(pub T);
 
-impl<T: ToByteSlice> std::hash::Hash for Hashable<T> {
+impl<T: ToByteSlice> Hash for Hashable<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.to_byte_slice().hash(state)
     }
@@ -87,6 +88,100 @@ impl<T: ArrowNativeTypeOp> PartialEq for Hashable<T> {
 }
 
 impl<T: ArrowNativeTypeOp> Eq for Hashable<T> {}
+
+/// Provides the hashing key to use for a given primitive type.
+///
+/// Floats use `Hashable` (byte-wise hash/equality), while integers and other
+/// hashable natives use the native type directly.
+pub trait DistinctKey: ArrowPrimitiveType + sealed::Sealed {
+    type Key: Eq + Hash + Copy + Send + Sync + 'static;
+
+    fn to_key(value: Self::Native) -> Self::Key;
+    fn from_key(key: Self::Key) -> Self::Native;
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+macro_rules! impl_hashable_key {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl sealed::Sealed for $t {}
+
+            impl DistinctKey for $t {
+                type Key = Hashable<Self::Native>;
+
+                #[inline]
+                fn to_key(value: Self::Native) -> Self::Key {
+                    Hashable(value)
+                }
+
+                #[inline]
+                fn from_key(key: Self::Key) -> Self::Native {
+                    key.0
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! impl_native_key {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl sealed::Sealed for $t {}
+
+            impl DistinctKey for $t {
+                type Key = <Self as ArrowPrimitiveType>::Native;
+
+                #[inline]
+                fn to_key(value: Self::Native) -> Self::Key {
+                    value
+                }
+
+                #[inline]
+                fn from_key(key: Self::Key) -> Self::Native {
+                    key
+                }
+            }
+        )+
+    };
+}
+
+impl_hashable_key!(
+    arrow::datatypes::Float16Type,
+    arrow::datatypes::Float32Type,
+    arrow::datatypes::Float64Type,
+);
+
+impl_native_key!(
+    arrow::datatypes::Int8Type,
+    arrow::datatypes::Int16Type,
+    arrow::datatypes::Int32Type,
+    arrow::datatypes::Int64Type,
+    arrow::datatypes::UInt8Type,
+    arrow::datatypes::UInt16Type,
+    arrow::datatypes::UInt32Type,
+    arrow::datatypes::UInt64Type,
+    arrow::datatypes::Decimal32Type,
+    arrow::datatypes::Decimal64Type,
+    arrow::datatypes::Decimal128Type,
+    arrow::datatypes::Decimal256Type,
+    arrow::datatypes::Date32Type,
+    arrow::datatypes::Date64Type,
+    arrow::datatypes::Time32MillisecondType,
+    arrow::datatypes::Time32SecondType,
+    arrow::datatypes::Time64MicrosecondType,
+    arrow::datatypes::Time64NanosecondType,
+    arrow::datatypes::DurationSecondType,
+    arrow::datatypes::DurationMillisecondType,
+    arrow::datatypes::DurationMicrosecondType,
+    arrow::datatypes::DurationNanosecondType,
+    arrow::datatypes::TimestampSecondType,
+    arrow::datatypes::TimestampMillisecondType,
+    arrow::datatypes::TimestampMicrosecondType,
+    arrow::datatypes::TimestampNanosecondType,
+);
 
 /// Computes averages for `Decimal128`/`Decimal256` values, checking for overflow
 ///
@@ -182,12 +277,12 @@ impl<T: DecimalType> DecimalAverager<T> {
 /// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
 /// in the final evaluation step so that we avoid expensive conversions and
 /// allocations during `update_batch`.
-pub struct GenericDistinctBuffer<T: ArrowPrimitiveType> {
-    pub values: HashSet<Hashable<T::Native>, RandomState>,
+pub struct GenericDistinctBuffer<T: ArrowPrimitiveType + DistinctKey> {
+    pub values: HashSet<<T as DistinctKey>::Key, RandomState>,
     data_type: DataType,
 }
 
-impl<T: ArrowPrimitiveType> std::fmt::Debug for GenericDistinctBuffer<T> {
+impl<T: ArrowPrimitiveType + DistinctKey> std::fmt::Debug for GenericDistinctBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -198,7 +293,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for GenericDistinctBuffer<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
+impl<T: ArrowPrimitiveType + DistinctKey> GenericDistinctBuffer<T> {
     pub fn new(data_type: DataType) -> Self {
         Self {
             values: HashSet::default(),
@@ -209,11 +304,13 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
     /// Mirrors [`Accumulator::state`].
     pub fn state(&self) -> Result<Vec<ScalarValue>> {
         let arr = Arc::new(
-            PrimitiveArray::<T>::from_iter_values(self.values.iter().map(|v| v.0))
-                // Ideally we'd just use T::DATA_TYPE but this misses things like
-                // decimal scale/precision and timestamp timezones, which need to
-                // match up with Accumulator::state_fields
-                .with_data_type(self.data_type.clone()),
+            PrimitiveArray::<T>::from_iter_values(
+                self.values.iter().map(|v| T::from_key(*v)),
+            )
+            // Ideally we'd just use T::DATA_TYPE but this misses things like
+            // decimal scale/precision and timestamp timezones, which need to
+            // match up with Accumulator::state_fields
+            .with_data_type(self.data_type.clone()),
         );
         Ok(vec![
             SingleRowListArrayBuilder::new(arr).build_list_scalar(),
@@ -234,10 +331,10 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
 
         let arr = as_primitive_array::<T>(&values[0])?;
         if arr.null_count() > 0 {
-            self.values.extend(arr.iter().flatten().map(Hashable));
+            self.values.extend(arr.iter().flatten().map(T::to_key));
         } else {
             self.values
-                .extend(arr.values().iter().cloned().map(Hashable));
+                .extend(arr.values().iter().cloned().map(T::to_key));
         }
 
         Ok(())
@@ -262,5 +359,15 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
         let num_elements = self.values.len();
         let fixed_size = size_of_val(self) + size_of_val(&self.values);
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+    }
+
+    /// Iterate over the stored distinct values as native types.
+    pub fn iter_native_values(&self) -> impl Iterator<Item = T::Native> + '_ {
+        self.values.iter().copied().map(T::from_key)
+    }
+
+    /// Drain and return the stored distinct values as native types.
+    pub fn drain_native_values(&mut self) -> impl Iterator<Item = T::Native> + '_ {
+        self.values.drain().map(T::from_key)
     }
 }

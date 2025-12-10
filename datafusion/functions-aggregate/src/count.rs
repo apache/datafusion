@@ -44,9 +44,7 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::BytesDistinctCountAccumulator,
     count_distinct::BytesViewDistinctCountAccumulator,
-    count_distinct::DictionaryCountAccumulator,
-    count_distinct::FloatDistinctCountAccumulator,
-    count_distinct::PrimitiveDistinctCountAccumulator,
+    count_distinct::DictionaryCountAccumulator, count_distinct::DistinctCountAccumulator,
     groups_accumulator::accumulate::accumulate_indices,
 };
 use datafusion_macros::user_doc;
@@ -180,77 +178,87 @@ impl Count {
 fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
     match data_type {
         // try and use a specialized accumulator if possible, otherwise fall back to generic accumulator
-        DataType::Int8 => Box::new(PrimitiveDistinctCountAccumulator::<Int8Type>::new(
+        DataType::Int8 => Box::new(DistinctCountAccumulator::<Int8Type>::with_data_type(
             data_type,
         )),
-        DataType::Int16 => Box::new(PrimitiveDistinctCountAccumulator::<Int16Type>::new(
-            data_type,
-        )),
-        DataType::Int32 => Box::new(PrimitiveDistinctCountAccumulator::<Int32Type>::new(
-            data_type,
-        )),
-        DataType::Int64 => Box::new(PrimitiveDistinctCountAccumulator::<Int64Type>::new(
-            data_type,
-        )),
-        DataType::UInt8 => Box::new(PrimitiveDistinctCountAccumulator::<UInt8Type>::new(
-            data_type,
-        )),
+        DataType::Int16 => Box::new(
+            DistinctCountAccumulator::<Int16Type>::with_data_type(data_type),
+        ),
+        DataType::Int32 => Box::new(
+            DistinctCountAccumulator::<Int32Type>::with_data_type(data_type),
+        ),
+        DataType::Int64 => Box::new(
+            DistinctCountAccumulator::<Int64Type>::with_data_type(data_type),
+        ),
+        DataType::UInt8 => Box::new(
+            DistinctCountAccumulator::<UInt8Type>::with_data_type(data_type),
+        ),
         DataType::UInt16 => Box::new(
-            PrimitiveDistinctCountAccumulator::<UInt16Type>::new(data_type),
+            DistinctCountAccumulator::<UInt16Type>::with_data_type(data_type),
         ),
         DataType::UInt32 => Box::new(
-            PrimitiveDistinctCountAccumulator::<UInt32Type>::new(data_type),
+            DistinctCountAccumulator::<UInt32Type>::with_data_type(data_type),
         ),
         DataType::UInt64 => Box::new(
-            PrimitiveDistinctCountAccumulator::<UInt64Type>::new(data_type),
+            DistinctCountAccumulator::<UInt64Type>::with_data_type(data_type),
         ),
-        DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
-            Decimal128Type,
-        >::new(data_type)),
-        DataType::Decimal256(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
-            Decimal256Type,
-        >::new(data_type)),
+        DataType::Decimal128(_, _) => Box::new(
+            DistinctCountAccumulator::<Decimal128Type>::with_data_type(data_type),
+        ),
+        DataType::Decimal256(_, _) => Box::new(
+            DistinctCountAccumulator::<Decimal256Type>::with_data_type(data_type),
+        ),
 
         DataType::Date32 => Box::new(
-            PrimitiveDistinctCountAccumulator::<Date32Type>::new(data_type),
+            DistinctCountAccumulator::<Date32Type>::with_data_type(data_type),
         ),
         DataType::Date64 => Box::new(
-            PrimitiveDistinctCountAccumulator::<Date64Type>::new(data_type),
+            DistinctCountAccumulator::<Date64Type>::with_data_type(data_type),
         ),
-        DataType::Time32(TimeUnit::Millisecond) => Box::new(
-            PrimitiveDistinctCountAccumulator::<Time32MillisecondType>::new(data_type),
-        ),
-        DataType::Time32(TimeUnit::Second) => Box::new(
-            PrimitiveDistinctCountAccumulator::<Time32SecondType>::new(data_type),
-        ),
-        DataType::Time64(TimeUnit::Microsecond) => Box::new(
-            PrimitiveDistinctCountAccumulator::<Time64MicrosecondType>::new(data_type),
-        ),
-        DataType::Time64(TimeUnit::Nanosecond) => Box::new(
-            PrimitiveDistinctCountAccumulator::<Time64NanosecondType>::new(data_type),
-        ),
+        DataType::Time32(TimeUnit::Millisecond) => Box::new(DistinctCountAccumulator::<
+            Time32MillisecondType,
+        >::with_data_type(
+            data_type
+        )),
+        DataType::Time32(TimeUnit::Second) => {
+            Box::new(
+                DistinctCountAccumulator::<Time32SecondType>::with_data_type(data_type),
+            )
+        }
+        DataType::Time64(TimeUnit::Microsecond) => Box::new(DistinctCountAccumulator::<
+            Time64MicrosecondType,
+        >::with_data_type(
+            data_type
+        )),
+        DataType::Time64(TimeUnit::Nanosecond) => Box::new(DistinctCountAccumulator::<
+            Time64NanosecondType,
+        >::with_data_type(
+            data_type
+        )),
         DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(
-            PrimitiveDistinctCountAccumulator::<TimestampMicrosecondType>::new(data_type),
+            DistinctCountAccumulator::<TimestampMicrosecondType>::with_data_type(
+                data_type,
+            ),
         ),
         DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(
-            PrimitiveDistinctCountAccumulator::<TimestampMillisecondType>::new(data_type),
+            DistinctCountAccumulator::<TimestampMillisecondType>::with_data_type(
+                data_type,
+            ),
         ),
         DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
-            PrimitiveDistinctCountAccumulator::<TimestampNanosecondType>::new(data_type),
+            DistinctCountAccumulator::<TimestampNanosecondType>::with_data_type(
+                data_type,
+            ),
         ),
-        DataType::Timestamp(TimeUnit::Second, _) => Box::new(
-            PrimitiveDistinctCountAccumulator::<TimestampSecondType>::new(data_type),
-        ),
+        DataType::Timestamp(TimeUnit::Second, _) => Box::new(DistinctCountAccumulator::<
+            TimestampSecondType,
+        >::with_data_type(
+            data_type
+        )),
 
-        DataType::Float16 => {
-            Box::new(FloatDistinctCountAccumulator::<Float16Type>::new())
-        }
-        DataType::Float32 => {
-            Box::new(FloatDistinctCountAccumulator::<Float32Type>::new())
-        }
-        DataType::Float64 => {
-            Box::new(FloatDistinctCountAccumulator::<Float64Type>::new())
-        }
+        DataType::Float16 => Box::new(DistinctCountAccumulator::<Float16Type>::new()),
+        DataType::Float32 => Box::new(DistinctCountAccumulator::<Float32Type>::new()),
+        DataType::Float64 => Box::new(DistinctCountAccumulator::<Float64Type>::new()),
 
         DataType::Utf8 => {
             Box::new(BytesDistinctCountAccumulator::<i32>::new(OutputType::Utf8))
@@ -272,7 +280,7 @@ fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
         )),
 
         // Use the generic accumulator based on `ScalarValue` for all other types
-        _ => Box::new(DistinctCountAccumulator {
+        _ => Box::new(ScalarDistinctCountAccumulator {
             values: HashSet::default(),
             state_data_type: data_type.clone(),
         }),
@@ -746,15 +754,15 @@ fn null_count_for_multiple_cols(values: &[ArrayRef]) -> usize {
 /// It stores intermediate results as a `ListArray`
 ///
 /// Note that many types have specialized accumulators that are (much)
-/// more efficient such as [`PrimitiveDistinctCountAccumulator`] and
+/// more efficient such as [`DistinctCountAccumulator`] and
 /// [`BytesDistinctCountAccumulator`]
 #[derive(Debug)]
-struct DistinctCountAccumulator {
+struct ScalarDistinctCountAccumulator {
     values: HashSet<ScalarValue, RandomState>,
     state_data_type: DataType,
 }
 
-impl DistinctCountAccumulator {
+impl ScalarDistinctCountAccumulator {
     // calculating the size for fixed length values, taking first batch size *
     // number of batches This method is faster than .full_size(), however it is
     // not suitable for variable length values like strings or complex types
@@ -784,7 +792,7 @@ impl DistinctCountAccumulator {
     }
 }
 
-impl Accumulator for DistinctCountAccumulator {
+impl Accumulator for ScalarDistinctCountAccumulator {
     /// Returns the distinct values seen so far as (one element) ListArray.
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let scalars = self.values.iter().cloned().collect::<Vec<_>>();
@@ -931,7 +939,7 @@ mod tests {
 
         // The expected behavior is that count_distinct should count only non-null values
         // which in this case are "a" and "c" (appearing as 0 and 2 in keys)
-        let mut accumulator = DistinctCountAccumulator {
+        let mut accumulator = ScalarDistinctCountAccumulator {
             values: HashSet::default(),
             state_data_type: dict_array.data_type().clone(),
         };
@@ -966,7 +974,7 @@ mod tests {
         let dict_array =
             DictionaryArray::<Int32Type>::try_new(dict_indices, Arc::new(dict_values))?;
 
-        let mut accumulator = DistinctCountAccumulator {
+        let mut accumulator = ScalarDistinctCountAccumulator {
             values: HashSet::default(),
             state_data_type: dict_array.data_type().clone(),
         };

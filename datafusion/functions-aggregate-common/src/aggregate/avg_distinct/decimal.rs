@@ -27,19 +27,19 @@ use std::fmt::Debug;
 use std::mem::size_of_val;
 
 use crate::aggregate::sum_distinct::DistinctSumAccumulator;
-use crate::utils::DecimalAverager;
+use crate::utils::{DecimalAverager, DistinctKey};
 
 /// Generic implementation of `AVG DISTINCT` for Decimal types.
 /// Handles both all Arrow decimal types (32, 64, 128 and 256 bits).
 #[derive(Debug)]
-pub struct DecimalDistinctAvgAccumulator<T: DecimalType + Debug> {
+pub struct DecimalDistinctAvgAccumulator<T: DecimalType + DistinctKey + Debug> {
     sum_accumulator: DistinctSumAccumulator<T>,
     sum_scale: i8,
     target_precision: u8,
     target_scale: i8,
 }
 
-impl<T: DecimalType + Debug> DecimalDistinctAvgAccumulator<T> {
+impl<T: DecimalType + DistinctKey + Debug> DecimalDistinctAvgAccumulator<T> {
     pub fn with_decimal_params(
         sum_scale: i8,
         target_precision: u8,
@@ -56,7 +56,7 @@ impl<T: DecimalType + Debug> DecimalDistinctAvgAccumulator<T> {
     }
 }
 
-impl<T: DecimalType + ArrowNumericType + Debug> Accumulator
+impl<T: DecimalType + ArrowNumericType + DistinctKey + Debug> Accumulator
     for DecimalDistinctAvgAccumulator<T>
 {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {

@@ -34,12 +34,12 @@ use crate::utils::GenericDistinctBuffer;
 
 /// Accumulator for computing SUM(DISTINCT expr)
 #[derive(Debug)]
-pub struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
+pub struct DistinctSumAccumulator<T: ArrowPrimitiveType + crate::utils::DistinctKey> {
     values: GenericDistinctBuffer<T>,
     data_type: DataType,
 }
 
-impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
+impl<T: ArrowPrimitiveType + crate::utils::DistinctKey> DistinctSumAccumulator<T> {
     pub fn new(data_type: &DataType) -> Self {
         Self {
             values: GenericDistinctBuffer::new(data_type.clone()),
@@ -52,7 +52,9 @@ impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
+impl<T: ArrowPrimitiveType + crate::utils::DistinctKey + Debug> Accumulator
+    for DistinctSumAccumulator<T>
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.values.state()
     }
@@ -70,8 +72,8 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
             ScalarValue::new_primitive::<T>(None, &self.data_type)
         } else {
             let mut acc = T::Native::usize_as(0);
-            for distinct_value in self.values.values.iter() {
-                acc = acc.add_wrapping(distinct_value.0)
+            for distinct_value in self.values.iter_native_values() {
+                acc = acc.add_wrapping(distinct_value)
             }
             ScalarValue::new_primitive::<T>(Some(acc), &self.data_type)
         }
