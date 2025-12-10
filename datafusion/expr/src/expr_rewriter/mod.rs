@@ -26,15 +26,15 @@ use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
+use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
 mod guarantees;
+pub use guarantees::GuaranteeRewriter;
 pub use guarantees::rewrite_with_guarantees;
 pub use guarantees::rewrite_with_guarantees_map;
-pub use guarantees::GuaranteeRewriter;
 mod order_by;
 
 pub use order_by::rewrite_sort_cols_by_aggs;
@@ -260,7 +260,11 @@ fn coerce_exprs_for_schema(
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
-                    _ => expr.cast_to(new_type, src_schema),
+                    _ => {
+                        // maintain the original name when casting
+                        let name = dst_schema.field(idx).name();
+                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                    }
                 }
             } else {
                 Ok(expr)
@@ -360,10 +364,10 @@ mod test {
 
     use super::*;
     use crate::literal::lit_with_metadata;
-    use crate::{col, lit, Cast};
+    use crate::{Cast, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::TreeNodeRewriter;
     use datafusion_common::ScalarValue;
+    use datafusion_common::tree_node::TreeNodeRewriter;
 
     #[derive(Default)]
     struct RecordingRewriter {

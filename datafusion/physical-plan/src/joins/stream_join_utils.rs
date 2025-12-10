@@ -78,7 +78,9 @@ impl JoinHashMapType for PruningJoinHashMap {
         hash_values: &[u64],
         limit: usize,
         offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<JoinHashMapOffset> {
         // Flatten the deque
         let next: Vec<u64> = self.next.iter().copied().collect();
         get_matched_indices_with_limit_offset::<u64>(
@@ -87,11 +89,17 @@ impl JoinHashMapType for PruningJoinHashMap {
             hash_values,
             limit,
             offset,
+            input_indices,
+            match_indices,
         )
     }
 
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 

@@ -18,13 +18,13 @@
 use std::sync::Arc;
 
 use crate::expressions::{self, Column};
-use crate::{create_physical_expr, LexOrdering, PhysicalSortExpr};
+use crate::{LexOrdering, PhysicalSortExpr, create_physical_expr};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Result};
 use datafusion_common::{DFSchema, HashMap};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, SortExpr};
 

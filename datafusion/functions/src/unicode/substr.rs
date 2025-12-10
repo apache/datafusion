@@ -28,9 +28,9 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
-    logical_int32, logical_int64, logical_string, NativeType,
+    NativeType, logical_int32, logical_int64, logical_string,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
@@ -364,7 +364,7 @@ fn string_view_substr(
         other => {
             return exec_err!(
                 "substr was called with {other} arguments. It requires 2 or 3."
-            )
+            );
         }
     }
 
@@ -470,7 +470,7 @@ mod tests {
     use arrow::array::{Array, StringViewArray};
     use arrow::datatypes::DataType::Utf8View;
 
-    use datafusion_common::{exec_err, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::unicode::substr::SubstrFunc;

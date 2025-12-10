@@ -36,7 +36,7 @@ default = ["compression"]
 
 [dependencies]
 arrow = { workspace = true }
-async-compression = { version = "0.4.30", features = [
+async-compression = { version = "0.4.35", features = [
     "bzip2",
     "gzip",
     "xz",
