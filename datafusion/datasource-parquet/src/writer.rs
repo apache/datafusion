@@ -39,9 +39,14 @@ pub async fn plan_to_parquet(
     let object_store_url = parsed.object_store();
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut join_set = JoinSet::new();
+    let exec_options = &task_ctx.session_config().options().execution;
     for i in 0..plan.output_partitioning().partition_count() {
         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
-        let filename = format!("{}/part-{i}.parquet", parsed.prefix());
+        let filename = format!(
+            "{}/{}part-{i}.parquet",
+            exec_options.partitioned_file_prefix_name,
+            parsed.prefix()
+        );
         let file = Path::parse(filename)?;
         let propclone = writer_properties.clone();
 
@@ -49,11 +54,7 @@ pub async fn plan_to_parquet(
         let buf_writer = BufWriter::with_capacity(
             storeref,
             file.clone(),
-            task_ctx
-                .session_config()
-                .options()
-                .execution
-                .objectstore_writer_buffer_size,
+            exec_options.objectstore_writer_buffer_size,
         );
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
