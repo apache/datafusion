@@ -2354,3 +2354,89 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
     }
     number
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+    fn make_field(name: &str, data_type: DataType, nullable: bool) -> FieldRef {
+        Arc::new(Field::new(name, data_type, nullable))
+    }
+
+    #[test]
+    fn format_string_return_field_non_nullable_all_args_non_nullable() -> Result<()> {
+        let func = FormatStringFunc::new();
+
+        let fmt_field = make_field("fmt", DataType::Utf8, false);
+        let arg_field = make_field("arg1", DataType::Int32, false);
+
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[fmt_field, arg_field],
+            scalar_arguments: &[None, None],
+        })?;
+
+        assert_eq!(out.data_type(), &DataType::Utf8);
+        assert!(
+            !out.is_nullable(),
+            "Result should be non-nullable when all args are non-nullable",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn format_string_return_field_nullable_when_any_arg_nullable() -> Result<()> {
+        let func = FormatStringFunc::new();
+
+        let fmt_field = make_field("fmt", DataType::Utf8, false);
+        let arg_field_nullable = make_field("arg1", DataType::Int32, true);
+
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[fmt_field, arg_field_nullable],
+            scalar_arguments: &[None, None],
+        })?;
+
+        assert_eq!(out.data_type(), &DataType::Utf8);
+        assert!(
+            out.is_nullable(),
+            "Result should be nullable when any arg is nullable",
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn format_string_return_field_respects_first_arg_type() -> Result<()> {
+        let func = FormatStringFunc::new();
+
+        // LargeUtf8 format
+        let fmt_large = make_field("fmt", DataType::LargeUtf8, false);
+        let arg = make_field("arg1", DataType::Int32, false);
+
+        let out_large = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[fmt_large, arg.clone()],
+            scalar_arguments: &[None, None],
+        })?;
+        assert_eq!(out_large.data_type(), &DataType::LargeUtf8);
+
+        // Utf8View format
+        let fmt_view = make_field("fmt", DataType::Utf8View, false);
+        let out_view = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[fmt_view, arg.clone()],
+            scalar_arguments: &[None, None],
+        })?;
+        assert_eq!(out_view.data_type(), &DataType::Utf8View);
+
+        // Null first arg -> Utf8
+        let fmt_null = make_field("fmt", DataType::Null, true);
+        let out_null = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[fmt_null, arg],
+            scalar_arguments: &[None, None],
+        })?;
+        assert_eq!(out_null.data_type(), &DataType::Utf8);
+
+        Ok(())
+    }
+}
