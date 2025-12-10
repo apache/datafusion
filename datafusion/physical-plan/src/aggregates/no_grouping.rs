@@ -62,6 +62,7 @@ struct AggregateStreamInner {
     input: SendableRecordBatchStream,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    grouping_id: Option<ScalarValue>,
 
     // ==== Runtime States/Buffers ====
     accumulators: Vec<AccumulatorItem>,
@@ -255,6 +256,7 @@ impl AggregateStream {
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
+        grouping_id: Option<ScalarValue>,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
         let agg_filter_expr = agg.filter_expr.clone();
@@ -301,6 +303,7 @@ impl AggregateStream {
             baseline_metrics,
             aggregate_expressions,
             filter_expressions,
+            grouping_id,
             accumulators,
             reservation,
             finished: false,
@@ -348,7 +351,17 @@ impl AggregateStream {
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)
-                                .and_then(|columns| {
+                                .and_then(|mut columns| {
+                                    if let Some(grouping_id) = &this.grouping_id {
+                                        let num_rows = columns
+                                            .first()
+                                            .map(|array| array.len())
+                                            .unwrap_or(1);
+                                        let grouping_ids =
+                                            grouping_id.to_array_of_size(num_rows)?;
+                                        columns.insert(0, grouping_ids);
+                                    }
+
                                     RecordBatch::try_new(
                                         Arc::clone(&this.schema),
                                         columns,

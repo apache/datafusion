@@ -42,12 +42,13 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints, Result, ScalarValue,
+    assert_eq_or_internal_err, internal_err, not_impl_err, Constraint, Constraints,
+    Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
@@ -177,6 +178,9 @@ pub struct PhysicalGroupBy {
     /// expression in null_expr. If `groups[i][j]` is true, then the
     /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
     groups: Vec<Vec<bool>>,
+    /// True if this grouping is created from a `GROUPING SET` style expression
+    /// (including cube and rollup)
+    is_grouping_sets: bool,
 }
 
 impl PhysicalGroupBy {
@@ -190,7 +194,14 @@ impl PhysicalGroupBy {
             expr,
             null_expr,
             groups,
+            is_grouping_sets: false,
         }
+    }
+
+    /// Mark this `PhysicalGroupBy` as coming from `GROUPING SETS`/`CUBE`/`ROLLUP`.
+    pub fn with_grouping_sets(mut self, is_grouping_sets: bool) -> Self {
+        self.is_grouping_sets = is_grouping_sets;
+        self
     }
 
     /// Create a GROUPING SET with only a single group. This is the "standard"
@@ -201,6 +212,7 @@ impl PhysicalGroupBy {
             expr,
             null_expr: vec![],
             groups: vec![vec![false; num_exprs]],
+            is_grouping_sets: false,
         }
     }
 
@@ -232,6 +244,33 @@ impl PhysicalGroupBy {
         &self.groups
     }
 
+    /// Returns true if this `PhysicalGroupBy` was constructed from grouping sets.
+    pub fn is_grouping_sets(&self) -> bool {
+        self.is_grouping_sets
+    }
+
+    /// Returns the grouping id value if this grouping set requires it.
+    pub fn grouping_id_value(&self) -> Result<Option<ScalarValue>> {
+        if !self.is_grouping_sets {
+            return Ok(None);
+        }
+
+        let data_type = Aggregate::grouping_id_type(self.expr.len());
+        let scalar = match data_type {
+            DataType::UInt8 => ScalarValue::UInt8(Some(0)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(0)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(0)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(0)),
+            _ => {
+                return internal_err!(
+                    "Unexpected grouping id type for grouping sets: {data_type}"
+                )
+            }
+        };
+
+        Ok(Some(scalar))
+    }
+
     /// Returns true if this `PhysicalGroupBy` has no group expressions
     pub fn is_empty(&self) -> bool {
         self.expr.is_empty()
@@ -239,7 +278,7 @@ impl PhysicalGroupBy {
 
     /// Check whether grouping set is single group
     pub fn is_single(&self) -> bool {
-        self.null_expr.is_empty()
+        self.null_expr.is_empty() && !self.is_grouping_sets
     }
 
     /// Calculate GROUP BY expressions according to input schema.
@@ -344,17 +383,18 @@ impl PhysicalGroupBy {
                 )
                 .collect();
         let num_exprs = expr.len();
-        let groups = if self.expr.is_empty() {
-            // No GROUP BY expressions - should have no groups
+        let groups = if num_exprs == 0 {
             vec![]
         } else {
-            // Has GROUP BY expressions - create a single group
             vec![vec![false; num_exprs]]
         };
         Self {
             expr,
             null_expr: vec![],
             groups,
+            // Final aggregation receives the grouping id explicitly as part of `expr`
+            // so it should not be treated as a grouping set.
+            is_grouping_sets: false,
         }
     }
 }
@@ -374,6 +414,7 @@ impl PartialEq for PhysicalGroupBy {
                 .zip(other.null_expr.iter())
                 .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
             && self.groups == other.groups
+            && self.is_grouping_sets == other.is_grouping_sets
     }
 }
 
@@ -724,9 +765,12 @@ impl AggregateExec {
         context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
         // no group by at all
-        if self.group_by.expr.is_empty() {
+        if self.group_by.is_empty() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
-                self, context, partition,
+                self,
+                context,
+                partition,
+                self.group_by.grouping_id_value()?,
             )?));
         }
 
@@ -757,7 +801,7 @@ impl AggregateExec {
     /// on an AggregateExec.
     pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         // ensure there is a group by
-        if self.group_expr().is_empty() {
+        if self.group_by.is_empty() {
             return false;
         }
         // ensure there are no aggregate expressions

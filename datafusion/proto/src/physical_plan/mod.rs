@@ -1093,9 +1093,12 @@ impl protobuf::PhysicalPlanNode {
             .as_ref()
             .map(|lit_value| lit_value.limit as usize);
 
+        let group_by = PhysicalGroupBy::new(group_expr, null_expr, groups)
+            .with_grouping_sets(hash_agg.is_grouping_sets);
+
         let agg = AggregateExec::try_new(
             agg_mode,
-            PhysicalGroupBy::new(group_expr, null_expr, groups),
+            group_by,
             physical_aggr_expr,
             physical_filter_expr,
             input,
@@ -2490,6 +2493,7 @@ impl protobuf::PhysicalPlanNode {
                     null_expr,
                     groups,
                     limit,
+                    is_grouping_sets: exec.group_expr().is_grouping_sets(),
                 },
             ))),
         })
