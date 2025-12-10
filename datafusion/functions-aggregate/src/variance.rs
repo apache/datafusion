@@ -21,16 +21,16 @@
 use arrow::datatypes::FieldRef;
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, BooleanArray, FixedSizeBinaryArray,
-        FixedSizeBinaryBuilder, Float64Array, Float64Builder, PrimitiveArray,
-        UInt64Array, UInt64Builder,
+        Array, ArrayRef, AsArray, BooleanArray, Decimal256Builder, FixedSizeBinaryArray,
+        FixedSizeBinaryBuilder, Float64Array, PrimitiveArray, UInt64Array, UInt64Builder,
     },
     buffer::NullBuffer,
     compute::kernels::cast,
     datatypes::i256,
     datatypes::{
         ArrowNumericType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-        Decimal64Type, DecimalType, Field, DECIMAL256_MAX_SCALE,
+        Decimal64Type, DecimalType, Field, DECIMAL256_MAX_PRECISION,
+        DECIMAL256_MAX_SCALE,
     },
 };
 use datafusion_common::{
@@ -40,16 +40,17 @@ use datafusion_common::{
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Coercion, Documentation, GroupsAccumulator, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
 };
 use datafusion_macros::user_doc;
-use std::convert::TryInto;
 use std::mem::{size_of, size_of_val};
-use std::{fmt::Debug, marker::PhantomData, ops::Neg, sync::Arc};
+#[cfg(test)]
+use std::{convert::TryInto, ops::Neg};
+use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 
 make_udaf_expr_and_func!(
     VarianceSample,
@@ -68,23 +69,17 @@ make_udaf_expr_and_func!(
 );
 
 fn variance_signature() -> Signature {
-    Signature::one_of(
-        vec![
-            TypeSignature::Numeric(1),
-            TypeSignature::Coercible(vec![Coercion::new_exact(
-                TypeSignatureClass::Decimal,
-            )]),
-        ],
-        Volatility::Immutable,
-    )
+    Signature::numeric(1, Volatility::Immutable)
 }
 
 const DECIMAL_VARIANCE_BINARY_SIZE: i32 = 32;
+const DECIMAL_VARIANCE_SCALE_INCREMENT: i8 = 6;
 
 fn decimal_overflow_err() -> DataFusionError {
     DataFusionError::Execution("Decimal variance overflow".to_string())
 }
 
+#[cfg(test)]
 fn i256_to_f64_lossy(value: i256) -> f64 {
     const SCALE: f64 = 18446744073709551616.0; // 2^64
     let mut abs = value;
@@ -115,6 +110,27 @@ fn decimal_scale(dt: &DataType) -> Option<i8> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DecimalVarianceParams {
+    input_scale: i8,
+    result_precision: u8,
+    result_scale: i8,
+}
+
+fn decimal_variance_params(data_type: &DataType) -> Option<DecimalVarianceParams> {
+    decimal_scale(data_type).map(|input_scale| {
+        let base_scale = input_scale.saturating_mul(2);
+        let target_scale = base_scale
+            .saturating_add(DECIMAL_VARIANCE_SCALE_INCREMENT)
+            .min(DECIMAL256_MAX_SCALE);
+        DecimalVarianceParams {
+            input_scale,
+            result_precision: DECIMAL256_MAX_PRECISION,
+            result_scale: target_scale,
+        }
+    })
+}
+
 fn decimal_variance_state_fields(name: &str) -> Vec<FieldRef> {
     vec![
         Field::new(format_state_name(name, "count"), DataType::UInt64, true),
@@ -134,15 +150,13 @@ fn decimal_variance_state_fields(name: &str) -> Vec<FieldRef> {
     .collect()
 }
 
-fn is_numeric_or_decimal(data_type: &DataType) -> bool {
-    data_type.is_numeric()
-        || matches!(
-            data_type,
-            DataType::Decimal32(_, _)
-                | DataType::Decimal64(_, _)
-                | DataType::Decimal128(_, _)
-                | DataType::Decimal256(_, _)
-        )
+fn pow10_i256(exp: u32) -> Result<i256> {
+    let mut value = i256::from_i128(1);
+    let ten = i256::from_i128(10);
+    for _ in 0..exp {
+        value = value.checked_mul(ten).ok_or_else(decimal_overflow_err)?;
+    }
+    Ok(value)
 }
 
 fn i256_from_bytes(bytes: &[u8]) -> Result<i256> {
@@ -171,26 +185,27 @@ fn create_decimal_variance_accumulator(
     data_type: &DataType,
     stats_type: StatsType,
 ) -> Result<Option<Box<dyn Accumulator>>> {
-    let accumulator = match data_type {
-        DataType::Decimal32(_, scale) => Some(Box::new(DecimalVarianceAccumulator::<
+    let Some(params) = decimal_variance_params(data_type) else {
+        return Ok(None);
+    };
+    let accumulator: Option<Box<dyn Accumulator>> = match data_type {
+        DataType::Decimal32(_, _) => Some(Box::new(DecimalVarianceAccumulator::<
             Decimal32Type,
-        >::try_new(
-            *scale, stats_type
-        )?) as Box<dyn Accumulator>),
-        DataType::Decimal64(_, scale) => Some(Box::new(DecimalVarianceAccumulator::<
+        >::try_new(params, stats_type)?)
+            as Box<dyn Accumulator>),
+        DataType::Decimal64(_, _) => Some(Box::new(DecimalVarianceAccumulator::<
             Decimal64Type,
-        >::try_new(
-            *scale, stats_type
-        )?) as Box<dyn Accumulator>),
-        DataType::Decimal128(_, scale) => Some(Box::new(DecimalVarianceAccumulator::<
+        >::try_new(params, stats_type)?)
+            as Box<dyn Accumulator>),
+        DataType::Decimal128(_, _) => Some(Box::new(DecimalVarianceAccumulator::<
             Decimal128Type,
         >::try_new(
-            *scale, stats_type
+            params, stats_type
         )?) as Box<dyn Accumulator>),
-        DataType::Decimal256(_, scale) => Some(Box::new(DecimalVarianceAccumulator::<
+        DataType::Decimal256(_, _) => Some(Box::new(DecimalVarianceAccumulator::<
             Decimal256Type,
         >::try_new(
-            *scale, stats_type
+            params, stats_type
         )?) as Box<dyn Accumulator>),
         _ => None,
     };
@@ -201,27 +216,28 @@ fn create_decimal_variance_groups_accumulator(
     data_type: &DataType,
     stats_type: StatsType,
 ) -> Result<Option<Box<dyn GroupsAccumulator>>> {
-    let accumulator = match data_type {
-        DataType::Decimal32(_, scale) => Some(Box::new(
-            DecimalVarianceGroupsAccumulator::<Decimal32Type>::try_new(
-                *scale, stats_type,
-            )?,
-        ) as Box<dyn GroupsAccumulator>),
-        DataType::Decimal64(_, scale) => Some(Box::new(
-            DecimalVarianceGroupsAccumulator::<Decimal64Type>::try_new(
-                *scale, stats_type,
-            )?,
-        ) as Box<dyn GroupsAccumulator>),
-        DataType::Decimal128(_, scale) => Some(Box::new(
-            DecimalVarianceGroupsAccumulator::<Decimal128Type>::try_new(
-                *scale, stats_type,
-            )?,
-        ) as Box<dyn GroupsAccumulator>),
-        DataType::Decimal256(_, scale) => Some(Box::new(
-            DecimalVarianceGroupsAccumulator::<Decimal256Type>::try_new(
-                *scale, stats_type,
-            )?,
-        ) as Box<dyn GroupsAccumulator>),
+    let Some(params) = decimal_variance_params(data_type) else {
+        return Ok(None);
+    };
+    let accumulator: Option<Box<dyn GroupsAccumulator>> = match data_type {
+        DataType::Decimal32(_, _) => Some(Box::new(DecimalVarianceGroupsAccumulator::<
+            Decimal32Type,
+        >::try_new(params, stats_type)?)
+            as Box<dyn GroupsAccumulator>),
+        DataType::Decimal64(_, _) => Some(Box::new(DecimalVarianceGroupsAccumulator::<
+            Decimal64Type,
+        >::try_new(params, stats_type)?)
+            as Box<dyn GroupsAccumulator>),
+        DataType::Decimal128(_, _) => Some(Box::new(DecimalVarianceGroupsAccumulator::<
+            Decimal128Type,
+        >::try_new(
+            params, stats_type
+        )?) as Box<dyn GroupsAccumulator>),
+        DataType::Decimal256(_, _) => Some(Box::new(DecimalVarianceGroupsAccumulator::<
+            Decimal256Type,
+        >::try_new(
+            params, stats_type
+        )?) as Box<dyn GroupsAccumulator>),
         _ => None,
     };
     Ok(accumulator)
@@ -310,7 +326,11 @@ impl DecimalVarianceState {
         Ok(())
     }
 
-    fn variance(&self, stats_type: StatsType, scale: i8) -> Result<Option<f64>> {
+    fn variance_decimal(
+        &self,
+        stats_type: StatsType,
+        params: DecimalVarianceParams,
+    ) -> Result<Option<i256>> {
         if self.count == 0 {
             return Ok(None);
         }
@@ -343,23 +363,40 @@ impl DecimalVarianceState {
         };
 
         let denominator_counts = match stats_type {
-            StatsType::Population => {
-                let count = self.count as f64;
-                count * count
-            }
-            StatsType::Sample => {
-                let count = self.count as f64;
-                count * ((self.count - 1) as f64)
-            }
+            StatsType::Population => count_i256
+                .checked_mul(count_i256)
+                .ok_or_else(decimal_overflow_err)?,
+            StatsType::Sample => count_i256
+                .checked_mul(i256::from_i128((self.count - 1) as i128))
+                .ok_or_else(decimal_overflow_err)?,
         };
 
-        if denominator_counts == 0.0 {
+        if denominator_counts == i256::ZERO {
             return Ok(None);
         }
 
-        let numerator_f64 = i256_to_f64_lossy(numerator);
-        let scale_factor = 10f64.powi(2 * scale as i32);
-        Ok(Some(numerator_f64 / (denominator_counts * scale_factor)))
+        let two_scale = params.input_scale.saturating_mul(2);
+        if params.result_scale >= two_scale {
+            let up = params.result_scale - two_scale;
+            let factor = pow10_i256(up as u32)?;
+            let scaled_numerator = numerator
+                .checked_mul(factor)
+                .ok_or_else(decimal_overflow_err)?;
+            let value = scaled_numerator
+                .checked_div(denominator_counts)
+                .ok_or_else(decimal_overflow_err)?;
+            return Ok(Some(value));
+        }
+
+        let down = two_scale - params.result_scale;
+        let factor = pow10_i256(down as u32)?;
+        let scaled_numerator = numerator
+            .checked_div(factor)
+            .ok_or_else(decimal_overflow_err)?;
+        let value = scaled_numerator
+            .checked_div(denominator_counts)
+            .ok_or_else(decimal_overflow_err)?;
+        Ok(Some(value))
     }
 
     fn to_scalar_state(&self) -> Vec<ScalarValue> {
@@ -378,7 +415,7 @@ where
     T::Native: DecimalNative,
 {
     state: DecimalVarianceState,
-    scale: i8,
+    params: DecimalVarianceParams,
     stats_type: StatsType,
     _marker: PhantomData<T>,
 }
@@ -388,17 +425,17 @@ where
     T: DecimalType + ArrowNumericType + Debug,
     T::Native: DecimalNative,
 {
-    fn try_new(scale: i8, stats_type: StatsType) -> Result<Self> {
-        if scale > DECIMAL256_MAX_SCALE {
+    fn try_new(params: DecimalVarianceParams, stats_type: StatsType) -> Result<Self> {
+        if params.input_scale > DECIMAL256_MAX_SCALE {
             return exec_err!(
                 "Decimal variance does not support scale {} greater than {}",
-                scale,
+                params.input_scale,
                 DECIMAL256_MAX_SCALE
             );
         }
         Ok(Self {
             state: DecimalVarianceState::default(),
-            scale,
+            params,
             stats_type,
             _marker: PhantomData,
         })
@@ -460,9 +497,29 @@ where
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        match self.state.variance(self.stats_type, self.scale)? {
-            Some(v) => Ok(ScalarValue::Float64(Some(v))),
-            None => Ok(ScalarValue::Float64(None)),
+        let value = self.state.variance_decimal(self.stats_type, self.params)?;
+        match value {
+            Some(v) => {
+                if Decimal256Type::validate_decimal_precision(
+                    v,
+                    self.params.result_precision,
+                    self.params.result_scale,
+                )
+                .is_err()
+                {
+                    return Err(decimal_overflow_err());
+                }
+                Ok(ScalarValue::Decimal256(
+                    Some(v),
+                    self.params.result_precision,
+                    self.params.result_scale,
+                ))
+            }
+            None => Ok(ScalarValue::Decimal256(
+                None,
+                self.params.result_precision,
+                self.params.result_scale,
+            )),
         }
     }
 
@@ -482,7 +539,7 @@ where
     T::Native: DecimalNative,
 {
     states: Vec<DecimalVarianceState>,
-    scale: i8,
+    params: DecimalVarianceParams,
     stats_type: StatsType,
     _marker: PhantomData<T>,
 }
@@ -492,17 +549,17 @@ where
     T: DecimalType + ArrowNumericType + Debug,
     T::Native: DecimalNative,
 {
-    fn try_new(scale: i8, stats_type: StatsType) -> Result<Self> {
-        if scale > DECIMAL256_MAX_SCALE {
+    fn try_new(params: DecimalVarianceParams, stats_type: StatsType) -> Result<Self> {
+        if params.input_scale > DECIMAL256_MAX_SCALE {
             return exec_err!(
                 "Decimal variance does not support scale {} greater than {}",
-                scale,
+                params.input_scale,
                 DECIMAL256_MAX_SCALE
             );
         }
         Ok(Self {
             states: Vec::new(),
-            scale,
+            params,
             stats_type,
             _marker: PhantomData,
         })
@@ -579,14 +636,29 @@ where
 
     fn evaluate(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<ArrayRef> {
         let states = emit_to.take_needed(&mut self.states);
-        let mut builder = Float64Builder::with_capacity(states.len());
+        let mut builder = Decimal256Builder::with_capacity(states.len());
         for state in &states {
-            match state.variance(self.stats_type, self.scale)? {
-                Some(value) => builder.append_value(value),
+            match state.variance_decimal(self.stats_type, self.params)? {
+                Some(value) => {
+                    if Decimal256Type::validate_decimal_precision(
+                        value,
+                        self.params.result_precision,
+                        self.params.result_scale,
+                    )
+                    .is_err()
+                    {
+                        return Err(decimal_overflow_err());
+                    }
+                    builder.append_value(value)
+                }
                 None => builder.append_null(),
             }
         }
-        Ok(Arc::new(builder.finish()))
+        let array = builder.finish().with_precision_and_scale(
+            self.params.result_precision,
+            self.params.result_scale,
+        )?;
+        Ok(Arc::new(array))
     }
 
     fn state(&mut self, emit_to: datafusion_expr::EmitTo) -> Result<Vec<ArrayRef>> {
@@ -668,7 +740,16 @@ impl AggregateUDFImpl for VarianceSample {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if let Some(params) = decimal_variance_params(&arg_types[0]) {
+            return Ok(DataType::Decimal256(
+                params.result_precision,
+                params.result_scale,
+            ));
+        }
+        if !arg_types[0].is_numeric() {
+            return plan_err!("Variance requires numeric input types");
+        }
         Ok(DataType::Float64)
     }
 
@@ -783,7 +864,14 @@ impl AggregateUDFImpl for VariancePopulation {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !is_numeric_or_decimal(&arg_types[0]) {
+        if let Some(params) = decimal_variance_params(&arg_types[0]) {
+            return Ok(DataType::Decimal256(
+                params.result_precision,
+                params.result_scale,
+            ));
+        }
+
+        if !arg_types[0].is_numeric() {
             return plan_err!("Variance requires numeric input types");
         }
 
@@ -1189,7 +1277,9 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Decimal128Array, Decimal128Builder, Float64Array};
+    use arrow::array::{
+        Decimal128Array, Decimal128Builder, Decimal256Array, Float64Array,
+    };
     use arrow::datatypes::DECIMAL256_MAX_PRECISION;
     use datafusion_expr::EmitTo;
     use std::sync::Arc;
@@ -1215,19 +1305,27 @@ mod tests {
         let decimal_array = builder.finish().with_precision_and_scale(10, 3).unwrap();
         let array: ArrayRef = Arc::new(decimal_array);
 
+        let params = decimal_variance_params(&DataType::Decimal128(10, 3))
+            .expect("decimal params");
         let mut pop_acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
-            3,
+            params,
             StatsType::Population,
         )?;
         let pop_input = [Arc::clone(&array)];
         pop_acc.update_batch(&pop_input)?;
-        assert_variance(pop_acc.evaluate()?, 11025.9450285);
+        assert_decimal_variance(pop_acc.evaluate()?, 11025.9450285, params.result_scale);
 
-        let mut sample_acc =
-            DecimalVarianceAccumulator::<Decimal128Type>::try_new(3, StatsType::Sample)?;
+        let mut sample_acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
+            params,
+            StatsType::Sample,
+        )?;
         let sample_input = [array];
         sample_acc.update_batch(&sample_input)?;
-        assert_variance(sample_acc.evaluate()?, 11606.257924736841);
+        assert_decimal_variance(
+            sample_acc.evaluate()?,
+            11606.257924736841,
+            params.result_scale,
+        );
 
         Ok(())
     }
@@ -1241,12 +1339,14 @@ mod tests {
         let array = builder.finish().with_precision_and_scale(10, 2).unwrap();
         let array: ArrayRef = Arc::new(array);
 
+        let params = decimal_variance_params(&DataType::Decimal128(10, 2))
+            .expect("decimal params");
         let mut acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
-            2,
+            params,
             StatsType::Population,
         )?;
         acc.update_batch(&[Arc::clone(&array)])?;
-        assert_variance(acc.evaluate()?, 1.0);
+        assert_decimal_variance(acc.evaluate()?, 1.0, params.result_scale);
         Ok(())
     }
 
@@ -1257,13 +1357,15 @@ mod tests {
             .unwrap();
         let array: ArrayRef = Arc::new(array);
 
+        let params = decimal_variance_params(&DataType::Decimal128(10, 2))
+            .expect("decimal params");
         let mut acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
-            2,
+            params,
             StatsType::Population,
         )?;
         acc.update_batch(&[array])?;
         match acc.evaluate()? {
-            ScalarValue::Float64(None) => Ok(()),
+            ScalarValue::Decimal256(None, ..) => Ok(()),
             other => panic!("expected NULL variance for empty input, got {other:?}"),
         }
     }
@@ -1274,11 +1376,15 @@ mod tests {
             .with_precision_and_scale(10, 2)
             .unwrap();
         let array: ArrayRef = Arc::new(array);
-        let mut acc =
-            DecimalVarianceAccumulator::<Decimal128Type>::try_new(2, StatsType::Sample)?;
+        let params = decimal_variance_params(&DataType::Decimal128(10, 2))
+            .expect("decimal params");
+        let mut acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
+            params,
+            StatsType::Sample,
+        )?;
         acc.update_batch(&[array])?;
         match acc.evaluate()? {
-            ScalarValue::Float64(None) => Ok(()),
+            ScalarValue::Decimal256(None, ..) => Ok(()),
             other => {
                 panic!("expected NULL sample variance for single value, got {other:?}")
             }
@@ -1292,16 +1398,22 @@ mod tests {
                 .with_precision_and_scale(10, 2)
                 .unwrap();
         let array: ArrayRef = Arc::new(array);
+        let params = decimal_variance_params(&DataType::Decimal128(10, 2))
+            .expect("decimal params");
         let mut groups = DecimalVarianceGroupsAccumulator::<Decimal128Type>::try_new(
-            2,
+            params,
             StatsType::Population,
         )?;
         let group_indices = vec![0, 0, 1, 1];
         groups.update_batch(&[Arc::clone(&array)], &group_indices, None, 2)?;
         let result = groups.evaluate(EmitTo::All)?;
-        let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
-        assert!((result.value(0) - 1.0).abs() < 1e-9);
-        assert!((result.value(1) - 1.0).abs() < 1e-9);
+        let result = result.as_any().downcast_ref::<Decimal256Array>().unwrap();
+        let v0 =
+            i256_to_f64_lossy(result.value(0)) / 10f64.powi(params.result_scale as i32);
+        let v1 =
+            i256_to_f64_lossy(result.value(1)) / 10f64.powi(params.result_scale as i32);
+        assert!((v0 - 1.0).abs() < 1e-9);
+        assert!((v1 - 1.0).abs() < 1e-9);
         Ok(())
     }
 
@@ -1320,12 +1432,17 @@ mod tests {
             ),
         ];
         let array = ScalarValue::iter_to_array(values).unwrap();
-        let mut acc = DecimalVarianceAccumulator::<Decimal256Type>::try_new(
+        let params = decimal_variance_params(&DataType::Decimal256(
+            DECIMAL256_MAX_PRECISION,
             DECIMAL256_MAX_SCALE,
+        ))
+        .expect("decimal params");
+        let mut acc = DecimalVarianceAccumulator::<Decimal256Type>::try_new(
+            params,
             StatsType::Population,
         )?;
         acc.update_batch(&[array])?;
-        assert_variance(acc.evaluate()?, 1e-152);
+        assert_decimal_variance(acc.evaluate()?, 1e-152, params.result_scale);
         Ok(())
     }
 
@@ -1338,23 +1455,26 @@ mod tests {
             .with_precision_and_scale(10, 2)
             .unwrap();
 
+        let params = decimal_variance_params(&DataType::Decimal128(10, 2))
+            .expect("decimal params");
         let mut acc = DecimalVarianceAccumulator::<Decimal128Type>::try_new(
-            2,
+            params,
             StatsType::Population,
         )?;
         acc.update_batch(&[Arc::new(update)])?;
         acc.retract_batch(&[Arc::new(retract)])?;
-        assert_variance(acc.evaluate()?, 0.0);
+        assert_decimal_variance(acc.evaluate()?, 0.0, params.result_scale);
         Ok(())
     }
 
-    fn assert_variance(value: ScalarValue, expected: f64) {
-        match value {
-            ScalarValue::Float64(Some(actual)) => {
-                assert!((actual - expected).abs() < 1e-9)
+    fn assert_decimal_variance(value: ScalarValue, expected: f64, scale: i8) {
+        let actual = match value {
+            ScalarValue::Decimal256(Some(v), ..) => {
+                i256_to_f64_lossy(v) / 10f64.powi(scale as i32)
             }
-            other => panic!("expected Float64 result, got {other:?}"),
-        }
+            other => panic!("expected Decimal256 result, got {other:?}"),
+        };
+        assert!((actual - expected).abs() < 1e-9);
     }
 
     #[test]
