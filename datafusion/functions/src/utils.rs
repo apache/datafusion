@@ -223,7 +223,7 @@ pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
     }
 }
 
-pub fn decimal32_to_f64(value: i32, precision: u8, scale: i8) -> Result<f64, ArrowError> {
+pub fn decimal32_to_i32(value: i32, precision: u8, scale: i8) -> Result<i32, ArrowError> {
     if scale < 0 {
         Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
@@ -232,15 +232,21 @@ pub fn decimal32_to_f64(value: i32, precision: u8, scale: i8) -> Result<f64, Arr
         Err(ArrowError::ComputeError(format!(
             "scale {scale} is greater than precision {precision}"
         )))
+    } else if scale == 0 {
+        Ok(value)
     } else {
         validate_decimal32_precision(value, precision, scale)?;
 
-        let divisor = f64::from(10).pow_checked(scale as u32)?;
-        Ok(value as f64 / divisor)
+        match i32::from(10).checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
     }
 }
 
-pub fn decimal64_to_f64(value: i64, precision: u8, scale: i8) -> Result<f64, ArrowError> {
+pub fn decimal64_to_i64(value: i64, precision: u8, scale: i8) -> Result<i64, ArrowError> {
     if scale < 0 {
         Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
@@ -249,11 +255,17 @@ pub fn decimal64_to_f64(value: i64, precision: u8, scale: i8) -> Result<f64, Arr
         Err(ArrowError::ComputeError(format!(
             "scale {scale} is greater than precision {precision}"
         )))
+    } else if scale == 0 {
+        Ok(value)
     } else {
         validate_decimal64_precision(value, precision, scale)?;
 
-        let divisor = f64::from(10).pow_checked(scale as u32)?;
-        Ok(value as f64 / divisor)
+        match i64::from(10).checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
     }
 }
 
@@ -416,22 +428,22 @@ pub mod test {
     }
 
     #[test]
-    fn test_decimal32_to_f64() {
+    fn test_decimal32_to_i32() {
         let cases = [
-            (123, 7, 0, Some(123.0)),
-            (1230, 7, 1, Some(123.0)),
-            (123000, 7, 3, Some(123.0)),
-            (1234567, 7, 2, Some(12345.67)),
-            (-1234567, 7, 2, Some(-12345.67)),
-            (1, 7, 0, Some(1.0)),
+            (123, 7, 0, Some(123)),
+            (1230, 7, 1, Some(123)),
+            (123000, 7, 3, Some(123)),
+            (1234567, 7, 2, Some(12345)),
+            (-1234567, 7, 2, Some(-12345)),
+            (1, 7, 0, Some(1)),
             (123, 7, -3, None),
             (123, 7, i8::MAX, None),
-            (999999999, 9, 0, Some(999999999.0)),
-            (999999999, 9, 3, Some(999999.999)),
+            (999999999, 9, 0, Some(999999999)),
+            (999999999, 9, 3, Some(999999)),
         ];
 
         for (value, precision, scale, expected) in cases {
-            match decimal32_to_f64(value, precision, scale) {
+            match decimal32_to_i32(value, precision, scale) {
                 Ok(actual) => {
                     assert_eq!(
                         actual,
@@ -445,35 +457,30 @@ pub mod test {
     }
 
     #[test]
-    fn test_decimal64_to_f64() {
+    fn test_decimal64_to_i64() {
         let cases = [
-            (123, 18, 0, Some(123.0)),
-            (1234567890, 14, 2, Some(12345678.9)),
-            (-1234567890, 10, 2, Some(-12345678.9)),
+            (123, 18, 0, Some(123)),
+            (1234567890, 14, 2, Some(12345678)),
+            (-1234567890, 10, 2, Some(-12345678)),
             (123, 18, -3, None),
             (123, 18, i8::MAX, None),
-            (
-                999999999999999999i64,
-                18,
-                0,
-                Some(999999999999999999i64 as f64),
-            ),
+            (999999999999999999i64, 18, 0, Some(999999999999999999i64)),
             (
                 999999999999999999i64,
                 18,
                 3,
-                Some(999999999999999999i64 as f64 / 1000.0),
+                Some(999999999999999999i64 / 1000),
             ),
             (
                 -999999999999999999i64,
                 18,
                 3,
-                Some(-999999999999999999i64 as f64 / 1000.0),
+                Some(-999999999999999999i64 / 1000),
             ),
         ];
 
         for (value, precision, scale, expected) in cases {
-            match decimal64_to_f64(value, precision, scale) {
+            match decimal64_to_i64(value, precision, scale) {
                 Ok(actual) => {
                     assert_eq!(
                         actual,

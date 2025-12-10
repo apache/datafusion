@@ -22,7 +22,7 @@ use std::any::Any;
 use super::power::PowerFunc;
 
 use crate::utils::{
-    calculate_binary_math, decimal128_to_i128, decimal32_to_f64, decimal64_to_f64,
+    calculate_binary_math, decimal128_to_i128, decimal32_to_i32, decimal64_to_i64,
 };
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
@@ -123,9 +123,10 @@ fn log_decimal32(
         )));
     }
 
-    let unscaled_value = decimal32_to_f64(value, precision, scale)?;
-    if unscaled_value > 0.0 {
-        Ok(unscaled_value.log(base))
+    let unscaled_value = decimal32_to_i32(value, precision, scale)?;
+    if unscaled_value > 0 {
+        let log_value: u32 = unscaled_value.ilog(base as i32);
+        Ok(log_value as f64)
     } else {
         // Reflect f64::log behaviour
         Ok(f64::NAN)
@@ -151,9 +152,10 @@ fn log_decimal64(
         )));
     }
 
-    let unscaled_value = decimal64_to_f64(value, precision, scale)?;
-    if unscaled_value > 0.0 {
-        Ok(unscaled_value.log(base))
+    let unscaled_value = decimal64_to_i64(value, precision, scale)?;
+    if unscaled_value > 0 {
+        let log_value: u32 = unscaled_value.ilog(base as i64);
+        Ok(log_value as f64)
     } else {
         // Reflect f64::log behaviour
         Ok(f64::NAN)
