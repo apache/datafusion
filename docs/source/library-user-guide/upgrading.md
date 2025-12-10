@@ -84,6 +84,100 @@ You can disable the new behavior by setting the
 [configuration setting]: https://datafusion.apache.org/user-guide/configs.html
 [not yet the default behavior]: https://github.com/apache/datafusion/issues/3463
 
+### Breaking Change: `PhysicalExtensionCodec` requires 4 new methods
+
+The `PhysicalExtensionCodec` trait now requires implementing 4 additional methods
+that intercept all plan and expression serialization/deserialization. These methods
+are called for **every** node in the plan/expression tree, enabling use cases like
+caching, transformation, and custom metadata injection during serialization.
+
+**New required methods:**
+
+```rust,ignore
+pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+    // ... existing methods unchanged ...
+
+    /// Deserialize a physical plan node from protobuf.
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Serialize an execution plan to protobuf.
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode>;
+
+    /// Deserialize a physical expression from protobuf.
+    fn deserialize_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
+
+    /// Serialize a physical expression to protobuf.
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode>;
+}
+```
+
+**Migration:** For existing implementations that don't need custom interception logic,
+delegate to the provided helper functions:
+
+```rust,ignore
+use datafusion_proto::physical_plan::{
+    PhysicalExtensionCodec, default_deserialize_physical_plan,
+    default_serialize_physical_plan, default_deserialize_physical_expr,
+    default_serialize_physical_expr,
+};
+
+impl PhysicalExtensionCodec for MyCodec {
+    // ... existing methods ...
+
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        default_deserialize_physical_plan(proto, ctx, self)
+    }
+
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        default_serialize_physical_plan(plan, self)
+    }
+
+    fn deserialize_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        default_deserialize_physical_expr(proto, ctx, input_schema, self)
+    }
+
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        default_serialize_physical_expr(expr, self)
+    }
+}
+```
+
+**Use cases for custom implementations:**
+- Caching deserialized expressions to avoid redundant work
+- Transforming nodes during serialization/deserialization
+- Injecting custom metadata not in the protobuf schema
+- Implementing decorator patterns around standard serialization
+
 ### Statistics handling moved from `FileSource` to `FileScanConfig`
 
 Statistics are now managed directly by `FileScanConfig` instead of being delegated to `FileSource` implementations. This simplifies the `FileSource` trait and provides more consistent statistics handling across all file formats.

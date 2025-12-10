@@ -3330,7 +3330,110 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
+/// Trait for custom serialization and deserialization of physical plans and expressions.
+///
+/// This trait provides methods for handling:
+/// 1. Extension/custom execution plans and expressions (via `try_decode`/`try_encode` methods)
+/// 2. User-defined functions (UDFs, UDAFs, UDWFs)
+/// 3. Interception of ALL plan/expression nodes during serialization/deserialization
+///
+/// The `deserialize_physical_plan`, `serialize_physical_plan`, `deserialize_physical_expr`,
+/// and `serialize_physical_expr` methods are called for **every** node in the plan/expression
+/// tree, allowing implementations to intercept, cache, transform, or otherwise customize
+/// the serialization process.
+///
+/// # Example: Fully Default Implementation
+///
+/// If you want standard behavior without custom logic, delegate to the provided helper functions:
+///
+/// ```ignore
+/// use datafusion_proto::physical_plan::{
+///     PhysicalExtensionCodec, default_deserialize_physical_plan,
+///     default_serialize_physical_plan, default_deserialize_physical_expr,
+///     default_serialize_physical_expr,
+/// };
+///
+/// #[derive(Debug)]
+/// struct MyCodec;
+///
+/// impl PhysicalExtensionCodec for MyCodec {
+///     // Required extension methods (for custom ExecutionPlan types)
+///     fn try_decode(
+///         &self,
+///         buf: &[u8],
+///         inputs: &[Arc<dyn ExecutionPlan>],
+///         ctx: &TaskContext,
+///     ) -> Result<Arc<dyn ExecutionPlan>> {
+///         not_impl_err!("No custom ExecutionPlan types supported")
+///     }
+///
+///     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+///         not_impl_err!("No custom ExecutionPlan types supported")
+///     }
+///
+///     // Interception methods - delegate to defaults for standard behavior
+///     fn deserialize_physical_plan(
+///         &self,
+///         proto: &protobuf::PhysicalPlanNode,
+///         ctx: &TaskContext,
+///     ) -> Result<Arc<dyn ExecutionPlan>> {
+///         default_deserialize_physical_plan(proto, ctx, self)
+///     }
+///
+///     fn serialize_physical_plan(
+///         &self,
+///         plan: Arc<dyn ExecutionPlan>,
+///     ) -> Result<protobuf::PhysicalPlanNode> {
+///         default_serialize_physical_plan(plan, self)
+///     }
+///
+///     fn deserialize_physical_expr(
+///         &self,
+///         proto: &protobuf::PhysicalExprNode,
+///         ctx: &TaskContext,
+///         input_schema: &arrow::datatypes::Schema,
+///     ) -> Result<Arc<dyn PhysicalExpr>> {
+///         default_deserialize_physical_expr(proto, ctx, input_schema, self)
+///     }
+///
+///     fn serialize_physical_expr(
+///         &self,
+///         expr: &Arc<dyn PhysicalExpr>,
+///     ) -> Result<protobuf::PhysicalExprNode> {
+///         default_serialize_physical_expr(expr, self)
+///     }
+/// }
+/// ```
+///
+/// # Example: Caching Deserializer
+///
+/// Custom implementations can intercept deserialization to add caching:
+///
+/// ```ignore
+/// impl PhysicalExtensionCodec for CachingCodec {
+///     fn deserialize_physical_expr(
+///         &self,
+///         proto: &protobuf::PhysicalExprNode,
+///         ctx: &TaskContext,
+///         input_schema: &arrow::datatypes::Schema,
+///     ) -> Result<Arc<dyn PhysicalExpr>> {
+///         // Check cache first
+///         if let Some(cached) = self.expr_cache.get(proto) {
+///             return Ok(Arc::clone(cached));
+///         }
+///         // Deserialize and cache
+///         let expr = default_deserialize_physical_expr(proto, ctx, input_schema, self)?;
+///         self.expr_cache.insert(proto.clone(), Arc::clone(&expr));
+///         Ok(expr)
+///     }
+///     // ... other methods
+/// }
+/// ```
 pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+    /// Decode a custom/extension [`ExecutionPlan`] from bytes.
+    ///
+    /// This is called as a fallback when the standard deserialization
+    /// encounters an unknown plan type (marked as Extension in protobuf).
     fn try_decode(
         &self,
         buf: &[u8],
@@ -3338,7 +3441,58 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
+    /// Encode a custom/extension [`ExecutionPlan`] to bytes.
+    ///
+    /// This is called as a fallback when the standard serialization
+    /// encounters an unknown plan type.
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
+
+    /// Deserialize a physical plan node from protobuf.
+    ///
+    /// This method is called for **every** plan node during deserialization,
+    /// allowing implementations to intercept, cache, or transform nodes.
+    ///
+    /// For standard behavior, delegate to [`default_deserialize_physical_plan`].
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Serialize an execution plan to protobuf.
+    ///
+    /// This method is called for **every** plan node during serialization,
+    /// allowing implementations to intercept, cache, or transform nodes.
+    ///
+    /// For standard behavior, delegate to [`default_serialize_physical_plan`].
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode>;
+
+    /// Deserialize a physical expression from protobuf.
+    ///
+    /// This method is called for **every** expression node during deserialization,
+    /// allowing implementations to intercept, cache, or transform expressions.
+    ///
+    /// For standard behavior, delegate to [`default_deserialize_physical_expr`].
+    fn deserialize_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &arrow::datatypes::Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
+
+    /// Serialize a physical expression to protobuf.
+    ///
+    /// This method is called for **every** expression node during serialization,
+    /// allowing implementations to intercept, cache, or transform expressions.
+    ///
+    /// For standard behavior, delegate to [`default_serialize_physical_expr`].
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode>;
 
     fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         not_impl_err!("PhysicalExtensionCodec is not provided for scalar function {name}")
@@ -3383,6 +3537,69 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     }
 }
 
+/// Default implementation for deserializing a physical plan from protobuf.
+///
+/// This function provides the standard deserialization logic. Custom
+/// [`PhysicalExtensionCodec`] implementations can call this to get default
+/// behavior while adding their own logic before or after.
+///
+/// The deserialization recursively calls `codec.deserialize_physical_plan`
+/// for child nodes, allowing the codec to intercept every node in the tree.
+pub fn default_deserialize_physical_plan(
+    proto: &protobuf::PhysicalPlanNode,
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    proto.try_into_physical_plan(ctx, codec)
+}
+
+/// Default implementation for serializing an execution plan to protobuf.
+///
+/// This function provides the standard serialization logic. Custom
+/// [`PhysicalExtensionCodec`] implementations can call this to get default
+/// behavior while adding their own logic before or after.
+///
+/// The serialization recursively calls `codec.serialize_physical_plan`
+/// for child nodes, allowing the codec to intercept every node in the tree.
+pub fn default_serialize_physical_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalPlanNode> {
+    protobuf::PhysicalPlanNode::try_from_physical_plan(plan, codec)
+}
+
+/// Default implementation for deserializing a physical expression from protobuf.
+///
+/// This function provides the standard deserialization logic. Custom
+/// [`PhysicalExtensionCodec`] implementations can call this to get default
+/// behavior while adding their own logic before or after.
+///
+/// The deserialization recursively calls `codec.deserialize_physical_expr`
+/// for child expressions, allowing the codec to intercept every expression in the tree.
+pub fn default_deserialize_physical_expr(
+    proto: &protobuf::PhysicalExprNode,
+    ctx: &TaskContext,
+    input_schema: &arrow::datatypes::Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    from_proto::parse_physical_expr(proto, ctx, input_schema, codec)
+}
+
+/// Default implementation for serializing a physical expression to protobuf.
+///
+/// This function provides the standard serialization logic. Custom
+/// [`PhysicalExtensionCodec`] implementations can call this to get default
+/// behavior while adding their own logic before or after.
+///
+/// The serialization recursively calls `codec.serialize_physical_expr`
+/// for child expressions, allowing the codec to intercept every expression in the tree.
+pub fn default_serialize_physical_expr(
+    expr: &Arc<dyn PhysicalExpr>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalExprNode> {
+    to_proto::serialize_physical_expr(expr, codec)
+}
+
 #[derive(Debug)]
 pub struct DefaultPhysicalExtensionCodec {}
 
@@ -3402,6 +3619,37 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
+    }
+
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        default_deserialize_physical_plan(proto, ctx, self)
+    }
+
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        default_serialize_physical_plan(plan, self)
+    }
+
+    fn deserialize_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &arrow::datatypes::Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        default_deserialize_physical_expr(proto, ctx, input_schema, self)
+    }
+
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        default_serialize_physical_expr(expr, self)
     }
 }
 
@@ -3514,6 +3762,37 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
+    }
+
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        default_deserialize_physical_plan(proto, ctx, self)
+    }
+
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        default_serialize_physical_plan(plan, self)
+    }
+
+    fn deserialize_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &arrow::datatypes::Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        default_deserialize_physical_expr(proto, ctx, input_schema, self)
+    }
+
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        default_serialize_physical_expr(expr, self)
     }
 }
 

@@ -408,6 +408,44 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
 
         Ok(())
     }
+
+    fn deserialize_physical_plan(
+        &self,
+        proto: &datafusion_proto::protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        datafusion_proto::physical_plan::default_deserialize_physical_plan(
+            proto, ctx, self,
+        )
+    }
+
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<datafusion_proto::protobuf::PhysicalPlanNode> {
+        datafusion_proto::physical_plan::default_serialize_physical_plan(plan, self)
+    }
+
+    fn deserialize_physical_expr(
+        &self,
+        proto: &datafusion_proto::protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &arrow_schema::Schema,
+    ) -> Result<Arc<dyn datafusion_physical_plan::PhysicalExpr>> {
+        datafusion_proto::physical_plan::default_deserialize_physical_expr(
+            proto,
+            ctx,
+            input_schema,
+            self,
+        )
+    }
+
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+    ) -> Result<datafusion_proto::protobuf::PhysicalExprNode> {
+        datafusion_proto::physical_plan::default_serialize_physical_expr(expr, self)
+    }
 }
 
 #[cfg(test)]
@@ -562,6 +600,44 @@ pub(crate) mod tests {
             buf.push(Self::RANK_UDWF_SERIALIZED);
 
             Ok(())
+        }
+
+        fn deserialize_physical_plan(
+            &self,
+            proto: &datafusion_proto::protobuf::PhysicalPlanNode,
+            ctx: &TaskContext,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            datafusion_proto::physical_plan::default_deserialize_physical_plan(
+                proto, ctx, self,
+            )
+        }
+
+        fn serialize_physical_plan(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+        ) -> Result<datafusion_proto::protobuf::PhysicalPlanNode> {
+            datafusion_proto::physical_plan::default_serialize_physical_plan(plan, self)
+        }
+
+        fn deserialize_physical_expr(
+            &self,
+            proto: &datafusion_proto::protobuf::PhysicalExprNode,
+            ctx: &TaskContext,
+            input_schema: &Schema,
+        ) -> Result<Arc<dyn datafusion_physical_plan::PhysicalExpr>> {
+            datafusion_proto::physical_plan::default_deserialize_physical_expr(
+                proto,
+                ctx,
+                input_schema,
+                self,
+            )
+        }
+
+        fn serialize_physical_expr(
+            &self,
+            expr: &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<datafusion_proto::protobuf::PhysicalExprNode> {
+            datafusion_proto::physical_plan::default_serialize_physical_expr(expr, self)
         }
     }
 
