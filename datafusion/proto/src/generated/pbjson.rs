@@ -254,9 +254,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             "groups" => Ok(GeneratedField::Groups),
                             "filterExpr" | "filter_expr" => Ok(GeneratedField::FilterExpr),
                             "limit" => Ok(GeneratedField::Limit),
-                            "hasGroupingSet" | "has_grouping_set" => {
-                                Ok(GeneratedField::HasGroupingSet)
-                            }
+                            "hasGroupingSet" | "has_grouping_set" => Ok(GeneratedField::HasGroupingSet),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
