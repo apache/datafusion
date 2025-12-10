@@ -52,7 +52,6 @@ arrow = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
