@@ -17,7 +17,7 @@
 
 //! Table source
 
-use crate::{Expr, LogicalPlan, Signature, Volatility};
+use crate::{Expr, LogicalPlan, Signature};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraints, Result};
@@ -153,14 +153,9 @@ pub trait BatchedTableFunctionSource: Sync + Send {
 
     /// Get the signature of this table function for type coercion
     ///
-    /// The default implementation returns a permissive signature that accepts
-    /// any types and any number of arguments. Custom implementations should
-    /// override this to provide proper type checking and coercion.
-    fn signature(&self) -> &Signature {
-        // Default permissive signature for backward compatibility
-        static DEFAULT_SIGNATURE: std::sync::OnceLock<Signature> = std::sync::OnceLock::new();
-        DEFAULT_SIGNATURE.get_or_init(|| Signature::any(usize::MAX, Volatility::Volatile))
-    }
+    /// This signature is used by the type coercion analyzer to automatically
+    /// insert CAST expressions when arguments don't match the expected types.
+    fn signature(&self) -> &Signature;
 
     /// Tests whether the batched table function can make use of any or all filter
     /// expressions to optimize data retrieval. Only non-volatile expressions are passed
