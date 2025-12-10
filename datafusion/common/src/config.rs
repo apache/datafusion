@@ -970,6 +970,14 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// Prefix to use when generating file name in multi file output.
+        ///
+        /// When prefix is non-empty string, this prefix will be used to generate file name as
+        /// `{partitioned_file_prefix_name}{datafusion generated suffix}`.
+        ///
+        /// Defaults to empty string.
+        pub partitioned_file_prefix_name: String, default = String::new()
     }
 }
 
