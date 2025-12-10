@@ -23,7 +23,7 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanBuilder, MapArray, StructArr
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::filter;
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 
 /// Helper function to get element [`DataType`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
@@ -64,14 +64,15 @@ pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
     match array.data_type() {
         DataType::List(_) => Ok(Cow::Borrowed(array.as_list::<i32>().offsets().as_ref())),
         DataType::LargeList(_) => Ok(Cow::Owned(
-            array.as_list::<i64>()
+            array
+                .as_list::<i64>()
                 .offsets()
                 .iter()
                 .map(|i| *i as i32)
                 .collect::<Vec<_>>(),
         )),
         DataType::FixedSizeList(_, size) => Ok(Cow::Owned(
-             (0..=array.len() as i32).map(|i| size * i).collect()
+            (0..=array.len() as i32).map(|i| size * i).collect(),
         )),
         wrong_type => exec_err!(
             "get_list_offsets expects List/LargeList/FixedSizeList as argument, got {wrong_type:?}"
@@ -188,7 +189,9 @@ fn map_deduplicate_keys(
 
         if key_is_valid && value_is_valid {
             if num_keys_entries != num_values_entries {
-                return exec_err!("map_deduplicate_keys: keys and values lists in the same row must have equal lengths");
+                return exec_err!(
+                    "map_deduplicate_keys: keys and values lists in the same row must have equal lengths"
+                );
             } else if num_keys_entries != 0 {
                 let mut seen_keys = HashSet::new();
 

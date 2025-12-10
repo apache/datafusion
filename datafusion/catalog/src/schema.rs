@@ -19,7 +19,7 @@
 //! representing collections of named tables.
 
 use async_trait::async_trait;
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::{DataFusionError, exec_err};
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;

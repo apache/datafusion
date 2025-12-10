@@ -24,7 +24,7 @@ repository = { workspace = true }
 authors = { workspace = true }
 readme = "README.md"
 license = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 
 [package.metadata.docs.rs]
 all-features = true

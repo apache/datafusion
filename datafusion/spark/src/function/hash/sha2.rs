@@ -23,7 +23,7 @@ use crate::function::error_utils::{
 use crate::function::math::hex::spark_sha2_hex;
 use arrow::array::{ArrayRef, AsArray, StringArray};
 use arrow::datatypes::{DataType, Int32Type};
-use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 pub use datafusion_functions::crypto::basic::{sha224, sha256, sha384, sha512};
@@ -81,7 +81,7 @@ impl ScalarUDFImpl for SparkSha2 {
                 return exec_err!(
                     "{} function can only accept strings or binary arrays.",
                     self.name()
-                )
+                );
             }
         })
     }
@@ -138,17 +138,21 @@ impl ScalarUDFImpl for SparkSha2 {
 
 pub fn sha2(args: [ColumnarValue; 2]) -> Result<ColumnarValue> {
     match args {
-        [ColumnarValue::Scalar(ScalarValue::Utf8(expr_arg)), ColumnarValue::Scalar(ScalarValue::Int32(Some(bit_length_arg)))] => {
-            compute_sha2(
-                bit_length_arg,
-                &[ColumnarValue::from(ScalarValue::Utf8(expr_arg))],
-            )
-        }
-        [ColumnarValue::Array(expr_arg), ColumnarValue::Scalar(ScalarValue::Int32(Some(bit_length_arg)))] => {
-            compute_sha2(bit_length_arg, &[ColumnarValue::from(expr_arg)])
-        }
-        [ColumnarValue::Scalar(ScalarValue::Utf8(expr_arg)), ColumnarValue::Array(bit_length_arg)] =>
-        {
+        [
+            ColumnarValue::Scalar(ScalarValue::Utf8(expr_arg)),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(bit_length_arg))),
+        ] => compute_sha2(
+            bit_length_arg,
+            &[ColumnarValue::from(ScalarValue::Utf8(expr_arg))],
+        ),
+        [
+            ColumnarValue::Array(expr_arg),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(bit_length_arg))),
+        ] => compute_sha2(bit_length_arg, &[ColumnarValue::from(expr_arg)]),
+        [
+            ColumnarValue::Scalar(ScalarValue::Utf8(expr_arg)),
+            ColumnarValue::Array(bit_length_arg),
+        ] => {
             let arr: StringArray = bit_length_arg
                 .as_primitive::<Int32Type>()
                 .iter()
@@ -171,7 +175,10 @@ pub fn sha2(args: [ColumnarValue; 2]) -> Result<ColumnarValue> {
                 .collect();
             Ok(ColumnarValue::Array(Arc::new(arr) as ArrayRef))
         }
-        [ColumnarValue::Array(expr_arg), ColumnarValue::Array(bit_length_arg)] => {
+        [
+            ColumnarValue::Array(expr_arg),
+            ColumnarValue::Array(bit_length_arg),
+        ] => {
             let expr_iter = expr_arg.as_string::<i32>().iter();
             let bit_length_iter = bit_length_arg.as_primitive::<Int32Type>().iter();
             let arr: StringArray = expr_iter

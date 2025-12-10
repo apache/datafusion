@@ -28,9 +28,9 @@ use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
 };
-use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use datafusion_common::pruning::PruningStatistics;
+use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 use datafusion_pruning::PruningPredicate;
 
 use log::{debug, trace};
@@ -178,9 +178,10 @@ impl PagePruningAccessPlanFilter {
             || parquet_metadata.column_index().is_none()
         {
             debug!(
-                    "Can not prune pages due to lack of indexes. Have offset: {}, column index: {}",
-                    parquet_metadata.offset_index().is_some(), parquet_metadata.column_index().is_some()
-                );
+                "Can not prune pages due to lack of indexes. Have offset: {}, column index: {}",
+                parquet_metadata.offset_index().is_some(),
+                parquet_metadata.column_index().is_some()
+            );
             return access_plan;
         };
 
@@ -230,7 +231,8 @@ impl PagePruningAccessPlanFilter {
                     continue;
                 };
 
-                debug!("Use filter and page index to create RowSelection {:?} from predicate: {:?}",
+                debug!(
+                    "Use filter and page index to create RowSelection {:?} from predicate: {:?}",
                     &selection,
                     predicate.predicate_expr(),
                 );
@@ -253,7 +255,9 @@ impl PagePruningAccessPlanFilter {
                 let rows_selected = overall_selection.row_count();
                 if rows_selected > 0 {
                     let rows_skipped = overall_selection.skipped_row_count();
-                    trace!("Overall selection from predicate skipped {rows_skipped}, selected {rows_selected}: {overall_selection:?}");
+                    trace!(
+                        "Overall selection from predicate skipped {rows_skipped}, selected {rows_selected}: {overall_selection:?}"
+                    );
                     total_skip += rows_skipped;
                     total_select += rows_selected;
                     access_plan.scan_selection(row_group_index, overall_selection)

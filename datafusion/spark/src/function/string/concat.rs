@@ -150,10 +150,10 @@ fn compute_null_mask(
     if all_scalars {
         // For scalars, check if any is NULL
         for arg in args {
-            if let ColumnarValue::Scalar(scalar) = arg {
-                if scalar.is_null() {
-                    return Ok(NullMaskResolution::ReturnNull);
-                }
+            if let ColumnarValue::Scalar(scalar) = arg
+                && scalar.is_null()
+            {
+                return Ok(NullMaskResolution::ReturnNull);
             }
         }
         // No NULLs in scalars

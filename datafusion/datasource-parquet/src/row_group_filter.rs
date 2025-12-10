@@ -31,7 +31,7 @@ use parquet::basic::Type;
 use parquet::data_type::Decimal;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
-    arrow::{async_reader::AsyncFileReader, ParquetRecordBatchStreamBuilder},
+    arrow::{ParquetRecordBatchStreamBuilder, async_reader::AsyncFileReader},
     bloom_filter::Sbbf,
     file::metadata::RowGroupMetaData,
 };
@@ -444,11 +444,11 @@ mod tests {
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
-    use datafusion_expr::{cast, col, lit, Expr};
+    use datafusion_expr::{Expr, cast, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-    use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::arrow::ArrowSchemaConverter;
+    use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::metadata::ColumnChunkMetaData;
@@ -1425,7 +1425,10 @@ mod tests {
                 }
                 ExpectedPruning::Some(expected) => {
                     let actual = row_groups.access_plan.row_group_indexes();
-                    assert_eq!(expected, &actual, "Unexpected row groups pruned. Expected {expected:?}, got {actual:?}");
+                    assert_eq!(
+                        expected, &actual,
+                        "Unexpected row groups pruned. Expected {expected:?}, got {actual:?}"
+                    );
                 }
             }
         }

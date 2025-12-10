@@ -16,9 +16,9 @@
 // under the License.
 
 use arrow::compute::kernels::bitwise;
-use arrow::datatypes::{Int16Type, Int32Type, Int64Type, Int8Type};
+use arrow::datatypes::{Int8Type, Int16Type, Int32Type, Int64Type};
 use arrow::{array::*, datatypes::DataType};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;

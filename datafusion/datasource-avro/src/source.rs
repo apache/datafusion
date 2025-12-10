@@ -23,12 +23,12 @@ use std::sync::Arc;
 use crate::avro_to_arrow::Reader as AvroReader;
 
 use datafusion_common::error::Result;
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::TableSchema;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
@@ -162,7 +162,7 @@ mod private {
     use super::*;
 
     use bytes::Buf;
-    use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
+    use datafusion_datasource::{PartitionedFile, file_stream::FileOpenFuture};
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
 

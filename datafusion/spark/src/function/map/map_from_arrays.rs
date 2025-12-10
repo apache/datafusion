@@ -24,8 +24,8 @@ use crate::function::map::utils::{
 use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::DataType;
-use datafusion_common::utils::take_function_args;
 use datafusion_common::Result;
+use datafusion_common::utils::take_function_args;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 

@@ -26,13 +26,13 @@ use crate::file_format::JsonDecoder;
 
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
-use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
+use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
-    as_file_source, calculate_range, ListingTableUrl, PartitionedFile, RangeCalculation,
+    ListingTableUrl, PartitionedFile, RangeCalculation, as_file_source, calculate_range,
 };
 use datafusion_physical_plan::projection::ProjectionExprs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -214,7 +214,7 @@ impl FileOpener for JsonOpener {
                 RangeCalculation::TerminateEarly => {
                     return Ok(
                         futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                    )
+                    );
                 }
             };
 

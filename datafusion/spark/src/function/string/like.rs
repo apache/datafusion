@@ -18,7 +18,7 @@
 use arrow::array::ArrayRef;
 use arrow::compute::like;
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;

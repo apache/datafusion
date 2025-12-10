@@ -34,7 +34,7 @@ use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
-    make_with_child, update_expr, update_ordering_requirement, ProjectionExec,
+    ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
