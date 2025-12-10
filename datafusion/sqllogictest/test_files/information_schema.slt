@@ -269,6 +269,7 @@ datafusion.execution.sort_in_place_threshold_bytes 1048576
 datafusion.execution.sort_spill_reservation_bytes 10485760
 datafusion.execution.spill_compression uncompressed
 datafusion.execution.split_file_groups_by_statistics false
+datafusion.execution.substrait_alias_all_expressions false
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone NULL
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false
@@ -397,6 +398,7 @@ datafusion.execution.sort_in_place_threshold_bytes 1048576 When sorting, below w
 datafusion.execution.sort_spill_reservation_bytes 10485760 Specifies the reserved memory for each spillable sort operation to facilitate an in-memory merge. When a sort operation spills to disk, the in-memory data must be sorted and merged before being written to a file. This setting reserves a specific amount of memory for that in-memory sort/merge process. Note: This setting is irrelevant if the sort operation cannot spill (i.e., if there's no `DiskManager` configured).
 datafusion.execution.spill_compression uncompressed Sets the compression codec used when spilling data to disk. Since datafusion writes spill files using the Arrow IPC Stream format, only codecs supported by the Arrow IPC Stream Writer are allowed. Valid values are: uncompressed, lz4_frame, zstd. Note: lz4_frame offers faster (de)compression, but typically results in larger spill files. In contrast, zstd achieves higher compression ratios at the cost of slower (de)compression speed.
 datafusion.execution.split_file_groups_by_statistics false Attempt to eliminate sorts by packing & sorting files with non-overlapping statistics into the same file groups. Currently experimental
+datafusion.execution.substrait_alias_all_expressions false When set to true, all expressions in Substrait plans will be aliased with UUIDs during conversion to avoid ambiguous column references. This ensures unique names for all expressions, not just literals. This can help prevent naming conflicts when the same expression appears multiple times in different relations. # Default `false` — UUID aliasing is disabled by default.
 datafusion.execution.target_partitions 7 Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system
 datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
