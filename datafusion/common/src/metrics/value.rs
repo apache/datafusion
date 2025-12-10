@@ -18,18 +18,16 @@
 //! Value representation of metrics
 
 use super::CustomMetricValue;
+use crate::instant::Instant;
+use crate::{human_readable_count, human_readable_duration, human_readable_size};
 use chrono::{DateTime, Utc};
-use datafusion_common::instant::Instant;
-use datafusion_common::{
-    human_readable_count, human_readable_duration, human_readable_size,
-};
 use parking_lot::Mutex;
 use std::{
     borrow::{Borrow, Cow},
     fmt::{Debug, Display},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -1033,8 +1031,8 @@ impl Display for MetricValue {
 mod tests {
     use std::any::Any;
 
+    use crate::units::MB;
     use chrono::TimeZone;
-    use datafusion_common::units::MB;
 
     use super::*;
 
@@ -1076,12 +1074,10 @@ mod tests {
     fn new_custom_counter(name: &'static str, value: usize) -> MetricValue {
         let custom_counter = CustomCounter::default();
         custom_counter.count.fetch_add(value, Ordering::Relaxed);
-        let custom_val = MetricValue::Custom {
+        MetricValue::Custom {
             name: Cow::Borrowed(name),
             value: Arc::new(custom_counter),
-        };
-
-        custom_val
+        }
     }
 
     #[test]

@@ -21,17 +21,16 @@ use std::task::Poll;
 
 use arrow::record_batch::RecordBatch;
 
-use crate::spill::get_record_batch_memory_size;
-
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
-use datafusion_common::Result;
+use crate::Result;
+use crate::utils::memory::get_record_batch_memory_size;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator
 ///
 /// Example:
 /// ```
-/// use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+/// use datafusion_common::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 /// let metrics = ExecutionPlanMetricsSet::new();
 ///
 /// let partition = 2;
@@ -203,7 +202,7 @@ impl SpillMetrics {
     }
 }
 
-/// Metrics for tracking [`crate::stream::BatchSplitStream`] activity
+/// Metrics for tracking batch splitting activity
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
     /// Number of times an input [`RecordBatch`] was split
