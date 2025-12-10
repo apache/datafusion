@@ -173,6 +173,7 @@ impl PhysicalExtensionCodec for MyCodec {
 ```
 
 **Use cases for custom implementations:**
+
 - Caching deserialized expressions to avoid redundant work
 - Transforming nodes during serialization/deserialization
 - Injecting custom metadata not in the protobuf schema
