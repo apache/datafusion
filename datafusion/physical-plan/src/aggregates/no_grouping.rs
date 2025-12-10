@@ -251,10 +251,17 @@ fn scalar_cmp_null_short_circuit(
 }
 
 impl AggregateStream {
-    /// Create a new AggregateStream
-    /// Note: Grouping ID generation for GROUPING SETS happens in GroupedHashAggregateStream,
-    /// not in the no-grouping path. The grouping_id parameter is reserved for final
-    /// aggregation modes or future extensions.
+    /// Create a new AggregateStream for aggregation without grouping columns.
+    ///
+    /// # Arguments
+    /// * `agg` - The aggregate execution plan
+    /// * `context` - The task context
+    /// * `partition` - The partition number
+    /// * `grouping_id` - Optional grouping ID value for GROUPING SETS. In the no-grouping
+    ///   path (when there are no GROUP BY expressions), this is typically `None` as grouping
+    ///   ID generation for GROUPING SETS is handled at the `GroupedHashAggregateStream` level.
+    ///   This parameter is reserved for final aggregation modes or future extensions where
+    ///   the grouping ID may need to be propagated through the no-grouping stream.
     pub fn new(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
