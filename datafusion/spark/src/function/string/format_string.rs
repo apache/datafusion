@@ -2413,26 +2413,28 @@ mod tests {
 
         // LargeUtf8 format
         let fmt_large = make_field("fmt", DataType::LargeUtf8, false);
-        let arg = make_field("arg1", DataType::Int32, false);
+        let arg_large = make_field("arg1", DataType::Int32, false);
 
         let out_large = func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[fmt_large, arg.clone()],
+            arg_fields: &[fmt_large, arg_large],
             scalar_arguments: &[None, None],
         })?;
         assert_eq!(out_large.data_type(), &DataType::LargeUtf8);
 
         // Utf8View format
         let fmt_view = make_field("fmt", DataType::Utf8View, false);
+        let arg_view = make_field("arg1", DataType::Int32, false);
         let out_view = func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[fmt_view, arg.clone()],
+            arg_fields: &[fmt_view, arg_view],
             scalar_arguments: &[None, None],
         })?;
         assert_eq!(out_view.data_type(), &DataType::Utf8View);
 
         // Null first arg -> Utf8
         let fmt_null = make_field("fmt", DataType::Null, true);
+        let arg_null = make_field("arg1", DataType::Int32, false);
         let out_null = func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[fmt_null, arg],
+            arg_fields: &[fmt_null, arg_null],
             scalar_arguments: &[None, None],
         })?;
         assert_eq!(out_null.data_type(), &DataType::Utf8);
