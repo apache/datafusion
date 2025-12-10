@@ -22,11 +22,11 @@ use std::any::Any;
 use super::power::PowerFunc;
 
 use crate::utils::{
-    calculate_binary_math, decimal128_to_i128, decimal32_to_i32, decimal64_to_i64,
+    calculate_binary_math, decimal32_to_i32, decimal64_to_i64, decimal128_to_i128,
 };
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, Float16Type,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float16Type,
     Float32Type, Float64Type,
 };
 use arrow::error::ArrowError;
