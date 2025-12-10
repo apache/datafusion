@@ -18,17 +18,17 @@
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::{
-    assert_contains, Column, DFSchema, DFSchemaRef, DataFusionError, Result,
-    TableReference,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
+    assert_contains,
 };
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    cast, col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
-    LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
-    WindowFrame, WindowFunctionDefinition,
+    EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Union,
+    UserDefinedLogicalNode, UserDefinedLogicalNodeCore, WindowFrame,
+    WindowFunctionDefinition, cast, col, lit, table_scan, wildcard,
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
@@ -41,7 +41,7 @@ use datafusion_sql::unparser::dialect::{
     DefaultDialect, Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
     PostgreSqlDialect as UnparserPostgreSqlDialect, SqliteDialect,
 };
-use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
+use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
 use sqlparser::ast::Statement;
 use std::hash::Hash;
@@ -334,9 +334,7 @@ fn roundtrip_statement_with_dialect_1() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        // top projection sort gets derived into a subquery
-        // for MySQL, this subquery needs an alias
-        expected: @"SELECT `j1_min` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, min(`ta`.`j1_id`) FROM `j1` AS `ta` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+        expected: @"SELECT min(`ta`.`j1_id`) AS `j1_min` FROM `j1` AS `ta` ORDER BY `j1_min` ASC LIMIT 10",
     );
     Ok(())
 }
@@ -347,9 +345,7 @@ fn roundtrip_statement_with_dialect_2() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min from j1 ta order by min(ta.j1_id) limit 10;",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        // top projection sort still gets derived into a subquery in default dialect
-        // except for the default dialect, the subquery is left non-aliased
-        expected: @"SELECT j1_min FROM (SELECT min(ta.j1_id) AS j1_min, min(ta.j1_id) FROM j1 AS ta ORDER BY min(ta.j1_id) ASC NULLS LAST) LIMIT 10",
+        expected: @"SELECT min(ta.j1_id) AS j1_min FROM j1 AS ta ORDER BY j1_min ASC NULLS LAST LIMIT 10",
     );
     Ok(())
 }
@@ -360,7 +356,7 @@ fn roundtrip_statement_with_dialect_3() -> Result<(), DataFusionError> {
         sql: "select min(ta.j1_id) as j1_min, max(tb.j1_max) from j1 ta, (select distinct max(ta.j1_id) as j1_max from j1 ta order by max(ta.j1_id)) tb order by min(ta.j1_id) limit 10;",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        expected: @"SELECT `j1_min`, `max(tb.j1_max)` FROM (SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`), min(`ta`.`j1_id`) FROM `j1` AS `ta` CROSS JOIN (SELECT `j1_max` FROM (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `derived_distinct`) AS `tb` ORDER BY min(`ta`.`j1_id`) ASC) AS `derived_sort` LIMIT 10",
+        expected: @"SELECT min(`ta`.`j1_id`) AS `j1_min`, max(`tb`.`j1_max`) FROM `j1` AS `ta` CROSS JOIN (SELECT DISTINCT max(`ta`.`j1_id`) AS `j1_max` FROM `j1` AS `ta`) AS `tb` ORDER BY `j1_min` ASC LIMIT 10",
     );
     Ok(())
 }
@@ -1909,7 +1905,7 @@ fn test_complex_order_by_with_grouping() -> Result<()> {
     }, {
         assert_snapshot!(
             sql,
-            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY (grouping(j1.j1_id) + grouping(j1.j1_string)) DESC NULLS FIRST, CASE WHEN ((grouping(j1.j1_id) + grouping(j1.j1_string)) = 0) THEN j1.j1_id END ASC NULLS LAST) LIMIT 100"#
+            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN ((grouping(j1.j1_id) + grouping(j1.j1_string)) = 0) THEN j1.j1_id END ASC NULLS LAST) LIMIT 100"#
         );
     });
 
@@ -2075,7 +2071,8 @@ fn test_unparse_extension_to_statement() -> Result<()> {
     if let Some(err) = plan_to_sql(&extension).err() {
         assert_contains!(
             err.to_string(),
-            "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan");
+            "This feature is not implemented: Unsupported extension node: MockUserDefinedLogicalPlan"
+        );
     } else {
         panic!("Expected error");
     }
@@ -2179,11 +2176,9 @@ fn test_unparse_optimized_multi_union() -> Result<()> {
     );
 
     let plan = LogicalPlan::Union(Union {
-        inputs: vec![project(
-            empty.clone(),
-            vec![lit(1).alias("x"), lit("a").alias("y")],
-        )?
-        .into()],
+        inputs: vec![
+            project(empty.clone(), vec![lit(1).alias("x"), lit("a").alias("y")])?.into(),
+        ],
         schema: dfschema.clone(),
     });
 

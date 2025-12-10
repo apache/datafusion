@@ -247,7 +247,7 @@ impl TableProvider for IndexTableProvider {
             Arc::new(ParquetSource::new(self.schema()).with_predicate(predicate));
         let mut file_scan_config_builder =
             FileScanConfigBuilder::new(object_store_url, source)
-                .with_projection_indices(projection.cloned())
+                .with_projection_indices(projection.cloned())?
                 .with_limit(limit);
 
         // Transform to the format needed to pass to DataSourceExec

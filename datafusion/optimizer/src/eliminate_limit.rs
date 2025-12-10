@@ -18,8 +18,8 @@
 //! [`EliminateLimit`] eliminates `LIMIT` when possible
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::logical_plan::{EmptyRelation, FetchType, LogicalPlan, SkipType};
 use std::sync::Arc;
 
@@ -90,12 +90,12 @@ impl OptimizerRule for EliminateLimit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::*;
     use crate::OptimizerContext;
+    use crate::test::*;
     use datafusion_common::Column;
     use datafusion_expr::{
         col,
-        logical_plan::{builder::LogicalPlanBuilder, JoinType},
+        logical_plan::{JoinType, builder::LogicalPlanBuilder},
     };
     use std::sync::Arc;
 

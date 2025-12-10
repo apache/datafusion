@@ -528,18 +528,31 @@ pub fn serialize_file_scan_config(
             .with_metadata(conf.file_schema().metadata.clone()),
     );
 
+    let projection_exprs = conf
+        .file_source
+        .projection()
+        .as_ref()
+        .map(|projection_exprs| {
+            let projections = projection_exprs.iter().cloned().collect::<Vec<_>>();
+            Ok::<_, DataFusionError>(protobuf::ProjectionExprs {
+                projections: projections
+                    .into_iter()
+                    .map(|expr| {
+                        Ok(protobuf::ProjectionExpr {
+                            alias: expr.alias.to_string(),
+                            expr: Some(serialize_physical_expr(&expr.expr, codec)?),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            })
+        })
+        .transpose()?;
+
     Ok(protobuf::FileScanExecConf {
         file_groups,
         statistics: Some((&conf.statistics()).into()),
         limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
-        projection: conf
-            .projection_exprs
-            .as_ref()
-            .map(|p| p.column_indices())
-            .unwrap_or((0..schema.fields().len()).collect::<Vec<_>>())
-            .iter()
-            .map(|n| *n as u32)
-            .collect(),
+        projection: vec![],
         schema: Some(schema.as_ref().try_into()?),
         table_partition_cols: conf
             .table_partition_cols()
@@ -555,6 +568,7 @@ pub fn serialize_file_scan_config(
             .collect::<Vec<_>>(),
         constraints: Some(conf.constraints.clone().into()),
         batch_size: conf.batch_size.map(|s| s as u64),
+        projection_exprs,
     })
 }
 

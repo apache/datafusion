@@ -23,16 +23,18 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod arrow_wrappers;
 pub mod catalog_provider;
 pub mod catalog_provider_list;
+pub mod execution;
 pub mod execution_plan;
+pub mod expr;
 pub mod insert_op;
+pub mod physical_expr;
 pub mod plan_properties;
+pub mod proto;
 pub mod record_batch_stream;
 pub mod schema_provider;
 pub mod session_config;

@@ -18,9 +18,9 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use datafusion_common::config::ConfigOptions;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::concat;
 use std::hint::black_box;

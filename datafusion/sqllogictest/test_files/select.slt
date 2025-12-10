@@ -1420,9 +1420,7 @@ logical_plan
 01)Sort: annotated_data_finite2.a ASC NULLS LAST
 02)--Projection: annotated_data_finite2.a, annotated_data_finite2.b, Int64(2)
 03)----TableScan: annotated_data_finite2 projection=[a, b]
-physical_plan
-01)ProjectionExec: expr=[a@0 as a, b@1 as b, 2 as Int64(2)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, 2 as Int64(2)], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 # source is ordered by a,b,c
 # when filter result is constant for column a

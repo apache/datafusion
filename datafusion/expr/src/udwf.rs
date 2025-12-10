@@ -31,9 +31,9 @@ use arrow::datatypes::{DataType, FieldRef};
 use crate::expr::WindowFunction;
 use crate::udf_eq::UdfEq;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
+    Expr, PartitionEvaluator, Signature, function::WindowFunctionSimplification,
 };
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_doc::Documentation;
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_functions_window_common::expr::ExpressionArgs;

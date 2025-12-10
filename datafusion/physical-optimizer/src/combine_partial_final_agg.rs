@@ -40,7 +40,7 @@ use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
 pub struct CombinePartialFinalAggregate {}
 
 impl CombinePartialFinalAggregate {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

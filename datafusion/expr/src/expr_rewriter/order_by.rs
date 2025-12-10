@@ -19,7 +19,7 @@
 
 use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
-use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
+use crate::{Cast, Expr, LogicalPlan, TryCast, expr::Sort};
 
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
@@ -152,8 +152,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::{
-        cast, col, lit, logical_plan::builder::LogicalTableSource, try_cast,
-        LogicalPlanBuilder,
+        LogicalPlanBuilder, cast, col, lit, logical_plan::builder::LogicalTableSource,
+        try_cast,
     };
 
     use super::*;

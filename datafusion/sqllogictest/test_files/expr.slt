@@ -1398,6 +1398,11 @@ SELECT md5('tom');
 ----
 34b7da764b21d298ef307d04d8152dc5
 
+query T
+SELECT md5(arrow_cast('tom', 'Dictionary(Int32, Utf8)'));
+----
+34b7da764b21d298ef307d04d8152dc5
+
 query ?
 SELECT digest('tom','md5');
 ----

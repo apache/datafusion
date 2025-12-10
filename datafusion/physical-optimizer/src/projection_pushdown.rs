@@ -50,7 +50,7 @@ use datafusion_physical_plan::ExecutionPlan;
 pub struct ProjectionPushdown {}
 
 impl ProjectionPushdown {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

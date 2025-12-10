@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion::assert_batches_eq;
 use datafusion::common::tree_node::{
@@ -277,14 +277,14 @@ impl PhysicalExprAdapterFactory for ShreddedJsonRewriterFactory {
         physical_file_schema: SchemaRef,
     ) -> Arc<dyn PhysicalExprAdapter> {
         let default_factory = DefaultPhysicalExprAdapterFactory;
-        let default_adapter = default_factory
-            .create(logical_file_schema.clone(), physical_file_schema.clone());
+        let default_adapter = default_factory.create(
+            Arc::clone(&logical_file_schema),
+            Arc::clone(&physical_file_schema),
+        );
 
         Arc::new(ShreddedJsonRewriter {
-            logical_file_schema,
             physical_file_schema,
             default_adapter,
-            partition_values: Vec::new(),
         })
     }
 }
@@ -293,10 +293,8 @@ impl PhysicalExprAdapterFactory for ShreddedJsonRewriterFactory {
 /// and wraps DefaultPhysicalExprAdapter for standard schema adaptation
 #[derive(Debug)]
 struct ShreddedJsonRewriter {
-    logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     default_adapter: Arc<dyn PhysicalExprAdapter>,
-    partition_values: Vec<(FieldRef, ScalarValue)>,
 }
 
 impl PhysicalExprAdapter for ShreddedJsonRewriter {
@@ -307,27 +305,8 @@ impl PhysicalExprAdapter for ShreddedJsonRewriter {
             .data()?;
 
         // Then apply the default adapter as a fallback to handle standard schema differences
-        // like type casting, missing columns, and partition column handling
-        let default_adapter = if !self.partition_values.is_empty() {
-            self.default_adapter
-                .with_partition_values(self.partition_values.clone())
-        } else {
-            self.default_adapter.clone()
-        };
-
-        default_adapter.rewrite(rewritten)
-    }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(ShreddedJsonRewriter {
-            logical_file_schema: self.logical_file_schema.clone(),
-            physical_file_schema: self.physical_file_schema.clone(),
-            default_adapter: self.default_adapter.clone(),
-            partition_values,
-        })
+        // like type casting and missing columns
+        self.default_adapter.rewrite(rewritten)
     }
 }
 

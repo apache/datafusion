@@ -74,6 +74,11 @@ statement error DataFusion error: Error during planning: Unsupported compound id
 SELECT COUNT(*) FROM way.too.many.namespaces.as.ident.prefixes.aggregate_test_100
 
 
+# fetch_clause_not_supported
+statement error FETCH clause is not supported yet
+SELECT 1 FETCH NEXT 1 ROW ONLY
+
+
 
 #
 # Wrong scalar function signature

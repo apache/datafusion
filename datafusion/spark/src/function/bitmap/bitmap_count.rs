@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::datatypes::DataType::{
     Binary, BinaryView, Dictionary, FixedSizeBinary, LargeBinary,
 };
-use arrow::datatypes::{DataType, Int16Type, Int32Type, Int64Type, Int8Type};
+use arrow::datatypes::{DataType, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
@@ -71,7 +71,20 @@ impl ScalarUDFImpl for BitmapCount {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        use arrow::datatypes::Field;
+        // bitmap_count returns Int64 with the same nullability as the input
+        Ok(Arc::new(Field::new(
+            args.arg_fields[0].name(),
+            DataType::Int64,
+            args.arg_fields[0].is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -222,6 +235,39 @@ mod tests {
         let actual = udf.invoke_with_args(args)?;
         let expect = Scalar(ScalarValue::Int64(Some(16)));
         assert_eq!(*actual.into_array(1)?, *expect.into_array(1)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_bitmap_count_nullability() -> Result<()> {
+        use datafusion_expr::ReturnFieldArgs;
+
+        let bitmap_count = BitmapCount::new();
+
+        // Test with non-nullable binary field
+        let non_nullable_field = Arc::new(Field::new("bin", DataType::Binary, false));
+
+        let result = bitmap_count.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&non_nullable_field)],
+            scalar_arguments: &[None],
+        })?;
+
+        // The result should not be nullable (same as input)
+        assert!(!result.is_nullable());
+        assert_eq!(result.data_type(), &Int64);
+
+        // Test with nullable binary field
+        let nullable_field = Arc::new(Field::new("bin", DataType::Binary, true));
+
+        let result = bitmap_count.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&nullable_field)],
+            scalar_arguments: &[None],
+        })?;
+
+        // The result should be nullable (same as input)
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), &Int64);
+
         Ok(())
     }
 }

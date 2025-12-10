@@ -43,8 +43,8 @@ LOCATION '../core/tests/data/parquet_map.parquet';
 query TTT
 describe data;
 ----
-ints Map("entries": Struct("key": Utf8, "value": Int64), unsorted) NO
-strings Map("entries": Struct("key": Utf8, "value": Utf8), unsorted) NO
+ints Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Int64), unsorted) NO
+strings Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Utf8), unsorted) NO
 timestamp Utf8View NO
 
 query ??T
