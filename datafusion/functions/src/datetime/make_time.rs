@@ -26,8 +26,8 @@ use arrow::datatypes::DataType::Time32;
 use arrow::datatypes::{DataType, Time32SecondType, TimeUnit};
 use chrono::prelude::*;
 
-use datafusion_common::types::{logical_int32, logical_string, NativeType};
-use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
+use datafusion_common::types::{NativeType, logical_int32, logical_string};
+use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -214,8 +214,8 @@ mod tests {
     use arrow::array::{Array, Int32Array, Time32SecondArray};
     use arrow::datatypes::TimeUnit::Second;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::DataFusionError;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
 
