@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-sphinx==8.2.3
+sphinx==9.0.4
 sphinx-reredirects==1.0.0
 pydata-sphinx-theme==0.16.1
 myst-parser==4.0.1
