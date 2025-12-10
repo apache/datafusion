@@ -736,7 +736,7 @@ pub struct ColumnStatistics {
     ///
     /// E.g. we may read 1GB of data from a Parquet file but the Arrow data
     /// the node produces may be 2GB; it's this 2GB that is tracked here.
-    /// 
+    ///
     /// Currently this is accurately calculated for primitive types only.
     /// For complex types (like Utf8, List, Struct, etc), this value may be
     /// absent or inexact (e.g. estimated from the size of the data in the source Parquet files).
