@@ -21,12 +21,14 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray};
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
-use arrow::datatypes::{DataType, IntervalMonthDayNano};
+use arrow::datatypes::{DataType, Field, FieldRef, IntervalMonthDayNano};
 use datafusion_common::types::{logical_float64, logical_int32, NativeType};
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -119,7 +121,16 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Interval(MonthDayNano))
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            Interval(MonthDayNano),
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -271,15 +282,64 @@ fn make_interval_month_day_nano(
 #[cfg(test)]
 mod tests {
     use arrow::array::{Float64Array, Int32Array, IntervalMonthDayNanoArray};
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, FieldRef};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
         assert_eq_or_internal_err, internal_datafusion_err, internal_err, Result,
     };
+    use datafusion_expr::ReturnFieldArgs;
 
     use super::*;
     fn run_make_interval_month_day_nano(arrs: Vec<ArrayRef>) -> Result<ArrayRef> {
         make_interval_kernel(&arrs)
+    }
+
+    #[test]
+    fn return_field_nullability() -> Result<()> {
+        let func = SparkMakeInterval::new();
+
+        // zero-arg form returns constant zero interval (non-nullable)
+        let field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[],
+            scalar_arguments: &[],
+        })?;
+        assert!(
+            !field.is_nullable(),
+            "zero-arg make_interval should be non-nullable"
+        );
+        assert_eq!(field.data_type(), &Interval(MonthDayNano));
+
+        // all inputs non-nullable -> non-nullable output
+        let non_nullable_fields: Vec<FieldRef> = vec![
+            Field::new("y", DataType::Int32, false).into(),
+            Field::new("m", DataType::Int32, false).into(),
+        ];
+        let scalar_arguments = vec![None, None];
+        let field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &non_nullable_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert!(
+            !field.is_nullable(),
+            "make_interval should be non-nullable when all inputs are non-nullable"
+        );
+
+        // any nullable input -> nullable output
+        let nullable_fields: Vec<FieldRef> = vec![
+            Field::new("y", DataType::Int32, false).into(),
+            Field::new("m", DataType::Int32, true).into(),
+        ];
+        let scalar_arguments = vec![None, None];
+        let field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &nullable_fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        assert!(
+            field.is_nullable(),
+            "nullable input should yield nullable output"
+        );
+
+        Ok(())
     }
 
     #[test]
