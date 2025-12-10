@@ -23,11 +23,11 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
+use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
-use datafusion_common::Result;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
-use datafusion_expr::{lit, FetchType, SkipType};
+use datafusion_expr::{FetchType, SkipType, lit};
 
 /// Optimization rule that tries to push down `LIMIT`.
 //. It will push down through projection, limits (taking the smaller limit)
@@ -281,8 +281,8 @@ mod test {
     use crate::OptimizerContext;
     use datafusion_common::DFSchemaRef;
     use datafusion_expr::{
-        col, exists, logical_plan::builder::LogicalPlanBuilder, Expr, Extension,
-        UserDefinedLogicalNodeCore,
+        Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
+        logical_plan::builder::LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::expr_fn::max;
 

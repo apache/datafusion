@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use crate::expressions::{binary, BinaryExpr, Literal};
 use crate::PhysicalExpr;
+use crate::expressions::{BinaryExpr, Literal, binary};
 use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Operator;

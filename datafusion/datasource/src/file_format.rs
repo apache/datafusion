@@ -30,7 +30,7 @@ use crate::file_sink_config::FileSinkConfig;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{internal_err, not_impl_err, GetExt, Result, Statistics};
+use datafusion_common::{GetExt, Result, Statistics, internal_err, not_impl_err};
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;

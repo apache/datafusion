@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example query_planning -- [analyzer_rule|expr_api|optimizer_rule|parse_sql_expr|plan_to_sql|planner_api|pruning|thread_pools]
+//! cargo run --example query_planning -- [all|analyzer_rule|expr_api|optimizer_rule|parse_sql_expr|plan_to_sql|planner_api|pruning|thread_pools]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `analyzer_rule` — use a custom AnalyzerRule to change a query's semantics (row level access control)
 //! - `expr_api` — create, execute, simplify, analyze and coerce `Expr`s
 //! - `optimizer_rule` — use a custom OptimizerRule to replace certain predicates
@@ -43,11 +44,14 @@ mod planner_api;
 mod pruning;
 mod thread_pools;
 
-use std::str::FromStr;
-
 use datafusion::error::{DataFusionError, Result};
+use strum::{IntoEnumIterator, VariantNames};
+use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
+#[derive(EnumIter, EnumString, Display, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 enum ExampleKind {
+    All,
     AnalyzerRule,
     ExprApi,
     OptimizerRule,
@@ -58,55 +62,31 @@ enum ExampleKind {
     ThreadPools,
 }
 
-impl AsRef<str> for ExampleKind {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::AnalyzerRule => "analyzer_rule",
-            Self::ExprApi => "expr_api",
-            Self::OptimizerRule => "optimizer_rule",
-            Self::ParseSqlExpr => "parse_sql_expr",
-            Self::PlanToSql => "plan_to_sql",
-            Self::PlannerApi => "planner_api",
-            Self::Pruning => "pruning",
-            Self::ThreadPools => "thread_pools",
-        }
-    }
-}
-
-impl FromStr for ExampleKind {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "analyzer_rule" => Ok(Self::AnalyzerRule),
-            "expr_api" => Ok(Self::ExprApi),
-            "optimizer_rule" => Ok(Self::OptimizerRule),
-            "parse_sql_expr" => Ok(Self::ParseSqlExpr),
-            "plan_to_sql" => Ok(Self::PlanToSql),
-            "planner_api" => Ok(Self::PlannerApi),
-            "pruning" => Ok(Self::Pruning),
-            "thread_pools" => Ok(Self::ThreadPools),
-            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
-        }
-    }
-}
-
 impl ExampleKind {
-    const ALL: [Self; 8] = [
-        Self::AnalyzerRule,
-        Self::ExprApi,
-        Self::OptimizerRule,
-        Self::ParseSqlExpr,
-        Self::PlanToSql,
-        Self::PlannerApi,
-        Self::Pruning,
-        Self::ThreadPools,
-    ];
-
     const EXAMPLE_NAME: &str = "query_planning";
 
-    fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+    fn runnable() -> impl Iterator<Item = ExampleKind> {
+        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::All => {
+                for example in ExampleKind::runnable() {
+                    println!("Running example: {example}");
+                    Box::pin(example.run()).await?;
+                }
+            }
+            ExampleKind::AnalyzerRule => analyzer_rule::analyzer_rule().await?,
+            ExampleKind::ExprApi => expr_api::expr_api().await?,
+            ExampleKind::OptimizerRule => optimizer_rule::optimizer_rule().await?,
+            ExampleKind::ParseSqlExpr => parse_sql_expr::parse_sql_expr().await?,
+            ExampleKind::PlanToSql => plan_to_sql::plan_to_sql_examples().await?,
+            ExampleKind::PlannerApi => planner_api::planner_api().await?,
+            ExampleKind::Pruning => pruning::pruning().await?,
+            ExampleKind::ThreadPools => thread_pools::thread_pools().await?,
+        }
+        Ok(())
     }
 }
 
@@ -115,24 +95,14 @@ async fn main() -> Result<()> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::variants().join("|")
+        ExampleKind::VARIANTS.join("|")
     );
 
-    let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{usage}");
-        DataFusionError::Execution("Missing argument".to_string())
-    })?;
+    let example: ExampleKind = std::env::args()
+        .nth(1)
+        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .parse()
+        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::AnalyzerRule => analyzer_rule::analyzer_rule().await?,
-        ExampleKind::ExprApi => expr_api::expr_api().await?,
-        ExampleKind::OptimizerRule => optimizer_rule::optimizer_rule().await?,
-        ExampleKind::ParseSqlExpr => parse_sql_expr::parse_sql_expr().await?,
-        ExampleKind::PlanToSql => plan_to_sql::plan_to_sql_examples().await?,
-        ExampleKind::PlannerApi => planner_api::planner_api().await?,
-        ExampleKind::Pruning => pruning::pruning().await?,
-        ExampleKind::ThreadPools => thread_pools::thread_pools().await?,
-    }
-
-    Ok(())
+    example.run().await
 }

@@ -24,7 +24,7 @@ use arrow::array::RecordBatch;
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 
-use super::{spill_manager::SpillManager, IPCStreamWriter};
+use super::{IPCStreamWriter, spill_manager::SpillManager};
 
 /// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 /// Caller is able to use this struct to incrementally append in-memory batches to

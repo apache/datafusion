@@ -33,20 +33,20 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{layout, ArrayData, BufferSpec};
+use arrow::array::{ArrayData, BufferSpec, layout};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{
+    MetadataVersion,
     reader::StreamReader,
     writer::{IpcWriteOptions, StreamWriter},
-    MetadataVersion,
 };
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{exec_datafusion_err, DataFusionError, HashSet, Result};
+use datafusion_common::{DataFusionError, HashSet, Result, exec_datafusion_err};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::RecordBatchStream;
+use datafusion_execution::disk_manager::RefCountedTempFile;
 use futures::{FutureExt as _, Stream};
 use log::warn;
 
@@ -154,11 +154,11 @@ impl SpillReaderStream {
                                             + SPILL_BATCH_MEMORY_MARGIN
                                     {
                                         warn!(
-                                                "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
+                                            "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
                                                 by more than the allowed tolerance ({SPILL_BATCH_MEMORY_MARGIN} bytes).\n\
                                                 This likely indicates a bug in memory accounting during spilling.\n\
                                                 Please report this issue in https://github.com/apache/datafusion/issues/17340."
-                                            );
+                                        );
                                     }
                                 }
                                 self.state = SpillReaderStreamState::Waiting(reader);
@@ -306,10 +306,10 @@ fn count_array_data_memory_size(
         } // Otherwise the buffer's memory is already counted
     }
 
-    if let Some(null_buffer) = array_data.nulls() {
-        if counted_buffers.insert(null_buffer.inner().inner().data_ptr()) {
-            *total_size += null_buffer.inner().inner().capacity();
-        }
+    if let Some(null_buffer) = array_data.nulls()
+        && counted_buffers.insert(null_buffer.inner().inner().data_ptr())
+    {
+        *total_size += null_buffer.inner().inner().capacity();
     }
 
     // Count all children `ArrayData` recursively

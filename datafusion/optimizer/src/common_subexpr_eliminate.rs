@@ -27,14 +27,14 @@ use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
 use datafusion_common::alias::AliasGenerator;
 
-use datafusion_common::cse::{CSEController, FoundCommonNodes, CSE};
+use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{qualified_name, Column, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, qualified_name};
 use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
-use datafusion_expr::{col, BinaryExpr, Case, Expr, Operator, SortExpr};
+use datafusion_expr::{BinaryExpr, Case, Expr, Operator, SortExpr, col};
 
 const CSE_PREFIX: &str = "__common_expr";
 
@@ -814,11 +814,11 @@ mod test {
     use std::iter;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::logical_plan::{table_scan, JoinType};
+    use datafusion_expr::logical_plan::{JoinType, table_scan};
     use datafusion_expr::{
-        grouping_set, is_null, not, AccumulatorFactoryFunction, AggregateUDF,
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        SimpleAggregateUDF, Volatility,
+        AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarFunctionArgs,
+        ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Volatility,
+        grouping_set, is_null, not,
     };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 

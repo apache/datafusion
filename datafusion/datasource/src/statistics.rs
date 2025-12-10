@@ -22,8 +22,8 @@
 
 use std::sync::Arc;
 
-use crate::file_groups::FileGroup;
 use crate::PartitionedFile;
+use crate::file_groups::FileGroup;
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortColumn;
@@ -31,7 +31,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::row::{Row, Rows};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    plan_datafusion_err, plan_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};

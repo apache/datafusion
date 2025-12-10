@@ -86,6 +86,9 @@ cargo run --example dataframe -- dataframe
 - [`examples/external_dependency/query_aws_s3.rs`](examples/external_dependency/query_aws_s3.rs): Configure `object_store` and run a query against files stored in AWS S3
 - [`examples/data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs): Configure `object_store` and run a query against files via HTTP
 - [`examples/builtin_functions/regexp.rs`](examples/builtin_functions/regexp.rs): Examples of using regular expression functions
+- [`examples/relation_planner/match_recognize.rs`](examples/relation_planner/match_recognize.rs): Use custom relation planner to implement MATCH_RECOGNIZE pattern matching
+- [`examples/relation_planner/pivot_unpivot.rs`](examples/relation_planner/pivot_unpivot.rs): Use custom relation planner to implement PIVOT and UNPIVOT operations
+- [`examples/relation_planner/table_sample.rs`](examples/relation_planner/table_sample.rs): Use custom relation planner to implement TABLESAMPLE clause
 - [`examples/data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs): Examples of interfacing with a remote catalog (e.g. over a network)
 - [`examples/udf/simple_udaf.rs`](examples/udf/simple_udaf.rs): Define and invoke a User Defined Aggregate Function (UDAF)
 - [`examples/udf/simple_udf.rs`](examples/udf/simple_udf.rs): Define and invoke a User Defined Scalar Function (UDF)

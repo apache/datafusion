@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 
-use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::common::Result;
 use datafusion::config::{ConfigOptions, TableParquetOptions};
@@ -35,7 +35,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::record_batch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{ColumnStatistics, ScalarValue};
+use datafusion_common::ColumnStatistics;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -193,11 +193,10 @@ struct UppercasePhysicalExprAdapterFactory;
 impl PhysicalExprAdapterFactory for UppercasePhysicalExprAdapterFactory {
     fn create(
         &self,
-        logical_file_schema: SchemaRef,
+        _logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Arc<dyn PhysicalExprAdapter> {
         Arc::new(UppercasePhysicalExprAdapter {
-            logical_file_schema,
             physical_file_schema,
         })
     }
@@ -205,7 +204,6 @@ impl PhysicalExprAdapterFactory for UppercasePhysicalExprAdapterFactory {
 
 #[derive(Debug)]
 struct UppercasePhysicalExprAdapter {
-    logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
 }
 
@@ -225,16 +223,6 @@ impl PhysicalExprAdapter for UppercasePhysicalExprAdapter {
             Ok(Transformed::no(e))
         })
         .data()
-    }
-
-    fn with_partition_values(
-        &self,
-        _partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(Self {
-            logical_file_schema: self.logical_file_schema.clone(),
-            physical_file_schema: self.physical_file_schema.clone(),
-        })
     }
 }
 
@@ -564,20 +552,9 @@ async fn test_parquet_missing_column() -> Result<()> {
         .push_down_filters(false)
         .execute()
         .await?;
-    // There will be data: the filter is (null) is not null or a = 24.
-    // Statistics pruning doesn't handle `null is not null` so it resolves to `true or a = 24` -> `true` so no row groups are pruned
-    #[rustfmt::skip]
-    let expected = [
-        "+---+---+-----+",
-        "| a | b | c   |",
-        "+---+---+-----+",
-        "| 1 |   | 1.1 |",
-        "| 2 |   | 2.2 |",
-        "| 3 |   | 3.3 |",
-        "+---+---+-----+",
-    ];
-    assert_batches_eq!(expected, &batches);
-    // On the other hand the filter `b = 'foo' and a = 24` should prune all data even with only statistics-based pushdown
+    // There should be zero batches
+    assert_eq!(batches.len(), 0);
+    // Check another filter: `b = 'foo' and a = 24` should also prune data with only statistics-based pushdown
     let filter = col("b").eq(lit("foo")).and(col("a").eq(lit(24)));
     let batches = test_case
         .clone()
@@ -587,6 +564,24 @@ async fn test_parquet_missing_column() -> Result<()> {
         .await?;
     // There should be zero batches
     assert_eq!(batches.len(), 0);
+    // On the other hand `b is null and a = 2` should prune only the second row group with stats only pruning
+    let filter = col("b").is_null().and(col("a").eq(lit(2)));
+    let batches = test_case
+        .clone()
+        .with_predicate(filter)
+        .push_down_filters(false)
+        .execute()
+        .await?;
+    #[rustfmt::skip]
+    let expected = [
+        "+---+---+-----+",
+        "| a | b | c   |",
+        "+---+---+-----+",
+        "| 1 |   | 1.1 |",
+        "| 2 |   | 2.2 |",
+        "+---+---+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
 
     Ok(())
 }

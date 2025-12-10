@@ -26,8 +26,8 @@ use std::sync::Arc;
 use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_common::{plan_err, ScalarValue};
+use datafusion_common::{Result, internal_err, not_impl_err};
+use datafusion_common::{ScalarValue, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -473,12 +473,16 @@ mod tests {
         let mut accum1 = agg1.accumulator(args1)?;
         let mut accum2 = agg2.accumulator(args2)?;
 
-        let value1 = vec![col("a", schema)?
-            .evaluate(batch1)
-            .and_then(|v| v.into_array(batch1.num_rows()))?];
-        let value2 = vec![col("a", schema)?
-            .evaluate(batch2)
-            .and_then(|v| v.into_array(batch2.num_rows()))?];
+        let value1 = vec![
+            col("a", schema)?
+                .evaluate(batch1)
+                .and_then(|v| v.into_array(batch1.num_rows()))?,
+        ];
+        let value2 = vec![
+            col("a", schema)?
+                .evaluate(batch2)
+                .and_then(|v| v.into_array(batch2.num_rows()))?,
+        ];
 
         accum1.update_batch(&value1)?;
         accum2.update_batch(&value2)?;
