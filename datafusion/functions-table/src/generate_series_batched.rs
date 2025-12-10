@@ -45,9 +45,18 @@ pub struct GenerateSeriesFunction {
 
 impl GenerateSeriesFunction {
     pub fn new() -> Self {
+        use datafusion_common::types::{logical_int64, NativeType};
+        use datafusion_expr::{Coercion, TypeSignatureClass};
+
+        let integer = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![TypeSignatureClass::Integer],
+            NativeType::Int64,
+        );
+
         Self {
-            signature: Signature::exact(
-                vec![DataType::Int64, DataType::Int64],
+            signature: Signature::coercible(
+                vec![integer.clone(), integer.clone()],
                 datafusion_expr::Volatility::Immutable,
             ),
         }
@@ -63,7 +72,7 @@ impl Default for GenerateSeriesFunction {
 #[async_trait::async_trait]
 impl BatchedTableFunctionImpl for GenerateSeriesFunction {
     fn name(&self) -> &str {
-        "generate_series"
+        "batched_generate_series"
     }
 
     fn signature(&self) -> &Signature {
@@ -89,8 +98,21 @@ impl BatchedTableFunctionImpl for GenerateSeriesFunction {
             return exec_err!("generate_series expects 2 arguments, got {}", args.len());
         }
 
-        let start_array = args[0].as_primitive::<arrow::datatypes::Int64Type>();
-        let end_array = args[1].as_primitive::<arrow::datatypes::Int64Type>();
+        // Cast inputs to Int64 if needed (for coercible signature support)
+        use arrow::compute::cast;
+        let start_array = if args[0].data_type() != &DataType::Int64 {
+            cast(&args[0], &DataType::Int64)?
+        } else {
+            Arc::clone(&args[0])
+        };
+        let end_array = if args[1].data_type() != &DataType::Int64 {
+            cast(&args[1], &DataType::Int64)?
+        } else {
+            Arc::clone(&args[1])
+        };
+
+        let start_array = start_array.as_primitive::<arrow::datatypes::Int64Type>();
+        let end_array = end_array.as_primitive::<arrow::datatypes::Int64Type>();
 
         if start_array.len() != end_array.len() {
             return exec_err!("start and end arrays must have same length");

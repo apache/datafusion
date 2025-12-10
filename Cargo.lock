@@ -2727,6 +2727,7 @@ dependencies = [
  "chrono",
  "clap 4.5.50",
  "datafusion",
+ "datafusion-functions-table",
  "datafusion-spark",
  "datafusion-substrait",
  "env_logger",

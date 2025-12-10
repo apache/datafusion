@@ -35,7 +35,7 @@ INSERT INTO ranges VALUES (1, 3), (5, 7), (10, 12);
 
 query I
 SELECT * FROM batched_generate_series(1, 5)
-ORDER BY n
+ORDER BY value
 ----
 1
 2
@@ -49,10 +49,10 @@ SELECT COUNT(*) FROM batched_generate_series(1, 100)
 100
 
 query II
-SELECT a.n, b.n
+SELECT a.value, b.value
 FROM batched_generate_series(1, 2) a
 CROSS JOIN batched_generate_series(3, 4) b
-ORDER BY a.n, b.n
+ORDER BY a.value, b.value
 ----
 1 3
 1 4
@@ -60,8 +60,8 @@ ORDER BY a.n, b.n
 2 4
 
 query I
-SELECT series.n FROM batched_generate_series(5, 7) AS series
-ORDER BY n
+SELECT series.value FROM batched_generate_series(5, 7) AS series
+ORDER BY value
 ----
 5
 6
@@ -72,10 +72,10 @@ ORDER BY n
 ##########
 
 query II
-SELECT ranges.start_val, n
+SELECT ranges.start_val, value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-ORDER BY ranges.start_val, n
+ORDER BY ranges.start_val, value
 ----
 1 1
 1 2
@@ -91,7 +91,7 @@ query III
 SELECT *
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-ORDER BY start_val, end_val, n
+ORDER BY start_val, end_val, value
 ----
 1 3 1
 1 3 2
@@ -104,10 +104,10 @@ ORDER BY start_val, end_val, n
 10 12 12
 
 query I
-SELECT n
+SELECT value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-ORDER BY n
+ORDER BY value
 ----
 1
 2
@@ -123,7 +123,7 @@ query II
 SELECT start_val, end_val
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-ORDER BY start_val, n
+ORDER BY start_val, value
 ----
 1 3
 1 3
@@ -140,11 +140,11 @@ ORDER BY start_val, n
 ##########
 
 query II
-SELECT ranges.start_val, n
+SELECT ranges.start_val, value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
 WHERE start_val < 10
-ORDER BY start_val, n
+ORDER BY start_val, value
 ----
 1 1
 1 2
@@ -154,11 +154,11 @@ ORDER BY start_val, n
 5 7
 
 query II
-SELECT ranges.start_val, n
+SELECT ranges.start_val, value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-WHERE n > 6
-ORDER BY start_val, n
+WHERE value > 6
+ORDER BY start_val, value
 ----
 5 7
 10 10
@@ -166,11 +166,11 @@ ORDER BY start_val, n
 10 12
 
 query II
-SELECT ranges.start_val, n
+SELECT ranges.start_val, value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-WHERE start_val >= 5 AND n <= 7
-ORDER BY start_val, n
+WHERE start_val >= 5 AND value <= 7
+ORDER BY start_val, value
 ----
 5 5
 5 6
@@ -188,7 +188,7 @@ CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
 9
 
 query I
-SELECT SUM(n)
+SELECT SUM(value)
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
 ----
@@ -206,7 +206,7 @@ ORDER BY start_val
 10 3
 
 query II
-SELECT start_val, SUM(n)
+SELECT start_val, SUM(value)
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
 GROUP BY start_val
@@ -217,7 +217,7 @@ ORDER BY start_val
 10 33
 
 query RII
-SELECT AVG(n), MAX(n), COUNT(n)
+SELECT AVG(value), MAX(value), COUNT(value)
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
 ----
@@ -234,12 +234,12 @@ statement ok
 INSERT INTO multipliers VALUES (2), (3);
 
 query IIII
-SELECT ranges.start_val, ranges.end_val, multipliers.mult, n
+SELECT ranges.start_val, ranges.end_val, multipliers.mult, value
 FROM ranges
 CROSS JOIN multipliers
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
 WHERE multipliers.mult = 2 AND start_val < 10
-ORDER BY start_val, n
+ORDER BY start_val, value
 ----
 1 3 2 1
 1 3 2 2
@@ -253,10 +253,10 @@ ORDER BY start_val, n
 ##########
 
 query II
-SELECT sub.start_val, n
+SELECT sub.start_val, value
 FROM (SELECT start_val, end_val FROM ranges WHERE start_val < 10) sub
 CROSS JOIN LATERAL batched_generate_series(sub.start_val, sub.end_val)
-ORDER BY sub.start_val, n
+ORDER BY sub.start_val, value
 ----
 1 1
 1 2
@@ -270,10 +270,10 @@ ORDER BY sub.start_val, n
 ##########
 
 query II
-SELECT ranges.start_val, n
+SELECT ranges.start_val, value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-ORDER BY start_val DESC, n DESC
+ORDER BY start_val DESC, value DESC
 LIMIT 5
 ----
 10 12
@@ -283,10 +283,10 @@ LIMIT 5
 5 6
 
 query II
-SELECT ranges.start_val, n
+SELECT ranges.start_val, value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-ORDER BY n ASC
+ORDER BY value ASC
 LIMIT 5
 ----
 1 1
@@ -300,10 +300,10 @@ LIMIT 5
 ##########
 
 query II
-SELECT r.start_val, s.n
+SELECT r.start_val, s.value
 FROM ranges r
 CROSS JOIN LATERAL batched_generate_series(r.start_val, r.end_val) AS s
-ORDER BY r.start_val, s.n
+ORDER BY r.start_val, s.value
 ----
 1 1
 1 2
@@ -320,10 +320,10 @@ ORDER BY r.start_val, s.n
 ##########
 
 query I
-SELECT DISTINCT n
+SELECT DISTINCT value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-ORDER BY n
+ORDER BY value
 ----
 1
 2
@@ -369,17 +369,17 @@ statement ok
 INSERT INTO single_range VALUES (5);
 
 query II
-SELECT val, n
+SELECT val, value
 FROM single_range
 CROSS JOIN LATERAL batched_generate_series(single_range.val, single_range.val)
 ----
 5 5
 
 query II
-SELECT start_val, n
+SELECT start_val, value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-WHERE n > 100
+WHERE value > 100
 ----
 
 ##########
@@ -387,11 +387,11 @@ WHERE n > 100
 ##########
 
 # Test that projection pushdown works with batched table functions
-# The optimizer should push down the projection to only select the 'n' column
+# The optimizer should push down the projection to only select the 'value' column
 
 query I
-SELECT n FROM batched_generate_series(1, 5)
-ORDER BY n
+SELECT value FROM batched_generate_series(1, 5)
+ORDER BY value
 ----
 1
 2
@@ -401,7 +401,7 @@ ORDER BY n
 
 # Test projection pushdown with LIMIT
 query I
-SELECT n FROM batched_generate_series(1, 100) LIMIT 3
+SELECT value FROM batched_generate_series(1, 100) LIMIT 3
 ----
 1
 2
@@ -466,10 +466,10 @@ ORDER BY id, n
 
 # Test projection pushdown with LATERAL
 query I
-SELECT n
+SELECT value
 FROM ranges
 CROSS JOIN LATERAL batched_generate_series(ranges.start_val, ranges.end_val)
-ORDER BY n
+ORDER BY value
 LIMIT 5
 ----
 1
@@ -489,88 +489,95 @@ CREATE TABLE ranges_filter_test (start_val INT, end_val INT);
 statement ok
 INSERT INTO ranges_filter_test VALUES (1, 10), (5, 15), (10, 20);
 
-# Verify filter pushdown in query plan - non-volatile filters should be pushed down
+# Verify filter handling in query plan - filters are not pushed down
 query TT
-EXPLAIN SELECT n
+EXPLAIN SELECT value
 FROM batched_generate_series(1, 20)
-WHERE n > 15 AND n < 18
-----
-logical_plan StandaloneBatchedTableFunction: batched_generate_series(Int64(1), Int64(20)), projection=[0], filters=[batched_generate_series().n > Int32(15), batched_generate_series().n < Int32(18)]
-physical_plan
-01)BatchedTableFunctionExec: function=batched_generate_series, args=[1, 20], projection=[0], filters=[batched_generate_series().n > Int32(15), batched_generate_series().n < Int32(18)]
-02)--PlaceholderRowExec
-
-# Verify volatile filters are NOT pushed down (they stay as Filter operator)
-query TT
-EXPLAIN SELECT n
-FROM batched_generate_series(1, 20)
-WHERE n > 15 AND random() > 0.5
+WHERE value > 15 AND value < 18
 ----
 logical_plan
-01)Filter: random() > Float64(0.5)
-02)--StandaloneBatchedTableFunction: batched_generate_series(Int64(1), Int64(20)), projection=[0], filters=[batched_generate_series().n > Int32(15)]
+01)Filter: batched_generate_series().value > Int64(15) AND batched_generate_series().value < Int64(18)
+02)--StandaloneBatchedTableFunction: batched_generate_series(Int64(1), Int64(20)), projection=[0]
 physical_plan
-01)FilterExec: random() > 0.5
+01)FilterExec: value@0 > 15 AND value@0 < 18
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----BatchedTableFunctionExec: function=batched_generate_series, args=[1, 20], projection=[0], filters=[batched_generate_series().n > Int32(15)]
+03)----BatchedTableFunctionExec: function=batched_generate_series, args=[1, 20], projection=[0]
+04)------PlaceholderRowExec
+
+# Verify volatile filters stay as Filter operator
+query TT
+EXPLAIN SELECT value
+FROM batched_generate_series(1, 20)
+WHERE value > 15 AND random() > 0.5
+----
+logical_plan
+01)Filter: batched_generate_series().value > Int64(15) AND random() > Float64(0.5)
+02)--StandaloneBatchedTableFunction: batched_generate_series(Int64(1), Int64(20)), projection=[0]
+physical_plan
+01)FilterExec: value@0 > 15 AND random() > 0.5
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----BatchedTableFunctionExec: function=batched_generate_series, args=[1, 20], projection=[0]
 04)------PlaceholderRowExec
 
 # Verify LATERAL projection pushdown - since generate_series only has 1 column, projection not shown
 query TT
-EXPLAIN SELECT start_val, n
+EXPLAIN SELECT start_val, value
 FROM ranges_filter_test
 CROSS JOIN LATERAL batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 ----
 logical_plan
-01)Projection: ranges_filter_test.start_val, batched_generate_series().n
+01)Projection: ranges_filter_test.start_val, batched_generate_series().value
 02)--LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 03)----TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
-01)ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]
+01)ProjectionExec: expr=[start_val@0 as start_val, value@2 as value]
 02)--BatchedTableFunctionExec: function=batched_generate_series, args=[start_val@0, end_val@1]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Verify LATERAL filter pushdown - filters on table function output ARE pushed down
+# Verify LATERAL filter handling - filters on table function output are not pushed down
 query TT
-EXPLAIN SELECT start_val, n
+EXPLAIN SELECT start_val, value
 FROM ranges_filter_test
 CROSS JOIN LATERAL batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
-WHERE n > 12
+WHERE value > 12
 ----
 logical_plan
-01)Projection: ranges_filter_test.start_val, batched_generate_series().n
-02)--LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val), filters=[batched_generate_series().n > Int32(12)]
-03)----TableScan: ranges_filter_test projection=[start_val, end_val]
+01)Filter: batched_generate_series().value > Int64(12)
+02)--Projection: ranges_filter_test.start_val, batched_generate_series().value
+03)----LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
+04)------TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
-01)ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]
-02)--BatchedTableFunctionExec: function=batched_generate_series, args=[start_val@0, end_val@1], filters=[batched_generate_series().n > Int32(12)]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: value@1 > 12
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----ProjectionExec: expr=[start_val@0 as start_val, value@2 as value]
+04)------BatchedTableFunctionExec: function=batched_generate_series, args=[start_val@0, end_val@1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Verify LATERAL filter NOT pushed down when referencing input columns
 query TT
-EXPLAIN SELECT start_val, n
+EXPLAIN SELECT start_val, value
 FROM ranges_filter_test
 CROSS JOIN LATERAL batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 WHERE start_val > 5
 ----
 logical_plan
 01)Filter: ranges_filter_test.start_val > Int32(5)
-02)--Projection: ranges_filter_test.start_val, batched_generate_series().n
+02)--Projection: ranges_filter_test.start_val, batched_generate_series().value
 03)----LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 04)------TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
 01)FilterExec: start_val@0 > 5
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]
+03)----ProjectionExec: expr=[start_val@0 as start_val, value@2 as value]
 04)------BatchedTableFunctionExec: function=batched_generate_series, args=[start_val@0, end_val@1]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test filter pushdown on table function output
 query I
-SELECT n
+SELECT value
 FROM batched_generate_series(1, 20)
-WHERE n > 15
-ORDER BY n
+WHERE value > 15
+ORDER BY value
 ----
 16
 17
@@ -580,11 +587,11 @@ ORDER BY n
 
 # Test filter pushdown with LATERAL - filter on function output
 query II
-SELECT start_val, n
+SELECT start_val, value
 FROM ranges_filter_test
 CROSS JOIN LATERAL batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
-WHERE n > 12
-ORDER BY start_val, n
+WHERE value > 12
+ORDER BY start_val, value
 ----
 5 13
 5 14
@@ -600,11 +607,11 @@ ORDER BY start_val, n
 
 # Test filter pushdown with LATERAL - filter on input table
 query II
-SELECT start_val, n
+SELECT start_val, value
 FROM ranges_filter_test
 CROSS JOIN LATERAL batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 WHERE start_val >= 5
-ORDER BY start_val, n
+ORDER BY start_val, value
 ----
 5 5
 5 6
@@ -631,11 +638,11 @@ ORDER BY start_val, n
 
 # Test filter pushdown with multiple filters
 query II
-SELECT start_val, n
+SELECT start_val, value
 FROM ranges_filter_test
 CROSS JOIN LATERAL batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
-WHERE start_val < 10 AND n >= 8 AND n <= 12
-ORDER BY start_val, n
+WHERE start_val < 10 AND value >= 8 AND value <= 12
+ORDER BY start_val, value
 ----
 1 8
 1 9
@@ -650,7 +657,7 @@ ORDER BY start_val, n
 query I
 SELECT COUNT(*)
 FROM batched_generate_series(1, 100)
-WHERE n <= 10
+WHERE value <= 10
 ----
 10
 
@@ -660,7 +667,7 @@ WHERE n <= 10
 
 # Verify limit pushdown for StandaloneBatchedTableFunction
 query TT
-EXPLAIN SELECT n FROM batched_generate_series(1, 100) LIMIT 5
+EXPLAIN SELECT value FROM batched_generate_series(1, 100) LIMIT 5
 ----
 logical_plan
 01)Limit: skip=0, fetch=5
@@ -672,7 +679,7 @@ physical_plan
 
 # Test limit actually works
 query I
-SELECT n FROM batched_generate_series(1, 100) LIMIT 5
+SELECT value FROM batched_generate_series(1, 100) LIMIT 5
 ----
 1
 2
@@ -682,18 +689,18 @@ SELECT n FROM batched_generate_series(1, 100) LIMIT 5
 
 # Verify limit with LATERAL (limit stays above projection)
 query TT
-EXPLAIN SELECT start_val, n
+EXPLAIN SELECT start_val, value
 FROM ranges_filter_test
 CROSS JOIN LATERAL batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 LIMIT 3
 ----
 logical_plan
-01)Projection: ranges_filter_test.start_val, batched_generate_series().n
+01)Projection: ranges_filter_test.start_val, batched_generate_series().value
 02)--Limit: skip=0, fetch=3
 03)----LateralBatchedTableFunction: batched_generate_series(ranges_filter_test.start_val, ranges_filter_test.end_val)
 04)------TableScan: ranges_filter_test projection=[start_val, end_val]
 physical_plan
-01)ProjectionExec: expr=[start_val@0 as start_val, n@2 as n]
+01)ProjectionExec: expr=[start_val@0 as start_val, value@2 as value]
 02)--GlobalLimitExec: skip=0, fetch=3
 03)----BatchedTableFunctionExec: function=batched_generate_series, args=[start_val@0, end_val@1]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
