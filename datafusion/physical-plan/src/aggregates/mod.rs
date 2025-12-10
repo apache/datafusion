@@ -47,8 +47,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints,
-    Result, ScalarValue,
+    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints, Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
@@ -224,6 +223,11 @@ impl PhysicalGroupBy {
         exprs_nullable
     }
 
+    /// Returns true if this has no grouping at all (including no GROUPING SETS)
+    pub fn is_true_no_grouping(&self) -> bool {
+        self.is_empty() && !self.has_grouping_set
+    }
+
     /// Returns the group expressions
     pub fn expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
         &self.expr
@@ -249,7 +253,8 @@ impl PhysicalGroupBy {
         self.expr.is_empty()
     }
 
-    /// Check whether grouping set is single group
+    /// Returns true if this is a "simple" GROUP BY (not using GROUPING SETS/CUBE/ROLLUP).
+    /// This determines whether the `__grouping_id` column is included in the output schema.
     pub fn is_single(&self) -> bool {
         !self.has_grouping_set
     }
@@ -732,13 +737,9 @@ impl AggregateExec {
         partition: usize,
         context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
-        // no group by at all
-        if self.group_by.is_empty() && !self.group_by.has_grouping_set() {
+        if self.group_by.is_true_no_grouping() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
-                self,
-                context,
-                partition,
-                None,
+                self, context, partition, None,
             )?));
         }
 
@@ -897,7 +898,7 @@ impl AggregateExec {
         };
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.group_by.is_empty() && !self.group_by.has_grouping_set() =>
+                if self.group_by.is_true_no_grouping() =>
             {
                 let total_byte_size =
                     Self::calculate_scaled_byte_size(child_statistics, 1);

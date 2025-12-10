@@ -252,6 +252,9 @@ fn scalar_cmp_null_short_circuit(
 
 impl AggregateStream {
     /// Create a new AggregateStream
+    /// Note: Grouping ID generation for GROUPING SETS happens in GroupedHashAggregateStream,
+    /// not in the no-grouping path. The grouping_id parameter is reserved for final
+    /// aggregation modes or future extensions.
     pub fn new(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
