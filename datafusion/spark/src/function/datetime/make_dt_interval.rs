@@ -105,7 +105,19 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        let has_non_finite_secs = args
+            .scalar_arguments
+            .get(3)
+            .and_then(|arg| {
+                arg.map(|scalar| match scalar {
+                    ScalarValue::Float64(Some(v)) => !v.is_finite(),
+                    ScalarValue::Float32(Some(v)) => !v.is_finite(),
+                    _ => false,
+                })
+            })
+            .unwrap_or(false);
+        let nullable =
+            has_non_finite_secs || args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Duration(Microsecond),
@@ -334,6 +346,16 @@ mod tests {
             scalar_arguments: &[None, None, None, None],
         })?;
         assert!(!out.is_nullable());
+
+        // Non-finite secs scalar should force nullable even if fields are non-nullable
+        let scalar_values =
+            [None, None, None, Some(ScalarValue::Float64(Some(f64::NAN)))];
+        let scalar_refs = scalar_values.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+        let out = udf.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &non_nullable_arg_fields,
+            scalar_arguments: &scalar_refs,
+        })?;
+        assert!(out.is_nullable());
 
         // Zero-arg call (defaults) should also be non-nullable
         let out = udf.return_field_from_args(ReturnFieldArgs {
