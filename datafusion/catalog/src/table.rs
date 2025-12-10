@@ -46,6 +46,92 @@ use datafusion_physical_plan::ExecutionPlan;
 /// 2. [`Self::supports_filters_pushdown`]: Should filters be pushed into this scan
 /// 2. [`Self::scan`]: An [`ExecutionPlan`] that can read data
 ///
+/// ## Supporting Substrait Serialization for Table Functions
+///
+/// Table providers that represent table function invocations (e.g., `generate_series()`,
+/// `range()`) should override [`Self::table_function_details`] to provide the function
+/// name and evaluated arguments. This enables Substrait producers to serialize table
+/// function calls properly, allowing round-trip conversion between DataFusion logical
+/// plans and Substrait plans.
+///
+/// ### Example: Implementing a Table Function Provider
+///
+/// ```rust
+/// # use std::any::Any;
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+/// # use async_trait::async_trait;
+/// # use datafusion_catalog::{Session, TableProvider, TableFunctionDetails};
+/// # use datafusion_common::{Result, ScalarValue};
+/// # use datafusion_expr::{Expr, TableType};
+/// # use datafusion_physical_plan::ExecutionPlan;
+///
+/// /// A table function that generates a sequence of numbers
+/// #[derive(Debug)]
+/// struct MySeriesTable {
+///     schema: SchemaRef,
+///     // Store evaluated arguments for Substrait serialization
+///     arguments: Vec<ScalarValue>,
+///     start: i64,
+///     end: i64,
+/// }
+///
+/// impl MySeriesTable {
+///     fn new(start: i64, end: i64) -> Self {
+///         let schema = Arc::new(Schema::new(vec![
+///             Field::new("value", DataType::Int64, false)
+///         ]));
+///         
+///         // Store evaluated arguments for Substrait round-trip
+///         let arguments = vec![
+///             ScalarValue::Int64(Some(start)),
+///             ScalarValue::Int64(Some(end)),
+///         ];
+///         
+///         Self { schema, arguments, start, end }
+///     }
+/// }
+///
+/// #[async_trait]
+/// impl TableProvider for MySeriesTable {
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+///
+///     fn schema(&self) -> SchemaRef {
+///         Arc::clone(&self.schema)
+///     }
+///
+///     fn table_type(&self) -> TableType {
+///         TableType::Base
+///     }
+///
+///     /// Provide metadata for Substrait serialization
+///     fn table_function_details(&self) -> Option<TableFunctionDetails<'_>> {
+///         Some(TableFunctionDetails {
+///             name: "my_series",
+///             arguments: &self.arguments,
+///         })
+///     }
+///
+///     async fn scan(
+///         &self,
+///         _state: &dyn Session,
+///         _projection: Option<&Vec<usize>>,
+///         _filters: &[Expr],
+///         _limit: Option<usize>,
+///     ) -> Result<Arc<dyn ExecutionPlan>> {
+///         // Implementation details omitted
+/// #       unimplemented!()
+///     }
+/// }
+/// ```
+///
+/// When this table provider is used in a query that gets serialized to Substrait,
+/// the producer will call `table_function_details()` to obtain the function name
+/// and arguments, then encode them in the Substrait plan's `ReadRel.advanced_extension`.
+/// The consumer can later decode this metadata to reconstruct the table function call.
+///
 /// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]

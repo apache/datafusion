@@ -269,15 +269,45 @@ impl GenSeriesArgs {
     }
 }
 
-/// Table that generates a series of integers/timestamps from `start`(inclusive) to `end`, incrementing by step
+/// Table that generates a series of integers/timestamps from `start`(inclusive) to `end`, incrementing by step.
+///
+/// # Architecture Note: Argument Storage
+///
+/// This table stores arguments in two forms:
+///
+/// 1. **Structured form** (`args: GenSeriesArgs`): The primary storage that maintains
+///    type-specific information (e.g., timezone for timestamps) and is used during
+///    execution to generate batches efficiently.
+///
+/// 2. **Evaluated form** (`arguments: Vec<ScalarValue>`): A normalized representation
+///    required for Substrait serialization via `table_function_details()`. This allows
+///    the Substrait producer to serialize table function calls without knowing the
+///    concrete table provider type.
+///
+/// **Why both are needed:**
+///
+/// - The structured form (`GenSeriesArgs`) provides type-safe access and includes execution
+///   metadata (e.g., `include_end`, parsed timezone) that would be cumbersome to encode/decode
+///   repeatedly from scalar values.
+///
+/// - The evaluated form (`arguments`) provides a stable, simple interface for Substrait
+///   serialization that works uniformly across different table function implementations.
+///
+/// **Memory overhead:** For a typical `generate_series(1, 1000)` call, the redundant storage
+/// is ~48 bytes (3 i64 values), which is negligible compared to the RecordBatch data generated.
+///
+/// **Alternative considered:** Deriving `arguments` on-demand from `GenSeriesArgs` when
+/// `table_function_details()` is called would eliminate redundancy but would require complex
+/// lifetime management and repeated allocations. The current design prioritizes simplicity
+/// and query execution performance over the small memory overhead.
 #[derive(Debug, Clone)]
 pub struct GenerateSeriesTable {
     schema: SchemaRef,
+    /// Primary argument storage with type-specific metadata for execution
     args: GenSeriesArgs,
+    /// Normalized arguments for Substrait serialization (see struct-level docs)
     arguments: Vec<ScalarValue>,
 }
-
-// `TableFunctionDetails` is provided through `datafusion::catalog::TableFunctionDetails`.
 
 impl GenerateSeriesTable {
     pub fn new(

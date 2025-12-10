@@ -39,6 +39,17 @@ This allows custom and built-in table providers to be serialized by the Substrai
 downcasting to concrete types. For example, `GenerateSeriesTable` implements this hook and returns
 the function name and a slice of evaluated `ScalarValue`s.
 
+### Current Limitations
+
+- **Literal arguments only**: Table function arguments must be fully evaluated to literal `ScalarValue`s
+  at planning time. Dynamic or column-referencing expressions in table function arguments are not yet
+  supported for Substrait serialization. For example, `generate_series(1, 10)` works, but
+  `generate_series(column_a, column_b)` would fail during serialization.
+
+- **Function registration**: The consumer must have the table function registered in its catalog
+  with the same name that was used during production. Custom table functions need to be registered
+  on both the producer and consumer side for successful round-trip conversion.
+
 [apache arrow]: https://arrow.apache.org/
 [apache datafusion]: https://datafusion.apache.org/
 [substrait]: https://substrait.io
