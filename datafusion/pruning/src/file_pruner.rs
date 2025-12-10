@@ -20,9 +20,9 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{FieldRef, SchemaRef};
-use datafusion_common::{internal_datafusion_err, pruning::PrunableStatistics, Result};
+use datafusion_common::{Result, internal_datafusion_err, pruning::PrunableStatistics};
 use datafusion_datasource::PartitionedFile;
-use datafusion_physical_expr_common::physical_expr::{snapshot_generation, PhysicalExpr};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, snapshot_generation};
 use datafusion_physical_plan::metrics::Count;
 use log::debug;
 

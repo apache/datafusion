@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int32, Int64};
 use datafusion_common::cast::as_int32_array;
 use datafusion_common::{
-    exec_err, utils::take_function_args, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_err, utils::take_function_args,
 };
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
@@ -136,8 +136,8 @@ fn compute_factorial(num: Option<i32>) -> Option<i64> {
 mod test {
     use crate::function::math::factorial::spark_factorial;
     use arrow::array::{Int32Array, Int64Array};
-    use datafusion_common::cast::as_int64_array;
     use datafusion_common::ScalarValue;
+    use datafusion_common::cast::as_int64_array;
     use datafusion_expr::ColumnarValue;
     use std::sync::Arc;
 

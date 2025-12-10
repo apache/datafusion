@@ -20,8 +20,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use crate::schema::SchemaProvider;
-use datafusion_common::not_impl_err;
 use datafusion_common::Result;
+use datafusion_common::not_impl_err;
 
 /// Represents a catalog, comprising a number of named schemas.
 ///

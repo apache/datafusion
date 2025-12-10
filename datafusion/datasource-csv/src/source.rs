@@ -26,12 +26,12 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
+use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    as_file_source, calculate_range, FileRange, ListingTableUrl, PartitionedFile,
-    RangeCalculation, TableSchema,
+    FileRange, ListingTableUrl, PartitionedFile, RangeCalculation, TableSchema,
+    as_file_source, calculate_range,
 };
 
 use arrow::csv;
@@ -350,10 +350,10 @@ impl FileOpener for CsvOpener {
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line
         let mut csv_has_header = self.config.has_header();
-        if let Some(FileRange { start, .. }) = partitioned_file.range {
-            if start != 0 {
-                csv_has_header = false;
-            }
+        if let Some(FileRange { start, .. }) = partitioned_file.range
+            && start != 0
+        {
+            csv_has_header = false;
         }
 
         let mut config = (*self.config).clone();
@@ -387,7 +387,7 @@ impl FileOpener for CsvOpener {
                 RangeCalculation::TerminateEarly => {
                     return Ok(
                         futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                    )
+                    );
                 }
             };
 

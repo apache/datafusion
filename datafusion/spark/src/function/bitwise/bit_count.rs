@@ -20,11 +20,11 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::{
-    DataType, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    DataType, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -173,8 +173,8 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::array::{
-        Array, BooleanArray, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        Array, BooleanArray, Int8Array, Int16Array, Int32Array, Int64Array, UInt8Array,
+        UInt16Array, UInt32Array, UInt64Array,
     };
     use arrow::datatypes::{Field, Int32Type};
 

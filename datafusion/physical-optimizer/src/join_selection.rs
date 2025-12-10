@@ -27,10 +27,10 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, JoinSide, JoinType};
+use datafusion_common::{JoinSide, JoinType, internal_err};
 use datafusion_expr_common::sort_properties::SortProperties;
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
@@ -481,19 +481,15 @@ pub fn hash_join_swap_subrule(
     mut input: Arc<dyn ExecutionPlan>,
     _config_options: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>() {
-        if hash_join.left.boundedness().is_unbounded()
-            && !hash_join.right.boundedness().is_unbounded()
-            && matches!(
-                *hash_join.join_type(),
-                JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::LeftSemi
-                    | JoinType::LeftAnti
-            )
-        {
-            input = swap_join_according_to_unboundedness(hash_join)?;
-        }
+    if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>()
+        && hash_join.left.boundedness().is_unbounded()
+        && !hash_join.right.boundedness().is_unbounded()
+        && matches!(
+            *hash_join.join_type(),
+            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
+        )
+    {
+        input = swap_join_according_to_unboundedness(hash_join)?;
     }
     Ok(input)
 }

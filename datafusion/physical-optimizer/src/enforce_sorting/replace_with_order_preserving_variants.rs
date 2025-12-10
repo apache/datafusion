@@ -27,13 +27,13 @@ use crate::utils::{
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{assert_or_internal_err, Result};
+use datafusion_common::{Result, assert_or_internal_err};
+use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
-use datafusion_physical_plan::ExecutionPlanProperties;
 
 use itertools::izip;
 

@@ -26,7 +26,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
-use datafusion_common::{exec_datafusion_err, exec_err, Result};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -86,7 +86,9 @@ impl ParseUrl {
             return if !value.contains("://") {
                 Ok(None)
             } else {
-                Err(exec_datafusion_err!("The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"))
+                Err(exec_datafusion_err!(
+                    "The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"
+                ))
             };
         };
         url.map_err(|e| exec_datafusion_err!("{e:?}"))
@@ -186,7 +188,7 @@ pub fn spark_handled_parse_url(
     let url = &args[0];
     let part = &args[1];
 
-    let result = if args.len() == 3 {
+    if args.len() == 3 {
         // In this case, the 'key' argument is passed
         let key = &args[2];
 
@@ -253,8 +255,7 @@ pub fn spark_handled_parse_url(
             }
             _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
         }
-    };
-    result
+    }
 }
 
 fn process_parse_url<'a, A, B, C, T>(

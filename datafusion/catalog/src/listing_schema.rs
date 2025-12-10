@@ -26,7 +26,7 @@ use crate::{SchemaProvider, TableProvider, TableProviderFactory};
 
 use crate::Session;
 use datafusion_common::{
-    internal_datafusion_err, DFSchema, DataFusionError, HashMap, TableReference,
+    DFSchema, DataFusionError, HashMap, TableReference, internal_datafusion_err,
 };
 use datafusion_expr::CreateExternalTable;
 

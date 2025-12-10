@@ -16,10 +16,10 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::{
-    binary::try_type_union_resolution, simplify::ExprSimplifyResult, when, ColumnarValue,
-    Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    binary::try_type_union_resolution, simplify::ExprSimplifyResult, when,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]

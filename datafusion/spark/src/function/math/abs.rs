@@ -17,7 +17,7 @@
 
 use arrow::array::*;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };

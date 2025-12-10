@@ -52,7 +52,11 @@ pub mod expr_fn {
     export_functions!((hex, "Computes hex value of the given column.", arg1));
     export_functions!((modulus, "Returns the remainder of division of the first argument by the second argument.", arg1 arg2));
     export_functions!((pmod, "Returns the positive remainder of division of the first argument by the second argument.", arg1 arg2));
-    export_functions!((rint, "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.", arg1));
+    export_functions!((
+        rint,
+        "Returns the double value that is closest in value to the argument and is equal to a mathematical integer.",
+        arg1
+    ));
     export_functions!((width_bucket, "Returns the bucket number into which the value of this expression would fall after being evaluated.", arg1 arg2 arg3 arg4));
     export_functions!((csc, "Returns the cosecant of expr.", arg1));
     export_functions!((sec, "Returns the secant of expr.", arg1));

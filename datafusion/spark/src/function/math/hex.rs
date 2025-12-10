@@ -30,8 +30,9 @@ use arrow::{
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
+    DataFusionError,
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
-    exec_err, DataFusionError,
+    exec_err,
 };
 use datafusion_expr::Signature;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
@@ -295,8 +296,8 @@ mod test {
     use arrow::array::{Int64Array, StringArray};
     use arrow::{
         array::{
-            as_string_array, BinaryDictionaryBuilder, PrimitiveDictionaryBuilder,
-            StringBuilder, StringDictionaryBuilder,
+            BinaryDictionaryBuilder, PrimitiveDictionaryBuilder, StringBuilder,
+            StringDictionaryBuilder, as_string_array,
         },
         datatypes::{Int32Type, Int64Type},
     };

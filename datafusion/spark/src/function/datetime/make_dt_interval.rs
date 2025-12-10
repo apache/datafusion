@@ -23,8 +23,8 @@ use arrow::array::{
 };
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{DataType, Float64Type, Int32Type};
-use datafusion_common::types::{logical_float64, logical_int32, NativeType};
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::types::{NativeType, logical_float64, logical_int32};
+use datafusion_common::{DataFusionError, Result, ScalarValue, plan_datafusion_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
@@ -227,7 +227,7 @@ mod tests {
     use arrow::datatypes::DataType::Duration;
     use arrow::datatypes::Field;
     use arrow::datatypes::TimeUnit::Microsecond;
-    use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+    use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 
     use super::*;

@@ -22,10 +22,10 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
-use datafusion_physical_plan::aggregates::{concat_slices, AggregateExec};
+use datafusion_physical_plan::aggregates::{AggregateExec, concat_slices};
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 

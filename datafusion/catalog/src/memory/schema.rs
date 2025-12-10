@@ -20,7 +20,7 @@
 use crate::{SchemaProvider, TableProvider};
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::{DataFusionError, exec_err};
 use std::any::Any;
 use std::sync::Arc;
 

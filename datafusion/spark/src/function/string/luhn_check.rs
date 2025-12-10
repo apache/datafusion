@@ -21,7 +21,7 @@ use arrow::array::{Array, AsArray, BooleanArray};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Boolean;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,

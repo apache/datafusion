@@ -24,8 +24,8 @@ use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::error::Result;
 use datafusion_common::Column;
+use datafusion_common::error::Result;
 use datafusion_expr::TableType;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};

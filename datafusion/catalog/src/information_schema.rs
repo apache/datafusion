@@ -28,17 +28,17 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
 use datafusion_common::types::NativeType;
-use datafusion_common::DataFusionError;
-use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use datafusion_expr::{TableType, Volatility};
+use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
-use datafusion_physical_plan::SendableRecordBatchStream;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
@@ -138,11 +138,11 @@ impl InformationSchemaConfig {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
             for schema_name in catalog.schema_names() {
-                if schema_name != INFORMATION_SCHEMA {
-                    if let Some(schema) = catalog.schema(&schema_name) {
-                        let schema_owner = schema.owner_name();
-                        builder.add_schemata(&catalog_name, &schema_name, schema_owner);
-                    }
+                if schema_name != INFORMATION_SCHEMA
+                    && let Some(schema) = catalog.schema(&schema_name)
+                {
+                    let schema_owner = schema.owner_name();
+                    builder.add_schemata(&catalog_name, &schema_name, schema_owner);
                 }
             }
         }
@@ -1408,7 +1408,9 @@ mod tests {
         // InformationSchemaConfig::make_tables used this before `table_type`
         // existed but should not, as it may be expensive.
         async fn table(&self, _: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-            panic!("InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type")
+            panic!(
+                "InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type"
+            )
         }
 
         fn as_any(&self) -> &dyn Any {

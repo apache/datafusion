@@ -25,7 +25,7 @@ use arrow::array::{Array, ArrayRef, NullBufferBuilder, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
