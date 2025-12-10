@@ -72,6 +72,7 @@ use datafusion_functions_aggregate::expr_fn::{
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 
+#[derive(Clone)]
 /// Contains options that control how data is
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
