@@ -251,17 +251,7 @@ fn scalar_cmp_null_short_circuit(
 }
 
 impl AggregateStream {
-    /// Create a new AggregateStream for aggregation without grouping columns.
-    ///
-    /// # Arguments
-    /// * `agg` - The aggregate execution plan
-    /// * `context` - The task context
-    /// * `partition` - The partition number
-    /// * `grouping_id` - Optional grouping ID value for GROUPING SETS. In the no-grouping
-    ///   path (when there are no GROUP BY expressions), this is typically `None` as grouping
-    ///   ID generation for GROUPING SETS is handled at the `GroupedHashAggregateStream` level.
-    ///   This parameter is reserved for final aggregation modes or future extensions where
-    ///   the grouping ID may need to be propagated through the no-grouping stream.
+    /// Create a new AggregateStream
     pub fn new(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
@@ -362,6 +352,8 @@ impl AggregateStream {
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)
                                 .and_then(|mut columns| {
+                                    // If a grouping_id was provided (e.g., for GROUPING SETS with no GROUP BY columns),
+                                    // insert it as the first column in the output schema to maintain schema alignment
                                     if let Some(grouping_id) = &this.grouping_id {
                                         let num_rows = columns
                                             .first()
