@@ -441,7 +441,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use crate::remove::{ArrayRemove, ArrayRemoveAll, ArrayRemoveN};
-    use arrow::datatypes::{DataType, Field, FieldRef};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
     use std::sync::Arc;
