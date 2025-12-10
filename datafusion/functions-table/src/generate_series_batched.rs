@@ -98,21 +98,9 @@ impl BatchedTableFunctionImpl for GenerateSeriesFunction {
             return exec_err!("generate_series expects 2 arguments, got {}", args.len());
         }
 
-        // Cast inputs to Int64 if needed (for coercible signature support)
-        use arrow::compute::cast;
-        let start_array = if args[0].data_type() != &DataType::Int64 {
-            cast(&args[0], &DataType::Int64)?
-        } else {
-            Arc::clone(&args[0])
-        };
-        let end_array = if args[1].data_type() != &DataType::Int64 {
-            cast(&args[1], &DataType::Int64)?
-        } else {
-            Arc::clone(&args[1])
-        };
-
-        let start_array = start_array.as_primitive::<arrow::datatypes::Int64Type>();
-        let end_array = end_array.as_primitive::<arrow::datatypes::Int64Type>();
+        // Type coercion analyzer ensures arguments are already Int64
+        let start_array = args[0].as_primitive::<arrow::datatypes::Int64Type>();
+        let end_array = args[1].as_primitive::<arrow::datatypes::Int64Type>();
 
         if start_array.len() != end_array.len() {
             return exec_err!("start and end arrays must have same length");
@@ -244,7 +232,7 @@ mod tests {
     fn test_function_metadata() {
         let function = GenerateSeriesFunction::new();
 
-        assert_eq!(function.name(), "generate_series");
+        assert_eq!(function.name(), "batched_generate_series");
 
         let sig = function.signature();
         assert_eq!(sig.volatility, datafusion_expr::Volatility::Immutable);

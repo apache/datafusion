@@ -25,7 +25,8 @@ use crate::{BatchedTableFunctionImpl, TableProvider};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Constraints};
 use datafusion_expr::{
-    BatchedTableFunctionSource, Expr, TableProviderFilterPushDown, TableSource, TableType,
+    BatchedTableFunctionSource, Expr, Signature, TableProviderFilterPushDown, TableSource,
+    TableType,
 };
 
 /// Implements [`TableSource`] for a [`TableProvider`]
@@ -191,6 +192,10 @@ impl BatchedTableFunctionSource for DefaultBatchedTableFunctionSource {
             Ok(schema) => Arc::new(schema),
             Err(_) => Arc::new(arrow::datatypes::Schema::empty()),
         }
+    }
+
+    fn signature(&self) -> &Signature {
+        self.function_impl.signature()
     }
 
     fn supports_filters_pushdown(
