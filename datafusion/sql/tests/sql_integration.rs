@@ -27,11 +27,11 @@ use std::vec;
 
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
-use datafusion_common::{assert_contains, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, ColumnarValue,
-    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
+    test::function_stub::sum_udaf,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -1339,8 +1339,8 @@ fn select_aggregate_with_group_by_with_having_using_column_by_alias() {
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_their_aliases(
-) {
+fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_their_aliases()
+ {
     let sql = "SELECT first_name AS fn, MAX(age) AS max_age
                    FROM person
                    GROUP BY first_name
@@ -1447,8 +1447,8 @@ fn select_aggregate_aliased_with_group_by_with_having_referencing_aggregate_by_i
 }
 
 #[test]
-fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compound_aggregate_by_its_alias(
-) {
+fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compound_aggregate_by_its_alias()
+ {
     let sql = "SELECT first_name, MAX(age) + 1 AS max_age_plus_one
                    FROM person
                    GROUP BY first_name
@@ -1466,8 +1466,8 @@ fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compo
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not_in_select(
-) {
+fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not_in_select()
+ {
     let sql = "SELECT first_name, MAX(age)
                    FROM person
                    GROUP BY first_name
@@ -2384,7 +2384,7 @@ fn create_external_table_with_compression_type() {
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON LOCATION 'foo.json.gz' OPTIONS ('format.compression' 'gzip')",
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON LOCATION 'foo.json.bz2' OPTIONS ('format.compression' 'bzip2')",
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS NONSTANDARD LOCATION 'foo.unk' OPTIONS ('format.compression' 'gzip')",
-         ];
+    ];
 
     allow_duplicates! {
         for sql in sqls {
@@ -3070,8 +3070,7 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ORDE
 /// ```
 #[test]
 fn over_partition_by_order_by_no_dup() {
-    let sql =
-        "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
@@ -3097,8 +3096,7 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orde
 /// ```
 #[test]
 fn over_partition_by_order_by_mix_up() {
-    let sql =
-            "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
@@ -3124,8 +3122,7 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orde
 /// FIXME: for now we are not detecting prefix of sorting keys in order to save one sort exec phase
 #[test]
 fn over_partition_by_order_by_mix_up_prefix() {
-    let sql =
-            "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
@@ -3670,8 +3667,7 @@ Projection: p.id
 
 #[test]
 fn scalar_subquery() {
-    let sql =
-        "SELECT p.id, (SELECT MAX(id) FROM person WHERE last_name = p.last_name) FROM person p";
+    let sql = "SELECT p.id, (SELECT MAX(id) FROM person WHERE last_name = p.last_name) FROM person p";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
@@ -4391,8 +4387,7 @@ fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str)
 
 #[test]
 fn select_order_by_with_cast() {
-    let sql =
-        "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
+    let sql = "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,

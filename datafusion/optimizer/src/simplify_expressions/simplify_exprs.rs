@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::Expr;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::Expr;
 
 use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
@@ -161,9 +161,9 @@ mod tests {
     use datafusion_expr::*;
     use datafusion_functions_aggregate::expr_fn::{max, min};
 
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::{assert_fields_eq, test_table_scan_with_name};
-    use crate::OptimizerContext;
 
     use super::*;
 
@@ -492,8 +492,7 @@ mod tests {
             .build()?;
 
         let actual = get_optimized_plan_formatted(plan, &time);
-        let expected =
-            "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
+        let expected = "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);

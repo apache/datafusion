@@ -21,7 +21,7 @@ description = "Physical (ExecutionPlan) implementations for DataFusion query eng
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -57,6 +57,7 @@ datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }

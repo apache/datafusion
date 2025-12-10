@@ -25,10 +25,10 @@ use arrow::datatypes::{
     DataType,
     DataType::{LargeList, List, Map, Null, UInt64},
 };
+use datafusion_common::Result;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::exec_err;
-use datafusion_common::utils::{take_function_args, ListCoercion};
-use datafusion_common::Result;
+use datafusion_common::utils::{ListCoercion, take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,

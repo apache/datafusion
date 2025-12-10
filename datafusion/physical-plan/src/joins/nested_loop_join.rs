@@ -20,8 +20,8 @@
 use std::any::Any;
 use std::fmt::Formatter;
 use std::ops::{BitOr, ControlFlow};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
 use super::utils::{
@@ -29,19 +29,19 @@ use super::utils::{
     reorder_output_after_swap, swap_join_projection,
 };
 use crate::common::can_project;
-use crate::execution_plan::{boundedness_from_children, EmissionType};
-use crate::joins::utils::{
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    need_produce_right_in_final, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-    OnceAsync, OnceFut,
-};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::SharedBitmapBuilder;
+use crate::joins::utils::{
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    need_produce_right_in_final,
+};
 use crate::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, MetricsSet, RatioMetrics,
 };
 use crate::projection::{
-    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
-    ProjectionExec,
+    EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
+    try_pushdown_through_join,
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -49,26 +49,26 @@ use crate::{
 };
 
 use arrow::array::{
-    new_null_array, Array, BooleanArray, BooleanBufferBuilder, RecordBatchOptions,
-    UInt32Array, UInt64Array,
+    Array, BooleanArray, BooleanBufferBuilder, RecordBatchOptions, UInt32Array,
+    UInt64Array, new_null_array,
 };
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::{
-    concat_batches, filter, filter_record_batch, not, take, BatchCoalescer,
+    BatchCoalescer, concat_batches, filter, filter_record_batch, not, take,
 };
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
-    arrow_err, assert_eq_or_internal_err, internal_datafusion_err, internal_err,
-    project_schema, unwrap_or_internal_err, JoinSide, Result, ScalarValue, Statistics,
+    JoinSide, Result, ScalarValue, Statistics, arrow_err, assert_eq_or_internal_err,
+    internal_datafusion_err, internal_err, project_schema, unwrap_or_internal_err,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{
-    join_equivalence_properties, ProjectionMapping,
+    ProjectionMapping, join_equivalence_properties,
 };
 
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -932,7 +932,7 @@ impl Stream for NestedLoopJoinStream {
                     match self.handle_probe_right() {
                         ControlFlow::Continue(()) => continue,
                         ControlFlow::Break(poll) => {
-                            return self.metrics.join_metrics.baseline.record_poll(poll)
+                            return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
                     }
                 }
@@ -953,7 +953,7 @@ impl Stream for NestedLoopJoinStream {
                     match self.handle_emit_right_unmatched() {
                         ControlFlow::Continue(()) => continue,
                         ControlFlow::Break(poll) => {
-                            return self.metrics.join_metrics.baseline.record_poll(poll)
+                            return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
                     }
                 }
@@ -983,7 +983,7 @@ impl Stream for NestedLoopJoinStream {
                     match self.handle_emit_left_unmatched() {
                         ControlFlow::Continue(()) => continue,
                         ControlFlow::Break(poll) => {
-                            return self.metrics.join_metrics.baseline.record_poll(poll)
+                            return self.metrics.join_metrics.baseline.record_poll(poll);
                         }
                     }
                 }
@@ -1293,7 +1293,10 @@ impl NestedLoopJoinStream {
                 left_data.batch().num_rows() - self.left_probe_idx,
             );
 
-            debug_assert!(l_row_count != 0, "This function should only be entered when there are remaining left rows to process");
+            debug_assert!(
+                l_row_count != 0,
+                "This function should only be entered when there are remaining left rows to process"
+            );
             let joined_batch = self.process_left_range_join(
                 &left_data,
                 &right_batch,
@@ -1433,17 +1436,17 @@ impl NestedLoopJoinStream {
             let l_index = l_start_index + i / right_rows;
             let r_index = i % right_rows;
 
-            if let Some(bitmap) = left_bitmap.as_mut() {
-                if is_matched {
-                    // Map local index back to absolute left index within the batch
-                    bitmap.set_bit(l_index, true);
-                }
+            if let Some(bitmap) = left_bitmap.as_mut()
+                && is_matched
+            {
+                // Map local index back to absolute left index within the batch
+                bitmap.set_bit(l_index, true);
             }
 
-            if let Some(bitmap) = local_right_bitmap.as_mut() {
-                if is_matched {
-                    bitmap.set_bit(r_index, true);
-                }
+            if let Some(bitmap) = local_right_bitmap.as_mut()
+                && is_matched
+            {
+                bitmap.set_bit(r_index, true);
             }
         }
 
@@ -1711,14 +1714,14 @@ impl NestedLoopJoinStream {
     /// Flush the `output_buffer` if there are batches ready to output
     /// None if no result batch ready.
     fn maybe_flush_ready_batch(&mut self) -> Option<Poll<Option<Result<RecordBatch>>>> {
-        if self.output_buffer.has_completed_batch() {
-            if let Some(batch) = self.output_buffer.next_completed_batch() {
-                // Update output rows for selectivity metric
-                let output_rows = batch.num_rows();
-                self.metrics.selectivity.add_part(output_rows);
+        if self.output_buffer.has_completed_batch()
+            && let Some(batch) = self.output_buffer.next_completed_batch()
+        {
+            // Update output rows for selectivity metric
+            let output_rows = batch.num_rows();
+            self.metrics.selectivity.add_part(output_rows);
 
-                return Some(Poll::Ready(Some(Ok(batch))));
-            }
+            return Some(Poll::Ready(Some(Ok(batch))));
         }
 
         None
@@ -2099,9 +2102,7 @@ fn build_unmatched_batch(
                 another_side_schema
                     .fields()
                     .iter()
-                    .map(|field| {
-                        (**field).clone().with_nullable(true)
-                    })
+                    .map(|field| (**field).clone().with_nullable(true))
                     .collect::<Vec<_>>(),
             ));
             let left_null_batch = if nullable_left_schema.fields.is_empty() {
@@ -2115,10 +2116,20 @@ fn build_unmatched_batch(
             debug_assert_ne!(batch_side, JoinSide::None);
             let opposite_side = batch_side.negate();
 
-            build_row_join_batch(output_schema, &left_null_batch, 0, batch, Some(flipped_bitmap), col_indices, opposite_side)
-
-        },
-        JoinType::RightSemi | JoinType::RightAnti | JoinType::LeftSemi | JoinType::LeftAnti => {
+            build_row_join_batch(
+                output_schema,
+                &left_null_batch,
+                0,
+                batch,
+                Some(flipped_bitmap),
+                col_indices,
+                opposite_side,
+            )
+        }
+        JoinType::RightSemi
+        | JoinType::RightAnti
+        | JoinType::LeftSemi
+        | JoinType::LeftAnti => {
             if matches!(join_type, JoinType::RightSemi | JoinType::RightAnti) {
                 debug_assert_eq!(batch_side, JoinSide::Right);
             }
@@ -2126,7 +2137,8 @@ fn build_unmatched_batch(
                 debug_assert_eq!(batch_side, JoinSide::Left);
             }
 
-            let bitmap = if matches!(join_type, JoinType::LeftSemi | JoinType::RightSemi) {
+            let bitmap = if matches!(join_type, JoinType::LeftSemi | JoinType::RightSemi)
+            {
                 batch_bitmap.clone()
             } else {
                 not(&batch_bitmap)?
@@ -2148,8 +2160,11 @@ fn build_unmatched_batch(
                 columns.push(filtered_col);
             }
 
-            Ok(Some(RecordBatch::try_new(Arc::clone(output_schema), columns)?))
-        },
+            Ok(Some(RecordBatch::try_new(
+                Arc::clone(output_schema),
+                columns,
+            )?))
+        }
         JoinType::RightMark | JoinType::LeftMark => {
             if join_type == JoinType::RightMark {
                 debug_assert_eq!(batch_side, JoinSide::Right);
@@ -2172,24 +2187,33 @@ fn build_unmatched_batch(
                 } else if column_index.side == JoinSide::None {
                     let right_batch_bitmap = std::mem::take(&mut right_batch_bitmap_opt);
                     match right_batch_bitmap {
-                        Some(right_batch_bitmap) => {columns.push(Arc::new(right_batch_bitmap))},
+                        Some(right_batch_bitmap) => {
+                            columns.push(Arc::new(right_batch_bitmap))
+                        }
                         None => unreachable!("Should only be one mark column"),
                     }
                 } else {
-                    return internal_err!("Not possible to have this join side for RightMark join");
+                    return internal_err!(
+                        "Not possible to have this join side for RightMark join"
+                    );
                 }
             }
 
-            Ok(Some(RecordBatch::try_new(Arc::clone(output_schema), columns)?))
+            Ok(Some(RecordBatch::try_new(
+                Arc::clone(output_schema),
+                columns,
+            )?))
         }
-        _ => internal_err!("If batch is at right side, this function must be handling Full/Right/RightSemi/RightAnti/RightMark joins"),
+        _ => internal_err!(
+            "If batch is at right side, this function must be handling Full/Right/RightSemi/RightAnti/RightMark joins"
+        ),
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::test::{assert_join_metrics, TestMemoryExec};
+    use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
@@ -2197,7 +2221,7 @@ pub(crate) mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::test_util::batches_to_sort_string;
-    use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_common::{ScalarValue, assert_contains};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};

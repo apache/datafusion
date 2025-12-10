@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
+use datafusion_common::{DFSchema, Diagnostic, Result, Span, Spans, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
 use sqlparser::ast::Expr as SQLExpr;
@@ -60,10 +60,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = &subquery.body.as_ref() {
             for item in &select.projection {
-                if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item {
-                    if let Some(span) = Span::try_from_sqlparser_span(ident.span) {
-                        spans.add_span(span);
-                    }
+                if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item
+                    && let Some(span) = Span::try_from_sqlparser_span(ident.span)
+                {
+                    spans.add_span(span);
                 }
             }
         }
@@ -103,10 +103,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
-                if let SelectItem::ExprWithAlias { alias, .. } = item {
-                    if let Some(span) = Span::try_from_sqlparser_span(alias.span) {
-                        spans.add_span(span);
-                    }
+                if let SelectItem::ExprWithAlias { alias, .. } = item
+                    && let Some(span) = Span::try_from_sqlparser_span(alias.span)
+                {
+                    spans.add_span(span);
                 }
             }
         }

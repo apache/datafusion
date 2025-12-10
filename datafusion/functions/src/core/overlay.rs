@@ -25,7 +25,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;

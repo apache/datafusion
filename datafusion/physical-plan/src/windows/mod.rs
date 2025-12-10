@@ -25,13 +25,13 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::PhysicalSortExpr, ExecutionPlan, ExecutionPlanProperties,
-    InputOrderMode, PhysicalExpr,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
+    expressions::PhysicalSortExpr,
 };
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{FieldRef, SortOptions};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -389,11 +389,11 @@ pub(crate) fn window_equivalence_properties(
             let mut found = false;
             for sort_expr in sort_options.into_iter() {
                 candidate_ordering.push(sort_expr);
-                if let Some(lex) = LexOrdering::new(candidate_ordering.clone()) {
-                    if window_eq_properties.ordering_satisfy(lex)? {
-                        found = true;
-                        break;
-                    }
+                if let Some(lex) = LexOrdering::new(candidate_ordering.clone())
+                    && window_eq_properties.ordering_satisfy(lex)?
+                {
+                    found = true;
+                    break;
                 }
                 // This option didn't work, remove it and try the next one
                 candidate_ordering.pop();
@@ -407,10 +407,10 @@ pub(crate) fn window_equivalence_properties(
 
         // If we successfully built an ordering for all columns, use it
         // When there are no partition expressions, candidate_ordering will be empty and won't be added
-        if candidate_ordering.len() == partitioning_exprs.len() {
-            if let Some(lex) = LexOrdering::new(candidate_ordering) {
-                all_satisfied_lexs.push(lex);
-            }
+        if candidate_ordering.len() == partitioning_exprs.len()
+            && let Some(lex) = LexOrdering::new(candidate_ordering)
+        {
+            all_satisfied_lexs.push(lex);
         }
         // If there is a partitioning, and no possible ordering cannot satisfy
         // the input plan's orderings, then we cannot further introduce any
@@ -512,21 +512,21 @@ pub(crate) fn window_equivalence_properties(
                             let is_asc = !sort_expr.options.descending;
                             candidate_order.push(sort_expr);
 
-                            if let Some(lex) = LexOrdering::new(candidate_order.clone()) {
-                                if window_eq_properties.ordering_satisfy(lex)? {
-                                    if idx == 0 {
-                                        // The first column's ordering direction determines the overall
-                                        // monotonicity behavior of the window result.
-                                        // - If the aggregate has increasing set monotonicity (e.g., MAX, COUNT)
-                                        //   and the first arg is ascending, the window result is increasing
-                                        // - If the aggregate has decreasing set monotonicity (e.g., MIN)
-                                        //   and the first arg is ascending, the window result is also increasing
-                                        // This flag is used to determine the final window column ordering.
-                                        asc = is_asc;
-                                    }
-                                    found = true;
-                                    break;
+                            if let Some(lex) = LexOrdering::new(candidate_order.clone())
+                                && window_eq_properties.ordering_satisfy(lex)?
+                            {
+                                if idx == 0 {
+                                    // The first column's ordering direction determines the overall
+                                    // monotonicity behavior of the window result.
+                                    // - If the aggregate has increasing set monotonicity (e.g., MAX, COUNT)
+                                    //   and the first arg is ascending, the window result is increasing
+                                    // - If the aggregate has decreasing set monotonicity (e.g., MIN)
+                                    //   and the first arg is ascending, the window result is also increasing
+                                    // This flag is used to determine the final window column ordering.
+                                    asc = is_asc;
                                 }
+                                found = true;
+                                break;
                             }
                             // This option didn't work, remove it and try the next one
                             candidate_order.pop();
@@ -740,13 +740,13 @@ mod tests {
     use crate::expressions::col;
     use crate::streaming::StreamingTableExec;
     use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
+    use InputOrderMode::{Linear, PartiallySorted, Sorted};
     use arrow::compute::SortOptions;
     use arrow_schema::{DataType, Field};
     use datafusion_execution::TaskContext;
     use datafusion_functions_aggregate::count::count_udaf;
-    use InputOrderMode::{Linear, PartiallySorted, Sorted};
 
     use futures::FutureExt;
 

@@ -20,7 +20,7 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::ast::{
-    self, visit_expressions_mut, LimitClause, OrderByKind, SelectFlavor,
+    self, LimitClause, OrderByKind, SelectFlavor, visit_expressions_mut,
 };
 
 #[derive(Clone)]
@@ -302,7 +302,7 @@ impl SelectBuilder {
             group_by: match self.group_by {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Err(Into::into(UninitializedFieldError::from("group_by")))
+                    return Err(Into::into(UninitializedFieldError::from("group_by")));
                 }
             },
             cluster_by: self.cluster_by.clone(),
@@ -581,7 +581,7 @@ impl DerivedRelationBuilder {
             subquery: match self.subquery {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Err(Into::into(UninitializedFieldError::from("subquery")))
+                    return Err(Into::into(UninitializedFieldError::from("subquery")));
                 }
             },
             alias: self.alias.clone(),
@@ -711,10 +711,10 @@ impl From<String> for BuilderError {
 impl fmt::Display for BuilderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::UninitializedField(ref field) => {
+            Self::UninitializedField(field) => {
                 write!(f, "`{field}` must be initialized")
             }
-            Self::ValidationError(ref error) => write!(f, "{error}"),
+            Self::ValidationError(error) => write!(f, "{error}"),
         }
     }
 }

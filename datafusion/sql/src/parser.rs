@@ -20,9 +20,9 @@
 //! This parser implements DataFusion specific statements such as
 //! `CREATE EXTERNAL TABLE`
 
-use datafusion_common::config::SqlParserOptions;
 use datafusion_common::DataFusionError;
-use datafusion_common::{sql_err, Diagnostic, Span};
+use datafusion_common::config::SqlParserOptions;
+use datafusion_common::{Diagnostic, Span, sql_err};
 use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
@@ -30,7 +30,7 @@ use sqlparser::{
         ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
         Statement as SQLStatement, TableConstraint, Value,
     },
-    dialect::{keywords::Keyword, Dialect, GenericDialect},
+    dialect::{Dialect, GenericDialect, keywords::Keyword},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer, Word},
 };
@@ -640,7 +640,9 @@ impl<'a> DFParser<'a> {
                     Keyword::WITH => {
                         self.parser.expect_keyword(Keyword::HEADER)?;
                         self.parser.expect_keyword(Keyword::ROW)?;
-                        return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')")?;
+                        return parser_err!(
+                            "WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')"
+                        )?;
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
@@ -1024,15 +1026,21 @@ impl<'a> DFParser<'a> {
                         } else {
                             self.parser.expect_keyword(Keyword::HEADER)?;
                             self.parser.expect_keyword(Keyword::ROW)?;
-                            return parser_err!("WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)")?;
+                            return parser_err!(
+                                "WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)"
+                            )?;
                         }
                     }
                     Keyword::DELIMITER => {
-                        return parser_err!("DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')")?;
+                        return parser_err!(
+                            "DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')"
+                        )?;
                     }
                     Keyword::COMPRESSION => {
                         self.parser.expect_keyword(Keyword::TYPE)?;
-                        return parser_err!("COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)")?;
+                        return parser_err!(
+                            "COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)"
+                        )?;
                     }
                     Keyword::PARTITIONED => {
                         self.parser.expect_keyword(Keyword::BY)?;
@@ -1385,8 +1393,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for avro files not to have columns specified
-        let sql =
-            "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
+        let sql = "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: name.clone(),
             columns: vec![],
@@ -1423,8 +1430,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case: column definition allowed in 'partition by' clause
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: name.clone(),
             columns: vec![
@@ -1445,17 +1451,18 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int, c1) LOCATION 'foo.csv'";
         expect_parse_error(
             sql,
             "SQL error: ParserError(\"Expected: a data type name, found: ) at Line: 1, Column: 73\")",
         );
 
         // negative case: mixed column defs and column names in `PARTITIONED BY` clause
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
-        expect_parse_error(sql, "SQL error: ParserError(\"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 70\")");
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c1, p1 int) LOCATION 'foo.csv'";
+        expect_parse_error(
+            sql,
+            "SQL error: ParserError(\"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 70\")",
+        );
 
         // positive case: additional options (one entry) can be specified
         let sql =
@@ -1477,8 +1484,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // positive case: additional options (multiple entries) can be specified
-        let sql =
-            "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2) LOCATION 'blahblah'";
+        let sql = "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2) LOCATION 'blahblah'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: name.clone(),
             columns: vec![],
@@ -1499,15 +1505,17 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // Ordered Col
-        let sqls = ["CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS LAST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS FIRST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS LAST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS FIRST) LOCATION 'foo.csv'",
-                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS LAST) LOCATION 'foo.csv'"];
+        let sqls = [
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS LAST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS FIRST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS LAST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS FIRST) LOCATION 'foo.csv'",
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS LAST) LOCATION 'foo.csv'",
+        ];
         let expected = vec![
             (None, None),
             (None, Some(true)),
@@ -1918,8 +1926,7 @@ mod tests {
     #[test]
     fn copy_to_multi_options() -> Result<(), DataFusionError> {
         // order of options is preserved
-        let sql =
-            "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy, 'execution.keep_partition_by_columns' true)";
+        let sql = "COPY foo TO bar STORED AS parquet OPTIONS ('format.row_group_size' 55, 'format.compression' snappy, 'execution.keep_partition_by_columns' true)";
 
         let expected_options = vec![
             (

@@ -18,15 +18,15 @@
 //! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
+use datafusion_common::{DFSchema, Result, plan_err, utils::list_ndims};
+use datafusion_expr::AggregateUDF;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 #[cfg(feature = "sql")]
 use datafusion_expr::sqlparser::ast::BinaryOperator;
-use datafusion_expr::AggregateUDF;
 use datafusion_expr::{
-    planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     Expr, ExprSchemable, GetFieldAccess,
+    planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
 };
 #[cfg(not(feature = "sql"))]
 use datafusion_expr_common::operator::Operator as BinaryOperator;

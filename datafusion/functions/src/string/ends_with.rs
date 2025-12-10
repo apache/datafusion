@@ -23,7 +23,7 @@ use arrow::datatypes::DataType;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -99,9 +99,9 @@ impl ScalarUDFImpl for EndsWithFunc {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
                 make_scalar_function(ends_with, vec![])(&args.args)
             }
-            other => {
-                internal_err!("Unsupported data type {other:?} for function ends_with. Expected Utf8, LargeUtf8 or Utf8View")?
-            }
+            other => internal_err!(
+                "Unsupported data type {other:?} for function ends_with. Expected Utf8, LargeUtf8 or Utf8View"
+            )?,
         }
     }
 
