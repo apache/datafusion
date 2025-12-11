@@ -83,7 +83,11 @@ pub trait ArrowHashTable {
     ) -> (usize, bool);
 }
 
-/// Returns true if the given data type can be used as a TopK hash key
+/// Returns true if the given data type can be used as a top-K aggregation hash key.
+///
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals)
+/// and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`). This is used internally by
+/// `PriorityMap::supports()` to validate grouping key type compatibility.
 pub fn is_supported_hash_key_type(kt: &DataType) -> bool {
     kt.is_primitive()
         || matches!(
