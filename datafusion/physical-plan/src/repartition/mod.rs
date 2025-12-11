@@ -1217,12 +1217,15 @@ impl RepartitionExec {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
+        let is_hash_partitioning = matches!(&partitioning, Partitioning::Hash(_, _));
         let mut partitioner = BatchPartitioner::try_new(
             partitioning,
             metrics.repartition_time.clone(),
             input_partition,
             num_input_partitions,
         )?;
+
+        let mut row_counts = vec![0usize; partitioner.num_partitions()];
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
@@ -1245,6 +1248,13 @@ impl RepartitionExec {
 
             for res in partitioner.partition_iter(batch)? {
                 let (partition, batch) = res?;
+                if is_hash_partitioning {
+                    row_counts[partition] += batch.num_rows();
+                    if row_counts[partition] >= 8192 {
+                        row_counts[partition] = 0;
+                        batches_until_yield -= 1;
+                    }
+                }
                 let size = batch.get_array_memory_size();
 
                 let timer = metrics.send_time[partition].timer();
@@ -1296,7 +1306,7 @@ impl RepartitionExec {
             if batches_until_yield == 0 {
                 tokio::task::yield_now().await;
                 batches_until_yield = partitioner.num_partitions();
-            } else {
+            } else if !is_hash_partitioning {
                 batches_until_yield -= 1;
             }
         }
