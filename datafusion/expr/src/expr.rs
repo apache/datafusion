@@ -2104,7 +2104,7 @@ impl Expr {
 
 impl Normalizeable for Expr {
     fn can_normalize(&self) -> bool {
-        #[allow(clippy::match_like_matches_macro)]
+        #[expect(clippy::match_like_matches_macro)]
         match self {
             Expr::BinaryExpr(BinaryExpr {
                 op:

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`ProjectionExpr`] and [`ProjectionExprs`] for representing projections.
+
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -35,7 +37,7 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-/// A projection expression as used by projection operations.
+/// An expression used by projection operations.
 ///
 /// The expression is evaluated and the result is stored in a column
 /// with the name specified by `alias`.
@@ -43,6 +45,8 @@ use itertools::Itertools;
 /// For example, the SQL expression `a + b AS sum_ab` would be represented
 /// as a `ProjectionExpr` where `expr` is the expression `a + b`
 /// and `alias` is the string `sum_ab`.
+///
+/// See [`ProjectionExprs`] for a collection of projection expressions.
 #[derive(Debug, Clone)]
 pub struct ProjectionExpr {
     /// The expression that will be evaluated.
@@ -107,11 +111,14 @@ impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
     }
 }
 
-/// A collection of projection expressions.
+/// A collection of  [`ProjectionExpr`] instances, representing a complete
+/// projection operation.
 ///
-/// This struct encapsulates multiple `ProjectionExpr` instances,
-/// representing a complete projection operation and provides
-/// methods to manipulate and analyze the projection as a whole.
+/// Projection operations are used in query plans to select specific columns or
+/// compute new columns based on existing ones.
+///
+/// See [`ProjectionExprs::from_indices`] to select a subset of columns by
+/// indices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionExprs {
     exprs: Vec<ProjectionExpr>,

@@ -49,3 +49,4 @@ ci/scripts/rust_toml_fmt.sh
 ci/scripts/rust_docs.sh
 ci/scripts/license_header.sh
 ci/scripts/typos_check.sh
+ci/scripts/doc_prettier_check.sh
