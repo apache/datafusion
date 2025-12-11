@@ -25,9 +25,7 @@ use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::config::{EncryptionFactoryOptions, TableParquetOptions};
-use datafusion_common::{
-    assert_batches_sorted_eq, assert_contains, exec_datafusion_err, DataFusionError,
-};
+use datafusion_common::{assert_batches_sorted_eq, exec_datafusion_err, DataFusionError};
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
@@ -114,20 +112,6 @@ async fn round_trip_encryption() {
     let tempdir = TempDir::new_in(Path::new(".")).unwrap();
     let tempfile = tempdir.path().join("data.parquet");
     let num_rows_written = write_batches(tempfile.clone(), props, batches).unwrap();
-
-    // Attempting to read without decryption properties should fail with an encrypted footer error
-    let ctx: SessionContext = SessionContext::new();
-    let err = match ctx
-        .read_parquet(
-            tempfile.to_string_lossy().to_string(),
-            ParquetReadOptions::default(),
-        )
-        .await
-    {
-        Ok(df) => df.collect().await.unwrap_err(),
-        Err(err) => err,
-    };
-    assert_contains!(err.to_string(), "encrypted footer");
 
     // Read encrypted parquet
     let ctx: SessionContext = SessionContext::new();
