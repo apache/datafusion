@@ -550,11 +550,11 @@ impl GroupedHashAggregateStream {
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
-        let reservation = MemoryConsumer::new(name)
-            .with_can_spill(true)
-            .register(context.memory_pool());
         let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
         let group_values = new_group_values(group_schema, &group_ordering)?;
+        let reservation = MemoryConsumer::new(name)
+            .with_can_spill(Self::is_spill_supported(&agg.mode, &group_ordering))
+            .register(context.memory_pool());
         timer.done();
 
         let exec_state = ExecutionState::ReadingInput;
@@ -988,10 +988,10 @@ impl GroupedHashAggregateStream {
         }
 
         match self.update_memory_reservation() {
-            // Here we can ignore `insufficient_capacity_err` because we will spill later,
-            // but at least one batch should fit in the memory
+            // Here we can ignore `insufficient_capacity_err` because
+            // the next call to `group_aggregate_batch` will spill to disk
             Err(DataFusionError::ResourcesExhausted(_))
-                if self.group_values.len() >= self.batch_size =>
+                if self.can_spill_on_oom() || self.can_emit_early_on_oom() =>
             {
                 Ok(())
             }
@@ -1060,15 +1060,27 @@ impl GroupedHashAggregateStream {
         Ok(Some(batch))
     }
 
+    fn is_spill_supported(
+        aggregate_mode: &AggregateMode,
+        group_ordering: &GroupOrdering,
+    ) -> bool {
+        *aggregate_mode != AggregateMode::Partial
+            && matches!(group_ordering, GroupOrdering::None)
+    }
+
+    fn can_spill_on_oom(&self) -> bool {
+        !self.group_values.is_empty()
+            && Self::is_spill_supported(&self.mode, &self.group_ordering)
+            && !self.spill_state.is_stream_merging
+    }
+
     /// Optimistically, [`Self::group_aggregate_batch`] allows to exceed the memory target slightly
     /// (~ 1 [`RecordBatch`]) for simplicity. In such cases, spill the data to disk and clear the
     /// memory. Currently only [`GroupOrdering::None`] is supported for spilling.
     fn spill_previous_if_necessary(&mut self, batch: &RecordBatch) -> Result<()> {
         // TODO: support group_ordering for spilling
-        if !self.group_values.is_empty()
+        if self.can_spill_on_oom()
             && batch.num_rows() > 0
-            && matches!(self.group_ordering, GroupOrdering::None)
-            && !self.spill_state.is_stream_merging
             && self.update_memory_reservation().is_err()
         {
             assert_ne!(self.mode, AggregateMode::Partial);
@@ -1127,16 +1139,18 @@ impl GroupedHashAggregateStream {
         self.clear_shrink(&RecordBatch::new_empty(s));
     }
 
+    fn can_emit_early_on_oom(&self) -> bool {
+        self.group_values.len() >= self.batch_size
+            && matches!(self.group_ordering, GroupOrdering::None)
+    }
+
     /// Emit if the used memory exceeds the target for partial aggregation.
     /// Currently only [`GroupOrdering::None`] is supported for early emitting.
     /// TODO: support group_ordering for early emitting
     ///
     /// Returns `Some(ExecutionState)` if the state should be changed, None otherwise.
     fn emit_early_if_necessary(&mut self) -> Result<Option<ExecutionState>> {
-        if self.group_values.len() >= self.batch_size
-            && matches!(self.group_ordering, GroupOrdering::None)
-            && self.update_memory_reservation().is_err()
-        {
+        if self.can_emit_early_on_oom() && self.update_memory_reservation().is_err() {
             assert_eq!(self.mode, AggregateMode::Partial);
             let n = self.group_values.len() / self.batch_size * self.batch_size;
             if let Some(batch) = self.emit(EmitTo::First(n), false)? {
