@@ -1971,6 +1971,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-ci-dummy"
+version = "51.0.0"
+
+[[package]]
 name = "datafusion-cli"
 version = "51.0.0"
 dependencies = [
