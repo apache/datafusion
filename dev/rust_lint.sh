@@ -43,9 +43,16 @@ if ! command -v typos &> /dev/null; then
     cargo install typos-cli --locked
 fi
 
+# For dependency graph checks
+if ! cargo depgraph --help > /dev/null 2>&1; then
+    echo "Installing cargo-depgraph using cargo"
+    cargo install cargo-depgraph --version ^1.6 --locked
+fi
+
 ci/scripts/rust_fmt.sh
 ci/scripts/rust_clippy.sh
 ci/scripts/rust_toml_fmt.sh
 ci/scripts/rust_docs.sh
 ci/scripts/license_header.sh
 ci/scripts/typos_check.sh
+docs/scripts/generate_dependency_graph.sh --check

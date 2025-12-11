@@ -67,3 +67,22 @@ jobs:
         run: cargo install cargo-machete --version ^0.9 --locked
       - name: Detect unused dependencies
         run: cargo machete --with-metadata
+
+  dependency-graph:
+    name: dependency graph up to date
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          submodules: true
+          fetch-depth: 1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Install cargo-depgraph
+        run: cargo install cargo-depgraph --version ^1.6 --locked
+      - name: Check workspace dependency graph
+        run: docs/scripts/generate_dependency_graph.sh --check
