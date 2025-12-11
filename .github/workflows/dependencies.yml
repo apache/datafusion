@@ -83,6 +83,6 @@ jobs:
         with:
           rust-version: stable
       - name: Install cargo-depgraph
-        run: cargo install cargo-depgraph --version ^1.10 --locked
+        run: cargo install cargo-depgraph --version ^1.6 --locked
       - name: Check workspace dependency graph
         run: docs/scripts/generate_dependency_graph.sh --check
