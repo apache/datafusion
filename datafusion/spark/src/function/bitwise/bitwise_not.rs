@@ -20,7 +20,7 @@ use arrow::compute::kernels::bitwise;
 use arrow::datatypes::{
     DataType, Field, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type,
 };
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;
@@ -67,7 +67,9 @@ impl ScalarUDFImpl for SparkBitwiseNot {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        plan_err!("SparkBitwiseNot: return_type() is not used; return_field_from_args() is implemented")
+        internal_err!(
+            "SparkBitwiseNot: return_type() is not used; return_field_from_args() is implemented"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -89,7 +91,7 @@ impl ScalarUDFImpl for SparkBitwiseNot {
             out_nullable = true;
         }
 
-        Ok(Arc::new(Field::new("bitwise_not", out_dt, out_nullable)))
+        Ok(Arc::new(Field::new(self.name(), out_dt, out_nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -196,32 +198,30 @@ mod tests {
     }
 
     #[test]
-fn test_bitwise_not_nullability_with_null_scalar() -> Result<()> {
-    use datafusion_common::ScalarValue;
-    use arrow::datatypes::{Field, DataType};
-    use std::sync::Arc;
+    fn test_bitwise_not_nullability_with_null_scalar() -> Result<()> {
+        use arrow::datatypes::{DataType, Field};
+        use datafusion_common::ScalarValue;
+        use std::sync::Arc;
 
-    let func = SparkBitwiseNot::new();
+        let func = SparkBitwiseNot::new();
 
-    let non_nullable: FieldRef = Arc::new(Field::new("col", DataType::Int32, false));
+        let non_nullable: FieldRef = Arc::new(Field::new("col", DataType::Int32, false));
 
-    let out = func.return_field_from_args(ReturnFieldArgs {
-        arg_fields: &[Arc::clone(&non_nullable)],
-        scalar_arguments: &[None],
-    })?;
-    assert!(!out.is_nullable());
-    assert_eq!(out.data_type(), &DataType::Int32);
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&non_nullable)],
+            scalar_arguments: &[None],
+        })?;
+        assert!(!out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Int32);
 
-   
-    let null_scalar = ScalarValue::Int32(None);
-    let out_with_null_scalar = func.return_field_from_args(ReturnFieldArgs {
-        arg_fields: &[Arc::clone(&non_nullable)],
-        scalar_arguments: &[Some(&null_scalar)],
-    })?;
-    assert!(out_with_null_scalar.is_nullable());
-    assert_eq!(out_with_null_scalar.data_type(), &DataType::Int32);
+        let null_scalar = ScalarValue::Int32(None);
+        let out_with_null_scalar = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&non_nullable)],
+            scalar_arguments: &[Some(&null_scalar)],
+        })?;
+        assert!(out_with_null_scalar.is_nullable());
+        assert_eq!(out_with_null_scalar.data_type(), &DataType::Int32);
 
-    Ok(())
-}
-
+        Ok(())
+    }
 }
