@@ -197,9 +197,9 @@ pub struct StringHeap {
 
 impl StringHeap {
     pub fn new(limit: usize, desc: bool, data_type: DataType) -> Self {
-        let owned: ArrayRef = Arc::new(StringArray::from(Vec::<&str>::new()));
+        let batch: ArrayRef = Arc::new(StringArray::from(Vec::<&str>::new()));
         Self {
-            batch: owned,
+            batch,
             heap: TopKHeap::new(limit, desc),
             desc,
             data_type,
