@@ -17,9 +17,16 @@
 
 //! A custom binary heap implementation for performant top K aggregation.
 //!
+//! This module uses the **Strategy pattern** with runtime polymorphism: the `new_heap`
+//! factory function selects an appropriate heap implementation (`PrimitiveHeap` or `StringHeap`)
+//! based on the Arrow data type. All implementations conform to the `ArrowHeap` trait,
+//! enabling dynamic dispatch while keeping the interface uniform.
+//!
 //! Supported value types include Arrow primitives (integers, floats, decimals, intervals)
-//! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering via
-//! the existing `Comparable for Option<String>` implementation.
+//! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering.
+//!
+//! Note: String values are owned/cloned on insertion. For very high cardinality or large
+//! strings with large limits, this may add overhead compared to primitive types.
 
 use arrow::array::{
     cast::AsArray,
@@ -203,15 +210,27 @@ impl StringHeap {
     ///
     /// Panics if the row index is out of bounds or if the data type is not one of
     /// the supported UTF-8 string types.
+    ///
+    /// Note: Null values should not appear in the input; the aggregation layer
+    /// ensures nulls are filtered before reaching this code.
     fn value(&self, row_idx: usize) -> String {
-        match self.data_type {
-            DataType::Utf8 => self.batch.as_string::<i32>().value(row_idx).to_string(),
-            DataType::LargeUtf8 => {
-                self.batch.as_string::<i64>().value(row_idx).to_string()
-            }
-            DataType::Utf8View => self.batch.as_string_view().value(row_idx).to_string(),
-            _ => unreachable!("Unsupported string type: {:?}", self.data_type),
-        }
+        extract_string_value(&self.batch, &self.data_type, row_idx)
+    }
+}
+
+/// Helper to extract a string value from an ArrayRef at a given index.
+///
+/// Supports `Utf8`, `LargeUtf8`, and `Utf8View` data types. This helper reduces
+/// duplication between `StringHeap::value()` and `StringHeap::drain()`.
+///
+/// # Panics
+/// Panics if the index is out of bounds or if the data type is unsupported.
+fn extract_string_value(batch: &ArrayRef, data_type: &DataType, idx: usize) -> String {
+    match data_type {
+        DataType::Utf8 => batch.as_string::<i32>().value(idx).to_string(),
+        DataType::LargeUtf8 => batch.as_string::<i64>().value(idx).to_string(),
+        DataType::Utf8View => batch.as_string_view().value(idx).to_string(),
+        _ => unreachable!("Unsupported string type: {:?}", data_type),
     }
 }
 
@@ -254,6 +273,7 @@ impl ArrowHeap for StringHeap {
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
         let (vals, map_idxs) = self.heap.drain();
+        // Convert owned strings to appropriate Arrow array type
         let arr: ArrayRef = match self.data_type {
             DataType::Utf8 => Arc::new(StringArray::from(vals)),
             DataType::LargeUtf8 => Arc::new(LargeStringArray::from(vals)),
@@ -593,19 +613,6 @@ pub fn new_heap(
     let vt_clone = vt.clone();
     downcast_primitive! {
         vt_clone => (downcast_helper, vt_clone),
-        _ => {}
-    }
-
-    match vt {
-        DataType::Utf8 => {
-            return Ok(Box::new(StringHeap::new(limit, desc, DataType::Utf8)));
-        }
-        DataType::LargeUtf8 => {
-            return Ok(Box::new(StringHeap::new(limit, desc, DataType::LargeUtf8)));
-        }
-        DataType::Utf8View => {
-            return Ok(Box::new(StringHeap::new(limit, desc, DataType::Utf8View)));
-        }
         _ => {}
     }
 
