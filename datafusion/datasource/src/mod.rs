@@ -616,7 +616,7 @@ mod tests {
 
         // Create a PartitionedFile with partition values
         let mut pf = PartitionedFile::new(
-            Path::from("test.parquet"),
+            "test.parquet",
             100, // file size
         );
         pf.partition_values = vec![
