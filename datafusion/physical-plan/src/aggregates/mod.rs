@@ -79,6 +79,25 @@ mod topk_stream;
 /// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
 /// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
 /// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
+///
+/// # Example
+/// ```
+/// use arrow::datatypes::DataType;
+/// use datafusion_physical_plan::aggregates::topk_types_supported;
+///
+/// // Supported: UTF-8 keys with numeric aggregates
+/// assert!(topk_types_supported(&DataType::Utf8, &DataType::Int64));
+/// assert!(topk_types_supported(&DataType::Utf8View, &DataType::Float64));
+///
+/// // Supported: Numeric keys with numeric aggregates
+/// assert!(topk_types_supported(&DataType::Int64, &DataType::Int64));
+///
+/// // Unsupported: Binary keys
+/// assert!(!topk_types_supported(&DataType::Binary, &DataType::Int64));
+///
+/// // Unsupported: String aggregate values (only min/max of numeric types supported)
+/// assert!(!topk_types_supported(&DataType::Int64, &DataType::Utf8));
+/// ```
 pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
     use topk::hash_table::is_supported_hash_key_type;
     use topk::heap::is_supported_heap_type;
@@ -765,7 +784,7 @@ impl AggregateExec {
         // grouping by an expression that has a sort/limit upstream
         if let Some(limit) = self.limit {
             if !self.is_unordered_unfiltered_group_by_distinct()
-                && GroupedTopKAggregateStream::supports(self)?
+                && GroupedTopKAggregateStream::can_use_topk(self)?
             {
                 return Ok(StreamType::GroupedPriorityQueue(
                     GroupedTopKAggregateStream::new(self, context, partition, limit)?,
