@@ -213,8 +213,8 @@ impl ArrayStaticFilter {
     }
 }
 
-/// Wrapper for f32 that implements Hash and Eq using IEEE 754 total ordering.
-/// This treats NaN values as equal to each other (using total_cmp).
+/// Wrapper for f32 that implements Hash and Eq using bit comparison.
+/// This treats NaN values as equal to each other when they have the same bit pattern.
 #[derive(Clone, Copy)]
 struct OrderedFloat32(f32);
 
@@ -226,7 +226,7 @@ impl Hash for OrderedFloat32 {
 
 impl PartialEq for OrderedFloat32 {
     fn eq(&self, other: &Self) -> bool {
-        self.0.total_cmp(&other.0).is_eq()
+        self.0.to_bits() == other.0.to_bits()
     }
 }
 
@@ -238,8 +238,8 @@ impl From<f32> for OrderedFloat32 {
     }
 }
 
-/// Wrapper for f64 that implements Hash and Eq using IEEE 754 total ordering.
-/// This treats NaN values as equal to each other (using total_cmp).
+/// Wrapper for f64 that implements Hash and Eq using bit comparison.
+/// This treats NaN values as equal to each other when they have the same bit pattern.
 #[derive(Clone, Copy)]
 struct OrderedFloat64(f64);
 
@@ -251,7 +251,7 @@ impl Hash for OrderedFloat64 {
 
 impl PartialEq for OrderedFloat64 {
     fn eq(&self, other: &Self) -> bool {
-        self.0.total_cmp(&other.0).is_eq()
+        self.0.to_bits() == other.0.to_bits()
     }
 }
 
