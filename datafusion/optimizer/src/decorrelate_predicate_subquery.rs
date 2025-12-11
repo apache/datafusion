@@ -27,14 +27,14 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, plan_err, Column, Result};
+use datafusion_common::{Column, Result, assert_or_internal_err, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
-    exists, in_subquery, lit, not, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
-    LogicalPlan, LogicalPlanBuilder, Operator,
+    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
+    in_subquery, lit, not, not_exists, not_in_subquery,
 };
 
 use log::debug;
@@ -79,11 +79,10 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 .into_iter()
                 .partition(has_subquery);
 
-        if with_subqueries.is_empty() {
-            return internal_err!(
-                "can not find expected subqueries in DecorrelatePredicateSubquery"
-            );
-        }
+        assert_or_internal_err!(
+            !with_subqueries.is_empty(),
+            "can not find expected subqueries in DecorrelatePredicateSubquery"
+        );
 
         // iterate through all exists clauses in predicate, turning each into a join
         let mut cur_input = Arc::unwrap_or_clone(filter.input);
@@ -136,7 +135,7 @@ fn rewrite_inner_subqueries(
         Expr::Exists(Exists {
             subquery: Subquery { subquery, .. },
             negated,
-        }) => match mark_join(&cur_input, Arc::clone(&subquery), None, negated, alias)? {
+        }) => match mark_join(&cur_input, &subquery, None, negated, alias)? {
             Some((plan, exists_expr)) => {
                 cur_input = plan;
                 Ok(Transformed::yes(exists_expr))
@@ -154,13 +153,7 @@ fn rewrite_inner_subqueries(
                 .map_or(plan_err!("single expression required."), |output_expr| {
                     Ok(Expr::eq(*expr.clone(), output_expr))
                 })?;
-            match mark_join(
-                &cur_input,
-                Arc::clone(&subquery),
-                Some(in_predicate),
-                negated,
-                alias,
-            )? {
+            match mark_join(&cur_input, &subquery, Some(&in_predicate), negated, alias)? {
                 Some((plan, exists_expr)) => {
                     cur_input = plan;
                     Ok(Transformed::yes(exists_expr))
@@ -275,7 +268,13 @@ fn build_join_top(
     };
     let subquery = query_info.query.subquery.as_ref();
     let subquery_alias = alias.next("__correlated_sq");
-    build_join(left, subquery, in_predicate_opt, join_type, subquery_alias)
+    build_join(
+        left,
+        subquery,
+        in_predicate_opt.as_ref(),
+        join_type,
+        subquery_alias,
+    )
 }
 
 /// This is used to handle the case when the subquery is embedded in a more complex boolean
@@ -295,8 +294,8 @@ fn build_join_top(
 ///           TableScan: t2
 fn mark_join(
     left: &LogicalPlan,
-    subquery: Arc<LogicalPlan>,
-    in_predicate_opt: Option<Expr>,
+    subquery: &LogicalPlan,
+    in_predicate_opt: Option<&Expr>,
     negated: bool,
     alias_generator: &Arc<AliasGenerator>,
 ) -> Result<Option<(LogicalPlan, Expr)>> {
@@ -306,7 +305,7 @@ fn mark_join(
     let exists_expr = if negated { !exists_col } else { exists_col };
 
     Ok(
-        build_join(left, &subquery, in_predicate_opt, JoinType::LeftMark, alias)?
+        build_join(left, subquery, in_predicate_opt, JoinType::LeftMark, alias)?
             .map(|plan| (plan, exists_expr)),
     )
 }
@@ -314,12 +313,12 @@ fn mark_join(
 fn build_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
-    in_predicate_opt: Option<Expr>,
+    in_predicate_opt: Option<&Expr>,
     join_type: JoinType,
     alias: String,
 ) -> Result<Option<LogicalPlan>> {
     let mut pull_up = PullUpCorrelatedExpr::new()
-        .with_in_predicate_opt(in_predicate_opt.clone())
+        .with_in_predicate_opt(in_predicate_opt.cloned())
         .with_exists_sub_query(in_predicate_opt.is_none());
 
     let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
@@ -342,7 +341,7 @@ fn build_join(
             replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
         })?;
 
-    let join_filter = match (join_filter_opt, in_predicate_opt.clone()) {
+    let join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
         (
             Some(join_filter),
             Some(Expr::BinaryExpr(BinaryExpr {
@@ -365,8 +364,8 @@ fn build_join(
             })),
         ) => {
             let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            in_predicate
+
+            Expr::eq(left.deref().clone(), Expr::Column(right_col))
         }
         (None, None) => lit(true),
         _ => return Ok(None),
@@ -378,7 +377,7 @@ fn build_join(
         // Gather all columns needed for the join filter + predicates
         let mut needed = std::collections::HashSet::new();
         expr_to_columns(&join_filter, &mut needed)?;
-        if let Some(ref in_pred) = in_predicate_opt {
+        if let Some(in_pred) = in_predicate_opt {
             expr_to_columns(in_pred, &mut needed)?;
         }
 

@@ -29,7 +29,7 @@ use datafusion_common::cast::{
     as_generic_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, Result, ScalarValue,
+    Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::utils::format_state_name;
@@ -150,12 +150,14 @@ impl AggregateUDFImpl for StringAgg {
             (args.ordering_fields.is_empty()) && (!args.is_distinct);
         if no_order_no_distinct {
             // Case `SimpleStringAggAccumulator`
-            Ok(vec![Field::new(
-                format_state_name(args.name, "string_agg"),
-                DataType::LargeUtf8,
-                true,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "string_agg"),
+                    DataType::LargeUtf8,
+                    true,
+                )
+                .into(),
+            ])
         } else {
             // Case `StringAggAccumulator`
             self.array_agg.state_fields(args)
@@ -199,7 +201,16 @@ impl AggregateUDFImpl for StringAgg {
                 )
                 .into(),
                 exprs: &filter_index(acc_args.exprs, 1),
-                ..acc_args
+                expr_fields: &filter_index(acc_args.expr_fields, 1),
+                // Unchanged below; we list each field explicitly in case we ever add more
+                // fields to AccumulatorArgs making it easier to see if changes are also
+                // needed here.
+                schema: acc_args.schema,
+                ignore_nulls: acc_args.ignore_nulls,
+                order_bys: acc_args.order_bys,
+                is_reversed: acc_args.is_reversed,
+                name: acc_args.name,
+                is_distinct: acc_args.is_distinct,
             })?;
 
             Ok(Box::new(StringAggAccumulator::new(
@@ -243,7 +254,10 @@ impl Accumulator for StringAggAccumulator {
         let scalar = self.array_agg_acc.evaluate()?;
 
         let ScalarValue::List(list) = scalar else {
-            return internal_err!("Expected a DataType::List while evaluating underlying ArrayAggAccumulator, but got {}", scalar.data_type());
+            return internal_err!(
+                "Expected a DataType::List while evaluating underlying ArrayAggAccumulator, but got {}",
+                scalar.data_type()
+            );
         };
 
         let string_arr: Vec<_> = match list.value_type() {
@@ -263,7 +277,7 @@ impl Accumulator for StringAggAccumulator {
                 return internal_err!(
                     "Expected elements to of type Utf8 or LargeUtf8, but got {}",
                     list.value_type()
-                )
+                );
             }
         };
 
@@ -590,6 +604,10 @@ mod tests {
             StringAgg::new().accumulator(AccumulatorArgs {
                 return_field: Field::new("f", DataType::LargeUtf8, true).into(),
                 schema: &self.schema,
+                expr_fields: &[
+                    Field::new("col", DataType::LargeUtf8, true).into(),
+                    Field::new("lit", DataType::Utf8, false).into(),
+                ],
                 ignore_nulls: false,
                 order_bys: &self.order_bys,
                 is_reversed: false,

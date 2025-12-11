@@ -20,10 +20,11 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::{
-    DataType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    DataType, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
-use datafusion_common::{plan_err, Result};
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -46,6 +47,7 @@ impl SparkBitCount {
         Self {
             signature: Signature::one_of(
                 vec![
+                    TypeSignature::Exact(vec![DataType::Boolean]),
                     TypeSignature::Exact(vec![DataType::Int8]),
                     TypeSignature::Exact(vec![DataType::Int16]),
                     TypeSignature::Exact(vec![DataType::Int32]),
@@ -75,7 +77,20 @@ impl ScalarUDFImpl for SparkBitCount {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32) // Spark returns int (Int32)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        use arrow::datatypes::Field;
+        // bit_count returns Int32 with the same nullability as the input
+        Ok(Arc::new(Field::new(
+            args.arg_fields[0].name(),
+            DataType::Int32,
+            args.arg_fields[0].is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -90,22 +105,29 @@ impl ScalarUDFImpl for SparkBitCount {
 fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
     let value_array = value_array[0].as_ref();
     match value_array.data_type() {
+        DataType::Boolean => {
+            let result: Int32Array = as_boolean_array(value_array)?
+                .iter()
+                .map(|x| x.map(|y| y as i32))
+                .collect();
+            Ok(Arc::new(result))
+        }
         DataType::Int8 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int8Type>()
-                .unary(|v| v.count_ones() as i32);
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int16 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int16Type>()
-                .unary(|v| v.count_ones() as i32);
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int32 => {
             let result: Int32Array = value_array
                 .as_primitive::<Int32Type>()
-                .unary(|v| v.count_ones() as i32);
+                .unary(|v| (v as i64).count_ones() as i32);
             Ok(Arc::new(result))
         }
         DataType::Int64 => {
@@ -151,10 +173,10 @@ fn spark_bit_count(value_array: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::array::{
-        Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        Array, BooleanArray, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
-    use arrow::datatypes::Int32Type;
+    use arrow::datatypes::{Field, Int32Type};
 
     #[test]
     fn test_bit_count_basic() {
@@ -192,7 +214,18 @@ mod tests {
         assert_eq!(arr.value(2), 2);
         assert_eq!(arr.value(3), 3);
         assert_eq!(arr.value(4), 4);
-        assert_eq!(arr.value(5), 8);
+        assert_eq!(arr.value(5), 64);
+    }
+
+    #[test]
+    fn test_bit_count_boolean() {
+        // Test bit_count on BooleanArray
+        let result =
+            spark_bit_count(&[Arc::new(BooleanArray::from(vec![true, false]))]).unwrap();
+
+        let arr = result.as_primitive::<Int32Type>();
+        assert_eq!(arr.value(0), 1);
+        assert_eq!(arr.value(1), 0);
     }
 
     #[test]
@@ -207,7 +240,7 @@ mod tests {
         assert_eq!(arr.value(1), 1);
         assert_eq!(arr.value(2), 8);
         assert_eq!(arr.value(3), 10);
-        assert_eq!(arr.value(4), 16);
+        assert_eq!(arr.value(4), 64);
     }
 
     #[test]
@@ -222,7 +255,7 @@ mod tests {
         assert_eq!(arr.value(1), 1); // 0b00000000000000000000000000000001 = 1
         assert_eq!(arr.value(2), 8); // 0b00000000000000000000000011111111 = 8
         assert_eq!(arr.value(3), 10); // 0b00000000000000000000001111111111 = 10
-        assert_eq!(arr.value(4), 32); // -1 in two's complement = all 32 bits set
+        assert_eq!(arr.value(4), 64); // -1 in two's complement = all 32 bits set
     }
 
     #[test]
@@ -315,5 +348,38 @@ mod tests {
         assert_eq!(arr.value(0), 2); // 0b11
         assert!(arr.is_null(1));
         assert_eq!(arr.value(2), 3); // 0b111
+    }
+
+    #[test]
+    fn test_bit_count_nullability() -> Result<()> {
+        use datafusion_expr::ReturnFieldArgs;
+
+        let bit_count = SparkBitCount::new();
+
+        // Test with non-nullable Int32 field
+        let non_nullable_field = Arc::new(Field::new("num", DataType::Int32, false));
+
+        let result = bit_count.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&non_nullable_field)],
+            scalar_arguments: &[None],
+        })?;
+
+        // The result should not be nullable (same as input)
+        assert!(!result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Int32);
+
+        // Test with nullable Int32 field
+        let nullable_field = Arc::new(Field::new("num", DataType::Int32, true));
+
+        let result = bit_count.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[Arc::clone(&nullable_field)],
+            scalar_arguments: &[None],
+        })?;
+
+        // The result should be nullable (same as input)
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), &DataType::Int32);
+
+        Ok(())
     }
 }

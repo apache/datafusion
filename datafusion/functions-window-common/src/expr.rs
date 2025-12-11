@@ -39,7 +39,6 @@ impl<'a> ExpressionArgs<'a> {
     ///   to the user-defined window function.
     /// * `input_fields` - The fields corresponding to the
     ///   arguments to the user-defined window function.
-    ///
     pub fn new(
         input_exprs: &'a [Arc<dyn PhysicalExpr>],
         input_fields: &'a [FieldRef],

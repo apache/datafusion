@@ -25,7 +25,7 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Null},
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -96,6 +96,7 @@ impl ScalarUDFImpl for Flatten {
         let data_type = match &arg_types[0] {
             List(field) => match field.data_type() {
                 List(field) | FixedSizeList(field, _) => List(Arc::clone(field)),
+                LargeList(field) => LargeList(Arc::clone(field)),
                 _ => arg_types[0].clone(),
             },
             LargeList(field) => match field.data_type() {
@@ -129,8 +130,7 @@ impl ScalarUDFImpl for Flatten {
     }
 }
 
-/// Flatten SQL function
-pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("flatten", args)?;
 
     match array.data_type() {
@@ -143,7 +143,8 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 List(_) => {
                     let (inner_field, inner_offsets, inner_values, _) =
                         as_list_array(&values)?.clone().into_parts();
-                    let offsets = get_offsets_for_flatten::<i32>(inner_offsets, offsets);
+                    let offsets =
+                        get_offsets_for_flatten::<i32, i32>(inner_offsets, &offsets);
                     let flattened_array = GenericListArray::<i32>::new(
                         inner_field,
                         offsets,
@@ -154,7 +155,17 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                     Ok(Arc::new(flattened_array) as ArrayRef)
                 }
                 LargeList(_) => {
-                    exec_err!("flatten does not support type '{:?}'", array.data_type())?
+                    let (inner_field, inner_offsets, inner_values, _) =
+                        as_large_list_array(&values)?.clone().into_parts();
+                    let offsets =
+                        get_offsets_for_flatten::<i64, i32>(inner_offsets, &offsets);
+                    let flattened_array = GenericListArray::<i64>::new(
+                        inner_field,
+                        offsets,
+                        inner_values,
+                        nulls,
+                    );
+                    Ok(Arc::new(flattened_array) as ArrayRef)
                 }
                 _ => Ok(Arc::clone(array) as ArrayRef),
             }
@@ -168,7 +179,7 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 List(_) => {
                     let (inner_field, inner_offsets, inner_values, _) =
                         as_list_array(&values)?.clone().into_parts();
-                    let offsets = get_large_offsets_for_flatten(inner_offsets, offsets);
+                    let offsets = get_large_offsets_for_flatten(inner_offsets, &offsets);
                     let flattened_array = GenericListArray::<i64>::new(
                         inner_field,
                         offsets,
@@ -179,9 +190,10 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                     Ok(Arc::new(flattened_array) as ArrayRef)
                 }
                 LargeList(_) => {
-                    let (inner_field, inner_offsets, inner_values, nulls) =
+                    let (inner_field, inner_offsets, inner_values, _) =
                         as_large_list_array(&values)?.clone().into_parts();
-                    let offsets = get_offsets_for_flatten::<i64>(inner_offsets, offsets);
+                    let offsets =
+                        get_offsets_for_flatten::<i64, i64>(inner_offsets, &offsets);
                     let flattened_array = GenericListArray::<i64>::new(
                         inner_field,
                         offsets,
@@ -202,12 +214,12 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 // Create new offsets that are equivalent to `flatten` the array.
-fn get_offsets_for_flatten<O: OffsetSizeTrait>(
-    offsets: OffsetBuffer<O>,
-    indexes: OffsetBuffer<O>,
+fn get_offsets_for_flatten<O: OffsetSizeTrait, P: OffsetSizeTrait>(
+    inner_offsets: OffsetBuffer<O>,
+    outer_offsets: &OffsetBuffer<P>,
 ) -> OffsetBuffer<O> {
-    let buffer = offsets.into_inner();
-    let offsets: Vec<O> = indexes
+    let buffer = inner_offsets.into_inner();
+    let offsets: Vec<O> = outer_offsets
         .iter()
         .map(|i| buffer[i.to_usize().unwrap()])
         .collect();
@@ -216,11 +228,11 @@ fn get_offsets_for_flatten<O: OffsetSizeTrait>(
 
 // Create new large offsets that are equivalent to `flatten` the array.
 fn get_large_offsets_for_flatten<O: OffsetSizeTrait, P: OffsetSizeTrait>(
-    offsets: OffsetBuffer<O>,
-    indexes: OffsetBuffer<P>,
+    inner_offsets: OffsetBuffer<O>,
+    outer_offsets: &OffsetBuffer<P>,
 ) -> OffsetBuffer<i64> {
-    let buffer = offsets.into_inner();
-    let offsets: Vec<i64> = indexes
+    let buffer = inner_offsets.into_inner();
+    let offsets: Vec<i64> = outer_offsets
         .iter()
         .map(|i| buffer[i.to_usize().unwrap()].to_i64().unwrap())
         .collect();

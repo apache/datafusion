@@ -23,11 +23,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use std::sync::Arc;
 
-use datafusion_common::{config::SpillCompression, Result};
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_common::{Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
+use datafusion_execution::disk_manager::RefCountedTempFile;
 
-use super::{in_progress_spill_file::InProgressSpillFile, SpillReaderStream};
+use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 
@@ -70,6 +70,11 @@ impl SpillManager {
     pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
         self.compression = spill_compression;
         self
+    }
+
+    /// Returns the schema for batches managed by this SpillManager
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     /// Creates a temporary file for in-progress operations, returning an error

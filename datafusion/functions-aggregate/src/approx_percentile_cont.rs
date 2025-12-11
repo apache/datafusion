@@ -16,23 +16,23 @@
 // under the License.
 
 use std::any::Any;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
-use arrow::array::Array;
+use arrow::array::{Array, Float16Array};
 use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{
     array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
     },
     datatypes::{DataType, Field},
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    DataFusionError, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -42,9 +42,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
     Volatility,
 };
-use datafusion_functions_aggregate_common::tdigest::{
-    TDigest, TryIntoF64, DEFAULT_MAX_SIZE,
-};
+use datafusion_functions_aggregate_common::tdigest::{DEFAULT_MAX_SIZE, TDigest};
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -121,18 +119,9 @@ An alternate syntax is also supported:
         description = "Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory."
     )
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ApproxPercentileCont {
     signature: Signature,
-}
-
-impl Debug for ApproxPercentileCont {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("ApproxPercentileCont")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for ApproxPercentileCont {
@@ -164,7 +153,7 @@ impl ApproxPercentileCont {
 
     pub(crate) fn create_accumulator(
         &self,
-        args: AccumulatorArgs,
+        args: &AccumulatorArgs,
     ) -> Result<ApproxPercentileAccumulator> {
         let percentile =
             validate_percentile_expr(&args.exprs[1], "APPROX_PERCENTILE_CONT")?;
@@ -187,9 +176,9 @@ impl ApproxPercentileCont {
             None
         };
 
-        let data_type = args.exprs[0].data_type(args.schema)?;
+        let data_type = args.expr_fields[0].data_type();
         let accumulator: ApproxPercentileAccumulator = match data_type {
-            t @ (DataType::UInt8
+            DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
@@ -197,19 +186,23 @@ impl ApproxPercentileCont {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+            | DataType::Float16
             | DataType::Float32
-            | DataType::Float64) => {
+            | DataType::Float64 => {
                 if let Some(max_size) = tdigest_max_size {
-                    ApproxPercentileAccumulator::new_with_max_size(percentile, t, max_size)
-                }else{
-                    ApproxPercentileAccumulator::new(percentile, t)
-
+                    ApproxPercentileAccumulator::new_with_max_size(
+                        percentile,
+                        data_type.clone(),
+                        max_size,
+                    )
+                } else {
+                    ApproxPercentileAccumulator::new(percentile, data_type.clone())
                 }
             }
             other => {
                 return not_impl_err!(
                     "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
-                )
+                );
             }
         };
 
@@ -238,8 +231,8 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
             return plan_err!(
                 "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
                 sv.data_type()
-            )
-        },
+            );
+        }
     };
 
     Ok(max_size)
@@ -250,7 +243,6 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         self
     }
 
-    #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -301,7 +293,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
 
     #[inline]
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(self.create_accumulator(acc_args)?))
+        Ok(Box::new(self.create_accumulator(&acc_args)?))
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -316,11 +308,7 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Ok(arg_types[0].clone())
     }
 
-    fn supports_null_handling_clause(&self) -> bool {
-        false
-    }
-
-    fn is_ordered_set_aggregate(&self) -> bool {
+    fn supports_within_group_clause(&self) -> bool {
         true
     }
 
@@ -377,83 +365,51 @@ impl ApproxPercentileAccumulator {
         match values.data_type() {
             DataType::Float64 => {
                 let array = downcast_value!(values, Float64Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().copied().collect::<Vec<_>>())
             }
             DataType::Float32 => {
                 let array = downcast_value!(values, Float32Array);
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
+            }
+            DataType::Float16 => {
+                let array = downcast_value!(values, Float16Array);
                 Ok(array
                     .values()
                     .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                    .map(|v| v.to_f64())
+                    .collect::<Vec<_>>())
             }
             DataType::Int64 => {
                 let array = downcast_value!(values, Int64Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
             }
             DataType::Int32 => {
                 let array = downcast_value!(values, Int32Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
             }
             DataType::Int16 => {
                 let array = downcast_value!(values, Int16Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
             }
             DataType::Int8 => {
                 let array = downcast_value!(values, Int8Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
             }
             DataType::UInt64 => {
                 let array = downcast_value!(values, UInt64Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
             }
             DataType::UInt32 => {
                 let array = downcast_value!(values, UInt32Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
             }
             DataType::UInt16 => {
                 let array = downcast_value!(values, UInt16Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
             }
             DataType::UInt8 => {
                 let array = downcast_value!(values, UInt8Array);
-                Ok(array
-                    .values()
-                    .iter()
-                    .filter_map(|v| v.try_as_f64().transpose())
-                    .collect::<Result<Vec<_>>>()?)
+                Ok(array.values().iter().map(|v| *v as f64).collect::<Vec<_>>())
             }
             e => internal_err!(
                 "APPROX_PERCENTILE_CONT is not expected to receive the type {e:?}"
@@ -496,6 +452,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             DataType::UInt16 => ScalarValue::UInt16(Some(q as u16)),
             DataType::UInt32 => ScalarValue::UInt32(Some(q as u32)),
             DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
+            DataType::Float16 => ScalarValue::Float16(Some(half::f16::from_f64(q))),
             DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
             DataType::Float64 => ScalarValue::Float64(Some(q)),
             v => unreachable!("unexpected return type {}", v),

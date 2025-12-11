@@ -21,7 +21,7 @@ use arrow::datatypes::DataType::Time64;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use chrono::TimeZone;
 use chrono::Timelike;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
@@ -104,7 +104,14 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         let nano = info
             .execution_props()
             .config_options()
-            .and_then(|config| config.execution.time_zone.parse::<Tz>().ok())
+            .and_then(|config| {
+                config
+                    .execution
+                    .time_zone
+                    .as_ref()
+                    .map(|tz| tz.parse::<Tz>().ok())
+            })
+            .flatten()
             .map_or_else(
                 || datetime_to_time_nanos(&now_ts),
                 |tz| {
@@ -167,7 +174,11 @@ mod tests {
 
     fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> MockSimplifyInfo {
         let mut config = datafusion_common::config::ConfigOptions::default();
-        config.execution.time_zone = tz.to_string();
+        config.execution.time_zone = if tz.is_empty() {
+            None
+        } else {
+            Some(tz.to_string())
+        };
         let mut execution_props =
             ExecutionProps::new().with_query_execution_start_time(start_time);
         execution_props.config_options = Some(Arc::new(config));
@@ -214,6 +225,9 @@ mod tests {
         // 10 hours in nanoseconds
         let expected_offset = 10i64 * 3600 * 1_000_000_000;
 
-        assert_eq!(difference, expected_offset, "Expected 10-hour offset difference in nanoseconds between UTC+05:00 and UTC-05:00");
+        assert_eq!(
+            difference, expected_offset,
+            "Expected 10-hour offset difference in nanoseconds between UTC+05:00 and UTC-05:00"
+        );
     }
 }

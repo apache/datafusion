@@ -100,10 +100,8 @@ impl ListingOptions {
     /// # use datafusion_catalog_listing::ListingOptions;
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::default()
-    ///   ))
-    ///   .with_file_extension(".parquet");
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_file_extension(".parquet");
     ///
     /// assert_eq!(listing_options.file_extension, ".parquet");
     /// ```
@@ -123,10 +121,8 @@ impl ListingOptions {
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
     /// let extension = Some(".parquet");
-    /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::default()
-    ///   ))
-    ///   .with_file_extension_opt(extension);
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_file_extension_opt(extension);
     ///
     /// assert_eq!(listing_options.file_extension, ".parquet");
     /// ```
@@ -216,10 +212,8 @@ impl ListingOptions {
     /// # use datafusion_catalog_listing::ListingOptions;
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::default()
-    ///   ))
-    ///   .with_collect_stat(true);
+    /// let listing_options =
+    ///     ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
     ///
     /// assert_eq!(listing_options.collect_stat, true);
     /// ```
@@ -235,10 +229,8 @@ impl ListingOptions {
     /// # use datafusion_catalog_listing::ListingOptions;
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::default()
-    ///   ))
-    ///   .with_target_partitions(8);
+    /// let listing_options =
+    ///     ListingOptions::new(Arc::new(ParquetFormat::default())).with_target_partitions(8);
     ///
     /// assert_eq!(listing_options.target_partitions, 8);
     /// ```
@@ -255,15 +247,11 @@ impl ListingOptions {
     /// # use datafusion_catalog_listing::ListingOptions;
     /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
     ///
-    ///  // Tell datafusion that the files are sorted by column "a"
-    ///  let file_sort_order = vec![vec![
-    ///    col("a").sort(true, true)
-    ///  ]];
+    /// // Tell datafusion that the files are sorted by column "a"
+    /// let file_sort_order = vec![vec![col("a").sort(true, true)]];
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::default()
-    ///   ))
-    ///   .with_file_sort_order(file_sort_order.clone());
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_file_sort_order(file_sort_order.clone());
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```

@@ -17,16 +17,12 @@
 
 //! Defines the accumulator for `SUM DISTINCT` for primitive numeric types
 
-use std::collections::HashSet;
 use std::fmt::Debug;
-use std::mem::{size_of, size_of_val};
+use std::mem::size_of_val;
 
-use ahash::RandomState;
-use arrow::array::Array;
 use arrow::array::ArrayRef;
 use arrow::array::ArrowNativeTypeOp;
 use arrow::array::ArrowPrimitiveType;
-use arrow::array::AsArray;
 use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::DataType;
 
@@ -34,90 +30,54 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 
-use crate::utils::Hashable;
+use crate::utils::GenericDistinctBuffer;
 
 /// Accumulator for computing SUM(DISTINCT expr)
+#[derive(Debug)]
 pub struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
-    values: HashSet<Hashable<T::Native>, RandomState>,
+    values: GenericDistinctBuffer<T>,
     data_type: DataType,
-}
-
-impl<T: ArrowPrimitiveType> Debug for DistinctSumAccumulator<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DistinctSumAccumulator({})", self.data_type)
-    }
 }
 
 impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
     pub fn new(data_type: &DataType) -> Self {
         Self {
-            values: HashSet::default(),
+            values: GenericDistinctBuffer::new(data_type.clone()),
             data_type: data_type.clone(),
         }
     }
 
     pub fn distinct_count(&self) -> usize {
-        self.values.len()
+        self.values.values.len()
     }
 }
 
-impl<T: ArrowPrimitiveType> Accumulator for DistinctSumAccumulator<T> {
+impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // 1. Stores aggregate state in `ScalarValue::List`
-        // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
-        let state_out = {
-            let distinct_values = self
-                .values
-                .iter()
-                .map(|value| {
-                    ScalarValue::new_primitive::<T>(Some(value.0), &self.data_type)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            vec![ScalarValue::List(ScalarValue::new_list_nullable(
-                &distinct_values,
-                &self.data_type,
-            ))]
-        };
-        Ok(state_out)
+        self.values.state()
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let array = values[0].as_primitive::<T>();
-        match array.nulls().filter(|x| x.null_count() > 0) {
-            Some(n) => {
-                for idx in n.valid_indices() {
-                    self.values.insert(Hashable(array.value(idx)));
-                }
-            }
-            None => array.values().iter().for_each(|x| {
-                self.values.insert(Hashable(*x));
-            }),
-        }
-        Ok(())
+        self.values.update_batch(values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        for x in states[0].as_list::<i32>().iter().flatten() {
-            self.update_batch(&[x])?
-        }
-        Ok(())
+        self.values.merge_batch(states)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut acc = T::Native::usize_as(0);
-        for distinct_value in self.values.iter() {
-            acc = acc.add_wrapping(distinct_value.0)
+        if self.distinct_count() == 0 {
+            ScalarValue::new_primitive::<T>(None, &self.data_type)
+        } else {
+            let mut acc = T::Native::usize_as(0);
+            for distinct_value in self.values.values.iter() {
+                acc = acc.add_wrapping(distinct_value.0)
+            }
+            ScalarValue::new_primitive::<T>(Some(acc), &self.data_type)
         }
-        let v = (!self.values.is_empty()).then_some(acc);
-        ScalarValue::new_primitive::<T>(v, &self.data_type)
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
+        size_of_val(self) + self.values.size()
     }
 }

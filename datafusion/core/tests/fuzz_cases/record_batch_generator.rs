@@ -34,7 +34,7 @@ use arrow_schema::{
     DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
     DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
 };
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
+use datafusion_common::{arrow_datafusion_err, Result};
 use rand::{rng, rngs::StdRng, Rng, SeedableRng};
 use test_utils::array_gen::{
     BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,

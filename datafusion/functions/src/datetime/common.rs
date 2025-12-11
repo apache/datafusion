@@ -23,14 +23,14 @@ use arrow::array::{
 };
 use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use arrow::datatypes::DataType;
-use chrono::format::{parse, Parsed, StrftimeItems};
 use chrono::LocalResult::Single;
+use chrono::format::{Parsed, StrftimeItems, parse};
 use chrono::{DateTime, TimeZone, Utc};
 
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, unwrap_or_internal_err, DataFusionError, Result,
-    ScalarType, ScalarValue,
+    DataFusionError, Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err,
+    unwrap_or_internal_err,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -140,7 +140,6 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 /// defined by `chrono`.
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-///
 #[inline]
 pub(crate) fn string_to_timestamp_nanos_formatted(
     s: &str,
@@ -169,7 +168,6 @@ pub(crate) fn string_to_timestamp_nanos_formatted(
 /// defined by `chrono`.
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
-///
 #[inline]
 pub(crate) fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Result<i64> {
     Ok(string_to_datetime_formatted(&Utc, s, format)?
@@ -192,19 +190,19 @@ where
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8View => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<&StringViewArray, O, _>(
-                    a.as_ref().as_string_view(),
+                    &a.as_string_view(),
                     op,
                 )?,
             ))),
             DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<&GenericStringArray<i64>, O, _>(
-                    a.as_ref().as_string::<i64>(),
+                    &a.as_string::<i64>(),
                     op,
                 )?,
             ))),
             DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
                 unary_string_to_primitive_function::<&GenericStringArray<i32>, O, _>(
-                    a.as_ref().as_string::<i32>(),
+                    &a.as_string::<i32>(),
                     op,
                 )?,
             ))),
@@ -245,14 +243,24 @@ where
                             DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
                                 // all good
                             }
-                            other => return exec_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
+                            other => {
+                                return exec_err!(
+                                    "Unsupported data type {other:?} for function {name}, arg # {pos}"
+                                );
+                            }
                         },
                         ColumnarValue::Scalar(arg) => {
                             match arg.data_type() {
-                                DataType::Utf8View| DataType::LargeUtf8 | DataType::Utf8 => {
+                                DataType::Utf8View
+                                | DataType::LargeUtf8
+                                | DataType::Utf8 => {
                                     // all good
                                 }
-                                other => return exec_err!("Unsupported data type {other:?} for function {name}, arg # {pos}"),
+                                other => {
+                                    return exec_err!(
+                                        "Unsupported data type {other:?} for function {name}, arg # {pos}"
+                                    );
+                                }
                             }
                         }
                     }
@@ -282,7 +290,9 @@ where
                         | ScalarValue::Utf8(x),
                     ) = v
                     else {
-                        return exec_err!("Unsupported data type {v:?} for function {name}, arg # {pos}");
+                        return exec_err!(
+                            "Unsupported data type {v:?} for function {name}, arg # {pos}"
+                        );
                     };
 
                     if let Some(s) = x {
@@ -433,7 +443,7 @@ where
 /// * the number of arguments is not 1 or
 /// * the function `op` errors
 fn unary_string_to_primitive_function<'a, StringArrType, O, F>(
-    array: StringArrType,
+    array: &StringArrType,
     op: F,
 ) -> Result<PrimitiveArray<O>>
 where

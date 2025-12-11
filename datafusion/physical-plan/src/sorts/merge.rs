@@ -20,13 +20,13 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
+use crate::RecordBatchStream;
 use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
-use crate::RecordBatchStream;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -390,7 +390,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     ///
     /// Zooming in at node 2 in the loser tree as an example, we can see that
     /// it takes as input the next item at (S0) and the loser of (S3, S4).
-    ///
     #[inline]
     fn lt_leaf_node_index(&self, cursor_index: usize) -> usize {
         (self.cursors.len() + cursor_index) / 2

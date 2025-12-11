@@ -27,13 +27,13 @@ use std::mem;
 use std::sync::Arc;
 
 use self::dependency::{
-    construct_prefix_orderings, generate_dependency_orderings, referred_dependencies,
-    Dependencies, DependencyMap,
+    Dependencies, DependencyMap, construct_prefix_orderings,
+    generate_dependency_orderings, referred_dependencies,
 };
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
+use crate::expressions::{CastExpr, Column, Literal, with_new_schema};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -41,7 +41,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Constraint, Constraints, HashMap, Result};
+use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::sort_expr::options_compatible;
@@ -123,11 +123,14 @@ use itertools::Itertools;
 /// let mut eq_properties = EquivalenceProperties::new(schema);
 /// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
 /// eq_properties.add_ordering([
-///   PhysicalSortExpr::new_default(col_a).asc(),
-///   PhysicalSortExpr::new_default(col_c).desc(),
+///     PhysicalSortExpr::new_default(col_a).asc(),
+///     PhysicalSortExpr::new_default(col_c).desc(),
 /// ]);
 ///
-/// assert_eq!(eq_properties.to_string(), "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]");
+/// assert_eq!(
+///     eq_properties.to_string(),
+///     "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]"
+/// );
 /// ```
 #[derive(Clone, Debug)]
 pub struct EquivalenceProperties {
@@ -377,7 +380,7 @@ impl EquivalenceProperties {
         right: Arc<dyn PhysicalExpr>,
     ) -> Result<()> {
         // Add equal expressions to the state:
-        if self.eq_group.add_equal_conditions(Arc::clone(&left), right) {
+        if self.eq_group.add_equal_conditions(left, right) {
             self.update_oeq_cache()?;
         }
         self.update_oeq_cache()?;

@@ -24,7 +24,7 @@ use rand::{rng, seq::SliceRandom, Rng};
 /// Creates queries like
 /// ```sql
 /// SELECT AGG(..) FROM table_name GROUP BY <group_by_columns>
-///```
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct QueryBuilder {
     // ===================================
@@ -95,7 +95,6 @@ pub struct QueryBuilder {
     /// More details can see [`GroupOrdering`].
     ///
     /// [`GroupOrdering`]:  datafusion_physical_plan::aggregates::order::GroupOrdering
-    ///
     dataset_sort_keys: Vec<Vec<String>>,
 
     /// If we will also test the no grouping case like:
@@ -103,7 +102,6 @@ pub struct QueryBuilder {
     /// ```text
     ///   SELECT aggr FROM t;
     /// ```
-    ///
     no_grouping: bool,
 
     // ====================================

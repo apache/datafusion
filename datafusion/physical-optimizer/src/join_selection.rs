@@ -47,7 +47,7 @@ use std::sync::Arc;
 pub struct JoinSelection {}
 
 impl JoinSelection {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -476,7 +476,6 @@ fn hash_join_convert_symmetric_subrule(
 ///           | Data Source  |--------------| Repartition  |
 ///           |              |              |              |
 ///           +--------------+              +--------------+
-///
 /// ```
 pub fn hash_join_swap_subrule(
     mut input: Arc<dyn ExecutionPlan>,

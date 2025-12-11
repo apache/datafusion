@@ -20,14 +20,16 @@
 use super::CustomMetricValue;
 use chrono::{DateTime, Utc};
 use datafusion_common::instant::Instant;
-use datafusion_execution::memory_pool::human_readable_size;
+use datafusion_common::{
+    human_readable_count, human_readable_duration, human_readable_size,
+};
 use parking_lot::Mutex;
 use std::{
     borrow::{Borrow, Cow},
     fmt::{Debug, Display},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -49,7 +51,7 @@ impl PartialEq for Count {
 
 impl Display for Count {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.value())
+        write!(f, "{}", human_readable_count(self.value()))
     }
 }
 
@@ -169,8 +171,7 @@ impl PartialEq for Time {
 
 impl Display for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let duration = Duration::from_nanos(self.value() as u64);
-        write!(f, "{duration:?}")
+        write!(f, "{}", human_readable_duration(self.value() as u64))
     }
 }
 
@@ -379,7 +380,12 @@ impl Display for PruningMetrics {
         let matched = self.matched.load(Ordering::Relaxed);
         let total = self.pruned.load(Ordering::Relaxed) + matched;
 
-        write!(f, "{total} total → {matched} matched")
+        write!(
+            f,
+            "{} total → {} matched",
+            human_readable_count(total),
+            human_readable_count(matched)
+        )
     }
 }
 
@@ -430,6 +436,135 @@ impl PruningMetrics {
     }
 }
 
+/// Counters tracking ratio metrics (e.g. matched vs total)
+///
+/// The counters are thread-safe and shared across clones.
+#[derive(Debug, Clone, Default)]
+pub struct RatioMetrics {
+    part: Arc<AtomicUsize>,
+    total: Arc<AtomicUsize>,
+    merge_strategy: RatioMergeStrategy,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum RatioMergeStrategy {
+    #[default]
+    AddPartAddTotal,
+    AddPartSetTotal,
+    SetPartAddTotal,
+}
+
+impl RatioMetrics {
+    /// Create a new [`RatioMetrics`]
+    pub fn new() -> Self {
+        Self {
+            part: Arc::new(AtomicUsize::new(0)),
+            total: Arc::new(AtomicUsize::new(0)),
+            merge_strategy: RatioMergeStrategy::AddPartAddTotal,
+        }
+    }
+
+    pub fn with_merge_strategy(mut self, merge_strategy: RatioMergeStrategy) -> Self {
+        self.merge_strategy = merge_strategy;
+        self
+    }
+
+    /// Add `n` to the numerator (`part`) value
+    pub fn add_part(&self, n: usize) {
+        self.part.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Add `n` to the denominator (`total`) value
+    pub fn add_total(&self, n: usize) {
+        self.total.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Set the numerator (`part`) value to `n`, overwriting any existing value
+    pub fn set_part(&self, n: usize) {
+        self.part.store(n, Ordering::Relaxed);
+    }
+
+    /// Set the denominator (`total`) value to `n`, overwriting any existing value
+    pub fn set_total(&self, n: usize) {
+        self.total.store(n, Ordering::Relaxed);
+    }
+
+    /// Merge the value from `other` into `self`
+    pub fn merge(&self, other: &Self) {
+        match self.merge_strategy {
+            RatioMergeStrategy::AddPartAddTotal => {
+                self.add_part(other.part());
+                self.add_total(other.total());
+            }
+            RatioMergeStrategy::AddPartSetTotal => {
+                self.add_part(other.part());
+                self.set_total(other.total());
+            }
+            RatioMergeStrategy::SetPartAddTotal => {
+                self.set_part(other.part());
+                self.add_total(other.total());
+            }
+        }
+    }
+
+    /// Return the numerator (`part`) value
+    pub fn part(&self) -> usize {
+        self.part.load(Ordering::Relaxed)
+    }
+
+    /// Return the denominator (`total`) value
+    pub fn total(&self) -> usize {
+        self.total.load(Ordering::Relaxed)
+    }
+}
+
+impl PartialEq for RatioMetrics {
+    fn eq(&self, other: &Self) -> bool {
+        self.part() == other.part() && self.total() == other.total()
+    }
+}
+
+/// Format a float number with `digits` most significant numbers.
+///
+/// fmt_significant(12.5) -> "12"
+/// fmt_significant(0.0543) -> "0.054"
+/// fmt_significant(0.000123) -> "0.00012"
+fn fmt_significant(mut x: f64, digits: usize) -> String {
+    if x == 0.0 {
+        return "0".to_string();
+    }
+
+    let exp = x.abs().log10().floor(); // exponent of first significant digit
+    let scale = 10f64.powf(-(exp - (digits as f64 - 1.0)));
+    x = (x * scale).round() / scale; // round to N significant digits
+    format!("{x}")
+}
+
+impl Display for RatioMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let part = self.part();
+        let total = self.total();
+
+        if total == 0 {
+            if part == 0 {
+                write!(f, "N/A (0/0)")
+            } else {
+                write!(f, "N/A ({}/0)", human_readable_count(part))
+            }
+        } else {
+            let percentage = (part as f64 / total as f64) * 100.0;
+
+            write!(
+                f,
+                "{}% ({}/{})",
+                fmt_significant(percentage, 2),
+                human_readable_count(part),
+                human_readable_count(total)
+            )
+        }
+    }
+}
+
 /// Possible values for a [super::Metric].
 ///
 /// Among other differences, the metric types have different ways to
@@ -465,6 +600,8 @@ pub enum MetricValue {
     SpilledBytes(Count),
     /// Total size of output bytes produced: "output_bytes" metric
     OutputBytes(Count),
+    /// Total number of output batches produced: "output_batches" metric
+    OutputBatches(Count),
     /// Total size of spilled rows produced: "spilled_rows" metric
     SpilledRows(Count),
     /// Current memory used
@@ -499,6 +636,11 @@ pub enum MetricValue {
         name: Cow<'static, str>,
         pruning_metrics: PruningMetrics,
     },
+    /// Metrics that should be displayed as ratio like (42%)
+    Ratio {
+        name: Cow<'static, str>,
+        ratio_metrics: RatioMetrics,
+    },
     Custom {
         /// The provided name of this metric
         name: Cow<'static, str>,
@@ -525,6 +667,9 @@ impl PartialEq for MetricValue {
                 count == other
             }
             (MetricValue::OutputBytes(count), MetricValue::OutputBytes(other)) => {
+                count == other
+            }
+            (MetricValue::OutputBatches(count), MetricValue::OutputBatches(other)) => {
                 count == other
             }
             (MetricValue::SpilledRows(count), MetricValue::SpilledRows(other)) => {
@@ -564,6 +709,30 @@ impl PartialEq for MetricValue {
                 timestamp == other
             }
             (
+                MetricValue::PruningMetrics {
+                    name,
+                    pruning_metrics,
+                },
+                MetricValue::PruningMetrics {
+                    name: other_name,
+                    pruning_metrics: other_pruning_metrics,
+                },
+            ) => {
+                name == other_name
+                    && pruning_metrics.pruned() == other_pruning_metrics.pruned()
+                    && pruning_metrics.matched() == other_pruning_metrics.matched()
+            }
+            (
+                MetricValue::Ratio {
+                    name,
+                    ratio_metrics,
+                },
+                MetricValue::Ratio {
+                    name: other_name,
+                    ratio_metrics: other_ratio_metrics,
+                },
+            ) => name == other_name && ratio_metrics == other_ratio_metrics,
+            (
                 MetricValue::Custom { name, value },
                 MetricValue::Custom {
                     name: other_name,
@@ -584,6 +753,7 @@ impl MetricValue {
             Self::SpillCount(_) => "spill_count",
             Self::SpilledBytes(_) => "spilled_bytes",
             Self::OutputBytes(_) => "output_bytes",
+            Self::OutputBatches(_) => "output_batches",
             Self::SpilledRows(_) => "spilled_rows",
             Self::CurrentMemoryUsage(_) => "mem_used",
             Self::ElapsedCompute(_) => "elapsed_compute",
@@ -593,6 +763,7 @@ impl MetricValue {
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
             Self::PruningMetrics { name, .. } => name.borrow(),
+            Self::Ratio { name, .. } => name.borrow(),
             Self::Custom { name, .. } => name.borrow(),
         }
     }
@@ -605,6 +776,7 @@ impl MetricValue {
             Self::SpillCount(count) => count.value(),
             Self::SpilledBytes(bytes) => bytes.value(),
             Self::OutputBytes(bytes) => bytes.value(),
+            Self::OutputBatches(count) => count.value(),
             Self::SpilledRows(count) => count.value(),
             Self::CurrentMemoryUsage(used) => used.value(),
             Self::ElapsedCompute(time) => time.value(),
@@ -625,6 +797,8 @@ impl MetricValue {
             // like `PruningMetrics`, this function is not supposed to get called.
             // Metrics aggregation for them are implemented inside `MetricsSet` directly.
             Self::PruningMetrics { .. } => 0,
+            // Should not be used. See comments in `PruningMetrics` for details.
+            Self::Ratio { .. } => 0,
             Self::Custom { value, .. } => value.as_usize(),
         }
     }
@@ -637,6 +811,7 @@ impl MetricValue {
             Self::SpillCount(_) => Self::SpillCount(Count::new()),
             Self::SpilledBytes(_) => Self::SpilledBytes(Count::new()),
             Self::OutputBytes(_) => Self::OutputBytes(Count::new()),
+            Self::OutputBatches(_) => Self::OutputBatches(Count::new()),
             Self::SpilledRows(_) => Self::SpilledRows(Count::new()),
             Self::CurrentMemoryUsage(_) => Self::CurrentMemoryUsage(Gauge::new()),
             Self::ElapsedCompute(_) => Self::ElapsedCompute(Time::new()),
@@ -658,6 +833,17 @@ impl MetricValue {
                 name: name.clone(),
                 pruning_metrics: PruningMetrics::new(),
             },
+            Self::Ratio {
+                name,
+                ratio_metrics,
+            } => {
+                let merge_strategy = ratio_metrics.merge_strategy.clone();
+                Self::Ratio {
+                    name: name.clone(),
+                    ratio_metrics: RatioMetrics::new()
+                        .with_merge_strategy(merge_strategy),
+                }
+            }
             Self::Custom { name, value } => Self::Custom {
                 name: name.clone(),
                 value: value.new_empty(),
@@ -680,6 +866,7 @@ impl MetricValue {
             | (Self::SpillCount(count), Self::SpillCount(other_count))
             | (Self::SpilledBytes(count), Self::SpilledBytes(other_count))
             | (Self::OutputBytes(count), Self::OutputBytes(other_count))
+            | (Self::OutputBatches(count), Self::OutputBatches(other_count))
             | (Self::SpilledRows(count), Self::SpilledRows(other_count))
             | (
                 Self::Count { count, .. },
@@ -724,6 +911,15 @@ impl MetricValue {
                 pruning_metrics.add_matched(matched);
             }
             (
+                Self::Ratio { ratio_metrics, .. },
+                Self::Ratio {
+                    ratio_metrics: other_ratio_metrics,
+                    ..
+                },
+            ) => {
+                ratio_metrics.merge(other_ratio_metrics);
+            }
+            (
                 Self::Custom { value, .. },
                 Self::Custom {
                     value: other_value, ..
@@ -748,18 +944,33 @@ impl MetricValue {
             Self::OutputRows(_) => 0,
             Self::ElapsedCompute(_) => 1,
             Self::OutputBytes(_) => 2,
+            Self::OutputBatches(_) => 3,
             // Other metrics
-            Self::PruningMetrics { .. } => 3,
-            Self::SpillCount(_) => 4,
-            Self::SpilledBytes(_) => 5,
-            Self::SpilledRows(_) => 6,
-            Self::CurrentMemoryUsage(_) => 7,
-            Self::Count { .. } => 8,
-            Self::Gauge { .. } => 9,
-            Self::Time { .. } => 10,
-            Self::StartTimestamp(_) => 11, // show timestamps last
-            Self::EndTimestamp(_) => 12,
-            Self::Custom { .. } => 13,
+            Self::PruningMetrics { name, .. } => match name.as_ref() {
+                // The following metrics belong to `DataSourceExec` with a Parquet data source.
+                // They are displayed in a specific order that reflects the actual pruning process,
+                // from coarse-grained to fine-grained pruning levels.
+                //
+                // You may update these metrics as long as their relative order remains unchanged.
+                //
+                // Reference PR: <https://github.com/apache/datafusion/pull/18379>
+                "files_ranges_pruned_statistics" => 4,
+                "row_groups_pruned_statistics" => 5,
+                "row_groups_pruned_bloom_filter" => 6,
+                "page_index_rows_pruned" => 7,
+                _ => 8,
+            },
+            Self::SpillCount(_) => 9,
+            Self::SpilledBytes(_) => 10,
+            Self::SpilledRows(_) => 11,
+            Self::CurrentMemoryUsage(_) => 12,
+            Self::Count { .. } => 13,
+            Self::Gauge { .. } => 14,
+            Self::Time { .. } => 15,
+            Self::Ratio { .. } => 16,
+            Self::StartTimestamp(_) => 17, // show timestamps last
+            Self::EndTimestamp(_) => 18,
+            Self::Custom { .. } => 19,
         }
     }
 
@@ -774,6 +985,7 @@ impl Display for MetricValue {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::OutputRows(count)
+            | Self::OutputBatches(count)
             | Self::SpillCount(count)
             | Self::SpilledRows(count)
             | Self::Count { count, .. } => {
@@ -783,8 +995,14 @@ impl Display for MetricValue {
                 let readable_count = human_readable_size(count.value());
                 write!(f, "{readable_count}")
             }
-            Self::CurrentMemoryUsage(gauge) | Self::Gauge { gauge, .. } => {
-                write!(f, "{gauge}")
+            Self::CurrentMemoryUsage(gauge) => {
+                // CurrentMemoryUsage is in bytes, format like SpilledBytes
+                let readable_size = human_readable_size(gauge.value());
+                write!(f, "{readable_size}")
+            }
+            Self::Gauge { gauge, .. } => {
+                // Generic gauge metrics - format with human-readable count
+                write!(f, "{}", human_readable_count(gauge.value()))
             }
             Self::ElapsedCompute(time) | Self::Time { time, .. } => {
                 // distinguish between no time recorded and very small
@@ -803,6 +1021,7 @@ impl Display for MetricValue {
             } => {
                 write!(f, "{pruning_metrics}")
             }
+            Self::Ratio { ratio_metrics, .. } => write!(f, "{ratio_metrics}"),
             Self::Custom { name, value } => {
                 write!(f, "name:{name} {value}")
             }
@@ -815,7 +1034,7 @@ mod tests {
     use std::any::Any;
 
     use chrono::TimeZone;
-    use datafusion_execution::memory_pool::units::MB;
+    use datafusion_common::units::MB;
 
     use super::*;
 
@@ -857,12 +1076,11 @@ mod tests {
     fn new_custom_counter(name: &'static str, value: usize) -> MetricValue {
         let custom_counter = CustomCounter::default();
         custom_counter.count.fetch_add(value, Ordering::Relaxed);
-        let custom_val = MetricValue::Custom {
+
+        MetricValue::Custom {
             name: Cow::Borrowed(name),
             value: Arc::new(custom_counter),
-        };
-
-        custom_val
+        }
     }
 
     #[test]
@@ -953,8 +1171,95 @@ mod tests {
 
         time.add_duration(Duration::from_nanos(1042));
         for value in &values {
-            assert_eq!("1.042µs", value.to_string(), "value {value:?}");
+            assert_eq!("1.04µs", value.to_string(), "value {value:?}");
         }
+    }
+
+    #[test]
+    fn test_display_ratio() {
+        let ratio_metrics = RatioMetrics::new();
+        let ratio = MetricValue::Ratio {
+            name: Cow::Borrowed("ratio_metric"),
+            ratio_metrics: ratio_metrics.clone(),
+        };
+
+        assert_eq!("N/A (0/0)", ratio.to_string());
+
+        ratio_metrics.add_part(10);
+        assert_eq!("N/A (10/0)", ratio.to_string());
+
+        ratio_metrics.add_total(40);
+        assert_eq!("25% (10/40)", ratio.to_string());
+
+        let tiny_ratio_metrics = RatioMetrics::new();
+        let tiny_ratio = MetricValue::Ratio {
+            name: Cow::Borrowed("tiny_ratio_metric"),
+            ratio_metrics: tiny_ratio_metrics.clone(),
+        };
+        tiny_ratio_metrics.add_part(1);
+        tiny_ratio_metrics.add_total(3000);
+        assert_eq!("0.033% (1/3.00 K)", tiny_ratio.to_string());
+    }
+
+    #[test]
+    fn test_ratio_set_methods() {
+        let ratio_metrics = RatioMetrics::new();
+
+        // Ensure set methods don't increment
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_total(40);
+        ratio_metrics.set_total(40);
+        assert_eq!("25% (10/40)", ratio_metrics.to_string());
+
+        let ratio_metrics = RatioMetrics::new();
+
+        // Calling set should change the value
+        ratio_metrics.set_part(10);
+        ratio_metrics.set_part(30);
+        ratio_metrics.set_total(40);
+        ratio_metrics.set_total(50);
+        assert_eq!("60% (30/50)", ratio_metrics.to_string());
+    }
+
+    #[test]
+    fn test_ratio_merge_strategy() {
+        // Test AddPartSetTotal strategy
+        let ratio_metrics1 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
+
+        ratio_metrics1.set_part(10);
+        ratio_metrics1.set_total(40);
+        assert_eq!("25% (10/40)", ratio_metrics1.to_string());
+        let ratio_metrics2 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::AddPartSetTotal);
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(40);
+        assert_eq!("50% (20/40)", ratio_metrics2.to_string());
+
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("75% (30/40)", ratio_metrics1.to_string());
+
+        // Test SetPartAddTotal strategy
+        let ratio_metrics1 =
+            RatioMetrics::new().with_merge_strategy(RatioMergeStrategy::SetPartAddTotal);
+        ratio_metrics1.set_part(20);
+        ratio_metrics1.set_total(50);
+        let ratio_metrics2 = RatioMetrics::new();
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(50);
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("20% (20/100)", ratio_metrics1.to_string());
+
+        // Test AddPartAddTotal strategy (default)
+        let ratio_metrics1 = RatioMetrics::new();
+        ratio_metrics1.set_part(20);
+        ratio_metrics1.set_total(50);
+        let ratio_metrics2 = RatioMetrics::new();
+        ratio_metrics2.set_part(20);
+        ratio_metrics2.set_total(50);
+        ratio_metrics1.merge(&ratio_metrics2);
+        assert_eq!("40% (40/100)", ratio_metrics1.to_string());
     }
 
     #[test]
@@ -1072,6 +1377,106 @@ mod tests {
         assert!(
             (10_000_000..=10_100_000).contains(&new_recorded),
             "Expected ~10ms total, got {new_recorded} ns",
+        );
+    }
+
+    #[test]
+    fn test_human_readable_metric_formatting() {
+        // Test Count formatting with various sizes
+        let small_count = Count::new();
+        small_count.add(42);
+        assert_eq!(
+            MetricValue::OutputRows(small_count.clone()).to_string(),
+            "42"
+        );
+
+        let thousand_count = Count::new();
+        thousand_count.add(10_100);
+        assert_eq!(
+            MetricValue::OutputRows(thousand_count.clone()).to_string(),
+            "10.10 K"
+        );
+
+        let million_count = Count::new();
+        million_count.add(1_532_000);
+        assert_eq!(
+            MetricValue::SpilledRows(million_count.clone()).to_string(),
+            "1.53 M"
+        );
+
+        let billion_count = Count::new();
+        billion_count.add(2_500_000_000);
+        assert_eq!(
+            MetricValue::OutputBatches(billion_count.clone()).to_string(),
+            "2.50 B"
+        );
+
+        // Test Time formatting with various durations
+        let micros_time = Time::new();
+        micros_time.add_duration(Duration::from_nanos(1_234));
+        assert_eq!(
+            MetricValue::ElapsedCompute(micros_time.clone()).to_string(),
+            "1.23µs"
+        );
+
+        let millis_time = Time::new();
+        millis_time.add_duration(Duration::from_nanos(11_295_377));
+        assert_eq!(
+            MetricValue::ElapsedCompute(millis_time.clone()).to_string(),
+            "11.30ms"
+        );
+
+        let seconds_time = Time::new();
+        seconds_time.add_duration(Duration::from_nanos(1_234_567_890));
+        assert_eq!(
+            MetricValue::ElapsedCompute(seconds_time.clone()).to_string(),
+            "1.23s"
+        );
+
+        // Test CurrentMemoryUsage formatting (should use size, not count)
+        let mem_gauge = Gauge::new();
+        mem_gauge.add(100 * MB as usize);
+        assert_eq!(
+            MetricValue::CurrentMemoryUsage(mem_gauge.clone()).to_string(),
+            "100.0 MB"
+        );
+
+        // Test custom Gauge formatting (should use count)
+        let custom_gauge = Gauge::new();
+        custom_gauge.add(50_000);
+        assert_eq!(
+            MetricValue::Gauge {
+                name: "custom".into(),
+                gauge: custom_gauge.clone()
+            }
+            .to_string(),
+            "50.00 K"
+        );
+
+        // Test PruningMetrics formatting
+        let pruning = PruningMetrics::new();
+        pruning.add_matched(500_000);
+        pruning.add_pruned(500_000);
+        assert_eq!(
+            MetricValue::PruningMetrics {
+                name: "test_pruning".into(),
+                pruning_metrics: pruning.clone()
+            }
+            .to_string(),
+            "1.00 M total → 500.0 K matched"
+        );
+
+        // Test RatioMetrics formatting
+        let ratio = RatioMetrics::new();
+        ratio.add_part(250_000);
+        ratio.add_total(1_000_000);
+        assert_eq!(
+            MetricValue::Ratio {
+                name: "test_ratio".into(),
+                ratio_metrics: ratio.clone()
+            }
+            .to_string(),
+            "25% (250.0 K/1.00 M)"
         );
     }
 }

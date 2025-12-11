@@ -17,17 +17,18 @@
 
 extern crate criterion;
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode::substr_index;
+use rand::Rng;
 use rand::distr::{Alphanumeric, Uniform};
 use rand::prelude::Distribution;
-use rand::Rng;
 
 struct Filter<Dist, Test> {
     dist: Dist,

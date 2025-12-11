@@ -35,7 +35,7 @@ use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{internal_err, not_impl_err};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError};
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -134,9 +134,19 @@ impl ExecutionPlan for CustomPlan {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let schema_captured = self.schema().clone();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            futures::stream::iter(self.batches.clone().into_iter().map(Ok)),
+            futures::stream::iter(self.batches.clone().into_iter().map(move |batch| {
+                let projection: Vec<usize> = schema_captured
+                    .fields()
+                    .iter()
+                    .filter_map(|field| batch.schema().index_of(field.name()).ok())
+                    .collect();
+                batch
+                    .project(&projection)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+            })),
         )))
     }
 

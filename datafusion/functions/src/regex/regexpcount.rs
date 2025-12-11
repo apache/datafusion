@@ -22,7 +22,7 @@ use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
     TypeSignature::Uniform, Volatility,
@@ -146,7 +146,9 @@ impl ScalarUDFImpl for RegexpCountFunc {
 pub fn regexp_count_func(args: &[ArrayRef]) -> Result<ArrayRef> {
     let args_len = args.len();
     if !(2..=4).contains(&args_len) {
-        return exec_err!("regexp_count was called with {args_len} arguments. It requires at least 2 and at most 4.");
+        return exec_err!(
+            "regexp_count was called with {args_len} arguments. It requires at least 2 and at most 4."
+        );
     }
 
     let values = &args[0];
@@ -183,7 +185,7 @@ pub fn regexp_count_func(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// # Errors
 /// Returns an error if the input arrays have mismatched lengths or if the regular expression fails to compile.
-pub fn regexp_count(
+fn regexp_count(
     values: &dyn Array,
     regex_array: &dyn Datum,
     start_array: Option<&dyn Datum>,
@@ -201,8 +203,8 @@ pub fn regexp_count(
 
     match (values.data_type(), regex_array.data_type(), flags_array) {
         (Utf8, Utf8, None) => regexp_count_inner(
-            values.as_string::<i32>(),
-            regex_array.as_string::<i32>(),
+            &values.as_string::<i32>(),
+            &regex_array.as_string::<i32>(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
@@ -210,17 +212,17 @@ pub fn regexp_count(
             is_flags_scalar,
         ),
         (Utf8, Utf8, Some(flags_array)) if *flags_array.data_type() == Utf8 => regexp_count_inner(
-            values.as_string::<i32>(),
-            regex_array.as_string::<i32>(),
+            &values.as_string::<i32>(),
+            &regex_array.as_string::<i32>(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
-            Some(flags_array.as_string::<i32>()),
+            Some(&flags_array.as_string::<i32>()),
             is_flags_scalar,
         ),
         (LargeUtf8, LargeUtf8, None) => regexp_count_inner(
-            values.as_string::<i64>(),
-            regex_array.as_string::<i64>(),
+            &values.as_string::<i64>(),
+            &regex_array.as_string::<i64>(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
@@ -228,17 +230,17 @@ pub fn regexp_count(
             is_flags_scalar,
         ),
         (LargeUtf8, LargeUtf8, Some(flags_array)) if *flags_array.data_type() == LargeUtf8 => regexp_count_inner(
-            values.as_string::<i64>(),
-            regex_array.as_string::<i64>(),
+            &values.as_string::<i64>(),
+            &regex_array.as_string::<i64>(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
-            Some(flags_array.as_string::<i64>()),
+            Some(&flags_array.as_string::<i64>()),
             is_flags_scalar,
         ),
         (Utf8View, Utf8View, None) => regexp_count_inner(
-            values.as_string_view(),
-            regex_array.as_string_view(),
+            &values.as_string_view(),
+            &regex_array.as_string_view(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
@@ -246,12 +248,12 @@ pub fn regexp_count(
             is_flags_scalar,
         ),
         (Utf8View, Utf8View, Some(flags_array)) if *flags_array.data_type() == Utf8View => regexp_count_inner(
-            values.as_string_view(),
-            regex_array.as_string_view(),
+            &values.as_string_view(),
+            &regex_array.as_string_view(),
             is_regex_scalar,
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             is_start_scalar,
-            Some(flags_array.as_string_view()),
+            Some(&flags_array.as_string_view()),
             is_flags_scalar,
         ),
         _ => Err(ArrowError::ComputeError(
@@ -260,13 +262,13 @@ pub fn regexp_count(
     }
 }
 
-pub fn regexp_count_inner<'a, S>(
-    values: S,
-    regex_array: S,
+fn regexp_count_inner<'a, S>(
+    values: &S,
+    regex_array: &S,
     is_regex_scalar: bool,
     start_array: Option<&Int64Array>,
     is_start_scalar: bool,
-    flags_array: Option<S>,
+    flags_array: Option<&S>,
     is_flags_scalar: bool,
 ) -> Result<ArrayRef, ArrowError>
 where
@@ -306,7 +308,7 @@ where
         (true, true, true) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])))
+                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
                 }
                 Some(regex) => regex,
             };
@@ -323,7 +325,7 @@ where
         (true, true, false) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])))
+                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
                 }
                 Some(regex) => regex,
             };
@@ -352,7 +354,7 @@ where
         (true, false, true) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])))
+                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
                 }
                 Some(regex) => regex,
             };
@@ -372,7 +374,7 @@ where
         (true, false, false) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])))
+                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
                 }
                 Some(regex) => regex,
             };

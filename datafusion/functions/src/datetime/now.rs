@@ -22,7 +22,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDF, ScalarUDFImpl,
@@ -33,7 +33,7 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r#"
-Returns the current UTC timestamp.
+Returns the current timestamp in the system configured timezone (None by default).
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
 "#,
@@ -54,19 +54,24 @@ impl Default for NowFunc {
 
 impl NowFunc {
     #[deprecated(since = "50.2.0", note = "use `new_with_config` instead")]
+    /// Deprecated constructor retained for backwards compatibility.
+    ///
+    /// Prefer [`NowFunc::new_with_config`] which allows specifying the
+    /// timezone via [`ConfigOptions`]. This helper now mirrors the
+    /// canonical default offset (None) provided by `ConfigOptions::default()`.
     pub fn new() -> Self {
-        Self {
-            signature: Signature::nullary(Volatility::Stable),
-            aliases: vec!["current_timestamp".to_string()],
-            timezone: Some(Arc::from("+00")),
-        }
+        Self::new_with_config(&ConfigOptions::default())
     }
 
     pub fn new_with_config(config: &ConfigOptions) -> Self {
         Self {
             signature: Signature::nullary(Volatility::Stable),
             aliases: vec!["current_timestamp".to_string()],
-            timezone: Some(Arc::from(config.execution.time_zone.as_str())),
+            timezone: config
+                .execution
+                .time_zone
+                .as_ref()
+                .map(|tz| Arc::from(tz.as_str())),
         }
     }
 }
@@ -136,5 +141,46 @@ impl ScalarUDFImpl for NowFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[expect(deprecated)]
+    #[test]
+    fn now_func_default_matches_config() {
+        let default_config = ConfigOptions::default();
+
+        let legacy_now = NowFunc::new();
+        let configured_now = NowFunc::new_with_config(&default_config);
+
+        let empty_fields: [FieldRef; 0] = [];
+        let empty_scalars: [Option<&ScalarValue>; 0] = [];
+
+        let legacy_field = legacy_now
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &empty_fields,
+                scalar_arguments: &empty_scalars,
+            })
+            .expect("legacy now() return field");
+
+        let configured_field = configured_now
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &empty_fields,
+                scalar_arguments: &empty_scalars,
+            })
+            .expect("configured now() return field");
+
+        assert_eq!(legacy_field.as_ref(), configured_field.as_ref());
+
+        let legacy_scalar =
+            ScalarValue::TimestampNanosecond(None, legacy_now.timezone.clone());
+        let configured_scalar =
+            ScalarValue::TimestampNanosecond(None, configured_now.timezone.clone());
+
+        assert_eq!(legacy_scalar, configured_scalar);
+        assert_eq!(None, legacy_now.timezone.as_deref());
     }
 }

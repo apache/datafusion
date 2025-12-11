@@ -125,3 +125,8 @@ pub const INTERVAL_MONTH_DAY_NANO_TYPE_NAME: &str = "interval-month-day-nano";
 
 /// Defined in <https://github.com/apache/arrow/blame/main/format/substrait/extension_types.yaml>
 pub const FLOAT_16_TYPE_NAME: &str = "fp16";
+
+/// For [`DataType::Null`]
+///
+/// [`DataType::Null`]: datafusion::arrow::datatypes::DataType::Null
+pub const NULL_TYPE_NAME: &str = "null";

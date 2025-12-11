@@ -25,11 +25,11 @@ use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{Result, not_impl_err, plan_err};
+use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
-use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
 };
@@ -184,7 +184,9 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
             );
         }
         if arg_types[2] != DataType::Float64 {
-            return plan_err!("approx_percentile_cont_with_weight requires float64 percentile input types");
+            return plan_err!(
+                "approx_percentile_cont_with_weight requires float64 percentile input types"
+            );
         }
         if arg_types.len() == 4 && !arg_types[3].is_integer() {
             return plan_err!(
@@ -220,28 +222,44 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
                     Arc::clone(&acc_args.exprs[2]), // percentile
                 ]
             },
-            ..acc_args
+            expr_fields: if acc_args.exprs.len() == 4 {
+                &[
+                    Arc::clone(&acc_args.expr_fields[0]), // value
+                    Arc::clone(&acc_args.expr_fields[2]), // percentile
+                    Arc::clone(&acc_args.expr_fields[3]), // centroids
+                ]
+            } else {
+                &[
+                    Arc::clone(&acc_args.expr_fields[0]), // value
+                    Arc::clone(&acc_args.expr_fields[2]), // percentile
+                ]
+            },
+            // Unchanged below; we list each field explicitly in case we ever add more
+            // fields to AccumulatorArgs making it easier to see if changes are also
+            // needed here.
+            return_field: acc_args.return_field,
+            schema: acc_args.schema,
+            ignore_nulls: acc_args.ignore_nulls,
+            order_bys: acc_args.order_bys,
+            is_reversed: acc_args.is_reversed,
+            name: acc_args.name,
+            is_distinct: acc_args.is_distinct,
         };
         let approx_percentile_cont_accumulator =
-            self.approx_percentile_cont.create_accumulator(sub_args)?;
+            self.approx_percentile_cont.create_accumulator(&sub_args)?;
         let accumulator = ApproxPercentileWithWeightAccumulator::new(
             approx_percentile_cont_accumulator,
         );
         Ok(Box::new(accumulator))
     }
 
-    #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialized
     /// state.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.approx_percentile_cont.state_fields(args)
     }
 
-    fn supports_null_handling_clause(&self) -> bool {
-        false
-    }
-
-    fn is_ordered_set_aggregate(&self) -> bool {
+    fn supports_within_group_clause(&self) -> bool {
         true
     }
 

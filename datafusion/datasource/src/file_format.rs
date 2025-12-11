@@ -30,7 +30,7 @@ use crate::file_sink_config::FileSinkConfig;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{internal_err, not_impl_err, GetExt, Result, Statistics};
+use datafusion_common::{GetExt, Result, Statistics, internal_err, not_impl_err};
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
@@ -111,7 +111,10 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     }
 
     /// Return the related FileSource such as `CsvSource`, `JsonSource`, etc.
-    fn file_source(&self) -> Arc<dyn FileSource>;
+    ///
+    /// # Arguments
+    /// * `table_schema` - The table schema to use for the FileSource (includes partition columns)
+    fn file_source(&self, table_schema: crate::TableSchema) -> Arc<dyn FileSource>;
 }
 
 /// Factory for creating [`FileFormat`] instances based on session and command level options

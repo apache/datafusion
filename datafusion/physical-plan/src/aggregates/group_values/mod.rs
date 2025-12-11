@@ -22,7 +22,7 @@ use arrow::array::types::{
     Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::array::{downcast_primitive, ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
 
@@ -131,7 +131,6 @@ pub trait GroupValues: Send {
 /// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
 /// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
 /// `GroupValuesRows`: crate::aggregates::group_values::row::GroupValuesRows
-///
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,

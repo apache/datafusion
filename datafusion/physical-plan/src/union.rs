@@ -27,27 +27,29 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 use crate::execution_plan::{
-    boundedness_from_children, check_default_invariants, emission_type_from_children,
-    InvariantLevel,
+    InvariantLevel, boundedness_from_children, check_default_invariants,
+    emission_type_from_children,
 };
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::metrics::BaselineMetrics;
-use crate::projection::{make_with_child, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_datafusion_err, internal_err, Result};
+use datafusion_common::{
+    Result, assert_or_internal_err, exec_err, internal_datafusion_err,
+};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{calculate_union, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -67,14 +69,14 @@ use tokio::macros::support::thread_rng_n;
 /// partitions, and then next `M` output partitions are from Input 2.
 ///
 /// ```text
-///                       ▲       ▲           ▲         ▲
-///                       │       │           │         │
-///     Output            │  ...  │           │         │
-///   Partitions          │0      │N-1        │ N       │N+M-1
-///(passes through   ┌────┴───────┴───────────┴─────────┴───┐
-/// the N+M input    │              UnionExec               │
-///  partitions)     │                                      │
-///                  └──────────────────────────────────────┘
+///                        ▲       ▲           ▲         ▲
+///                        │       │           │         │
+///      Output            │  ...  │           │         │
+///    Partitions          │0      │N-1        │ N       │N+M-1
+/// (passes through   ┌────┴───────┴───────────┴─────────┴───┐
+///  the N+M input    │              UnionExec               │
+///   partitions)     │                                      │
+///                   └──────────────────────────────────────┘
 ///                                      ▲
 ///                                      │
 ///                                      │
@@ -265,7 +267,12 @@ impl ExecutionPlan for UnionExec {
         mut partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -410,11 +417,10 @@ pub struct InterleaveExec {
 impl InterleaveExec {
     /// Create a new InterleaveExec
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
-        if !can_interleave(inputs.iter()) {
-            return internal_err!(
-                "Not all InterleaveExec children have a consistent hash partitioning"
-            );
-        }
+        assert_or_internal_err!(
+            can_interleave(inputs.iter()),
+            "Not all InterleaveExec children have a consistent hash partitioning"
+        );
         let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
             inputs,
@@ -485,11 +491,10 @@ impl ExecutionPlan for InterleaveExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // New children are no longer interleavable, which might be a bug of optimization rewrite.
-        if !can_interleave(children.iter()) {
-            return internal_err!(
-                "Can not create InterleaveExec: new children can not be interleaved"
-            );
-        }
+        assert_or_internal_err!(
+            can_interleave(children.iter()),
+            "Can not create InterleaveExec: new children can not be interleaved"
+        );
         Ok(Arc::new(InterleaveExec::try_new(children)?))
     }
 
@@ -498,7 +503,12 @@ impl ExecutionPlan for InterleaveExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -591,7 +601,8 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
             let base_field = first_schema.field(i).clone();
 
             // Coerce metadata and nullability across all inputs
-            let merged_field = inputs
+
+            inputs
                 .iter()
                 .enumerate()
                 .map(|(input_idx, input)| {
@@ -613,9 +624,7 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
                 // We can unwrap this because if inputs was empty, this would've already panic'ed when we
                 // indexed into inputs[0].
                 .unwrap()
-                .with_name(base_field.name());
-
-            merged_field
+                .with_name(base_field.name())
         })
         .collect::<Vec<_>>();
 
@@ -699,7 +708,7 @@ impl Stream for CombinedRecordBatchStream {
 
 fn col_stats_union(
     mut left: ColumnStatistics,
-    right: ColumnStatistics,
+    right: &ColumnStatistics,
 ) -> ColumnStatistics {
     left.distinct_count = Precision::Absent;
     left.min_value = left.min_value.min(&right.min_value);
@@ -711,12 +720,18 @@ fn col_stats_union(
 }
 
 fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
-    left.num_rows = left.num_rows.add(&right.num_rows);
-    left.total_byte_size = left.total_byte_size.add(&right.total_byte_size);
+    let Statistics {
+        num_rows: right_num_rows,
+        total_byte_size: right_total_bytes,
+        column_statistics: right_column_statistics,
+        ..
+    } = right;
+    left.num_rows = left.num_rows.add(&right_num_rows);
+    left.total_byte_size = left.total_byte_size.add(&right_total_bytes);
     left.column_statistics = left
         .column_statistics
         .into_iter()
-        .zip(right.column_statistics)
+        .zip(right_column_statistics.iter())
         .map(|(a, b)| col_stats_union(a, b))
         .collect::<Vec<_>>();
     left
@@ -785,6 +800,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -792,6 +808,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -799,6 +816,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(42.0))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -813,6 +831,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(1),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -820,6 +839,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("b")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -827,6 +847,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -842,6 +863,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
                     null_count: Precision::Exact(1),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -849,6 +871,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -856,6 +879,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -926,14 +950,14 @@ mod tests {
             let first_orderings = convert_to_orderings(first_child_orderings);
             let second_orderings = convert_to_orderings(second_child_orderings);
             let union_expected_orderings = convert_to_orderings(union_orderings);
-            let child1 = Arc::new(TestMemoryExec::update_cache(Arc::new(
-                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .try_with_sort_information(first_orderings)?,
-            )));
-            let child2 = Arc::new(TestMemoryExec::update_cache(Arc::new(
-                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
-                    .try_with_sort_information(second_orderings)?,
-            )));
+            let child1_exec = TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
+                .try_with_sort_information(first_orderings)?;
+            let child1 = Arc::new(child1_exec);
+            let child1 = Arc::new(TestMemoryExec::update_cache(&child1));
+            let child2_exec = TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
+                .try_with_sort_information(second_orderings)?;
+            let child2 = Arc::new(child2_exec);
+            let child2 = Arc::new(TestMemoryExec::update_cache(&child2));
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_orderings(union_expected_orderings);
@@ -967,20 +991,24 @@ mod tests {
     fn test_union_empty_inputs() {
         // Test that UnionExec::try_new fails with empty inputs
         let result = UnionExec::try_new(vec![]);
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("UnionExec requires at least one input"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("UnionExec requires at least one input")
+        );
     }
 
     #[test]
     fn test_union_schema_empty_inputs() {
         // Test that union_schema fails with empty inputs
         let result = union_schema(&[]);
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot create union schema from empty inputs"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot create union schema from empty inputs")
+        );
     }
 
     #[test]

@@ -18,15 +18,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::PrimitiveArray;
 use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::types::{Date32Type, Int32Type};
-use arrow::array::PrimitiveArray;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8, Utf8View};
 use chrono::prelude::*;
 
-use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -51,7 +51,7 @@ use datafusion_macros::user_doc;
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     argument(
         name = "year",

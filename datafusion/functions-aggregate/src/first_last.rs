@@ -30,20 +30,20 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
+    DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
     Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
     GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
@@ -159,12 +159,14 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let mut fields = vec![Field::new(
-            format_state_name(args.name, "first_value"),
-            args.return_type().clone(),
-            true,
-        )
-        .into()];
+        let mut fields = vec![
+            Field::new(
+                format_state_name(args.name, "first_value"),
+                args.return_type().clone(),
+                true,
+            )
+            .into(),
+        ];
         fields.extend(args.ordering_fields.iter().cloned());
         fields.push(
             Field::new(
@@ -209,7 +211,7 @@ impl AggregateUDFImpl for FirstValue {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         fn create_accumulator<T: ArrowPrimitiveType + Send>(
-            args: AccumulatorArgs,
+            args: &AccumulatorArgs,
         ) -> Result<Box<dyn GroupsAccumulator>> {
             let Some(ordering) = LexOrdering::new(args.order_bys.to_vec()) else {
                 return internal_err!("Groups accumulator must have an ordering.");
@@ -231,50 +233,50 @@ impl AggregateUDFImpl for FirstValue {
         }
 
         match args.return_field.data_type() {
-            DataType::Int8 => create_accumulator::<Int8Type>(args),
-            DataType::Int16 => create_accumulator::<Int16Type>(args),
-            DataType::Int32 => create_accumulator::<Int32Type>(args),
-            DataType::Int64 => create_accumulator::<Int64Type>(args),
-            DataType::UInt8 => create_accumulator::<UInt8Type>(args),
-            DataType::UInt16 => create_accumulator::<UInt16Type>(args),
-            DataType::UInt32 => create_accumulator::<UInt32Type>(args),
-            DataType::UInt64 => create_accumulator::<UInt64Type>(args),
-            DataType::Float16 => create_accumulator::<Float16Type>(args),
-            DataType::Float32 => create_accumulator::<Float32Type>(args),
-            DataType::Float64 => create_accumulator::<Float64Type>(args),
+            DataType::Int8 => create_accumulator::<Int8Type>(&args),
+            DataType::Int16 => create_accumulator::<Int16Type>(&args),
+            DataType::Int32 => create_accumulator::<Int32Type>(&args),
+            DataType::Int64 => create_accumulator::<Int64Type>(&args),
+            DataType::UInt8 => create_accumulator::<UInt8Type>(&args),
+            DataType::UInt16 => create_accumulator::<UInt16Type>(&args),
+            DataType::UInt32 => create_accumulator::<UInt32Type>(&args),
+            DataType::UInt64 => create_accumulator::<UInt64Type>(&args),
+            DataType::Float16 => create_accumulator::<Float16Type>(&args),
+            DataType::Float32 => create_accumulator::<Float32Type>(&args),
+            DataType::Float64 => create_accumulator::<Float64Type>(&args),
 
-            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(args),
-            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(args),
-            DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
-            DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
+            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(&args),
+            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(&args),
+            DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(&args),
+            DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(&args),
 
             DataType::Timestamp(TimeUnit::Second, _) => {
-                create_accumulator::<TimestampSecondType>(args)
+                create_accumulator::<TimestampSecondType>(&args)
             }
             DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                create_accumulator::<TimestampMillisecondType>(args)
+                create_accumulator::<TimestampMillisecondType>(&args)
             }
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                create_accumulator::<TimestampMicrosecondType>(args)
+                create_accumulator::<TimestampMicrosecondType>(&args)
             }
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                create_accumulator::<TimestampNanosecondType>(args)
+                create_accumulator::<TimestampNanosecondType>(&args)
             }
 
-            DataType::Date32 => create_accumulator::<Date32Type>(args),
-            DataType::Date64 => create_accumulator::<Date64Type>(args),
+            DataType::Date32 => create_accumulator::<Date32Type>(&args),
+            DataType::Date64 => create_accumulator::<Date64Type>(&args),
             DataType::Time32(TimeUnit::Second) => {
-                create_accumulator::<Time32SecondType>(args)
+                create_accumulator::<Time32SecondType>(&args)
             }
             DataType::Time32(TimeUnit::Millisecond) => {
-                create_accumulator::<Time32MillisecondType>(args)
+                create_accumulator::<Time32MillisecondType>(&args)
             }
 
             DataType::Time64(TimeUnit::Microsecond) => {
-                create_accumulator::<Time64MicrosecondType>(args)
+                create_accumulator::<Time64MicrosecondType>(&args)
             }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                create_accumulator::<Time64NanosecondType>(args)
+                create_accumulator::<Time64NanosecondType>(&args)
             }
 
             _ => internal_err!(
@@ -300,6 +302,10 @@ impl AggregateUDFImpl for FirstValue {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Reversed(last_value_udaf())
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -821,11 +827,11 @@ impl Accumulator for TrivialFirstValueAccumulator {
 
             let filtered_states =
                 filter_states_according_to_is_set(&states[0..1], flags)?;
-            if let Some(first) = filtered_states.first() {
-                if !first.is_empty() {
-                    self.first = ScalarValue::try_from_array(first, 0)?;
-                    self.is_set = true;
-                }
+            if let Some(first) = filtered_states.first()
+                && !first.is_empty()
+            {
+                self.first = ScalarValue::try_from_array(first, 0)?;
+                self.is_set = true;
             }
         }
         Ok(())
@@ -1091,12 +1097,14 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let mut fields = vec![Field::new(
-            format_state_name(args.name, "last_value"),
-            args.return_field.data_type().clone(),
-            true,
-        )
-        .into()];
+        let mut fields = vec![
+            Field::new(
+                format_state_name(args.name, "last_value"),
+                args.return_field.data_type().clone(),
+                true,
+            )
+            .into(),
+        ];
         fields.extend(args.ordering_fields.iter().cloned());
         fields.push(
             Field::new(
@@ -1125,6 +1133,10 @@ impl AggregateUDFImpl for LastValue {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Reversed(first_value_udaf())
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -1163,7 +1175,7 @@ impl AggregateUDFImpl for LastValue {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         fn create_accumulator<T>(
-            args: AccumulatorArgs,
+            args: &AccumulatorArgs,
         ) -> Result<Box<dyn GroupsAccumulator>>
         where
             T: ArrowPrimitiveType + Send,
@@ -1187,50 +1199,50 @@ impl AggregateUDFImpl for LastValue {
         }
 
         match args.return_field.data_type() {
-            DataType::Int8 => create_accumulator::<Int8Type>(args),
-            DataType::Int16 => create_accumulator::<Int16Type>(args),
-            DataType::Int32 => create_accumulator::<Int32Type>(args),
-            DataType::Int64 => create_accumulator::<Int64Type>(args),
-            DataType::UInt8 => create_accumulator::<UInt8Type>(args),
-            DataType::UInt16 => create_accumulator::<UInt16Type>(args),
-            DataType::UInt32 => create_accumulator::<UInt32Type>(args),
-            DataType::UInt64 => create_accumulator::<UInt64Type>(args),
-            DataType::Float16 => create_accumulator::<Float16Type>(args),
-            DataType::Float32 => create_accumulator::<Float32Type>(args),
-            DataType::Float64 => create_accumulator::<Float64Type>(args),
+            DataType::Int8 => create_accumulator::<Int8Type>(&args),
+            DataType::Int16 => create_accumulator::<Int16Type>(&args),
+            DataType::Int32 => create_accumulator::<Int32Type>(&args),
+            DataType::Int64 => create_accumulator::<Int64Type>(&args),
+            DataType::UInt8 => create_accumulator::<UInt8Type>(&args),
+            DataType::UInt16 => create_accumulator::<UInt16Type>(&args),
+            DataType::UInt32 => create_accumulator::<UInt32Type>(&args),
+            DataType::UInt64 => create_accumulator::<UInt64Type>(&args),
+            DataType::Float16 => create_accumulator::<Float16Type>(&args),
+            DataType::Float32 => create_accumulator::<Float32Type>(&args),
+            DataType::Float64 => create_accumulator::<Float64Type>(&args),
 
-            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(args),
-            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(args),
-            DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(args),
-            DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(args),
+            DataType::Decimal32(_, _) => create_accumulator::<Decimal32Type>(&args),
+            DataType::Decimal64(_, _) => create_accumulator::<Decimal64Type>(&args),
+            DataType::Decimal128(_, _) => create_accumulator::<Decimal128Type>(&args),
+            DataType::Decimal256(_, _) => create_accumulator::<Decimal256Type>(&args),
 
             DataType::Timestamp(TimeUnit::Second, _) => {
-                create_accumulator::<TimestampSecondType>(args)
+                create_accumulator::<TimestampSecondType>(&args)
             }
             DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                create_accumulator::<TimestampMillisecondType>(args)
+                create_accumulator::<TimestampMillisecondType>(&args)
             }
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                create_accumulator::<TimestampMicrosecondType>(args)
+                create_accumulator::<TimestampMicrosecondType>(&args)
             }
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                create_accumulator::<TimestampNanosecondType>(args)
+                create_accumulator::<TimestampNanosecondType>(&args)
             }
 
-            DataType::Date32 => create_accumulator::<Date32Type>(args),
-            DataType::Date64 => create_accumulator::<Date64Type>(args),
+            DataType::Date32 => create_accumulator::<Date32Type>(&args),
+            DataType::Date64 => create_accumulator::<Date64Type>(&args),
             DataType::Time32(TimeUnit::Second) => {
-                create_accumulator::<Time32SecondType>(args)
+                create_accumulator::<Time32SecondType>(&args)
             }
             DataType::Time32(TimeUnit::Millisecond) => {
-                create_accumulator::<Time32MillisecondType>(args)
+                create_accumulator::<Time32MillisecondType>(&args)
             }
 
             DataType::Time64(TimeUnit::Microsecond) => {
-                create_accumulator::<Time64MicrosecondType>(args)
+                create_accumulator::<Time64MicrosecondType>(&args)
             }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                create_accumulator::<Time64NanosecondType>(args)
+                create_accumulator::<Time64NanosecondType>(&args)
             }
 
             _ => {
@@ -1306,11 +1318,11 @@ impl Accumulator for TrivialLastValueAccumulator {
         validate_is_set_flags(flags, "last_value")?;
 
         let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
-        if let Some(last) = filtered_states.last() {
-            if !last.is_empty() {
-                self.last = ScalarValue::try_from_array(last, 0)?;
-                self.is_set = true;
-            }
+        if let Some(last) = filtered_states.last()
+            && !last.is_empty()
+        {
+            self.last = ScalarValue::try_from_array(last, 0)?;
+            self.is_set = true;
         }
         Ok(())
     }
@@ -1537,7 +1549,7 @@ mod tests {
         compute::SortOptions,
         datatypes::Schema,
     };
-    use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+    use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 
     use super::*;
 
@@ -1959,10 +1971,12 @@ mod tests {
         let trivial_states = vec![Arc::clone(&value), Arc::clone(&corrupted_flag)];
         let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is_set flags contain nulls")
+        );
 
         // Test FirstValueAccumulator (with ordering)
         let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
@@ -1982,10 +1996,12 @@ mod tests {
         let ordered_states = vec![value, ordering, corrupted_flag];
         let result = ordered_accumulator.merge_batch(&ordered_states);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is_set flags contain nulls")
+        );
 
         Ok(())
     }
@@ -2002,10 +2018,12 @@ mod tests {
         let trivial_states = vec![Arc::clone(&value), Arc::clone(&corrupted_flag)];
         let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is_set flags contain nulls")
+        );
 
         // Test LastValueAccumulator (with ordering)
         let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
@@ -2025,10 +2043,12 @@ mod tests {
         let ordered_states = vec![value, ordering, corrupted_flag];
         let result = ordered_accumulator.merge_batch(&ordered_states);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is_set flags contain nulls")
+        );
 
         Ok(())
     }

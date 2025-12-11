@@ -28,15 +28,15 @@ use datafusion_common::error::Result;
 use datafusion_physical_plan::SendableRecordBatchStream;
 
 use arrow::array::{
-    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, ArrayAccessor,
-    RecordBatch, StringArray, StructArray,
+    ArrayAccessor, RecordBatch, StringArray, StructArray, builder::UInt64Builder,
+    cast::AsArray, downcast_dictionary_array,
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
     as_boolean_array, as_date32_array, as_date64_array, as_float16_array,
-    as_float32_array, as_float64_array, as_int16_array, as_int32_array, as_int64_array,
-    as_int8_array, as_string_array, as_string_view_array, as_uint16_array,
-    as_uint32_array, as_uint64_array, as_uint8_array,
+    as_float32_array, as_float64_array, as_int8_array, as_int16_array, as_int32_array,
+    as_int64_array, as_string_array, as_string_view_array, as_uint8_array,
+    as_uint16_array, as_uint32_array, as_uint64_array,
 };
 use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -296,7 +296,7 @@ async fn hive_style_partitions_demuxer(
         let all_partition_values = compute_partition_keys_by_row(&rb, &partition_by)?;
 
         // Next compute how the batch should be split up to take each distinct key to its own batch
-        let take_map = compute_take_arrays(&rb, all_partition_values);
+        let take_map = compute_take_arrays(&rb, &all_partition_values);
 
         // Divide up the batch into distinct partition key batches and send each batch
         for (part_key, mut builder) in take_map.into_iter() {
@@ -502,9 +502,9 @@ fn compute_partition_keys_by_row<'a>(
             }
             _ => {
                 return not_impl_err!(
-                "it is not yet supported to write to hive partitions with datatype {}",
-                dtype
-            )
+                    "it is not yet supported to write to hive partitions with datatype {}",
+                    dtype
+                );
             }
         }
 
@@ -516,7 +516,7 @@ fn compute_partition_keys_by_row<'a>(
 
 fn compute_take_arrays(
     rb: &RecordBatch,
-    all_partition_values: Vec<Vec<Cow<str>>>,
+    all_partition_values: &[Vec<Cow<str>>],
 ) -> HashMap<Vec<String>, UInt64Builder> {
     let mut take_map = HashMap::new();
     for i in 0..rb.num_rows() {

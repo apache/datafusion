@@ -35,24 +35,22 @@ use substrait::proto::extensions;
 
 #[tokio::test]
 async fn parquet_exec() -> Result<()> {
-    let source = Arc::new(ParquetSource::default());
+    let schema = Arc::new(Schema::empty());
+    let source = Arc::new(ParquetSource::new(schema.clone()));
 
-    let scan_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        Arc::new(Schema::empty()),
-        source,
-    )
-    .with_file_groups(vec![
-        FileGroup::new(vec![PartitionedFile::new(
-            "file://foo/part-0.parquet".to_string(),
-            123,
-        )]),
-        FileGroup::new(vec![PartitionedFile::new(
-            "file://foo/part-1.parquet".to_string(),
-            123,
-        )]),
-    ])
-    .build();
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "file://foo/part-0.parquet".to_string(),
+                    123,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "file://foo/part-1.parquet".to_string(),
+                    123,
+                )]),
+            ])
+            .build();
     let parquet_exec: Arc<dyn ExecutionPlan> =
         DataSourceExec::from_data_source(scan_config);
 

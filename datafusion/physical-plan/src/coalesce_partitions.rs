@@ -29,11 +29,11 @@ use super::{
 };
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
-use crate::projection::{make_with_child, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -160,9 +160,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // CoalescePartitionsExec produces a single partition
-        if 0 != partition {
-            return internal_err!("CoalescePartitionsExec invalid partition {partition}");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "CoalescePartitionsExec invalid partition {partition}"
+        );
 
         let input_partitions = self.input.output_partitioning().partition_count();
         match input_partitions {
@@ -288,7 +290,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
 mod tests {
     use super::*;
     use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, PanicExec,
+        BlockingExec, PanicExec, assert_strong_count_converges_to_zero,
     };
     use crate::test::{self, assert_is_pending};
     use crate::{collect, common};

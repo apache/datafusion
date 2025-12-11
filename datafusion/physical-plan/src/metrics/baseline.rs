@@ -63,6 +63,9 @@ pub struct BaselineMetrics {
     /// multiple times.
     /// Issue: <https://github.com/apache/datafusion/issues/16841>
     output_bytes: Count,
+
+    /// output batches: the total output batch count
+    output_batches: Count,
     // Remember to update `docs/source/user-guide/metrics.md` when updating comments
     // or adding new metrics
 }
@@ -86,6 +89,9 @@ impl BaselineMetrics {
             output_bytes: MetricBuilder::new(metrics)
                 .with_type(super::MetricType::SUMMARY)
                 .output_bytes(partition),
+            output_batches: MetricBuilder::new(metrics)
+                .with_type(super::MetricType::DEV)
+                .output_batches(partition),
         }
     }
 
@@ -100,6 +106,7 @@ impl BaselineMetrics {
             elapsed_compute: self.elapsed_compute.clone(),
             output_rows: Default::default(),
             output_bytes: Default::default(),
+            output_batches: Default::default(),
         }
     }
 
@@ -111,6 +118,11 @@ impl BaselineMetrics {
     /// return the metric for the total number of output rows produced
     pub fn output_rows(&self) -> &Count {
         &self.output_rows
+    }
+
+    /// return the metric for the total number of output batches produced
+    pub fn output_batches(&self) -> &Count {
+        &self.output_batches
     }
 
     /// Records the fact that this operator's execution is complete
@@ -229,6 +241,7 @@ impl RecordOutput for RecordBatch {
         bm.record_output(self.num_rows());
         let n_bytes = get_record_batch_memory_size(&self);
         bm.output_bytes.add(n_bytes);
+        bm.output_batches.add(1);
         self
     }
 }
@@ -238,6 +251,7 @@ impl RecordOutput for &RecordBatch {
         bm.record_output(self.num_rows());
         let n_bytes = get_record_batch_memory_size(self);
         bm.output_bytes.add(n_bytes);
+        bm.output_batches.add(1);
         self
     }
 }

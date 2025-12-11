@@ -153,7 +153,7 @@ pub async fn exec_from_repl(
                                     }
                                 } else {
                                     eprintln!(
-                                        "'\\{}' is not a valid command",
+                                        "'\\{}' is not a valid command, you can use '\\?' to see all commands",
                                         &line[1..]
                                     );
                                 }
@@ -168,7 +168,7 @@ pub async fn exec_from_repl(
                         }
                     }
                 } else {
-                    eprintln!("'\\{}' is not a valid command", &line[1..]);
+                    eprintln!("'\\{}' is not a valid command, you can use '\\?' to see all commands", &line[1..]);
                 }
             }
             Ok(line) => {

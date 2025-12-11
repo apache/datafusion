@@ -18,11 +18,12 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::create_string_array_with_len;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use datafusion_common::config::ConfigOptions;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::concat;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn create_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
@@ -51,7 +52,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("concat", size), |b| {
             b.iter(|| {
                 let args_cloned = args.clone();
-                criterion::black_box(
+                black_box(
                     concat()
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args_cloned,

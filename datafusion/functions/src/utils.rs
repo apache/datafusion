@@ -17,11 +17,11 @@
 
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::function::Hint;
+use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::function::Hint;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -134,44 +134,71 @@ pub fn calculate_binary_math<L, R, O, F>(
     fun: F,
 ) -> Result<Arc<PrimitiveArray<O>>>
 where
-    R: ArrowPrimitiveType,
     L: ArrowPrimitiveType,
+    R: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
     R::Native: TryFrom<ScalarValue>,
 {
-    Ok(match right {
+    let left = left.as_primitive::<L>();
+    let right = right.cast_to(&R::DATA_TYPE, None)?;
+    let result = match right {
         ColumnarValue::Scalar(scalar) => {
-            let right_value: R::Native =
-                R::Native::try_from(scalar.clone()).map_err(|_| {
+            if scalar.is_null() {
+                // Null scalar is castable to any numeric, creating a non-null expression.
+                // Provide null array explicitly to make result null
+                PrimitiveArray::<O>::new_null(1)
+            } else {
+                let right = R::Native::try_from(scalar.clone()).map_err(|_| {
                     DataFusionError::NotImplemented(format!(
                         "Cannot convert scalar value {} to {}",
                         &scalar,
                         R::DATA_TYPE
                     ))
                 })?;
-            let left_array = left.as_primitive::<L>();
-            // Bind right value
-            let result =
-                left_array.try_unary::<_, O, _>(|lvalue| fun(lvalue, right_value))?;
-            Arc::new(result) as _
+                left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
+            }
         }
         ColumnarValue::Array(right) => {
-            let right_casted = arrow::compute::cast(&right, &R::DATA_TYPE)?;
-            let right_array = right_casted.as_primitive::<R>();
-
-            // Types are compatible even they are decimals with different scale or precision
-            let result = if PrimitiveArray::<L>::is_compatible(&L::DATA_TYPE) {
-                let left_array = left.as_primitive::<L>();
-                try_binary::<_, _, _, O>(left_array, right_array, &fun)?
-            } else {
-                let left_casted = arrow::compute::cast(left, &L::DATA_TYPE)?;
-                let left_array = left_casted.as_primitive::<L>();
-                try_binary::<_, _, _, O>(left_array, right_array, &fun)?
-            };
-            Arc::new(result) as _
+            let right = right.as_primitive::<R>();
+            try_binary::<_, _, _, O>(left, right, &fun)?
         }
-    })
+    };
+    Ok(Arc::new(result) as _)
+}
+
+/// Computes a binary math function for input arrays using a specified function
+/// and apply rescaling to given precision and scale.
+/// Generic types:
+/// - `L`: Left array decimal type
+/// - `R`: Right array primitive type
+/// - `O`: Output array decimal type
+/// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+pub fn calculate_binary_decimal_math<L, R, O, F>(
+    left: &dyn Array,
+    right: &ColumnarValue,
+    fun: F,
+    precision: u8,
+    scale: i8,
+) -> Result<Arc<PrimitiveArray<O>>>
+where
+    L: DecimalType,
+    R: ArrowPrimitiveType,
+    O: DecimalType,
+    F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
+    R::Native: TryFrom<ScalarValue>,
+{
+    let result_array = calculate_binary_math::<L, R, O, F>(left, right, fun)?;
+    if scale < 0 {
+        not_impl_err!("Negative scale is not supported for power for decimal types")
+    } else {
+        Ok(Arc::new(
+            result_array
+                .as_ref()
+                .clone()
+                .with_precision_and_scale(precision, scale)?,
+        ))
+    }
 }
 
 /// Converts Decimal128 components (value and scale) to an unscaled i128
@@ -307,7 +334,6 @@ pub mod test {
     }
 
     use arrow::datatypes::DataType;
-    #[allow(unused_imports)]
     pub(crate) use test_function;
 
     use super::*;

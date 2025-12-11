@@ -23,8 +23,8 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_array, Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder,
-    UInt64Array,
+    Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder, UInt64Array,
+    downcast_array,
 };
 use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
@@ -40,9 +40,9 @@ use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
@@ -88,7 +88,9 @@ impl Correlation {
             signature: Signature::exact(
                 vec![DataType::Float64, DataType::Float64],
                 Volatility::Immutable,
-            ),
+            )
+            .with_parameter_names(vec!["y".to_string(), "x".to_string()])
+            .expect("valid parameter names for corr"),
         }
     }
 }
@@ -194,24 +196,32 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let n = self.covar.get_count();
-        if n < 2 {
-            return Ok(ScalarValue::Float64(None));
-        }
-
         let covar = self.covar.evaluate()?;
         let stddev1 = self.stddev1.evaluate()?;
         let stddev2 = self.stddev2.evaluate()?;
 
-        if let ScalarValue::Float64(Some(c)) = covar {
-            if let ScalarValue::Float64(Some(s1)) = stddev1 {
-                if let ScalarValue::Float64(Some(s2)) = stddev2 {
-                    if s1 == 0_f64 || s2 == 0_f64 {
-                        return Ok(ScalarValue::Float64(None));
-                    } else {
-                        return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
-                    }
-                }
+        // First check if we have NaN values by examining the internal state
+        // This handles the case where both inputs are NaN even with count=1
+        let mean1 = self.covar.get_mean1();
+        let mean2 = self.covar.get_mean2();
+
+        // If both means are NaN, then both input columns contain only NaN values
+        if mean1.is_nan() && mean2.is_nan() {
+            return Ok(ScalarValue::Float64(Some(f64::NAN)));
+        }
+        let n = self.covar.get_count();
+        if mean1.is_nan() || mean2.is_nan() || n < 2 {
+            return Ok(ScalarValue::Float64(None));
+        }
+
+        if let ScalarValue::Float64(Some(c)) = covar
+            && let ScalarValue::Float64(Some(s1)) = stddev1
+            && let ScalarValue::Float64(Some(s2)) = stddev2
+        {
+            if s1 == 0_f64 || s2 == 0_f64 {
+                return Ok(ScalarValue::Float64(None));
+            } else {
+                return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
             }
         }
 
@@ -400,54 +410,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         Ok(())
     }
 
-    fn merge_batch(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        // Resize vectors to accommodate total number of groups
-        self.count.resize(total_num_groups, 0);
-        self.sum_x.resize(total_num_groups, 0.0);
-        self.sum_y.resize(total_num_groups, 0.0);
-        self.sum_xy.resize(total_num_groups, 0.0);
-        self.sum_xx.resize(total_num_groups, 0.0);
-        self.sum_yy.resize(total_num_groups, 0.0);
-
-        // Extract arrays from input values
-        let partial_counts = values[0].as_primitive::<UInt64Type>();
-        let partial_sum_x = values[1].as_primitive::<Float64Type>();
-        let partial_sum_y = values[2].as_primitive::<Float64Type>();
-        let partial_sum_xy = values[3].as_primitive::<Float64Type>();
-        let partial_sum_xx = values[4].as_primitive::<Float64Type>();
-        let partial_sum_yy = values[5].as_primitive::<Float64Type>();
-
-        assert!(opt_filter.is_none(), "aggregate filter should be applied in partial stage, there should be no filter in final stage");
-
-        accumulate_correlation_states(
-            group_indices,
-            (
-                partial_counts,
-                partial_sum_x,
-                partial_sum_y,
-                partial_sum_xy,
-                partial_sum_xx,
-                partial_sum_yy,
-            ),
-            |group_index, count, values| {
-                self.count[group_index] += count;
-                self.sum_x[group_index] += values[0];
-                self.sum_y[group_index] += values[1];
-                self.sum_xy[group_index] += values[2];
-                self.sum_xx[group_index] += values[3];
-                self.sum_yy[group_index] += values[4];
-            },
-        );
-
-        Ok(())
-    }
-
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let n = match emit_to {
             EmitTo::All => self.count.len(),
@@ -463,20 +425,30 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         // - Correlation can't be calculated when a group only has 1 record, or when
         //   the `denominator` state is 0. In these cases, the final aggregation
         //   result should be `Null` (according to PostgreSQL's behavior).
+        // - However, if any of the accumulated values contain NaN, the result should
+        //   be NaN regardless of the count (even for single-row groups).
         //
         for i in 0..n {
-            if self.count[i] < 2 {
-                values.push(0.0);
-                nulls.append_null();
-                continue;
-            }
-
             let count = self.count[i];
             let sum_x = self.sum_x[i];
             let sum_y = self.sum_y[i];
             let sum_xy = self.sum_xy[i];
             let sum_xx = self.sum_xx[i];
             let sum_yy = self.sum_yy[i];
+
+            // If BOTH sum_x AND sum_y are NaN, then both input values are NaN → return NaN
+            // If only ONE of them is NaN, then only one input value is NaN → return NULL
+            if sum_x.is_nan() && sum_y.is_nan() {
+                // Both inputs are NaN → return NaN
+                values.push(f64::NAN);
+                nulls.append_non_null();
+                continue;
+            } else if count < 2 || sum_x.is_nan() || sum_y.is_nan() {
+                // Only one input is NaN → return NULL
+                values.push(0.0);
+                nulls.append_null();
+                continue;
+            }
 
             let mean_x = sum_x / count as f64;
             let mean_y = sum_y / count as f64;
@@ -511,6 +483,57 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             Arc::new(Float64Array::from(self.sum_xx[0..n].to_vec())),
             Arc::new(Float64Array::from(self.sum_yy[0..n].to_vec())),
         ])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        // Resize vectors to accommodate total number of groups
+        self.count.resize(total_num_groups, 0);
+        self.sum_x.resize(total_num_groups, 0.0);
+        self.sum_y.resize(total_num_groups, 0.0);
+        self.sum_xy.resize(total_num_groups, 0.0);
+        self.sum_xx.resize(total_num_groups, 0.0);
+        self.sum_yy.resize(total_num_groups, 0.0);
+
+        // Extract arrays from input values
+        let partial_counts = values[0].as_primitive::<UInt64Type>();
+        let partial_sum_x = values[1].as_primitive::<Float64Type>();
+        let partial_sum_y = values[2].as_primitive::<Float64Type>();
+        let partial_sum_xy = values[3].as_primitive::<Float64Type>();
+        let partial_sum_xx = values[4].as_primitive::<Float64Type>();
+        let partial_sum_yy = values[5].as_primitive::<Float64Type>();
+
+        assert!(
+            opt_filter.is_none(),
+            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+        );
+
+        accumulate_correlation_states(
+            group_indices,
+            (
+                partial_counts,
+                partial_sum_x,
+                partial_sum_y,
+                partial_sum_xy,
+                partial_sum_xx,
+                partial_sum_yy,
+            ),
+            |group_index, count, values| {
+                self.count[group_index] += count;
+                self.sum_x[group_index] += values[0];
+                self.sum_y[group_index] += values[1];
+                self.sum_xy[group_index] += values[2];
+                self.sum_xx[group_index] += values[3];
+                self.sum_yy[group_index] += values[4];
+            },
+        );
+
+        Ok(())
     }
 
     fn size(&self) -> usize {

@@ -19,10 +19,10 @@ use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray,
+    ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
+    cast::AsArray,
 };
-use arrow::datatypes::{i256, DataType};
+use arrow::datatypes::{DataType, i256};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -87,7 +87,6 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// is obvious in high cardinality group by situation.
     /// More details can see:
     /// <https://github.com/apache/datafusion/issues/15961>
-    ///
     map: HashTable<(usize, u64)>,
     /// The group index of the null value if any
     null_group: Option<usize>,

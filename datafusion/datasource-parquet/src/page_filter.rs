@@ -90,7 +90,6 @@ use parquet::{
 ///  ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━┛
 ///
 ///   Total rows: 300
-///
 /// ```
 ///
 /// Given the predicate `A > 35 AND B = 'F'`:
@@ -119,6 +118,7 @@ pub struct PagePruningAccessPlanFilter {
 impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
     /// expression.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
         // extract any single column predicates
         let predicates = split_conjunction(expr)
@@ -270,8 +270,10 @@ impl PagePruningAccessPlanFilter {
             }
         }
 
-        file_metrics.page_index_rows_pruned.add(total_skip);
-        file_metrics.page_index_rows_matched.add(total_select);
+        file_metrics.page_index_rows_pruned.add_pruned(total_skip);
+        file_metrics
+            .page_index_rows_pruned
+            .add_matched(total_select);
         access_plan
     }
 

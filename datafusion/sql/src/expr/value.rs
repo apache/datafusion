@@ -17,20 +17,20 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::{
-    parse_interval_month_day_nano_config, IntervalParseConfig, IntervalUnit,
+    IntervalParseConfig, IntervalUnit, parse_interval_month_day_nano_config,
 };
 use arrow::datatypes::{
-    i256, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, FieldRef, i256,
 };
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result,
-    ScalarValue,
+    DFSchema, DataFusionError, Result, ScalarValue, internal_datafusion_err,
+    not_impl_err, plan_err,
 };
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;
-use datafusion_expr::{lit, Expr, Operator};
+use datafusion_expr::{Expr, Operator, lit};
 use log::debug;
 use sqlparser::ast::{
     BinaryOperator, Expr as SQLExpr, Interval, UnaryOperator, Value, ValueWithSpan,
@@ -86,10 +86,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(lit(n));
         }
 
-        if !negative {
-            if let Ok(n) = unsigned_number.parse::<u64>() {
-                return Ok(lit(n));
-            }
+        if !negative && let Ok(n) = unsigned_number.parse::<u64>() {
+            return Ok(lit(n));
         }
 
         if self.options.parse_float_as_decimal {
@@ -104,13 +102,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Create a placeholder expression
-    /// This is the same as Postgres's prepare statement syntax in which a placeholder starts with `$` sign and then
-    /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
+    /// Both named (`$foo`) and positional (`$1`, `$2`, ...) placeholder styles are supported.
     fn create_placeholder_expr(
         param: String,
         param_data_types: &[FieldRef],
     ) -> Result<Expr> {
-        // Parse the placeholder as a number because it is the only support from sqlparser and postgres
+        // Try to parse the placeholder as a number. If the placeholder does not have a valid
+        // positional value, assume we have a named placeholder.
         let index = param[1..].parse::<usize>();
         let idx = match index {
             Ok(0) => {
@@ -123,12 +121,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return if param_data_types.is_empty() {
                     Ok(Expr::Placeholder(Placeholder::new_with_field(param, None)))
                 } else {
-                    // when PREPARE Statement, param_data_types length is always 0
-                    plan_err!("Invalid placeholder, not a number: {param}")
+                    // FIXME: This branch is shared by params from PREPARE and CREATE FUNCTION, but
+                    // only CREATE FUNCTION currently supports named params. For now, we rewrite
+                    // these to positional params.
+                    let named_param_pos = param_data_types
+                        .iter()
+                        .position(|v| v.name() == &param[1..]);
+                    match named_param_pos {
+                        Some(pos) => Ok(Expr::Placeholder(Placeholder::new_with_field(
+                            format!("${}", pos + 1),
+                            param_data_types.get(pos).cloned(),
+                        ))),
+                        None => plan_err!("Unknown placeholder: {param}"),
+                    }
                 };
             }
         };
         // Check if the placeholder is in the parameter list
+        // FIXME: In the CREATE FUNCTION branch, param_type = None should raise an error
         let param_type = param_data_types.get(idx);
         // Data type of the parameter
         debug!("type of param {param} param_data_types[idx]: {param_type:?}");
@@ -169,7 +179,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        not_impl_err!("Could not plan array literal. Hint: Please try with `nested_expressions` DataFusion feature enabled")
+        not_impl_err!(
+            "Could not plan array literal. Hint: Please try with `nested_expressions` DataFusion feature enabled"
+        )
     }
 
     /// Convert a SQL interval expression to a DataFusion logical plan
@@ -282,14 +294,12 @@ fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {
             interval_literal(*expr, negative)?
         }
         _ => {
-            return not_impl_err!("Unsupported interval argument. Expected string literal or number, got: {interval_value:?}");
+            return not_impl_err!(
+                "Unsupported interval argument. Expected string literal or number, got: {interval_value:?}"
+            );
         }
     };
-    if negative {
-        Ok(format!("-{s}"))
-    } else {
-        Ok(s)
-    }
+    if negative { Ok(format!("-{s}")) } else { Ok(s) }
 }
 
 /// Try to decode bytes from hex literal string.
@@ -492,9 +502,7 @@ mod tests {
 
         // scale < i8::MIN
         assert_eq!(
-            parse_decimal("1e129", false)
-                .unwrap_err()
-                .strip_backtrace(),
+            parse_decimal("1e129", false).unwrap_err().strip_backtrace(),
             "This feature is not implemented: Decimal scale -129 exceeds the minimum supported scale: -128"
         );
 

@@ -23,6 +23,7 @@
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Serialize / Deserialize DataFusion Plans to bytes
 //!
@@ -64,15 +65,15 @@
 //! # use datafusion_expr::{col, lit, Expr};
 //! # use datafusion_proto::bytes::Serializeable;
 //! # fn main() -> Result<()>{
-//!  // Create a new `Expr` a < 32
-//!  let expr = col("a").lt(lit(5i32));
+//! // Create a new `Expr` a < 32
+//! let expr = col("a").lt(lit(5i32));
 //!
-//!  // Convert it to bytes (for sending over the network, etc.)
-//!  let bytes = expr.to_bytes()?;
+//! // Convert it to bytes (for sending over the network, etc.)
+//! let bytes = expr.to_bytes()?;
 //!
-//!  // Decode bytes from somewhere (over network, etc.) back to Expr
-//!  let decoded_expr = Expr::from_bytes(&bytes)?;
-//!  assert_eq!(expr, decoded_expr);
+//! // Decode bytes from somewhere (over network, etc.) back to Expr
+//! let decoded_expr = Expr::from_bytes(&bytes)?;
+//! assert_eq!(expr, decoded_expr);
 //! # Ok(())
 //! # }
 //! ```

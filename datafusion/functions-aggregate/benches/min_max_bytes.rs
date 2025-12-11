@@ -29,8 +29,8 @@ use arrow::{
     array::{ArrayRef, StringArray},
     datatypes::{DataType, Field, Schema},
 };
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use datafusion_expr::{function::AccumulatorArgs, GroupsAccumulator};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use datafusion_expr::{GroupsAccumulator, function::AccumulatorArgs};
 use datafusion_functions_aggregate::min_max;
 use datafusion_physical_expr::expressions::col;
 
@@ -44,6 +44,7 @@ fn create_max_bytes_accumulator() -> Box<dyn GroupsAccumulator> {
     max.create_groups_accumulator(AccumulatorArgs {
         return_field: Arc::new(Field::new("value", DataType::Utf8, true)),
         schema: &input_schema,
+        expr_fields: &[Field::new("value", DataType::Utf8, true).into()],
         ignore_nulls: true,
         order_bys: &[],
         is_reversed: false,

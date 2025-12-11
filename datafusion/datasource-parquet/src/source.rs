@@ -31,16 +31,15 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
-use datafusion_datasource::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
-};
 
-use arrow::datatypes::{SchemaRef, TimeUnit};
+use arrow::datatypes::TimeUnit;
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{DataFusionError, Statistics};
+use datafusion_common::DataFusionError;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::TableSchema;
 use datafusion_physical_expr::conjunction;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -85,7 +84,6 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 ///  │.───────────────────.│
 ///  │                     )
 ///   `───────────────────'
-///
 /// ```
 ///
 /// # Example: Create a `DataSourceExec`
@@ -104,11 +102,11 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let predicate = lit(true);
 /// let source = Arc::new(
-///     ParquetSource::default()
-///     .with_predicate(predicate)
+///     ParquetSource::new(Arc::clone(&file_schema))
+///         .with_predicate(predicate)
 /// );
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
-/// let config = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+/// let config = FileScanConfigBuilder::new(object_store_url, source)
 ///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024)).build();
 /// let exec = DataSourceExec::from_data_source(config);
 /// ```
@@ -133,7 +131,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 ///   details.
 ///
 /// * Schema evolution: read parquet files with different schemas into a unified
-///   table schema. See [`SchemaAdapterFactory`] for more details.
+///   table schema. See [`DefaultPhysicalExprAdapterFactory`] for more details.
 ///
 /// * metadata_size_hint: controls the number of bytes read from the end of the
 ///   file in the initial I/O when the default [`ParquetFileReaderFactory`]. If a
@@ -231,7 +229,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 /// let partitioned_file = PartitionedFile::new("my_file.parquet", 1234)
 ///   .with_extensions(Arc::new(access_plan));
 /// // create a FileScanConfig to scan this file
-/// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), schema(), Arc::new(ParquetSource::default()))
+/// let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), Arc::new(ParquetSource::new(schema())))
 ///     .with_file(partitioned_file).build();
 /// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
@@ -240,7 +238,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).
 ///
-/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_parquet_index.rs
+/// [`parquet_index_advanced` example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/data_io/parquet_advanced_index.rs
 ///
 /// # Execution Overview
 ///
@@ -260,13 +258,14 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 ///   [`Self::with_pushdown_filters`]).
 ///
 /// * Step 5: As each [`RecordBatch`] is read, it may be adapted by a
-///   [`SchemaAdapter`] to match the table schema. By default missing columns are
-///   filled with nulls, but this can be customized via [`SchemaAdapterFactory`].
+///   [`DefaultPhysicalExprAdapterFactory`] to match the table schema. By default missing columns are
+///   filled with nulls, but this can be customized via [`PhysicalExprAdapterFactory`].
 ///
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
 /// [`SchemaAdapter`]: datafusion_datasource::schema_adapter::SchemaAdapter
 /// [`ParquetMetadata`]: parquet::file::metadata::ParquetMetaData
-#[derive(Clone, Default, Debug)]
+/// [`PhysicalExprAdapterFactory`]: datafusion_physical_expr_adapter::PhysicalExprAdapterFactory
+#[derive(Clone, Debug)]
 pub struct ParquetSource {
     /// Options for reading Parquet files
     pub(crate) table_parquet_options: TableParquetOptions,
@@ -275,31 +274,53 @@ pub struct ParquetSource {
     /// The schema of the file.
     /// In particular, this is the schema of the table without partition columns,
     /// *not* the physical schema of the file.
-    pub(crate) file_schema: Option<SchemaRef>,
+    pub(crate) table_schema: TableSchema,
     /// Optional predicate for row filtering during parquet scan
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
-    /// Optional user defined schema adapter
-    pub(crate) schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
     /// Batch size configuration
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
-    pub(crate) projected_statistics: Option<Statistics>,
+    /// Projection to apply to the output.
+    pub(crate) projection: ProjectionExprs,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
 }
 
 impl ParquetSource {
     /// Create a new ParquetSource to read the data specified in the file scan
-    /// configuration with the provided `TableParquetOptions`.
-    /// if default values are going to be used, use `ParguetConfig::default()` instead
-    pub fn new(table_parquet_options: TableParquetOptions) -> Self {
+    /// configuration with the provided schema.
+    ///
+    /// Uses default `TableParquetOptions`.
+    /// To set custom options, use [ParquetSource::with_table_parquet_options`].
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
+        // Projection over the full table schema (file columns + partition columns)
+        let full_schema = table_schema.table_schema();
+        let indices: Vec<usize> = (0..full_schema.fields().len()).collect();
         Self {
-            table_parquet_options,
-            ..Self::default()
+            projection: ProjectionExprs::from_indices(&indices, full_schema),
+            table_schema,
+            table_parquet_options: TableParquetOptions::default(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            predicate: None,
+            parquet_file_reader_factory: None,
+            batch_size: None,
+            metadata_size_hint: None,
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
         }
+    }
+
+    /// Set the `TableParquetOptions` for this ParquetSource.
+    pub fn with_table_parquet_options(
+        mut self,
+        table_parquet_options: TableParquetOptions,
+    ) -> Self {
+        self.table_parquet_options = table_parquet_options;
+        self
     }
 
     /// Set the metadata size hint
@@ -314,6 +335,7 @@ impl ParquetSource {
     }
 
     /// Set predicate information
+    #[expect(clippy::needless_pass_by_value)]
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
         conf.predicate = Some(Arc::clone(&predicate));
@@ -349,7 +371,6 @@ impl ParquetSource {
     }
 
     /// Optional user defined parquet file reader factory.
-    ///
     pub fn with_parquet_file_reader_factory(
         mut self,
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
@@ -384,6 +405,11 @@ impl ParquetSource {
     /// Return the value described in [`Self::with_reorder_filters`]
     fn reorder_filters(&self) -> bool {
         self.table_parquet_options.global.reorder_filters
+    }
+
+    /// Return the value of [`datafusion_common::config::ParquetOptions::force_filter_selections`]
+    fn force_filter_selections(&self) -> bool {
+        self.table_parquet_options.global.force_filter_selections
     }
 
     /// If enabled, the reader will read the page index
@@ -425,28 +451,6 @@ impl ParquetSource {
     /// `pushdown_filters`
     pub fn max_predicate_cache_size(&self) -> Option<usize> {
         self.table_parquet_options.global.max_predicate_cache_size
-    }
-
-    /// Applies schema adapter factory from the FileScanConfig if present.
-    ///
-    /// # Arguments
-    /// * `conf` - FileScanConfig that may contain a schema adapter factory
-    /// # Returns
-    /// The converted FileSource with schema adapter factory applied if provided
-    pub fn apply_schema_adapter(
-        self,
-        conf: &FileScanConfig,
-    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
-        let file_source: Arc<dyn FileSource> = self.into();
-
-        // If the FileScanConfig.file_source() has a schema adapter factory, apply it
-        if let Some(factory) = conf.file_source().schema_adapter_factory() {
-            file_source.with_schema_adapter_factory(
-                Arc::<dyn SchemaAdapterFactory>::clone(&factory),
-            )
-        } else {
-            Ok(file_source)
-        }
     }
 
     #[cfg(feature = "parquet_encryption")]
@@ -494,48 +498,11 @@ impl FileSource for ParquetSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        let projection = base_config
-            .file_column_projection_indices()
-            .unwrap_or_else(|| (0..base_config.file_schema().fields().len()).collect());
-
-        let (expr_adapter_factory, schema_adapter_factory) = match (
-            base_config.expr_adapter_factory.as_ref(),
-            self.schema_adapter_factory.as_ref(),
-        ) {
-            (Some(expr_adapter_factory), Some(schema_adapter_factory)) => {
-                // Use both the schema adapter factory and the expr adapter factory.
-                // This results in the the SchemaAdapter being used for projections (e.g. a column was selected that is a UInt32 in the file and a UInt64 in the table schema)
-                // but the PhysicalExprAdapterFactory being used for predicate pushdown and stats pruning.
-                (
-                    Some(Arc::clone(expr_adapter_factory)),
-                    Arc::clone(schema_adapter_factory),
-                )
-            }
-            (Some(expr_adapter_factory), None) => {
-                // If no custom schema adapter factory is provided but an expr adapter factory is provided use the expr adapter factory alongside the default schema adapter factory.
-                // This means that the PhysicalExprAdapterFactory will be used for predicate pushdown and stats pruning, while the default schema adapter factory will be used for projections.
-                (
-                    Some(Arc::clone(expr_adapter_factory)),
-                    Arc::new(DefaultSchemaAdapterFactory) as _,
-                )
-            }
-            (None, Some(schema_adapter_factory)) => {
-                // If a custom schema adapter factory is provided but no expr adapter factory is provided use the custom SchemaAdapter for both projections and predicate pushdown.
-                // This maximizes compatibility with existing code that uses the SchemaAdapter API and did not explicitly opt into the PhysicalExprAdapterFactory API.
-                (None, Arc::clone(schema_adapter_factory) as _)
-            }
-            (None, None) => {
-                // If no custom schema adapter factory or expr adapter factory is provided, use the default schema adapter factory and the default physical expr adapter factory.
-                // This means that the default SchemaAdapter will be used for projections (e.g. a column was selected that is a UInt32 in the file and a UInt64 in the table schema)
-                // and the default PhysicalExprAdapterFactory will be used for predicate pushdown and stats pruning.
-                // This is the default behavior with not customization and means that most users of DataFusion will be cut over to the new PhysicalExprAdapterFactory API.
-                (
-                    Some(Arc::new(DefaultPhysicalExprAdapterFactory) as _),
-                    Arc::new(DefaultSchemaAdapterFactory) as _,
-                )
-            }
-        };
+    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+        let expr_adapter_factory = base_config
+            .expr_adapter_factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory) as _);
 
         let parquet_file_reader_factory =
             self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
@@ -558,25 +525,24 @@ impl FileSource for ParquetSource {
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
-        Arc::new(ParquetOpener {
+        let opener = Arc::new(ParquetOpener {
             partition_index: partition,
-            projection: Arc::from(projection),
+            projection: self.projection.clone(),
             batch_size: self
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
             limit: base_config.limit,
             predicate: self.predicate.clone(),
-            logical_file_schema: Arc::clone(base_config.file_schema()),
-            partition_fields: base_config.table_partition_cols().clone(),
+            table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
+            force_filter_selections: self.force_filter_selections(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
-            schema_adapter_factory,
             coerce_int96,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties,
@@ -584,11 +550,16 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
-        })
+        });
+        Ok(opener)
     }
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn table_schema(&self) -> &TableSchema {
+        &self.table_schema
     }
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
@@ -601,42 +572,21 @@ impl FileSource for ParquetSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self {
-            file_schema: Some(schema),
-            ..self.clone()
-        })
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        source.projection = self.projection.try_merge(projection)?;
+        Ok(Some(Arc::new(source)))
     }
 
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projected_statistics = Some(statistics);
-        Arc::new(conf)
-    }
-
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection)
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> datafusion_common::Result<Statistics> {
-        let statistics = &self.projected_statistics;
-        let statistics = statistics
-            .clone()
-            .expect("projected_statistics must be set");
-        // When filters are pushed down, we have no way of knowing the exact statistics.
-        // Note that pruning predicate is also a kind of filter pushdown.
-        // (bloom filters use `pruning_predicate` too).
-        // Because filter pushdown may happen dynamically as long as there is a predicate
-        // if we have *any* predicate applied, we can't guarantee the statistics are exact.
-        if self.filter().is_some() {
-            Ok(statistics.to_inexact())
-        } else {
-            Ok(statistics)
-        }
     }
 
     fn file_type(&self) -> &str {
@@ -661,13 +611,11 @@ impl FileSource for ParquetSource {
                 // the actual predicates are built in reference to the physical schema of
                 // each file, which we do not have at this point and hence cannot use.
                 // Instead we use the logical schema of the file (the table schema without partition columns).
-                if let (Some(file_schema), Some(predicate)) =
-                    (&self.file_schema, &self.predicate)
-                {
+                if let Some(predicate) = &self.predicate {
                     let predicate_creation_errors = Count::new();
                     if let (Some(pruning_predicate), _) = build_pruning_predicates(
                         Some(predicate),
-                        file_schema,
+                        self.table_schema.table_schema(),
                         &predicate_creation_errors,
                     ) {
                         let mut guarantees = pruning_predicate
@@ -700,11 +648,7 @@ impl FileSource for ParquetSource {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
-        let Some(file_schema) = self.file_schema.clone() else {
-            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            ));
-        };
+        let table_schema = self.table_schema.table_schema();
         // Determine if based on configs we should push filters down.
         // If either the table / scan itself or the config has pushdown enabled,
         // we will push down the filters.
@@ -720,7 +664,7 @@ impl FileSource for ParquetSource {
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {
-                if can_expr_be_pushed_down_with_schemas(&filter, &file_schema) {
+                if can_expr_be_pushed_down_with_schemas(&filter, table_schema) {
                     PushedDownPredicate::supported(filter)
                 } else {
                     PushedDownPredicate::unsupported(filter)
@@ -766,33 +710,21 @@ impl FileSource for ParquetSource {
         )
         .with_updated_node(source))
     }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::Schema;
     use datafusion_physical_expr::expressions::lit;
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_parquet_source_predicate_same_as_filter() {
         let predicate = lit(true);
 
-        let parquet_source = ParquetSource::default().with_predicate(predicate);
+        let parquet_source =
+            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
         // same value. but filter() call Arc::clone internally
         assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
     }

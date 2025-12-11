@@ -22,7 +22,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate, TimeZone};
 
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
@@ -108,7 +108,14 @@ impl ScalarUDFImpl for CurrentDateFunc {
         let days = info
             .execution_props()
             .config_options()
-            .and_then(|config| config.execution.time_zone.parse::<Tz>().ok())
+            .and_then(|config| {
+                config
+                    .execution
+                    .time_zone
+                    .as_ref()
+                    .map(|tz| tz.parse::<Tz>().ok())
+            })
+            .flatten()
             .map_or_else(
                 || datetime_to_days(&now_ts),
                 |tz| {

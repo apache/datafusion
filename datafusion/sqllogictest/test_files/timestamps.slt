@@ -45,6 +45,9 @@ create table ts_data_millis as select arrow_cast(ts / 1000000, 'Timestamp(Millis
 statement ok
 create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
 
+statement ok
+create table ts_data_micros_kolkata as select arrow_cast(ts / 1000, 'Timestamp(Microsecond, Some("Asia/Kolkata"))') as ts, value from ts_data;
+
 
 ##########
 ## Current date Tests
@@ -691,11 +694,11 @@ select
 ----
 08:09:10.123456789 13:14:15.123456 13:14:15.123 13:14:15
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64\(ns\) type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64\(ns\) type
 SELECT TIME 'not a time' as time;
 
 # invalid time
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64\(ns\) type
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64\(ns\) type
 SELECT TIME '24:01:02' as time;
 
 # invalid timezone
@@ -1687,6 +1690,30 @@ SELECT DATE_TRUNC('second', '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
 
+# DATE_TRUNC handling of times before the unix epoch (issue 18334)
+query PPPPPPPPPPP
+SELECT
+    d,
+    DATE_TRUNC('year', d),
+    DATE_TRUNC('quarter', d),
+    DATE_TRUNC('month', d),
+    DATE_TRUNC('week', d),
+    DATE_TRUNC('day', d),
+    DATE_TRUNC('hour', d),
+    DATE_TRUNC('minute', d),
+    DATE_TRUNC('second', d),
+    DATE_TRUNC('millisecond', d),
+    DATE_TRUNC('microsecond', d),
+FROM (VALUES
+    (TIMESTAMP '1900-06-15 07:09:00'),
+    (TIMESTAMP '1970-01-01 00:00:00'),
+    (TIMESTAMP '2024-12-31 23:39:01.123456789')
+) AS t(d);
+----
+1900-06-15T07:09:00 1900-01-01T00:00:00 1900-04-01T00:00:00 1900-06-01T00:00:00 1900-06-11T00:00:00 1900-06-15T00:00:00 1900-06-15T07:00:00 1900-06-15T07:09:00 1900-06-15T07:09:00 1900-06-15T07:09:00 1900-06-15T07:09:00
+1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1969-12-29T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00 1970-01-01T00:00:00
+2024-12-31T23:39:01.123456789 2024-01-01T00:00:00 2024-10-01T00:00:00 2024-12-01T00:00:00 2024-12-30T00:00:00 2024-12-31T00:00:00 2024-12-31T23:00:00 2024-12-31T23:39:00 2024-12-31T23:39:01 2024-12-31T23:39:01.123 2024-12-31T23:39:01.123456
+
 # Test that interval can add a timestamp
 query P
 SELECT timestamp '2013-07-01 12:00:00' + INTERVAL '8' DAY;
@@ -1846,27 +1873,6 @@ SELECT
 ;
 ----
 true false true true
-
-
-
-##########
-## Common timestamp data
-##########
-
-statement ok
-drop table ts_data
-
-statement ok
-drop table ts_data_nanos
-
-statement ok
-drop table ts_data_micros
-
-statement ok
-drop table ts_data_millis
-
-statement ok
-drop table ts_data_secs
 
 
 
@@ -2244,7 +2250,7 @@ SET TIME ZONE = '+05:00'
 
 statement ok
 CREATE TABLE foo (time TIMESTAMPTZ) AS VALUES
-    ('2020-01-01T00:00:00+05:00'), 
+    ('2020-01-01T00:00:00+05:00'),
     ('2020-01-01T01:00:00+05:00'),
     ('2020-01-01T02:00:00+05:00'),
     ('2020-01-01T03:00:00+05:00')
@@ -2329,17 +2335,17 @@ NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:5
 # verify timestamp syntax styles are consistent
 query BBBBBBBBBBBBB
 SELECT to_timestamp(null) is null as c1,
-       null::timestamp is null as c2, 
-       cast(null as timestamp) is null as c3, 
-       to_timestamp(0) = 0::timestamp as c4, 
-       to_timestamp(1926632005) = 1926632005::timestamp as c5, 
-       to_timestamp(1) = 1::timestamp as c6, 
-       to_timestamp(-1) = -1::timestamp as c7, 
+       null::timestamp is null as c2,
+       cast(null as timestamp) is null as c3,
+       to_timestamp(0) = 0::timestamp as c4,
+       to_timestamp(1926632005) = 1926632005::timestamp as c5,
+       to_timestamp(1) = 1::timestamp as c6,
+       to_timestamp(-1) = -1::timestamp as c7,
        to_timestamp(0-1) = (0-1)::timestamp as c8,
-       to_timestamp(0) = cast(0 as timestamp) as c9, 
-       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10, 
-       to_timestamp(1) = cast(1 as timestamp) as c11, 
-       to_timestamp(-1) = cast(-1 as timestamp) as c12, 
+       to_timestamp(0) = cast(0 as timestamp) as c9,
+       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10,
+       to_timestamp(1) = cast(1 as timestamp) as c11,
+       to_timestamp(-1) = cast(-1 as timestamp) as c12,
        to_timestamp(0-1) = cast(0-1 as timestamp) as c13
 ----
 true true true true true true true true true true true true true
@@ -2352,10 +2358,10 @@ Timestamp(ns) Timestamp(ns) Timestamp(ns)
 
 # verify timestamp output types using timestamp literal syntax
 query BBBBBB
-SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1, 
+SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1,
        arrow_typeof(to_timestamp(null)) = arrow_typeof(null::timestamp) as c2,
        arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof('2023-01-10 12:34:56.000'::timestamp) as c3,
-       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4, 
+       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4,
        arrow_typeof(to_timestamp(null)) = arrow_typeof(cast(null as timestamp)) as c5,
        arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof(cast('2023-01-10 12:34:56.000' as timestamp)) as c6
 ----
@@ -2599,13 +2605,13 @@ drop table table_a
 ##########
 
 statement ok
-create table table_a (ts timestamp) as values 
-    ('2020-09-08T11:42:29Z'::timestamp), 
+create table table_a (ts timestamp) as values
+    ('2020-09-08T11:42:29Z'::timestamp),
     ('2020-09-08T12:42:29Z'::timestamp),
     ('2020-09-08T13:42:29Z'::timestamp)
 
 statement ok
-create table table_b (ts timestamp) as values 
+create table table_b (ts timestamp) as values
     ('2020-09-08T11:42:29.190Z'::timestamp),
     ('2020-09-08T13:42:29.190Z'::timestamp),
     ('2020-09-08T12:42:29.190Z'::timestamp)
@@ -2727,8 +2733,8 @@ statement ok
 drop table t1
 
 statement ok
-create table table_a (val int, ts1 timestamp, ts2 timestamp) as values 
-    (1, '2018-07-01T06:00:00'::timestamp, '2018-07-01T07:00:00'::timestamp), 
+create table table_a (val int, ts1 timestamp, ts2 timestamp) as values
+    (1, '2018-07-01T06:00:00'::timestamp, '2018-07-01T07:00:00'::timestamp),
     (2, '2018-07-01T07:00:00'::timestamp, '2018-07-01T08:00:00'::timestamp)
 
 query I?
@@ -3032,7 +3038,7 @@ NULL
 
 query T
 SELECT to_char(date_column, '%Y-%m-%d')
-FROM (VALUES 
+FROM (VALUES
     (DATE '2020-09-01'),
     (NULL)
 ) AS t(date_column);
@@ -3042,7 +3048,7 @@ NULL
 
 query T
 SELECT to_char(date_column, '%Y-%m-%d')
-FROM (VALUES 
+FROM (VALUES
     (NULL),
     (DATE '2020-09-01')
 ) AS t(date_column);
@@ -3243,11 +3249,11 @@ statement error
 select to_local_time('2024-04-01T00:00:20Z'::timestamp, 'some string');
 
 # invalid argument data type
-statement error The to_local_time function can only accept Timestamp as the arg got Utf8
+statement error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Timestamp but received NativeType::String, DataType: Utf8
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone
-statement error DataFusion error: Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
 select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/timezone');
 
 # valid query
@@ -3270,6 +3276,13 @@ query P
 select to_local_time(NULL);
 ----
 NULL
+
+query PT
+select
+  to_local_time(arrow_cast(null, 'Timestamp(s, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast(null, 'Timestamp(s, "Asia/Tokyo")')));
+----
+NULL Timestamp(s)
 
 query PTPT
 select
@@ -3679,3 +3692,104 @@ SELECT
 FROM (SELECT CAST('2005-09-10 13:31:00 +02:00' AS timestamp with time zone) AS a)
 ----
 Timestamp(ns, "+00") 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z
+
+query P
+SELECT
+    date_trunc('millisecond', ts)
+FROM ts_data_micros_kolkata
+----
+2020-09-08T19:12:29.190+05:30
+2020-09-08T18:12:29.190+05:30
+2020-09-08T17:12:29.190+05:30
+
+
+##########
+## Casting between timestamp with and without timezone
+##########
+
+# Test casting from Timestamp(Nanosecond, Some("UTC")) to Timestamp(Nanosecond, None)
+# Verifies that the underlying nanosecond values are preserved when removing timezone
+
+# Verify input type
+query T
+SELECT arrow_typeof(arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+Timestamp(ns, "UTC")
+
+# Verify output type after casting
+query T
+SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))'), 'Timestamp(Nanosecond, None)'));
+----
+Timestamp(ns)
+
+# Verify values are preserved when casting from timestamp with timezone to timestamp without timezone
+query P rowsort
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, None)')
+FROM (VALUES
+  (arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(2, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(3, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(4, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(5, 'Timestamp(Nanosecond, Some("UTC"))'))
+) t;
+----
+1970-01-01T00:00:00.000000001
+1970-01-01T00:00:00.000000002
+1970-01-01T00:00:00.000000003
+1970-01-01T00:00:00.000000004
+1970-01-01T00:00:00.000000005
+
+# Test casting from Timestamp(Nanosecond, None) to Timestamp(Nanosecond, Some("UTC"))
+# Verifies that the underlying nanosecond values are preserved when adding timezone
+
+# Verify input type
+query T
+SELECT arrow_typeof(arrow_cast(1, 'Timestamp(Nanosecond, None)'));
+----
+Timestamp(ns)
+
+# Verify output type after casting
+query T
+SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, None)'), 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+Timestamp(ns, "UTC")
+
+# Verify values are preserved when casting from timestamp without timezone to timestamp with timezone
+query P rowsort
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))')
+FROM (VALUES
+  (arrow_cast(1, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(2, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(3, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(4, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(5, 'Timestamp(Nanosecond, None)'))
+) t;
+----
+1970-01-01T00:00:00.000000001Z
+1970-01-01T00:00:00.000000002Z
+1970-01-01T00:00:00.000000003Z
+1970-01-01T00:00:00.000000004Z
+1970-01-01T00:00:00.000000005Z
+
+
+##########
+## Common timestamp data
+##########
+
+statement ok
+drop table ts_data
+
+statement ok
+drop table ts_data_nanos
+
+statement ok
+drop table ts_data_micros
+
+statement ok
+drop table ts_data_millis
+
+statement ok
+drop table ts_data_secs
+
+statement ok
+drop table ts_data_micros_kolkata

@@ -24,7 +24,7 @@ use arrow::array::RecordBatch;
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 
-use super::{spill_manager::SpillManager, IPCStreamWriter};
+use super::{IPCStreamWriter, spill_manager::SpillManager};
 
 /// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 /// Caller is able to use this struct to incrementally append in-memory batches to
@@ -86,6 +86,12 @@ impl InProgressSpillFile {
             self.spill_writer.metrics.spilled_rows.add(spilled_rows);
         }
         Ok(())
+    }
+
+    /// Returns a reference to the in-progress file, if it exists.
+    /// This can be used to get the file path for creating readers before the file is finished.
+    pub fn file(&self) -> Option<&RefCountedTempFile> {
+        self.in_progress_file.as_ref()
     }
 
     /// Finalizes the file, returning the completed file reference.

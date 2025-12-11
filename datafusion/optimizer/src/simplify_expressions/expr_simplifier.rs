@@ -18,7 +18,7 @@
 //! Expression simplification API
 
 use arrow::{
-    array::{new_null_array, AsArray},
+    array::{AsArray, new_null_array},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -28,36 +28,37 @@ use std::ops::Not;
 use std::sync::Arc;
 
 use datafusion_common::{
+    DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
+};
+use datafusion_common::{
+    HashMap,
     cast::{as_large_list_array, as_list_array},
     metadata::FieldMetadata,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
-use datafusion_common::{
-    exec_datafusion_err, internal_err, DFSchema, DataFusionError, Result, ScalarValue,
-};
 use datafusion_expr::{
-    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility,
+    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
+    binary::BinaryTypeCoercer, lit, or,
 };
+use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery},
     utils::{iter_conjunction, iter_conjunction_owned},
 };
-use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::guarantees::GuaranteeRewriter;
+use crate::simplify_expressions::SimplifyInfo;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
     unwrap_cast_in_comparison_for_binary,
 };
-use crate::simplify_expressions::SimplifyInfo;
+use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
 use regex::Regex;
@@ -69,23 +70,21 @@ use regex::Regex;
 ///
 /// For example:
 /// ```
-/// use arrow::datatypes::{Schema, Field, DataType};
-/// use datafusion_expr::{col, lit};
+/// use arrow::datatypes::{DataType, Field, Schema};
 /// use datafusion_common::{DataFusionError, ToDFSchema};
 /// use datafusion_expr::execution_props::ExecutionProps;
 /// use datafusion_expr::simplify::SimplifyContext;
+/// use datafusion_expr::{col, lit};
 /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 ///
 /// // Create the schema
-/// let schema = Schema::new(vec![
-///     Field::new("i", DataType::Int64, false),
-///   ])
-///   .to_dfschema_ref().unwrap();
+/// let schema = Schema::new(vec![Field::new("i", DataType::Int64, false)])
+///     .to_dfschema_ref()
+///     .unwrap();
 ///
 /// // Create the simplifier
 /// let props = ExecutionProps::new();
-/// let context = SimplifyContext::new(&props)
-///    .with_schema(schema);
+/// let context = SimplifyContext::new(&props).with_schema(schema);
 /// let simplifier = ExprSimplifier::new(context);
 ///
 /// // Use the simplifier
@@ -144,35 +143,35 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// ```
     /// use arrow::datatypes::DataType;
-    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_common::DFSchema;
     /// use datafusion_common::Result;
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_expr::simplify::SimplifyInfo;
+    /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
-    /// use datafusion_common::DFSchema;
     /// use std::sync::Arc;
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// /// See SimplifyContext for a structure that does this.
     /// #[derive(Default)]
     /// struct Info {
-    ///   execution_props: ExecutionProps,
+    ///     execution_props: ExecutionProps,
     /// };
     ///
     /// impl SimplifyInfo for Info {
-    ///   fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-    ///     Ok(false)
-    ///   }
-    ///   fn nullable(&self, expr: &Expr) -> Result<bool> {
-    ///     Ok(true)
-    ///   }
-    ///   fn execution_props(&self) -> &ExecutionProps {
-    ///     &self.execution_props
-    ///   }
-    ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-    ///     Ok(DataType::Int32)
-    ///   }
+    ///     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
+    ///         Ok(false)
+    ///     }
+    ///     fn nullable(&self, expr: &Expr) -> Result<bool> {
+    ///         Ok(true)
+    ///     }
+    ///     fn execution_props(&self) -> &ExecutionProps {
+    ///         &self.execution_props
+    ///     }
+    ///     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
+    ///         Ok(DataType::Int32)
+    ///     }
     /// }
     ///
     /// // Create the simplifier
@@ -198,7 +197,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// optimizations.
     ///
     /// See [Self::simplify] for details and usage examples.
-    ///
     #[deprecated(
         since = "48.0.0",
         note = "Use `simplify_with_cycle_count_transformed` instead"
@@ -222,7 +220,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// - The number of simplification cycles that were performed
     ///
     /// See [Self::simplify] for details and usage examples.
-    ///
     pub fn simplify_with_cycle_count_transformed(
         &self,
         mut expr: Expr,
@@ -230,7 +227,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
-        let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
+        let guarantees_map: HashMap<&Expr, &NullableInterval> =
+            self.guarantees.iter().map(|(k, v)| (k, v)).collect();
 
         if self.canonicalize {
             expr = expr.rewrite(&mut Canonicalizer::new()).data()?
@@ -247,7 +245,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
             } = expr
                 .rewrite(&mut const_evaluator)?
                 .transform_data(|expr| expr.rewrite(&mut simplifier))?
-                .transform_data(|expr| expr.rewrite(&mut guarantee_rewriter))?;
+                .transform_data(|expr| {
+                    rewrite_with_guarantees_map(expr, &guarantees_map)
+                })?;
             expr = data;
             num_cycles += 1;
             // Track if any transformation occurred
@@ -286,24 +286,24 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_expr::{col, lit, Expr};
-    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
-    ///   Field::new("x", DataType::Int64, false),
-    ///   Field::new("y", DataType::UInt32, false),
-    ///   Field::new("z", DataType::Int64, false),
-    ///   ])
-    ///   .to_dfschema_ref().unwrap();
+    ///     Field::new("x", DataType::Int64, false),
+    ///     Field::new("y", DataType::UInt32, false),
+    ///     Field::new("z", DataType::Int64, false),
+    /// ])
+    /// .to_dfschema_ref()
+    /// .unwrap();
     ///
     /// // Create the simplifier
     /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
-    ///    .with_schema(schema);
+    /// let context = SimplifyContext::new(&props).with_schema(schema);
     ///
     /// // Expression: (x >= 3) AND (y + 2 < 10) AND (z > 5)
     /// let expr_x = col("x").gt_eq(lit(3_i64));
@@ -312,15 +312,18 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// let expr = expr_x.and(expr_y).and(expr_z.clone());
     ///
     /// let guarantees = vec![
-    ///    // x ∈ [3, 5]
-    ///    (
-    ///        col("x"),
-    ///        NullableInterval::NotNull {
-    ///            values: Interval::make(Some(3_i64), Some(5_i64)).unwrap()
-    ///        }
-    ///    ),
-    ///    // y = 3
-    ///    (col("y"), NullableInterval::from(ScalarValue::UInt32(Some(3)))),
+    ///     // x ∈ [3, 5]
+    ///     (
+    ///         col("x"),
+    ///         NullableInterval::NotNull {
+    ///             values: Interval::make(Some(3_i64), Some(5_i64)).unwrap(),
+    ///         },
+    ///     ),
+    ///     // y = 3
+    ///     (
+    ///         col("y"),
+    ///         NullableInterval::from(ScalarValue::UInt32(Some(3))),
+    ///     ),
     /// ];
     /// let simplifier = ExprSimplifier::new(context).with_guarantees(guarantees);
     /// let output = simplifier.simplify(expr).unwrap();
@@ -345,24 +348,24 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_expr::{col, lit, Expr};
-    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
     /// use datafusion_expr::execution_props::ExecutionProps;
+    /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_expr::simplify::SimplifyContext;
+    /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
-    ///   Field::new("a", DataType::Int64, false),
-    ///   Field::new("b", DataType::Int64, false),
-    ///   Field::new("c", DataType::Int64, false),
-    ///   ])
-    ///   .to_dfschema_ref().unwrap();
+    ///     Field::new("a", DataType::Int64, false),
+    ///     Field::new("b", DataType::Int64, false),
+    ///     Field::new("c", DataType::Int64, false),
+    /// ])
+    /// .to_dfschema_ref()
+    /// .unwrap();
     ///
     /// // Create the simplifier
     /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
-    ///    .with_schema(schema);
+    /// let context = SimplifyContext::new(&props).with_schema(schema);
     /// let simplifier = ExprSimplifier::new(context);
     ///
     /// // Expression: a = c AND 1 = b
@@ -376,9 +379,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// // If canonicalization is disabled, the expression is not changed
     /// let non_canonicalized = simplifier
-    ///   .with_canonicalize(false)
-    ///   .simplify(expr.clone())
-    ///   .unwrap();
+    ///     .with_canonicalize(false)
+    ///     .simplify(expr.clone())
+    ///     .unwrap();
     ///
     /// assert_eq!(non_canonicalized, expr);
     /// ```
@@ -437,7 +440,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// assert_eq!(simplified_expr.data, lit(true));
     /// // Only 1 cycle was executed
     /// assert_eq!(count, 1);
-    ///
     /// ```
     pub fn with_max_cycles(mut self, max_simplifier_cycles: u32) -> Self {
         self.max_simplifier_cycles = max_simplifier_cycles;
@@ -573,7 +575,17 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
                 ConstSimplifyResult::NotSimplified(s, m) => {
                     Ok(Transformed::no(Expr::Literal(s, m)))
                 }
-                ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
+                ConstSimplifyResult::SimplifyRuntimeError(err, expr) => {
+                    // For CAST expressions with literal inputs, propagate the error at plan time rather than deferring to execution time.
+                    // This provides clearer error messages and fails fast.
+                    if let Expr::Cast(Cast { ref expr, .. })
+                    | Expr::TryCast(TryCast { ref expr, .. }) = expr
+                        && matches!(expr.as_ref(), Expr::Literal(_, _))
+                    {
+                        return Err(err);
+                    }
+                    // For other expressions (like CASE, COALESCE), preserve the original
+                    // to allow short-circuit evaluation at execution time
                     Ok(Transformed::yes(expr))
                 }
             },
@@ -697,7 +709,10 @@ impl<'a> ConstEvaluator<'a> {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
                     ConstSimplifyResult::SimplifyRuntimeError(
-                        exec_datafusion_err!("Could not evaluate the expression, found a result of length {}", a.len()),
+                        exec_datafusion_err!(
+                            "Could not evaluate the expression, found a result of length {}",
+                            a.len()
+                        ),
                         expr,
                     )
                 } else if as_list_array(&a).is_ok() {
@@ -713,35 +728,12 @@ impl<'a> ConstEvaluator<'a> {
                 } else {
                     // Non-ListArray
                     match ScalarValue::try_from_array(&a, 0) {
-                        Ok(s) => {
-                            // TODO: support the optimization for `Map` type after support impl hash for it
-                            if matches!(&s, ScalarValue::Map(_)) {
-                                ConstSimplifyResult::SimplifyRuntimeError(
-                                    DataFusionError::NotImplemented("Const evaluate for Map type is still not supported".to_string()),
-                                    expr,
-                                )
-                            } else {
-                                ConstSimplifyResult::Simplified(s, metadata)
-                            }
-                        }
+                        Ok(s) => ConstSimplifyResult::Simplified(s, metadata),
                         Err(err) => ConstSimplifyResult::SimplifyRuntimeError(err, expr),
                     }
                 }
             }
-            ColumnarValue::Scalar(s) => {
-                // TODO: support the optimization for `Map` type after support impl hash for it
-                if matches!(&s, ScalarValue::Map(_)) {
-                    ConstSimplifyResult::SimplifyRuntimeError(
-                        DataFusionError::NotImplemented(
-                            "Const evaluate for Map type is still not supported"
-                                .to_string(),
-                        ),
-                        expr,
-                    )
-                } else {
-                    ConstSimplifyResult::Simplified(s, metadata)
-                }
-            }
+            ColumnarValue::Scalar(s) => ConstSimplifyResult::Simplified(s, metadata),
         }
     }
 }
@@ -1060,7 +1052,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                         right: left_right,
                     }))
                 } else {
-                    return internal_err!("can_reduce_to_equal_statement should only be called with a BinaryExpr");
+                    return internal_err!(
+                        "can_reduce_to_equal_statement should only be called with a BinaryExpr"
+                    );
                 }
             }
 
@@ -1673,7 +1667,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                                     .to_string();
                                 Transformed::yes(Expr::Like(Like {
                                     pattern: Box::new(to_string_scalar(
-                                        data_type,
+                                        &data_type,
                                         Some(simplified_pattern),
                                     )),
                                     ..like
@@ -1985,7 +1979,7 @@ fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
     }
 }
 
-fn to_string_scalar(data_type: DataType, value: Option<String>) -> Expr {
+fn to_string_scalar(data_type: &DataType, value: Option<String>) -> Expr {
     match data_type {
         DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value), None),
         DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value), None),
@@ -2169,7 +2163,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
     use arrow::datatypes::FieldRef;
-    use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
+    use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
     use datafusion_expr::{
         expr::WindowFunction,
         function::{
@@ -4968,6 +4962,56 @@ mod tests {
                 None
             ))
         );
+    }
+
+    #[test]
+    fn simplify_cast_literal() {
+        // Test that CAST(literal) expressions are evaluated at plan time
+
+        // CAST(123 AS Int64) should become 123i64
+        let expr = Expr::Cast(Cast::new(Box::new(lit(123i32)), DataType::Int64));
+        let expected = lit(123i64);
+        assert_eq!(simplify(expr), expected);
+
+        // CAST(1761630189642 AS Timestamp(Nanosecond, Some("+00:00")))
+        // Integer to timestamp cast
+        let expr = Expr::Cast(Cast::new(
+            Box::new(lit(1761630189642i64)),
+            DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Nanosecond,
+                Some("+00:00".into()),
+            ),
+        ));
+        // Should evaluate to a timestamp literal
+        let result = simplify(expr);
+        match result {
+            Expr::Literal(ScalarValue::TimestampNanosecond(Some(val), tz), _) => {
+                assert_eq!(val, 1761630189642i64);
+                assert_eq!(tz.as_deref(), Some("+00:00"));
+            }
+            other => panic!("Expected TimestampNanosecond literal, got: {other:?}"),
+        }
+
+        // Test CAST of invalid string to timestamp - should return an error at plan time
+        // This represents the case from the issue: CAST(Utf8("1761630189642") AS Timestamp)
+        // "1761630189642" is NOT a valid timestamp string format
+        let expr = Expr::Cast(Cast::new(
+            Box::new(lit("1761630189642")),
+            DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Nanosecond,
+                Some("+00:00".into()),
+            ),
+        ));
+
+        // The simplification should now fail with an error at plan time
+        let schema = test_schema();
+        let props = ExecutionProps::new();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+        let result = simplifier.simplify(expr);
+        assert!(result.is_err(), "Expected error for invalid cast");
+        let err_msg = result.unwrap_err().to_string();
+        assert_contains!(err_msg, "Error parsing timestamp");
     }
 
     fn if_not_null(expr: Expr, then: bool) -> Expr {

@@ -383,7 +383,7 @@ fn pushdown_requirement_to_children(
     } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {
-        handle_custom_pushdown(plan, parent_required, maintains_input_order)
+        handle_custom_pushdown(plan, parent_required, &maintains_input_order)
     }
     // TODO: Add support for Projection push down
 }
@@ -604,7 +604,7 @@ fn expr_source_side(
 fn handle_custom_pushdown(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: OrderingRequirements,
-    maintains_input_order: Vec<bool>,
+    maintains_input_order: &[bool],
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
     // If the plan has no children, return early:
     if plan.children().is_empty() {

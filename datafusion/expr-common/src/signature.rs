@@ -21,10 +21,10 @@ use std::fmt::Display;
 use std::hash::Hash;
 
 use crate::type_coercion::aggregates::NUMERICS;
-use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Decimal128Type, DecimalType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -127,11 +127,10 @@ pub enum Arity {
 /// ```
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_expr_common::signature::{TypeSignature};
-///  // Declares the function must be invoked with a single argument of type `Utf8View`.
-///  // if a user calls the function with `Utf8` or `LargeUtf8`, DataFusion will
-///  // automatically add a cast to `Utf8View` during planning.
-///  let type_signature = TypeSignature::Exact(vec![DataType::Utf8View]);
-///
+/// // Declares the function must be invoked with a single argument of type `Utf8View`.
+/// // if a user calls the function with `Utf8` or `LargeUtf8`, DataFusion will
+/// // automatically add a cast to `Utf8View` during planning.
+/// let type_signature = TypeSignature::Exact(vec![DataType::Utf8View]);
 /// ```
 ///
 /// # Example: Timestamps
@@ -144,11 +143,11 @@ pub enum Arity {
 /// # use arrow::datatypes::{DataType, TimeUnit};
 /// # use datafusion_expr_common::signature::{TIMEZONE_WILDCARD, TypeSignature};
 /// let type_signature = TypeSignature::Exact(vec![
-///   // A nanosecond precision timestamp with ANY timezone
-///   // matches  Timestamp(Nanosecond, Some("+0:00"))
-///   // matches  Timestamp(Nanosecond, Some("+5:00"))
-///   // does not match  Timestamp(Nanosecond, None)
-///   DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+///     // A nanosecond precision timestamp with ANY timezone
+///     // matches  Timestamp(Nanosecond, Some("+0:00"))
+///     // matches  Timestamp(Nanosecond, Some("+5:00"))
+///     // does not match  Timestamp(Nanosecond, None)
+///     DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
 /// ]);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -334,9 +333,10 @@ pub enum TypeSignatureClass {
     Interval,
     Duration,
     Native(LogicalTypeRef),
-    // TODO:
-    // Numeric
     Integer,
+    Float,
+    Decimal,
+    Numeric,
     /// Encompasses both the native Binary as well as arbitrarily sized FixedSizeBinary types
     Binary,
 }
@@ -379,14 +379,18 @@ impl TypeSignatureClass {
             TypeSignatureClass::Binary => {
                 vec![DataType::Binary]
             }
+            TypeSignatureClass::Decimal => vec![Decimal128Type::DEFAULT_TYPE],
+            TypeSignatureClass::Float => vec![DataType::Float64],
+            TypeSignatureClass::Numeric => vec![
+                DataType::Float64,
+                DataType::Int64,
+                Decimal128Type::DEFAULT_TYPE,
+            ],
         }
     }
 
     /// Does the specified `NativeType` match this type signature class?
-    pub fn matches_native_type(
-        self: &TypeSignatureClass,
-        logical_type: &NativeType,
-    ) -> bool {
+    pub fn matches_native_type(&self, logical_type: &NativeType) -> bool {
         if logical_type == &NativeType::Null {
             return true;
         }
@@ -399,6 +403,9 @@ impl TypeSignatureClass {
             TypeSignatureClass::Duration if logical_type.is_duration() => true,
             TypeSignatureClass::Integer if logical_type.is_integer() => true,
             TypeSignatureClass::Binary if logical_type.is_binary() => true,
+            TypeSignatureClass::Decimal if logical_type.is_decimal() => true,
+            TypeSignatureClass::Float if logical_type.is_float() => true,
+            TypeSignatureClass::Numeric if logical_type.is_numeric() => true,
             _ => false,
         }
     }
@@ -432,6 +439,16 @@ impl TypeSignatureClass {
             TypeSignatureClass::Binary if native_type.is_binary() => {
                 Ok(origin_type.to_owned())
             }
+            TypeSignatureClass::Decimal if native_type.is_decimal() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Float if native_type.is_float() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Numeric if native_type.is_numeric() => {
+                Ok(origin_type.to_owned())
+            }
+            _ if native_type.is_null() => Ok(origin_type.to_owned()),
             _ => internal_err!("May miss the matching logic in `matches_native_type`"),
         }
     }
@@ -541,9 +558,11 @@ impl TypeSignature {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::Any(arg_count) => {
-                vec![std::iter::repeat_n("Any", *arg_count)
-                    .collect::<Vec<&str>>()
-                    .join(", ")]
+                vec![
+                    std::iter::repeat_n("Any", *arg_count)
+                        .collect::<Vec<&str>>()
+                        .join(", "),
+                ]
             }
             TypeSignature::UserDefined => {
                 vec!["UserDefined".to_string()]
@@ -590,87 +609,103 @@ impl TypeSignature {
         match self {
             TypeSignature::Exact(types) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .zip(types.iter())
-                        .map(|(name, typ)| format!("{name}: {typ}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .zip(types.iter())
+                            .map(|(name, typ)| format!("{name}: {typ}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     vec![Self::join_types(types, ", ")]
                 }
             }
             TypeSignature::Any(count) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: Any"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: Any"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
-                    vec![std::iter::repeat_n("Any", *count)
-                        .collect::<Vec<&str>>()
-                        .join(", ")]
+                    vec![
+                        std::iter::repeat_n("Any", *count)
+                            .collect::<Vec<&str>>()
+                            .join(", "),
+                    ]
                 }
             }
             TypeSignature::Uniform(count, types) => {
                 if let Some(names) = parameter_names {
                     let type_str = Self::join_types(types, "/");
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: {type_str}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: {type_str}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     self.to_string_repr()
                 }
             }
             TypeSignature::Coercible(coercions) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .zip(coercions.iter())
-                        .map(|(name, coercion)| format!("{name}: {coercion}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .zip(coercions.iter())
+                            .map(|(name, coercion)| format!("{name}: {coercion}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     vec![Self::join_types(coercions, ", ")]
                 }
             }
             TypeSignature::Comparable(count) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: Comparable"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: Comparable"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     self.to_string_repr()
                 }
             }
             TypeSignature::Numeric(count) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: Numeric"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: Numeric"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     self.to_string_repr()
                 }
             }
             TypeSignature::String(count) => {
                 if let Some(names) = parameter_names {
-                    vec![names
-                        .iter()
-                        .take(*count)
-                        .map(|name| format!("{name}: String"))
-                        .collect::<Vec<_>>()
-                        .join(", ")]
+                    vec![
+                        names
+                            .iter()
+                            .take(*count)
+                            .map(|name| format!("{name}: String"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ]
                 } else {
                     self.to_string_repr()
                 }
@@ -680,28 +715,34 @@ impl TypeSignature {
                 if let Some(names) = parameter_names {
                     match array_sig {
                         ArrayFunctionSignature::Array { arguments, .. } => {
-                            vec![names
-                                .iter()
-                                .zip(arguments.iter())
-                                .map(|(name, arg_type)| format!("{name}: {arg_type}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")]
+                            vec![
+                                names
+                                    .iter()
+                                    .zip(arguments.iter())
+                                    .map(|(name, arg_type)| format!("{name}: {arg_type}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            ]
                         }
                         ArrayFunctionSignature::RecursiveArray => {
-                            vec![names
-                                .iter()
-                                .take(1)
-                                .map(|name| format!("{name}: recursive_array"))
-                                .collect::<Vec<_>>()
-                                .join(", ")]
+                            vec![
+                                names
+                                    .iter()
+                                    .take(1)
+                                    .map(|name| format!("{name}: recursive_array"))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            ]
                         }
                         ArrayFunctionSignature::MapArray => {
-                            vec![names
-                                .iter()
-                                .take(1)
-                                .map(|name| format!("{name}: map_array"))
-                                .collect::<Vec<_>>()
-                                .join(", ")]
+                            vec![
+                                names
+                                    .iter()
+                                    .take(1)
+                                    .map(|name| format!("{name}: map_array"))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            ]
                         }
                     }
                 } else {
@@ -858,8 +899,8 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 /// # Examples
 ///
 /// ```
+/// use datafusion_common::types::{logical_binary, logical_string, NativeType};
 /// use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-/// use datafusion_common::types::{NativeType, logical_binary, logical_string};
 ///
 /// // Exact coercion that only accepts timestamp types
 /// let exact = Coercion::new_exact(TypeSignatureClass::Timestamp);
@@ -868,7 +909,7 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 /// let implicit = Coercion::new_implicit(
 ///     TypeSignatureClass::Native(logical_string()),
 ///     vec![TypeSignatureClass::Native(logical_binary())],
-///     NativeType::String
+///     NativeType::String,
 /// );
 /// ```
 ///
@@ -1275,8 +1316,9 @@ impl Signature {
     /// ```
     /// # use datafusion_expr_common::signature::{Signature, Volatility};
     /// # use arrow::datatypes::DataType;
-    /// let sig = Signature::exact(vec![DataType::Int32, DataType::Utf8], Volatility::Immutable)
-    ///     .with_parameter_names(vec!["count".to_string(), "name".to_string()]);
+    /// let sig =
+    ///     Signature::exact(vec![DataType::Int32, DataType::Utf8], Volatility::Immutable)
+    ///         .with_parameter_names(vec!["count".to_string(), "name".to_string()]);
     /// ```
     ///
     /// # Errors
@@ -1520,10 +1562,12 @@ mod tests {
         .with_parameter_names(vec!["count".to_string()]); // Only 1 name for 2 args
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not match signature arity"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not match signature arity")
+        );
     }
 
     #[test]
@@ -1535,10 +1579,12 @@ mod tests {
         .with_parameter_names(vec!["count".to_string(), "count".to_string()]);
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Duplicate parameter name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Duplicate parameter name")
+        );
     }
 
     #[test]
@@ -1547,10 +1593,12 @@ mod tests {
             .with_parameter_names(vec!["arg".to_string()]);
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("variable arity signature"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("variable arity signature")
+        );
     }
 
     #[test]

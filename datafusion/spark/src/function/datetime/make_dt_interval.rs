@@ -23,11 +23,11 @@ use arrow::array::{
 };
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{DataType, Float64Type, Int32Type};
-use datafusion_common::{
-    exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::types::{logical_float64, logical_int32, NativeType};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -44,8 +44,37 @@ impl Default for SparkMakeDtInterval {
 
 impl SparkMakeDtInterval {
     pub fn new() -> Self {
+        let int32 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int32()),
+            vec![TypeSignatureClass::Integer],
+            NativeType::Int32,
+        );
+
+        let float64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
+
+        let variants = vec![
+            TypeSignature::Nullary,
+            // (days)
+            TypeSignature::Coercible(vec![int32.clone()]),
+            // (days, hours)
+            TypeSignature::Coercible(vec![int32.clone(), int32.clone()]),
+            // (days, hours, minutes)
+            TypeSignature::Coercible(vec![int32.clone(), int32.clone(), int32.clone()]),
+            // (days, hours, minutes, seconds)
+            TypeSignature::Coercible(vec![
+                int32.clone(),
+                int32.clone(),
+                int32.clone(),
+                float64,
+            ]),
+        ];
+
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(variants, Volatility::Immutable),
         }
     }
 }
@@ -79,26 +108,13 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
                 Some(0),
             )));
         }
-        make_scalar_function(make_dt_interval_kernel, vec![])(&args.args)
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() > 4 {
-            return exec_err!(
+        if args.args.len() > 4 {
+            return Err(DataFusionError::Execution(format!(
                 "make_dt_interval expects between 0 and 4 arguments, got {}",
-                arg_types.len()
-            );
+                args.args.len()
+            )));
         }
-
-        Ok((0..arg_types.len())
-            .map(|i| {
-                if i == 3 {
-                    DataType::Float64
-                } else {
-                    DataType::Int32
-                }
-            })
-            .collect())
+        make_scalar_function(make_dt_interval_kernel, vec![])(&args.args)
     }
 }
 
@@ -465,19 +481,33 @@ mod tests {
     fn no_more_than_4_params() -> Result<()> {
         let udf = SparkMakeDtInterval::new();
 
-        let arg_types = vec![
-            DataType::Int32,
-            DataType::Int32,
-            DataType::Int32,
-            DataType::Float64,
-            DataType::Int32,
+        // Create args with 5 parameters (exceeds the limit of 4)
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(4.0))),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(5))),
         ];
 
-        let res = udf.coerce_types(&arg_types);
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type(), true).into())
+            .collect::<Vec<_>>();
+
+        let func_args = ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", Duration(Microsecond), true).into(),
+            config_options: Arc::new(Default::default()),
+        };
+
+        let res = udf.invoke_with_args(func_args);
 
         assert!(
             matches!(res, Err(DataFusionError::Execution(_))),
-            "make_dt_interval should return execution error for too many arguments"
+            "make_dt_interval should return execution error for more than 4 arguments"
         );
 
         Ok(())

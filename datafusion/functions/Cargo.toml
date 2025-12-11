@@ -21,7 +21,7 @@ description = "Function packages for the DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -74,7 +77,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-macros = { workspace = true }
-hex = { version = "0.4", optional = true }
+hex = { workspace = true, optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
 md-5 = { version = "^0.10.0", optional = true }
@@ -83,7 +86,7 @@ rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { version = "^0.10.9", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
-uuid = { version = "1.18", features = ["v4"], optional = true }
+uuid = { version = "1.19", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

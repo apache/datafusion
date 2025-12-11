@@ -27,39 +27,39 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    builder::{BooleanBuilder, UInt64Builder},
     BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
     Int32Array, RecordBatch, UInt64Array,
+    builder::{BooleanBuilder, UInt64Builder},
 };
-use arrow::compute::{concat_batches, filter_record_batch, SortOptions};
+use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::JoinType::*;
 use datafusion_common::{
-    assert_batches_eq, assert_contains, JoinType, NullEquality, Result,
+    JoinSide,
+    test_util::{batches_to_sort_string, batches_to_string},
 };
 use datafusion_common::{
-    test_util::{batches_to_sort_string, batches_to_string},
-    JoinSide,
+    JoinType, NullEquality, Result, assert_batches_eq, assert_contains,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use insta::{allow_duplicates, assert_snapshot};
 
 use crate::{
     expressions::Column,
-    joins::sort_merge_join::stream::{get_corrected_filter_mask, JoinedRecordBatches},
+    joins::sort_merge_join::stream::{JoinedRecordBatches, get_corrected_filter_mask},
 };
 
-use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::joins::SortMergeJoinExec;
+use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use crate::test::TestMemoryExec;
 use crate::test::{build_table_i32, build_table_i32_two_cols};
-use crate::{common, ExecutionPlan};
+use crate::{ExecutionPlan, common};
 
 fn build_table(
     a: (&str, &Vec<i32>),
@@ -645,6 +645,240 @@ async fn join_right_one() -> Result<()> {
 }
 
 #[tokio::test]
+async fn join_right_different_columns_count_with_filter() -> Result<()> {
+    // select *
+    // from t1
+    // right join t2 on t1.b1 = t2.b1 and t1.a1 > t2.a2
+
+    let left = build_table(
+        ("a1", &vec![1, 21, 3]), // 21(t1.a1) > 20(t2.a2)
+        ("b1", &vec![4, 5, 7]),
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let right = build_table_two_cols(
+        ("a2", &vec![10, 20, 30]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the left
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a1", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("a2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Right).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 |
+            +----+----+----+----+----+
+            |    |    |    | 10 | 4  |
+            | 21 | 5  | 8  | 20 | 5  |
+            |    |    |    | 30 | 6  |
+            +----+----+----+----+----+
+            "#);
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_left_different_columns_count_with_filter() -> Result<()> {
+    // select *
+    // from t2
+    // left join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
+
+    let left = build_table_two_cols(
+        ("a2", &vec![10, 20, 30]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+    );
+
+    let right = build_table(
+        ("a1", &vec![1, 21, 3]), // 20(t2.a2) > 1(t1.a1)
+        ("b1", &vec![4, 5, 7]),
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a2", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("a1", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a2", DataType::Int32, true),
+            Field::new("a1", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Left).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+----+----+----+
+            | a2 | b1 | a1 | b1 | c1 |
+            +----+----+----+----+----+
+            | 10 | 4  | 1  | 4  | 7  |
+            | 20 | 5  |    |    |    |
+            | 30 | 6  |    |    |    |
+            +----+----+----+----+----+
+            "#);
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_left_mark_different_columns_count_with_filter() -> Result<()> {
+    // select *
+    // from t2
+    // left mark join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
+
+    let left = build_table_two_cols(
+        ("a2", &vec![10, 20, 30]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+    );
+
+    let right = build_table(
+        ("a1", &vec![1, 21, 3]), // 20(t2.a2) > 1(t1.a1)
+        ("b1", &vec![4, 5, 7]),
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a2", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("a1", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a2", DataType::Int32, true),
+            Field::new("a1", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) =
+        join_collect_with_filter(left, right, on, filter, LeftMark).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+-------+
+            | a2 | b1 | mark  |
+            +----+----+-------+
+            | 10 | 4  | true  |
+            | 20 | 5  | false |
+            | 30 | 6  | false |
+            +----+----+-------+
+            "#);
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_right_mark_different_columns_count_with_filter() -> Result<()> {
+    // select *
+    // from t1
+    // right mark join t2 on t1.b1 = t2.b1 and t1.a1 > t2.a2
+
+    let left = build_table(
+        ("a1", &vec![1, 21, 3]), // 21(t1.a1) > 20(t2.a2)
+        ("b1", &vec![4, 5, 7]),
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let right = build_table_two_cols(
+        ("a2", &vec![10, 20, 30]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the left
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a1", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("a2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) =
+        join_collect_with_filter(left, right, on, filter, RightMark).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r#"
+            +----+----+-------+
+            | a2 | b1 | mark  |
+            +----+----+-------+
+            | 10 | 4  | false |
+            | 20 | 5  | true  |
+            | 30 | 6  | false |
+            +----+----+-------+
+            "#);
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_full_one() -> Result<()> {
     let left = build_table(
         ("a1", &vec![1, 2, 3]),
@@ -872,6 +1106,61 @@ async fn join_right_anti_two_with_filter() -> Result<()> {
             | 1  | 10 | 20 |
             +----+----+----+
             "#);
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_right_anti_filtered_with_mismatched_columns() -> Result<()> {
+    let left = build_table_two_cols(("a1", &vec![31, 31]), ("b1", &vec![32, 33]));
+    let right = build_table(
+        ("a2", &vec![31, 31]),
+        ("b2", &vec![32, 35]),
+        ("c2", &vec![108, 109]),
+    );
+    let on = vec![
+        (
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        ),
+        (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        ),
+    ];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b1", 0)),
+            Operator::LtEq,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+
+    let (_, batches) =
+        join_collect_with_filter(left, right, on, filter, RightAnti).await?;
+
+    let expected = [
+        "+----+----+-----+",
+        "| a2 | b2 | c2  |",
+        "+----+----+-----+",
+        "| 31 | 35 | 109 |",
+        "+----+----+-----+",
+    ];
+    assert_batches_eq!(expected, &batches);
     Ok(())
 }
 
@@ -2085,14 +2374,14 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
     ]));
 
     let mut batches = JoinedRecordBatches {
-        batches: vec![],
+        joined_batches: BatchCoalescer::new(Arc::clone(&schema), 8192),
         filter_mask: BooleanBuilder::new(),
         row_indices: UInt64Builder::new(),
         batch_ids: vec![],
     };
 
     // Insert already prejoined non-filtered rows
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1, 1])),
@@ -2100,9 +2389,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1, 1])),
             Arc::new(Int32Array::from(vec![11, 9])),
         ],
-    )?);
+    )?)?;
 
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1])),
@@ -2110,9 +2399,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1])),
             Arc::new(Int32Array::from(vec![12])),
         ],
-    )?);
+    )?)?;
 
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1, 1])),
@@ -2120,9 +2409,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1, 1])),
             Arc::new(Int32Array::from(vec![11, 13])),
         ],
-    )?);
+    )?)?;
 
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1])),
@@ -2130,9 +2419,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1])),
             Arc::new(Int32Array::from(vec![12])),
         ],
-    )?);
+    )?)?;
 
-    batches.batches.push(RecordBatch::try_new(
+    batches.joined_batches.push_batch(RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(Int32Array::from(vec![1, 1])),
@@ -2140,7 +2429,7 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
             Arc::new(Int32Array::from(vec![1, 1])),
             Arc::new(Int32Array::from(vec![12, 11])),
         ],
-    )?);
+    )?)?;
 
     let streamed_indices = vec![0, 0];
     batches.batch_ids.extend(vec![0; streamed_indices.len()]);
@@ -2190,9 +2479,9 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
 #[tokio::test]
 async fn test_left_outer_join_filtered_mask() -> Result<()> {
     let mut joined_batches = build_joined_record_batches()?;
-    let schema = joined_batches.batches.first().unwrap().schema();
+    let schema = joined_batches.joined_batches.schema();
 
-    let output = concat_batches(&schema, &joined_batches.batches)?;
+    let output = joined_batches.concat_batches(&schema)?;
     let out_mask = joined_batches.filter_mask.finish();
     let out_indices = joined_batches.row_indices.finish();
 
@@ -2397,9 +2686,9 @@ async fn test_left_outer_join_filtered_mask() -> Result<()> {
 async fn test_semi_join_filtered_mask() -> Result<()> {
     for join_type in [LeftSemi, RightSemi] {
         let mut joined_batches = build_joined_record_batches()?;
-        let schema = joined_batches.batches.first().unwrap().schema();
+        let schema = joined_batches.joined_batches.schema();
 
-        let output = concat_batches(&schema, &joined_batches.batches)?;
+        let output = joined_batches.concat_batches(&schema)?;
         let out_mask = joined_batches.filter_mask.finish();
         let out_indices = joined_batches.row_indices.finish();
 
@@ -2572,9 +2861,9 @@ async fn test_semi_join_filtered_mask() -> Result<()> {
 async fn test_anti_join_filtered_mask() -> Result<()> {
     for join_type in [LeftAnti, RightAnti] {
         let mut joined_batches = build_joined_record_batches()?;
-        let schema = joined_batches.batches.first().unwrap().schema();
+        let schema = joined_batches.joined_batches.schema();
 
-        let output = concat_batches(&schema, &joined_batches.batches)?;
+        let output = joined_batches.concat_batches(&schema)?;
         let out_mask = joined_batches.filter_mask.finish();
         let out_indices = joined_batches.row_indices.finish();
 

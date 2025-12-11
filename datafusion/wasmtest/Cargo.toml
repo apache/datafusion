@@ -30,6 +30,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -60,7 +63,7 @@ object_store = { workspace = true }
 # needs to be compiled
 tokio = { workspace = true }
 url = { workspace = true }
-wasm-bindgen-test = "0.3.54"
+wasm-bindgen-test = "0.3.56"
 
 [package.metadata.cargo-machete]
 ignored = ["chrono", "getrandom"]

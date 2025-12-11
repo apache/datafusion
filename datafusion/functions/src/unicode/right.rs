@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::cmp::{max, Ordering};
+use std::cmp::{Ordering, max};
 use std::sync::Arc;
 
 use arrow::array::{
@@ -26,11 +26,11 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::Result;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
-use datafusion_common::Result;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -122,7 +122,7 @@ impl ScalarUDFImpl for RightFunc {
 /// Returns last n characters in the string, or when n is negative, returns all but first |n| characters.
 /// right('abcde', 2) = 'de'
 /// The implementation uses UTF-8 code points as characters
-pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let n_array = as_int64_array(&args[1])?;
     if args[0].data_type() == &DataType::Utf8View {
         // string_view_right(args)

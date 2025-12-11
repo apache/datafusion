@@ -54,6 +54,7 @@ async fn read_parquet_test_data<'a, T: Into<String>>(
         .unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn write_batches(
     path: PathBuf,
     props: WriterProperties,

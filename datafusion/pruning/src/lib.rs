@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+
 mod file_pruner;
 mod pruning_predicate;
 

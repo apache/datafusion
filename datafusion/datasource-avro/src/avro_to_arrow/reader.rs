@@ -64,13 +64,9 @@ impl ReaderBuilder {
     ///     let file = File::open("test/data/basic.avro").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = ReaderBuilder::new()
-    ///       .read_schema()
-    ///       .with_batch_size(100);
+    ///     let builder = ReaderBuilder::new().read_schema().with_batch_size(100);
     ///
-    ///     let reader = builder
-    ///       .build::<File>(file)
-    ///       .unwrap();
+    ///     let reader = builder.build::<File>(file).unwrap();
     ///
     ///     reader
     /// }
@@ -117,7 +113,7 @@ impl ReaderBuilder {
             None => Arc::new(super::read_avro_schema_from_reader(&mut source)?),
         };
         source.rewind()?;
-        Reader::try_new(source, schema, self.batch_size, self.projection)
+        Reader::try_new(source, &schema, self.batch_size, self.projection.as_ref())
     }
 }
 
@@ -139,12 +135,12 @@ impl<R: Read> Reader<'_, R> {
     /// useful if plucking values from a struct, e.g. getting `a.b.c.e` from `a.b.c.{d, e}`.
     pub fn try_new(
         reader: R,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         batch_size: usize,
-        projection: Option<Vec<String>>,
+        projection: Option<&Vec<String>>,
     ) -> Result<Self> {
         let projected_schema = projection.as_ref().filter(|p| !p.is_empty()).map_or_else(
-            || Arc::clone(&schema),
+            || Arc::clone(schema),
             |proj| {
                 Arc::new(arrow::datatypes::Schema::new(
                     proj.iter()

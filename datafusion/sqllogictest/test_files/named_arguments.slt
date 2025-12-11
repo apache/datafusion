@@ -85,7 +85,7 @@ SELECT substr("STR" => 'hello world', "start_pos" => 7);
 
 # Error: wrong number of arguments
 # This query provides only 1 argument but substr requires 2 or 3
-query error DataFusion error: Error during planning: Execution error: Function 'substr' user-defined coercion failed with "Error during planning: The substr function requires 2 or 3 arguments, but got 1."
+query error Function 'substr' failed to match any signature
 SELECT substr(str => 'hello world');
 
 #############
@@ -137,3 +137,135 @@ SELECT substr(str => 'hello world', start_pos => 7, length => 5);
 # Reset to default dialect
 statement ok
 set datafusion.sql_parser.dialect = 'Generic';
+
+#############
+## Aggregate UDF Tests - using corr(y, x) function
+#############
+
+# Setup test data
+statement ok
+CREATE TABLE correlation_test(col1 DOUBLE, col2 DOUBLE) AS VALUES
+  (1.0, 2.0),
+  (2.0, 4.0),
+  (3.0, 6.0),
+  (4.0, 8.0);
+
+# Test positional arguments (baseline)
+query R
+SELECT corr(col1, col2) FROM correlation_test;
+----
+1
+
+# Test named arguments out of order (proves named args work for aggregates)
+query R
+SELECT corr(x => col2, y => col1) FROM correlation_test;
+----
+1
+
+# Error: function doesn't support named arguments (count has no parameter names)
+query error DataFusion error: Error during planning: Aggregate function 'count' does not support named arguments
+SELECT count(value => col1) FROM correlation_test;
+
+# Cleanup
+statement ok
+DROP TABLE correlation_test;
+
+#############
+## Aggregate UDF with WITHIN GROUP Tests - using percentile_cont(expression, percentile)
+## This tests the special handling where WITHIN GROUP ORDER BY expressions are prepended to args
+#############
+
+# Setup test data
+statement ok
+CREATE TABLE percentile_test(salary DOUBLE) AS VALUES
+  (50000.0),
+  (60000.0),
+  (70000.0),
+  (80000.0),
+  (90000.0);
+
+# Test positional arguments (baseline) - standard call without WITHIN GROUP
+query R
+SELECT percentile_cont(salary, 0.5) FROM percentile_test;
+----
+70000
+
+# Test WITHIN GROUP with positional argument
+query R
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY salary) FROM percentile_test;
+----
+70000
+
+# Test WITHIN GROUP with named argument for percentile
+# The ORDER BY expression (salary) is prepended internally, becoming: percentile_cont(salary, 0.5)
+# We use named argument for percentile, which should work correctly
+query R
+SELECT percentile_cont(percentile => 0.5) WITHIN GROUP (ORDER BY salary) FROM percentile_test;
+----
+70000
+
+# Verify the WITHIN GROUP prepending logic with different percentile value
+query R
+SELECT percentile_cont(percentile => 0.25) WITHIN GROUP (ORDER BY salary) FROM percentile_test;
+----
+60000
+
+# Cleanup
+statement ok
+DROP TABLE percentile_test;
+
+#############
+## Window UDF Tests - using lead(expression, offset, default) function
+#############
+
+# Setup test data
+statement ok
+CREATE TABLE window_test(id INT, value INT) AS VALUES
+  (1, 10),
+  (2, 20),
+  (3, 30),
+  (4, 40);
+
+# Test positional arguments (baseline)
+query II
+SELECT id, lead(value, 1, 0) OVER (ORDER BY id) FROM window_test ORDER BY id;
+----
+1 20
+2 30
+3 40
+4 0
+
+# Test named arguments out of order (proves named args work for window functions)
+query II
+SELECT id, lead(default => 0, offset => 1, expr => value) OVER (ORDER BY id) FROM window_test ORDER BY id;
+----
+1 20
+2 30
+3 40
+4 0
+
+# Test with 1 argument (offset and default use defaults)
+query II
+SELECT id, lead(expr => value) OVER (ORDER BY id) FROM window_test ORDER BY id;
+----
+1 20
+2 30
+3 40
+4 NULL
+
+# Test with 2 arguments (default uses default)
+query II
+SELECT id, lead(expr => value, offset => 2) OVER (ORDER BY id) FROM window_test ORDER BY id;
+----
+1 30
+2 40
+3 NULL
+4 NULL
+
+# Error: function doesn't support named arguments (row_number has no parameter names)
+query error DataFusion error: Error during planning: Window function 'row_number' does not support named arguments
+SELECT row_number(value => 1) OVER (ORDER BY id) FROM window_test;
+
+# Cleanup
+statement ok
+DROP TABLE window_test;

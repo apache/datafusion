@@ -22,11 +22,12 @@ use crate::PhysicalOptimizerRule;
 
 use std::sync::Arc;
 
+use datafusion_common::assert_eq_or_internal_err;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
-    coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
+    async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
     repartition::RepartitionExec, ExecutionPlan,
 };
 
@@ -38,7 +39,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub struct CoalesceBatches {}
 
 impl CoalesceBatches {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -56,27 +57,37 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         let target_batch_size = config.execution.batch_size;
         plan.transform_up(|plan| {
             let plan_any = plan.as_any();
-            // The goal here is to detect operators that could produce small batches and only
-            // wrap those ones with a CoalesceBatchesExec operator. An alternate approach here
-            // would be to build the coalescing logic directly into the operators
-            // See https://github.com/apache/datafusion/issues/139
-            let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
-                || plan_any.downcast_ref::<HashJoinExec>().is_some()
+            let wrap_in_coalesce = plan_any
                 // Don't need to add CoalesceBatchesExec after a round robin RepartitionExec
-                || plan_any
-                    .downcast_ref::<RepartitionExec>()
-                    .map(|repart_exec| {
-                        !matches!(
-                            repart_exec.partitioning().clone(),
-                            Partitioning::RoundRobinBatch(_)
-                        )
-                    })
-                    .unwrap_or(false);
+                .downcast_ref::<RepartitionExec>()
+                .map(|repart_exec| {
+                    !matches!(
+                        repart_exec.partitioning().clone(),
+                        Partitioning::RoundRobinBatch(_)
+                    )
+                })
+                .unwrap_or(false);
+
             if wrap_in_coalesce {
                 Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(
                     plan,
                     target_batch_size,
                 ))))
+            } else if let Some(async_exec) = plan_any.downcast_ref::<AsyncFuncExec>() {
+                // Coalesce inputs to async functions to reduce number of async function invocations
+                let children = async_exec.children();
+                assert_eq_or_internal_err!(
+                    children.len(),
+                    1,
+                    "Expected AsyncFuncExec to have exactly one child"
+                );
+
+                let coalesce_exec = Arc::new(CoalesceBatchesExec::new(
+                    Arc::clone(children[0]),
+                    target_batch_size,
+                ));
+                let new_plan = plan.with_new_children(vec![coalesce_exec])?;
+                Ok(Transformed::yes(new_plan))
             } else {
                 Ok(Transformed::no(plan))
             }

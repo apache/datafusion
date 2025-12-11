@@ -48,7 +48,6 @@ impl<'a> PartitionEvaluatorArgs<'a> {
     ///   window function is reversible and is reversed.
     /// * `ignore_nulls` - Set to `true` when `IGNORE NULLS` is
     ///   specified.
-    ///
     pub fn new(
         input_exprs: &'a [Arc<dyn PhysicalExpr>],
         input_fields: &'a [FieldRef],

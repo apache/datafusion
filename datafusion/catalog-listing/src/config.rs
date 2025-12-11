@@ -53,7 +53,6 @@ pub enum SchemaSource {
 ///
 /// If not specified, a [`datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory`]
 /// will be used, which handles basic schema compatibility cases.
-///
 #[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating [`crate::ListingTable`].
@@ -160,8 +159,8 @@ impl ListingTableConfig {
     ///     .with_file_extension(".parquet")
     ///     .with_collect_stat(true);
     ///
-    /// let config = ListingTableConfig::new(table_paths)
-    ///     .with_listing_options(options);  // Configure file format and options
+    /// let config = ListingTableConfig::new(table_paths).with_listing_options(options);
+    /// // Configure file format and options
     /// ```
     pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
         // Note: This method properly sets options, but be aware that downstream

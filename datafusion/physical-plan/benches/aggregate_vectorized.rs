@@ -25,12 +25,13 @@ use arrow::util::test_util::seedable_rng;
 use arrow_schema::DataType;
 use criterion::measurement::WallTime;
 use criterion::{
-    criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion,
+    BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
+use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupColumn;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
-use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupColumn;
 use rand::distr::{Bernoulli, Distribution};
+use std::hint::black_box;
 use std::sync::Arc;
 
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
@@ -270,6 +271,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
 }
 
 /// Test `vectorized_equal_to` with different number of true in the initial results
+#[expect(clippy::needless_pass_by_value)]
 fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
     group: &mut BenchmarkGroup<WallTime>,
     mut builder: GroupColumnBuilder,
@@ -293,7 +295,7 @@ fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
             builder.vectorized_equal_to(rows, input, rows, &mut equal_to_results);
 
             // Make sure that the compiler does not optimize away the call
-            criterion::black_box(equal_to_results);
+            black_box(equal_to_results);
         });
     });
 }

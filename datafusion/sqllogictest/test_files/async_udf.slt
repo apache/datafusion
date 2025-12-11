@@ -80,12 +80,11 @@ logical_plan
 01)Filter: async_abs(data.x) < Int32(5)
 02)--TableScan: data projection=[x]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: __async_fn_0@1 < 5, projection=[x@0]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)------AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: __async_fn_0@1 < 5, projection=[x@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Async udf can be used in projection
 query I rowsort

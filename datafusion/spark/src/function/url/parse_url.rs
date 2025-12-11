@@ -80,7 +80,6 @@ impl ParseUrl {
     /// * `Ok(Some(String))` - The extracted URL component as a string
     /// * `Ok(None)` - If the requested component doesn't exist or is empty
     /// * `Err(DataFusionError)` - If the URL is malformed and cannot be parsed
-    ///
     fn parse(value: &str, part: &str, key: Option<&str>) -> Result<Option<String>> {
         let url: std::result::Result<Url, ParseError> = Url::parse(value);
         if let Err(ParseError::RelativeUrlWithoutBase) = url {
@@ -168,7 +167,6 @@ impl ScalarUDFImpl for ParseUrl {
 /// - A string array with extracted URL components
 /// - `None` values where extraction failed or component doesn't exist
 /// - The output array type (StringArray or LargeStringArray) is determined by input types
-///
 fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
     spark_handled_parse_url(args, |x| x)
 }

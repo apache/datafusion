@@ -33,6 +33,7 @@ use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::metrics::MetricType;
+use datafusion_datasource::TableSchema;
 use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -52,7 +53,7 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup,
-    FileScanConfigBuilder, FileSinkConfig, FileSource, ParquetSource,
+    FileScanConfigBuilder, FileSinkConfig, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
@@ -106,9 +107,11 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, DataFusionError, NullEquality,
     Result, UnnestOptions,
 };
+use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
-    Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound, WindowUDF,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
+    WindowFrame, WindowFrameBound, WindowUDF,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
@@ -883,25 +886,26 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let mut options = TableParquetOptions::new();
     options.global.pushdown_filters = true;
 
-    let file_source = Arc::new(ParquetSource::new(options).with_predicate(predicate));
+    let file_source = Arc::new(
+        ParquetSource::new(Arc::clone(&file_schema))
+            .with_table_parquet_options(options)
+            .with_predicate(predicate),
+    );
 
-    let scan_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        file_schema,
-        file_source,
-    )
-    .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-        "/path/to/file.parquet".to_string(),
-        1024,
-    )])])
-    .with_statistics(Statistics {
-        num_rows: Precision::Inexact(100),
-        total_byte_size: Precision::Inexact(1024),
-        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
-            Field::new("col", DataType::Utf8, false),
-        ]))),
-    })
-    .build();
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_statistics(Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(1024),
+                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
+                    vec![Field::new("col", DataType::Utf8, false)],
+                ))),
+            })
+            .build();
 
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
 }
@@ -914,21 +918,22 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
-    let file_source = Arc::new(ParquetSource::default());
-    let scan_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        schema,
-        file_source,
-    )
-    .with_projection_indices(Some(vec![0, 1]))
-    .with_file_group(FileGroup::new(vec![file_group]))
-    .with_table_partition_cols(vec![Field::new(
-        "part".to_string(),
-        wrap_partition_type_in_dict(DataType::Int16),
-        false,
-    )])
-    .with_newlines_in_values(false)
-    .build();
+    let table_schema = TableSchema::new(
+        schema.clone(),
+        vec![Arc::new(Field::new(
+            "part".to_string(),
+            wrap_partition_type_in_dict(DataType::Int16),
+            false,
+        ))],
+    );
+
+    let file_source = Arc::new(ParquetSource::new(table_schema.clone()));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_projection_indices(Some(vec![0, 1]))?
+            .with_file_group(FileGroup::new(vec![file_group]))
+            .with_newlines_in_values(false)
+            .build();
 
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
 }
@@ -942,26 +947,25 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         inner: Arc::new(Column::new("col", 1)),
     });
 
-    let file_source =
-        Arc::new(ParquetSource::default().with_predicate(custom_predicate_expr));
+    let file_source = Arc::new(
+        ParquetSource::new(Arc::clone(&file_schema))
+            .with_predicate(custom_predicate_expr),
+    );
 
-    let scan_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        file_schema,
-        file_source,
-    )
-    .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-        "/path/to/file.parquet".to_string(),
-        1024,
-    )])])
-    .with_statistics(Statistics {
-        num_rows: Precision::Inexact(100),
-        total_byte_size: Precision::Inexact(1024),
-        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
-            Field::new("col", DataType::Utf8, false),
-        ]))),
-    })
-    .build();
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_statistics(Statistics {
+                num_rows: Precision::Inexact(100),
+                total_byte_size: Precision::Inexact(1024),
+                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
+                    vec![Field::new("col", DataType::Utf8, false)],
+                ))),
+            })
+            .build();
 
     #[derive(Debug, Clone, Eq)]
     struct CustomPredicateExpr {
@@ -1803,19 +1807,16 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let statistics = Statistics::new_unknown(&schema);
 
-    let file_source = ParquetSource::default().with_statistics(statistics.clone());
-    let scan_config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        schema.clone(),
-        file_source,
-    )
-    .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-        "/path/to/file.parquet".to_string(),
-        1024,
-    )])])
-    .with_statistics(statistics)
-    .with_projection_indices(Some(vec![0, 1, 2]))
-    .build();
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .with_statistics(statistics)
+            .with_projection_indices(Some(vec![0, 1, 2]))?
+            .build();
 
     let filter = Arc::new(
         FilterExec::try_new(
@@ -2263,4 +2264,66 @@ async fn roundtrip_listing_table_with_schema_metadata() -> Result<()> {
         .await?;
 
     roundtrip_test(plan)
+}
+
+#[tokio::test]
+async fn roundtrip_async_func_exec() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestAsyncUDF {
+        signature: Signature,
+    }
+
+    impl TestAsyncUDF {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Int64], Volatility::Volatile),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestAsyncUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "test_async_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            not_impl_err!("Must call from `invoke_async_with_args`")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AsyncScalarUDFImpl for TestAsyncUDF {
+        async fn invoke_async_with_args(
+            &self,
+            args: ScalarFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let ctx = SessionContext::new();
+    let async_udf = AsyncScalarUDF::new(Arc::new(TestAsyncUDF::new()));
+    ctx.register_udf(async_udf.into_scalar_udf());
+
+    let physical_plan = ctx
+        .sql("select test_async_udf(1)")
+        .await?
+        .create_physical_plan()
+        .await?;
+
+    roundtrip_test_with_context(physical_plan, &ctx)?;
+
+    Ok(())
 }

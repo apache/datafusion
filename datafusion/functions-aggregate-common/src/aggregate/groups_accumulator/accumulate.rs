@@ -195,11 +195,11 @@ impl NullState {
                     .zip(group_indices.iter())
                     .zip(values.iter())
                     .for_each(|((filter_value, &group_index), new_value)| {
-                        if let Some(true) = filter_value {
-                            if let Some(new_value) = new_value {
-                                seen_values.set_bit(group_index, true);
-                                value_fn(group_index, new_value)
-                            }
+                        if let Some(true) = filter_value
+                            && let Some(new_value) = new_value
+                        {
+                            seen_values.set_bit(group_index, true);
+                            value_fn(group_index, new_value)
                         }
                     })
             }
@@ -218,14 +218,10 @@ impl NullState {
             EmitTo::All => nulls,
             EmitTo::First(n) => {
                 // split off the first N values in seen_values
-                //
-                // TODO make this more efficient rather than two
-                // copies and bitwise manipulation
-                let first_n_null: BooleanBuffer = nulls.iter().take(n).collect();
+                let first_n_null: BooleanBuffer = nulls.slice(0, n);
                 // reset the existing seen buffer
-                for seen in nulls.iter().skip(n) {
-                    self.seen_values.append(seen);
-                }
+                self.seen_values
+                    .append_buffer(&nulls.slice(n, nulls.len() - n));
                 first_n_null
             }
         };
@@ -361,10 +357,10 @@ pub fn accumulate<T, F>(
                 .zip(group_indices.iter())
                 .zip(values.iter())
                 .for_each(|((filter_value, &group_index), new_value)| {
-                    if let Some(true) = filter_value {
-                        if let Some(new_value) = new_value {
-                            value_fn(group_index, new_value)
-                        }
+                    if let Some(true) = filter_value
+                        && let Some(new_value) = new_value
+                    {
+                        value_fn(group_index, new_value)
                     }
                 })
         }
@@ -598,7 +594,7 @@ mod test {
     use super::*;
 
     use arrow::array::{Int32Array, UInt32Array};
-    use rand::{rngs::ThreadRng, Rng};
+    use rand::{Rng, rngs::ThreadRng};
     use std::collections::HashSet;
 
     #[test]
@@ -694,11 +690,7 @@ mod test {
             let values_with_nulls: Vec<Option<u32>> = (0..num_values)
                 .map(|_| {
                     let is_null = null_pct < rng.random_range(0.0..1.0);
-                    if is_null {
-                        None
-                    } else {
-                        Some(rng.random())
-                    }
+                    if is_null { None } else { Some(rng.random()) }
                 })
                 .collect();
 
@@ -760,7 +752,6 @@ mod test {
 
         /// Calls `NullState::accumulate` and `accumulate_indices` to
         /// ensure it generates the correct values.
-        ///
         fn accumulate_test(
             group_indices: &[usize],
             values: &UInt32Array,
@@ -829,18 +820,20 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
-                            if let Some(true) = is_included {
-                                if let Some(value) = value {
-                                    mock.saw_value(group_index);
-                                    expected_values.push((group_index, value));
-                                }
+                            if let Some(true) = is_included
+                                && let Some(value) = value
+                            {
+                                mock.saw_value(group_index);
+                                expected_values.push((group_index, value));
                             }
                         });
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
             let seen_values = null_state.seen_values.finish_cloned();
             mock.validate_seen_values(&seen_values);
 
@@ -900,8 +893,10 @@ mod test {
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
         }
 
         /// This is effectively a different implementation of
@@ -945,18 +940,20 @@ mod test {
                         .zip(filter.iter())
                         .for_each(|((&group_index, value), is_included)| {
                             // if value passed filter
-                            if let Some(true) = is_included {
-                                if let Some(value) = value {
-                                    mock.saw_value(group_index);
-                                    expected_values.push((group_index, value));
-                                }
+                            if let Some(true) = is_included
+                                && let Some(value) = value
+                            {
+                                mock.saw_value(group_index);
+                                expected_values.push((group_index, value));
                             }
                         });
                 }
             }
 
-            assert_eq!(accumulated_values, expected_values,
-                       "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}");
+            assert_eq!(
+                accumulated_values, expected_values,
+                "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
+            );
 
             let seen_values = null_state.seen_values.finish_cloned();
             mock.validate_seen_values(&seen_values);

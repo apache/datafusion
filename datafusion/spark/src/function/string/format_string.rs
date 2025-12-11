@@ -304,7 +304,7 @@ impl<'a> Formatter<'a> {
                         return exec_err!("No previous argument to reference");
                     };
                     let (spec, rest) =
-                        take_conversion_specifier(rest, p, arg_types[p - 1].clone())?;
+                        take_conversion_specifier(rest, p, &arg_types[p - 1])?;
                     res.push(FormatElement::Format(spec));
                     rem = rest;
                     continue;
@@ -335,7 +335,7 @@ impl<'a> Formatter<'a> {
                 let (spec, rest) = take_conversion_specifier(
                     rest,
                     current_argument_index,
-                    arg_types[current_argument_index - 1].clone(),
+                    &arg_types[current_argument_index - 1],
                 )
                 .map_err(|e| exec_datafusion_err!("{:?}, format string: {:?}", e, fmt))?;
                 res.push(FormatElement::Format(spec));
@@ -582,7 +582,7 @@ impl TryFrom<char> for TimeFormat {
 }
 
 impl ConversionType {
-    pub fn validate(&self, arg_type: DataType) -> Result<()> {
+    pub fn validate(&self, arg_type: &DataType) -> Result<()> {
         match self {
             ConversionType::BooleanLower | ConversionType::BooleanUpper => {
                 if !matches!(arg_type, DataType::Boolean) {
@@ -716,11 +716,11 @@ impl ConversionType {
     }
 }
 
-fn take_conversion_specifier(
-    mut s: &str,
+fn take_conversion_specifier<'a>(
+    mut s: &'a str,
     argument_index: usize,
-    arg_type: DataType,
-) -> Result<(ConversionSpecifier, &str)> {
+    arg_type: &DataType,
+) -> Result<(ConversionSpecifier, &'a str)> {
     let mut spec = ConversionSpecifier {
         argument_index,
         alt_form: false,
@@ -1186,7 +1186,7 @@ impl ConversionSpecifier {
                         | ConversionType::CompactFloatLower
                         | ConversionType::CompactFloatUpper,
                         Some(value),
-                    ) => self.format_decimal(string, value.to_string(), *scale as i64),
+                    ) => self.format_decimal(string, &value.to_string(), *scale as i64),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1212,7 +1212,7 @@ impl ConversionSpecifier {
                         | ConversionType::CompactFloatLower
                         | ConversionType::CompactFloatUpper,
                         Some(value),
-                    ) => self.format_decimal(string, value.to_string(), *scale as i64),
+                    ) => self.format_decimal(string, &value.to_string(), *scale as i64),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1991,12 +1991,7 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_decimal(
-        &self,
-        writer: &mut String,
-        value: String,
-        scale: i64,
-    ) -> Result<()> {
+    fn format_decimal(&self, writer: &mut String, value: &str, scale: i64) -> Result<()> {
         let mut prefix = String::new();
         let upper = self.conversion_type.is_upper();
 

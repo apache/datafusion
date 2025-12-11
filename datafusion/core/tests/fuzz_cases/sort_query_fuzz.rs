@@ -24,11 +24,9 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::{instant::Instant, Result};
+use datafusion_common::{human_readable_size, instant::Instant, Result};
 use datafusion_execution::disk_manager::DiskManagerBuilder;
-use datafusion_execution::memory_pool::{
-    human_readable_size, MemoryPool, UnboundedMemoryPool,
-};
+use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
 use datafusion_expr::display_schema;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use std::time::Duration;

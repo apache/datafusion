@@ -81,12 +81,12 @@ async fn get_parquet_exec(
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
     let source = Arc::new(
-        ParquetSource::default()
+        ParquetSource::new(schema.clone())
             .with_predicate(predicate)
             .with_enable_page_index(true)
             .with_pushdown_filters(pushdown_filters),
     );
-    let base_config = FileScanConfigBuilder::new(object_store_url, schema, source)
+    let base_config = FileScanConfigBuilder::new(object_store_url, source)
         .with_file(partitioned_file)
         .build();
 

@@ -36,7 +36,8 @@ pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
 pub use value::{
-    Count, Gauge, MetricValue, PruningMetrics, ScopedTimerGuard, Time, Timestamp,
+    Count, Gauge, MetricValue, PruningMetrics, RatioMergeStrategy, RatioMetrics,
+    ScopedTimerGuard, Time, Timestamp,
 };
 
 /// Something that tracks a value of interest (metric) of a DataFusion
@@ -47,24 +48,23 @@ pub use value::{
 /// [`ExecutionPlanMetricsSet`].
 ///
 /// ```
-///  use datafusion_physical_plan::metrics::*;
+/// use datafusion_physical_plan::metrics::*;
 ///
-///  let metrics = ExecutionPlanMetricsSet::new();
-///  assert!(metrics.clone_inner().output_rows().is_none());
+/// let metrics = ExecutionPlanMetricsSet::new();
+/// assert!(metrics.clone_inner().output_rows().is_none());
 ///
-///  // Create a counter to increment using the MetricBuilder
-///  let partition = 1;
-///  let output_rows = MetricBuilder::new(&metrics)
-///      .output_rows(partition);
+/// // Create a counter to increment using the MetricBuilder
+/// let partition = 1;
+/// let output_rows = MetricBuilder::new(&metrics).output_rows(partition);
 ///
-///  // Counter can be incremented
-///  output_rows.add(13);
+/// // Counter can be incremented
+/// output_rows.add(13);
 ///
-///  // The value can be retrieved directly:
-///  assert_eq!(output_rows.value(), 13);
+/// // The value can be retrieved directly:
+/// assert_eq!(output_rows.value(), 13);
 ///
-///  // As well as from the metrics set
-///  assert_eq!(metrics.clone_inner().output_rows(), Some(13));
+/// // As well as from the metrics set
+/// assert_eq!(metrics.clone_inner().output_rows(), Some(13));
 /// ```
 ///
 /// [`ExecutionPlan`]: super::ExecutionPlan
@@ -299,12 +299,14 @@ impl MetricsSet {
             MetricValue::SpillCount(_) => false,
             MetricValue::SpilledBytes(_) => false,
             MetricValue::OutputBytes(_) => false,
+            MetricValue::OutputBatches(_) => false,
             MetricValue::SpilledRows(_) => false,
             MetricValue::CurrentMemoryUsage(_) => false,
             MetricValue::Gauge { name, .. } => name == metric_name,
             MetricValue::StartTimestamp(_) => false,
             MetricValue::EndTimestamp(_) => false,
-            MetricValue::PruningMetrics { .. } => false,
+            MetricValue::PruningMetrics { name, .. } => name == metric_name,
+            MetricValue::Ratio { name, .. } => name == metric_name,
             MetricValue::Custom { .. } => false,
         })
     }
@@ -740,9 +742,15 @@ mod tests {
             n.join(", ")
         }
 
-        assert_eq!("end_timestamp, start_timestamp, elapsed_compute, the_second_counter, the_counter, the_third_counter, the_time, output_rows", metric_names(&metrics));
+        assert_eq!(
+            "end_timestamp, start_timestamp, elapsed_compute, the_second_counter, the_counter, the_third_counter, the_time, output_rows",
+            metric_names(&metrics)
+        );
 
         let metrics = metrics.sorted_for_display();
-        assert_eq!("output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp", metric_names(&metrics));
+        assert_eq!(
+            "output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp",
+            metric_names(&metrics)
+        );
     }
 }

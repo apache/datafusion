@@ -16,12 +16,12 @@
 // under the License.
 
 pub(crate) mod groups_accumulator {
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub(crate) mod accumulate {
         pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
     }
     pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-        accumulate::NullState, GroupsAccumulatorAdapter,
+        GroupsAccumulatorAdapter, accumulate::NullState,
     };
 }
 pub(crate) mod stats {
@@ -29,8 +29,8 @@ pub(crate) mod stats {
 }
 pub mod utils {
     pub use datafusion_functions_aggregate_common::utils::{
-        get_accum_scalar_values_as_arrays, get_sort_options, ordering_fields,
-        DecimalAverager, Hashable,
+        DecimalAverager, Hashable, get_accum_scalar_values_as_arrays, get_sort_options,
+        ordering_fields,
     };
 }
 
@@ -41,7 +41,9 @@ use crate::expressions::Column;
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
+};
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
@@ -143,7 +145,7 @@ impl AggregateExprBuilder {
     /// #     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
     /// #         unimplemented!()
     /// #         }
-    /// #     
+    /// #
     /// #     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
     /// #         unimplemented!()
     /// #     }
@@ -198,9 +200,7 @@ impl AggregateExprBuilder {
             is_distinct,
             is_reversed,
         } = self;
-        if args.is_empty() {
-            return internal_err!("args should not be empty");
-        }
+        assert_or_internal_err!(!args.is_empty(), "args should not be empty");
 
         let ordering_types = order_bys
             .iter()
@@ -226,14 +226,20 @@ impl AggregateExprBuilder {
             None => {
                 return internal_err!(
                     "AggregateExprBuilder::alias must be provided prior to calling build"
-                )
+                );
             }
             Some(alias) => alias,
         };
 
+        let arg_fields = args
+            .iter()
+            .map(|e| e.return_field(schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(AggregateFunctionExpr {
             fun: Arc::unwrap_or_clone(fun),
             args,
+            arg_fields,
             return_field,
             name,
             human_display,
@@ -306,6 +312,8 @@ impl AggregateExprBuilder {
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Fields corresponding to args (same order & length)
+    arg_fields: Vec<FieldRef>,
     /// Output / return field of this aggregate
     return_field: FieldRef,
     /// Output column name that this expression creates
@@ -383,6 +391,7 @@ impl AggregateFunctionExpr {
         let acc_args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
+            expr_fields: &self.arg_fields,
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
@@ -467,6 +476,7 @@ impl AggregateFunctionExpr {
         let args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
+            expr_fields: &self.arg_fields,
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
@@ -536,6 +546,7 @@ impl AggregateFunctionExpr {
         let args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
+            expr_fields: &self.arg_fields,
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
@@ -555,6 +566,7 @@ impl AggregateFunctionExpr {
         let args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
+            expr_fields: &self.arg_fields,
             ignore_nulls: self.ignore_nulls,
             order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
@@ -638,6 +650,9 @@ impl AggregateFunctionExpr {
         Some(AggregateFunctionExpr {
             fun: self.fun.clone(),
             args,
+            // TODO: need to align arg_fields here with new args
+            //       https://github.com/apache/datafusion/issues/18149
+            arg_fields: self.arg_fields.clone(),
             return_field: Arc::clone(&self.return_field),
             name: self.name.clone(),
             // TODO: Human name should be updated after re-write to not mislead
@@ -724,18 +739,18 @@ fn replace_order_by_clause(order_by: &mut String) {
         (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
     ];
 
-    if let Some(start) = order_by.find("ORDER BY [") {
-        if let Some(end) = order_by[start..].find(']') {
-            let order_by_start = start + 9;
-            let order_by_end = start + end;
+    if let Some(start) = order_by.find("ORDER BY [")
+        && let Some(end) = order_by[start..].find(']')
+    {
+        let order_by_start = start + 9;
+        let order_by_end = start + end;
 
-            let column_order = &order_by[order_by_start..=order_by_end];
-            for (suffix, replacement) in suffixes {
-                if column_order.ends_with(suffix) {
-                    let new_order = column_order.replace(suffix, replacement);
-                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
-                    break;
-                }
+        let column_order = &order_by[order_by_start..=order_by_end];
+        for (suffix, replacement) in suffixes {
+            if column_order.ends_with(suffix) {
+                let new_order = column_order.replace(suffix, replacement);
+                order_by.replace_range(order_by_start..=order_by_end, &new_order);
+                break;
             }
         }
     }

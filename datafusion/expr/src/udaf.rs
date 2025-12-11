@@ -26,23 +26,23 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
+use datafusion_common::{Result, ScalarValue, Statistics, exec_err, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
+    AggregateFunction, AggregateFunctionParams, ExprListDisplay, WindowFunctionParams,
     schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
-    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams, ExprListDisplay,
-    WindowFunctionParams,
+    schema_name_from_sorts,
 };
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
-use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
-use crate::{expr_vec_fmt, Accumulator, Expr};
+use crate::utils::format_state_name;
+use crate::{Accumulator, Expr, expr_vec_fmt};
 use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -74,8 +74,8 @@ use crate::{Documentation, Signature};
 /// [aggregate function]: https://en.wikipedia.org/wiki/Aggregate_function
 /// [`Accumulator`]: Accumulator
 /// [`create_udaf`]: crate::expr_fn::create_udaf
-/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 #[derive(Debug, Clone, PartialOrd)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
@@ -329,9 +329,9 @@ impl AggregateUDF {
         self.inner.supports_null_handling_clause()
     }
 
-    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
-    pub fn is_ordered_set_aggregate(&self) -> bool {
-        self.inner.is_ordered_set_aggregate()
+    /// See [`AggregateUDFImpl::supports_within_group_clause`] for more details.
+    pub fn supports_within_group_clause(&self) -> bool {
+        self.inner.supports_within_group_clause()
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -360,7 +360,7 @@ where
 /// See [`advanced_udaf.rs`] for a full example with complete implementation and
 /// [`AggregateUDF`] for other available options.
 ///
-/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 ///
 /// # Basic Example
 /// ```
@@ -565,11 +565,12 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let fields = vec![args
-            .return_field
-            .as_ref()
-            .clone()
-            .with_name(format_state_name(args.name, "value"))];
+        let fields = vec![
+            args.return_field
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(args.name, "value")),
+        ];
 
         Ok(fields
             .into_iter()
@@ -740,24 +741,35 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         ScalarValue::try_from(data_type)
     }
 
-    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
-    /// If the function does not, return false
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` SQL clause,
+    /// return `true`. Otherwise, return `false` which will cause an error to be
+    /// raised during SQL parsing if these clauses are detected for this function.
+    ///
+    /// Functions which implement this as `true` are expected to handle the resulting
+    /// null handling config present in [`AccumulatorArgs`], `ignore_nulls`.
     fn supports_null_handling_clause(&self) -> bool {
-        true
+        false
     }
 
-    /// If this function is an ordered-set aggregate function, return `true`.
-    /// Otherwise, return `false` (default).
+    /// If this function supports the `WITHIN GROUP (ORDER BY column [ASC|DESC])`
+    /// SQL syntax, return `true`. Otherwise, return `false` (default) which will
+    /// cause an error when parsing SQL where this syntax is detected for this
+    /// function.
+    ///
+    /// This function should return `true` for ordered-set aggregate functions
+    /// only.
+    ///
+    /// # Ordered-set aggregate functions
     ///
     /// Ordered-set aggregate functions allow specifying a sort order that affects
     /// how the function calculates its result, unlike other aggregate functions
-    /// like `SUM` or `COUNT`. For example, `percentile_cont` is an ordered-set
+    /// like `sum` or `count`. For example, `percentile_cont` is an ordered-set
     /// aggregate function that calculates the exact percentile value from a list
     /// of values; the output of calculating the `0.75` percentile depends on if
     /// you're calculating on an ascending or descending list of values.
     ///
-    /// Setting this to return `true` affects only SQL parsing & planning; it allows
-    /// use of the `WITHIN GROUP` clause to specify this order, for example:
+    /// An example of how an ordered-set aggregate function is called with the
+    /// `WITHIN GROUP` SQL syntax:
     ///
     /// ```sql
     /// -- Ascending
@@ -784,15 +796,11 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// without the `WITHIN GROUP` clause, though a default of ascending is the
     /// standard practice.
     ///
-    /// Note that setting this to `true` does not guarantee input sort order to
-    /// the aggregate function; it expects the function to handle ordering the
-    /// input values themselves (e.g. `percentile_cont` must buffer and sort
-    /// the values internally). That is, DataFusion does not introduce any kind
-    /// of sort into the plan for these functions.
-    ///
-    /// Setting this to `false` disallows calling this function with the `WITHIN GROUP`
-    /// clause.
-    fn is_ordered_set_aggregate(&self) -> bool {
+    /// Ordered-set aggregate function implementations are responsible for handling
+    /// the input sort order themselves (e.g. `percentile_cont` must buffer and
+    /// sort the values internally). That is, DataFusion does not introduce any
+    /// kind of sort into the plan for these functions with this syntax.
+    fn supports_within_group_clause(&self) -> bool {
         false
     }
 
@@ -843,7 +851,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
 
     // exclude the first function argument(= column) in ordered set aggregate function,
     // because it is duplicated with the WITHIN GROUP clause in schema name.
-    let args = if func.is_ordered_set_aggregate() && !order_by.is_empty() {
+    let args = if func.supports_within_group_clause() && !order_by.is_empty() {
         &args[1..]
     } else {
         &args[..]
@@ -867,7 +875,7 @@ pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
     };
 
     if !order_by.is_empty() {
-        let clause = match func.is_ordered_set_aggregate() {
+        let clause = match func.supports_within_group_clause() {
             true => "WITHIN GROUP",
             false => "ORDER BY",
         };
@@ -1259,8 +1267,8 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.supports_null_handling_clause()
     }
 
-    fn is_ordered_set_aggregate(&self) -> bool {
-        self.inner.is_ordered_set_aggregate()
+    fn supports_within_group_clause(&self) -> bool {
+        self.inner.supports_within_group_clause()
     }
 
     fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {

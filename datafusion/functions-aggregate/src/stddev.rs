@@ -26,8 +26,8 @@ use std::sync::Arc;
 use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_common::{plan_err, ScalarValue};
+use datafusion_common::{Result, internal_err, not_impl_err};
+use datafusion_common::{ScalarValue, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -443,37 +443,46 @@ mod tests {
         agg2: Arc<AggregateUDF>,
         schema: &Schema,
     ) -> Result<ScalarValue> {
+        let expr = col("a", schema)?;
+        let expr_field = expr.return_field(schema)?;
+
         let args1 = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
+            expr_fields: &[Arc::clone(&expr_field)],
             ignore_nulls: false,
             order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            exprs: &[col("a", schema)?],
+            exprs: &[Arc::clone(&expr)],
         };
 
         let args2 = AccumulatorArgs {
             return_field: Field::new("f", DataType::Float64, true).into(),
             schema,
+            expr_fields: &[expr_field],
             ignore_nulls: false,
             order_bys: &[],
             name: "a",
             is_distinct: false,
             is_reversed: false,
-            exprs: &[col("a", schema)?],
+            exprs: &[expr],
         };
 
         let mut accum1 = agg1.accumulator(args1)?;
         let mut accum2 = agg2.accumulator(args2)?;
 
-        let value1 = vec![col("a", schema)?
-            .evaluate(batch1)
-            .and_then(|v| v.into_array(batch1.num_rows()))?];
-        let value2 = vec![col("a", schema)?
-            .evaluate(batch2)
-            .and_then(|v| v.into_array(batch2.num_rows()))?];
+        let value1 = vec![
+            col("a", schema)?
+                .evaluate(batch1)
+                .and_then(|v| v.into_array(batch1.num_rows()))?,
+        ];
+        let value2 = vec![
+            col("a", schema)?
+                .evaluate(batch2)
+                .and_then(|v| v.into_array(batch2.num_rows()))?,
+        ];
 
         accum1.update_batch(&value1)?;
         accum2.update_batch(&value2)?;

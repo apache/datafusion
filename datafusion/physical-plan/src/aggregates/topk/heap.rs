@@ -17,15 +17,15 @@
 
 //! A custom binary heap implementation for performant top K aggregation
 
+use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
 use arrow::array::{
     cast::AsArray,
     types::{IntervalDayTime, IntervalMonthDayNano},
 };
-use arrow::array::{downcast_primitive, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{i256, DataType};
-use datafusion_common::exec_datafusion_err;
+use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
+use datafusion_common::exec_datafusion_err;
 
 use half::f16;
 use std::cmp::Ordering;
@@ -311,13 +311,12 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         let mut best_idx = node_idx;
         let mut best_val = &entry.val;
         for child_idx in left_child..=left_child + 1 {
-            if let Some(Some(child)) = self.heap.get(child_idx) {
-                if (!desc && child.val.comp(best_val) == Ordering::Greater)
-                    || (desc && child.val.comp(best_val) == Ordering::Less)
-                {
-                    best_val = &child.val;
-                    best_idx = child_idx;
-                }
+            if let Some(Some(child)) = self.heap.get(child_idx)
+                && ((!desc && child.val.comp(best_val) == Ordering::Greater)
+                    || (desc && child.val.comp(best_val) == Ordering::Less))
+            {
+                best_val = &child.val;
+                best_idx = child_idx;
             }
         }
         if best_val.comp(&entry.val) != Ordering::Equal {
@@ -326,20 +325,10 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         }
     }
 
-    fn _tree_print(
-        &self,
-        idx: usize,
-        prefix: String,
-        is_tail: bool,
-        output: &mut String,
-    ) {
+    fn _tree_print(&self, idx: usize, prefix: &str, is_tail: bool, output: &mut String) {
         if let Some(Some(hi)) = self.heap.get(idx) {
             let connector = if idx != 0 {
-                if is_tail {
-                    "└── "
-                } else {
-                    "├── "
-                }
+                if is_tail { "└── " } else { "├── " }
             } else {
                 ""
             };
@@ -357,10 +346,10 @@ impl<VAL: ValueType> TopKHeap<VAL> {
             let right_exists = right_idx < self.len;
 
             if left_exists {
-                self._tree_print(left_idx, child_prefix.clone(), !right_exists, output);
+                self._tree_print(left_idx, &child_prefix, !right_exists, output);
             }
             if right_exists {
-                self._tree_print(right_idx, child_prefix, true, output);
+                self._tree_print(right_idx, &child_prefix, true, output);
             }
         }
     }
@@ -370,7 +359,7 @@ impl<VAL: ValueType> Display for TopKHeap<VAL> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut output = String::new();
         if !self.heap.is_empty() {
-            self._tree_print(0, String::new(), true, &mut output);
+            self._tree_print(0, "", true, &mut output);
         }
         write!(f, "{output}")
     }

@@ -17,7 +17,7 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
@@ -27,7 +27,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::joins::SharedBitmapBuilder;
-use crate::metrics::{self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::metrics::{
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricType,
+};
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
@@ -39,20 +41,20 @@ pub use crate::joins::{JoinOn, JoinOnRef};
 
 use ahash::RandomState;
 use arrow::array::{
-    builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
-    BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
-    UInt32Array, UInt32Builder, UInt64Array,
+    Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
+    RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
+    builder::UInt64Builder, downcast_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, StringArray,
+    Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array,
+    Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
     StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt8Array,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{self, and, take, FilterBuilder};
+use arrow::compute::{self, FilterBuilder, and, take};
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
@@ -62,21 +64,22 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    not_impl_err, plan_err, DataFusionError, JoinSide, JoinType, NullEquality, Result,
-    SharedResult,
+    DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
+    not_impl_err, plan_err,
 };
-use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    add_offset_to_expr, add_offset_to_physical_sort_exprs, LexOrdering, PhysicalExpr,
-    PhysicalExprRef,
+    LexOrdering, PhysicalExpr, PhysicalExprRef, add_offset_to_expr,
+    add_offset_to_physical_sort_exprs,
 };
 
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::future::{BoxFuture, Shared};
-use futures::{ready, FutureExt};
+use futures::{FutureExt, ready};
 use parking_lot::Mutex;
 
 /// Checks whether the schemas "left" and "right" and columns "on" represent a valid join.
@@ -156,20 +159,21 @@ pub fn calculate_join_output_ordering(
     match maintains_input_order {
         [true, false] => {
             // Special case, we can prefix ordering of right side with the ordering of left side.
-            if join_type == JoinType::Inner && probe_side == Some(JoinSide::Left) {
-                if let Some(right_ordering) = right_ordering.cloned() {
-                    let right_offset = add_offset_to_physical_sort_exprs(
-                        right_ordering,
-                        left_columns_len as _,
-                    )?;
-                    return if let Some(left_ordering) = left_ordering {
-                        let mut result = left_ordering.clone();
-                        result.extend(right_offset);
-                        Ok(Some(result))
-                    } else {
-                        Ok(LexOrdering::new(right_offset))
-                    };
-                }
+            if join_type == JoinType::Inner
+                && probe_side == Some(JoinSide::Left)
+                && let Some(right_ordering) = right_ordering.cloned()
+            {
+                let right_offset = add_offset_to_physical_sort_exprs(
+                    right_ordering,
+                    left_columns_len as _,
+                )?;
+                return if let Some(left_ordering) = left_ordering {
+                    let mut result = left_ordering.clone();
+                    result.extend(right_offset);
+                    Ok(Some(result))
+                } else {
+                    Ok(LexOrdering::new(right_offset))
+                };
             }
             Ok(left_ordering.cloned())
         }
@@ -221,7 +225,6 @@ pub struct ColumnIndex {
 
 /// Returns the output field given the input field. Outer joins may
 /// insert nulls even if the input was not null
-///
 fn output_join_field(old_field: &Field, join_type: &JoinType, is_left: bool) -> Field {
     let force_nullable = match join_type {
         JoinType::Inner => false,
@@ -412,11 +415,11 @@ struct PartialJoinStatistics {
 pub(crate) fn estimate_join_statistics(
     left_stats: Statistics,
     right_stats: Statistics,
-    on: JoinOn,
+    on: &JoinOn,
     join_type: &JoinType,
     schema: &Schema,
 ) -> Result<Statistics> {
-    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, &on);
+    let join_stats = estimate_join_cardinality(join_type, left_stats, right_stats, on);
     let (num_rows, column_statistics) = match join_stats {
         Some(stats) => (Precision::Inexact(stats.num_rows), stats.column_statistics),
         None => (Precision::Absent, Statistics::unknown_column(schema)),
@@ -565,16 +568,26 @@ fn estimate_inner_join_cardinality(
         return Some(estimation);
     };
 
+    let Statistics {
+        num_rows: left_num_rows,
+        column_statistics: left_column_statistics,
+        ..
+    } = left_stats;
+    let Statistics {
+        num_rows: right_num_rows,
+        column_statistics: right_column_statistics,
+        ..
+    } = right_stats;
+
     // The algorithm here is partly based on the non-histogram selectivity estimation
     // from Spark's Catalyst optimizer.
     let mut join_selectivity = Precision::Absent;
-    for (left_stat, right_stat) in left_stats
-        .column_statistics
+    for (left_stat, right_stat) in left_column_statistics
         .iter()
-        .zip(right_stats.column_statistics.iter())
+        .zip(right_column_statistics.iter())
     {
-        let left_max_distinct = max_distinct_count(&left_stats.num_rows, left_stat);
-        let right_max_distinct = max_distinct_count(&right_stats.num_rows, right_stat);
+        let left_max_distinct = max_distinct_count(&left_num_rows, left_stat);
+        let right_max_distinct = max_distinct_count(&right_num_rows, right_stat);
         let max_distinct = left_max_distinct.max(&right_max_distinct);
         if max_distinct.get_value().is_some() {
             // Seems like there are a few implementations of this algorithm that implement
@@ -692,27 +705,25 @@ fn max_distinct_count(
             // Cap the estimate using the number of possible values:
             if let (Some(min), Some(max)) =
                 (stats.min_value.get_value(), stats.max_value.get_value())
-            {
-                if let Some(range_dc) = Interval::try_new(min.clone(), max.clone())
+                && let Some(range_dc) = Interval::try_new(min.clone(), max.clone())
                     .ok()
                     .and_then(|e| e.cardinality())
+            {
+                let range_dc = range_dc as usize;
+                // Note that the `unwrap` calls in the below statement are safe.
+                return if matches!(result, Precision::Absent)
+                    || &range_dc < result.get_value().unwrap()
                 {
-                    let range_dc = range_dc as usize;
-                    // Note that the `unwrap` calls in the below statement are safe.
-                    return if matches!(result, Precision::Absent)
-                        || &range_dc < result.get_value().unwrap()
+                    if stats.min_value.is_exact().unwrap()
+                        && stats.max_value.is_exact().unwrap()
                     {
-                        if stats.min_value.is_exact().unwrap()
-                            && stats.max_value.is_exact().unwrap()
-                        {
-                            Precision::Exact(range_dc)
-                        } else {
-                            Precision::Inexact(range_dc)
-                        }
+                        Precision::Exact(range_dc)
                     } else {
-                        result
-                    };
-                }
+                        Precision::Inexact(range_dc)
+                    }
+                } else {
+                    result
+                };
             }
 
             result
@@ -1129,8 +1140,8 @@ pub(crate) fn append_right_indices(
 ) -> Result<(UInt64Array, UInt32Array)> {
     if preserve_order_for_right {
         Ok(append_probe_indices_in_order(
-            left_indices,
-            right_indices,
+            &left_indices,
+            &right_indices,
             adjust_range,
         ))
     } else {
@@ -1274,8 +1285,8 @@ fn build_range_bitmap<T: ArrowPrimitiveType>(
 /// - A `PrimitiveArray` of `UInt64Type` with the newly constructed build indices.
 /// - A `PrimitiveArray` of `UInt32Type` with the newly constructed probe indices.
 fn append_probe_indices_in_order(
-    build_indices: PrimitiveArray<UInt64Type>,
-    probe_indices: PrimitiveArray<UInt32Type>,
+    build_indices: &PrimitiveArray<UInt64Type>,
+    probe_indices: &PrimitiveArray<UInt32Type>,
     range: Range<usize>,
 ) -> (PrimitiveArray<UInt64Type>, PrimitiveArray<UInt32Type>) {
     // Builders for new indices:
@@ -1328,8 +1339,10 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) input_batches: metrics::Count,
     /// Number of rows consumed by probe-side this operator
     pub(crate) input_rows: metrics::Count,
-    /// Number of batches produced by this operator
-    pub(crate) output_batches: metrics::Count,
+    /// Fraction of probe rows that found more than one match
+    pub(crate) probe_hit_rate: metrics::RatioMetrics,
+    /// Average number of build matches per matched probe row
+    pub(crate) avg_fanout: metrics::RatioMetrics,
 }
 
 // This Drop implementation updates the elapsed compute part of the metrics.
@@ -1373,8 +1386,13 @@ impl BuildProbeJoinMetrics {
 
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
 
-        let output_batches =
-            MetricBuilder::new(metrics).counter("output_batches", partition);
+        let probe_hit_rate = MetricBuilder::new(metrics)
+            .with_type(MetricType::SUMMARY)
+            .ratio_metrics("probe_hit_rate", partition);
+
+        let avg_fanout = MetricBuilder::new(metrics)
+            .with_type(MetricType::SUMMARY)
+            .ratio_metrics("avg_fanout", partition);
 
         Self {
             build_time,
@@ -1384,8 +1402,9 @@ impl BuildProbeJoinMetrics {
             join_time,
             input_batches,
             input_rows,
-            output_batches,
             baseline,
+            probe_hit_rate,
+            avg_fanout,
         }
     }
 }
@@ -1663,22 +1682,19 @@ pub fn swap_join_projection(
 /// `fifo_hashmap` sets the order of iteration over `batch` rows while updating hashmap,
 /// which allows to keep either first (if set to true) or last (if set to false) row index
 /// as a chain head for rows with equal hash values.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn update_hash(
     on: &[PhysicalExprRef],
     batch: &RecordBatch,
     hash_map: &mut dyn JoinHashMapType,
     offset: usize,
     random_state: &RandomState,
-    hashes_buffer: &mut Vec<u64>,
+    hashes_buffer: &mut [u64],
     deleted_offset: usize,
     fifo_hashmap: bool,
 ) -> Result<()> {
     // evaluate the keys
-    let keys_values = on
-        .iter()
-        .map(|c| c.evaluate(batch)?.into_array(batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
+    let keys_values = evaluate_expressions_to_arrays(on, batch)?;
 
     // calculate the hash values
     let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
@@ -1867,7 +1883,7 @@ mod tests {
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
-    use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
+    use datafusion_common::{ScalarValue, arrow_datafusion_err, arrow_err};
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use rstest::rstest;
@@ -2067,6 +2083,7 @@ mod tests {
             max_value: max.map(ScalarValue::from),
             sum_value: Absent,
             null_count,
+            byte_size: Absent,
         }
     }
 
@@ -2651,18 +2668,21 @@ mod tests {
             &JoinType::LeftSemi,
             Statistics {
                 num_rows: Inexact(500),
-                total_byte_size: Absent,
+                    total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
             Statistics {
                 num_rows: Absent,
-                total_byte_size: Absent,
+                    total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
             &join_on,
         ).expect("Expected non-empty PartialJoinStatistics for SemiJoin with absent inner num_rows");
 
-        assert_eq!(absent_inner_estimation.num_rows, 500, "Expected outer.num_rows estimated SemiJoin cardinality for absent inner num_rows");
+        assert_eq!(
+            absent_inner_estimation.num_rows, 500,
+            "Expected outer.num_rows estimated SemiJoin cardinality for absent inner num_rows"
+        );
 
         let absent_inner_estimation = estimate_join_cardinality(
             &JoinType::LeftSemi,
@@ -2678,7 +2698,10 @@ mod tests {
             },
             &join_on,
         );
-        assert!(absent_inner_estimation.is_none(), "Expected \"None\" estimated SemiJoin cardinality for absent outer and inner num_rows");
+        assert!(
+            absent_inner_estimation.is_none(),
+            "Expected \"None\" estimated SemiJoin cardinality for absent outer and inner num_rows"
+        );
 
         Ok(())
     }
