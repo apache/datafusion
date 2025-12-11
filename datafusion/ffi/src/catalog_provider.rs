@@ -204,7 +204,7 @@ impl FFI_CatalogProvider {
 /// defined on this struct must only use the stable functions provided in
 /// FFI_CatalogProvider to interact with the foreign table provider.
 #[derive(Debug)]
-pub struct ForeignCatalogProvider(FFI_CatalogProvider);
+pub struct ForeignCatalogProvider(pub(crate) FFI_CatalogProvider);
 
 unsafe impl Send for ForeignCatalogProvider {}
 unsafe impl Sync for ForeignCatalogProvider {}

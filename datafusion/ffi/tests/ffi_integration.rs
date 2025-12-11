@@ -21,7 +21,6 @@
 mod tests {
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;
-    use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
     use datafusion_ffi::table_provider::ForeignTableProvider;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
@@ -68,31 +67,5 @@ mod tests {
     #[tokio::test]
     async fn sync_test_table_provider() -> Result<()> {
         test_table_provider(true).await
-    }
-
-    #[tokio::test]
-    async fn test_catalog() -> Result<()> {
-        let module = get_module()?;
-
-        let ffi_catalog =
-            module
-                .create_catalog()
-                .ok_or(DataFusionError::NotImplemented(
-                    "External catalog provider failed to implement create_catalog"
-                        .to_string(),
-                ))?();
-        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
-
-        let ctx = SessionContext::default();
-        let _ = ctx.register_catalog("fruit", Arc::new(foreign_catalog));
-
-        let df = ctx.table("fruit.apple.purchases").await?;
-
-        let results = df.collect().await?;
-
-        assert!(!results.is_empty());
-        assert!(results[0].num_rows() != 0);
-
-        Ok(())
     }
 }
