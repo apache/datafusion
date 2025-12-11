@@ -739,7 +739,7 @@ impl AggregateExec {
     ) -> Result<StreamType> {
         if self.group_by.is_true_no_grouping() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
-                self, context, partition, None,
+                self, context, partition,
             )?));
         }
 
