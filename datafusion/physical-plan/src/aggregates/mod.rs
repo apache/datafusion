@@ -65,6 +65,8 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+use topk::hash_table::is_supported_hash_key_type;
+use topk::heap::is_supported_heap_type;
 
 pub mod group_values;
 mod no_grouping;
@@ -99,8 +101,6 @@ mod topk_stream;
 /// assert!(!topk_types_supported(&DataType::Int64, &DataType::Utf8));
 /// ```
 pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
-    use topk::hash_table::is_supported_hash_key_type;
-    use topk::heap::is_supported_heap_type;
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
 }
 
