@@ -30,9 +30,9 @@
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
 use arrow::array::{
+    LargeStringArray, StringArray, StringViewArray,
     cast::AsArray,
     types::{IntervalDayTime, IntervalMonthDayNano},
-    LargeStringArray, StringArray, StringViewArray,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, i256};
