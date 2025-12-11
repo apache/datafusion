@@ -52,7 +52,12 @@ pub struct GroupedTopKAggregateStream {
 }
 
 impl GroupedTopKAggregateStream {
-    pub fn supports(aggr: &AggregateExec) -> Result<bool> {
+    /// Returns true if this aggregate can use the TopK optimization.
+    ///
+    /// This check is primarily for use by `AggregateExec` stream selection logic.
+    /// Type validation is performed by the optimizer rule; this method focuses on
+    /// structural requirements (single min/max aggregate, single grouping key).
+    pub fn can_use_topk(aggr: &AggregateExec) -> Result<bool> {
         let (val_field, _) = match aggr.get_minmax_desc() {
             Some(values) => values,
             None => return Ok(false),
@@ -62,7 +67,7 @@ impl GroupedTopKAggregateStream {
         let kt = expr.data_type(&aggr.input().schema())?;
         let vt = val_field.data_type();
 
-        // Use the public API for consistency
+        // Validate type support using the public API
         use crate::aggregates::topk_types_supported;
         Ok(topk_types_supported(&kt, vt))
     }
@@ -88,15 +93,20 @@ impl GroupedTopKAggregateStream {
         let kt = expr.data_type(&aggr.input().schema())?;
         let vt = val_field.data_type().clone();
 
-        // Double-check: should be guaranteed by AggregateExec stream selection logic,
-        // but we validate here for safety and to provide a clear error message.
-        use crate::aggregates::topk_types_supported;
-        if !topk_types_supported(&kt, &vt) {
-            return Err(internal_datafusion_err!(
-                "Unsupported TopK aggregation types: grouping key {kt:?}, aggregate value {vt:?}"
-            ));
+        // Type validation is performed by the optimizer and can_use_topk() check.
+        // This debug assertion documents the contract without runtime overhead in release builds.
+        #[cfg(debug_assertions)]
+        {
+            use crate::aggregates::topk_types_supported;
+            debug_assert!(
+                topk_types_supported(&kt, &vt),
+                "TopK type validation should have been performed by optimizer and can_use_topk(). \
+                 Found unsupported types: key={kt:?}, value={vt:?}"
+            );
         }
 
+        // Note: Null values in aggregate columns are filtered by the aggregation layer
+        // before reaching the heap, so the heap implementations don't need explicit null handling.
         let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
 
         Ok(GroupedTopKAggregateStream {
