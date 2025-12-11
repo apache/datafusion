@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![deny(clippy::allow_attributes)]
+#![allow(clippy::allow_attributes)]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
@@ -36,7 +36,9 @@
     )
 )]
 #![warn(missing_docs, clippy::needless_borrow)]
-#![cfg_attr(test, expect(clippy::needless_pass_by_value))]
+// Use `allow` instead of `expect` for test configuration to explicitly 
+// disable the lint for all test code rather than expecting violations
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! [DataFusion] is an extensible query engine written in Rust that
 //! uses [Apache Arrow] as its in-memory format. DataFusion's target users are
