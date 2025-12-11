@@ -956,7 +956,7 @@ mod tests {
 
         let inner_empty = EmptyRelation {
             produce_one_row: false,
-            schema: df_schema_ref.clone(),
+            schema: Arc::clone(&df_schema_ref),
         };
 
         let inner_plan = LogicalPlan::EmptyRelation(inner_empty);
@@ -969,7 +969,7 @@ mod tests {
         let plan = LogicalPlan::TableScan(scan);
 
         let visited = Arc::new(std::sync::Mutex::new(false));
-        let visited_clone = visited.clone();
+        let visited_clone = Arc::clone(&visited);
 
         let _ = plan.map_children(|child_plan: LogicalPlan| {
             if matches!(&child_plan, LogicalPlan::EmptyRelation(_)) {
@@ -993,7 +993,7 @@ mod tests {
         let plan = LogicalPlan::TableScan(scan);
 
         let visited = Arc::new(std::sync::Mutex::new(false));
-        let visited_clone = visited.clone();
+        let visited_clone = Arc::clone(&visited);
 
         let _ = plan.map_children(|child_plan: LogicalPlan| {
             // If this is called for any child, mark visited
