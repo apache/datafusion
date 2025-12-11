@@ -27,8 +27,8 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 
-use crate::expressions::{Column, Literal};
 use crate::PhysicalExpr;
+use crate::expressions::{Column, Literal};
 
 /// Simplify expressions that consist only of literals by evaluating them.
 ///

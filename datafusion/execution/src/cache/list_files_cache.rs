@@ -172,8 +172,11 @@ impl DefaultListFilesCacheState {
         }
     }
 
-    /// Returns the respective entry from the cache, if it exists and the entry has not expired.
-    /// Takes `now` explicitly to determine expiration.
+    /// Returns the respective entry from the cache, if it exists and the entry
+    /// has not expired by `now`.
+    ///
+    /// If the entry exists it becomes the most recently used. If the entry has expired it is
+    /// removed from the cache
     fn get(&mut self, key: &Path, now: Instant) -> Option<Arc<Vec<ObjectMeta>>> {
         let entry = self.lru_queue.get(key)?;
 
@@ -187,7 +190,10 @@ impl DefaultListFilesCacheState {
     }
 
     /// Checks if the respective entry is currently cached.
-    /// Takes `now` explicitly to determine expiration.
+    ///
+    /// If the entry has expired by `now` it is removed from the cache.
+    ///
+    /// The LRU queue is not updated.
     fn contains_key(&mut self, k: &Path, now: Instant) -> bool {
         let Some(entry) = self.lru_queue.peek(k) else {
             return false;
@@ -202,8 +208,11 @@ impl DefaultListFilesCacheState {
         }
     }
 
-    /// Adds a new key-value pair to cache.
-    /// Takes `now` explicitly to determine expiration.
+    /// Adds a new key-value pair to cache expiring at `now` + the TTL.
+    ///
+    /// This means that LRU entries might be evicted if required.
+    /// If the key is already in the cache, the previous entry is returned.
+    /// If the size of the entry is greater than the `memory_limit`, the value is not inserted.
     fn put(
         &mut self,
         key: &Path,
@@ -237,6 +246,7 @@ impl DefaultListFilesCacheState {
             if let Some(removed) = self.lru_queue.pop() {
                 self.memory_used -= removed.1.size_bytes;
             } else {
+                // cache is empty while memory_used > memory_limit, cannot happen
                 debug_assert!(
                     false,
                     "cache is empty while memory_used > memory_limit, cannot happen"
