@@ -24,7 +24,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_plan::aggregates::{topk_supported, AggregateExec};
+use datafusion_physical_plan::aggregates::{topk_types_supported, AggregateExec};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -54,7 +54,8 @@ impl TopKAggregation {
         }
         let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
         let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
-        if !topk_supported(&kt, field.data_type()) {
+        let vt = field.data_type();
+        if !topk_types_supported(&kt, vt) {
             return None;
         }
         if aggr.filter_expr().iter().any(|e| e.is_some()) {

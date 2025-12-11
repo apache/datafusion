@@ -42,7 +42,7 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
@@ -73,6 +73,11 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 pub use self::topk::priority_map::topk_supported;
+
+/// Returns true if TopK aggregation data structures support the provided key and value
+pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
+    topk::priority_map::PriorityMap::supports(key_type, value_type)
+}
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: ahash::RandomState =
@@ -733,7 +738,9 @@ impl AggregateExec {
 
         // grouping by an expression that has a sort/limit upstream
         if let Some(limit) = self.limit {
-            if !self.is_unordered_unfiltered_group_by_distinct() {
+            if !self.is_unordered_unfiltered_group_by_distinct()
+                && GroupedTopKAggregateStream::supports(self)?
+            {
                 return Ok(StreamType::GroupedPriorityQueue(
                     GroupedTopKAggregateStream::new(self, context, partition, limit)?,
                 ));

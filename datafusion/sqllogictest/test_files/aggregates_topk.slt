@@ -200,6 +200,68 @@ a -1 -1
 NULL 0 0
 a 1 1
 
+statement ok
+CREATE TABLE string_topk(category varchar, val varchar) AS VALUES
+('x', 'apple'),
+('x', 'zebra'),
+('y', 'banana'),
+('y', 'apricot'),
+('z', 'mango');
+
+statement ok
+CREATE VIEW string_topk_view AS
+SELECT
+  arrow_cast(category, 'Utf8View') AS category,
+  arrow_cast(val, 'Utf8View') AS val
+FROM
+  string_topk;
+
+query TI
+select category, max(val) from string_topk group by category order by max(val) desc limit 2;
+----
+x zebra
+z mango
+
+query TT
+explain select category, max(val) max_val from string_topk group by category order by max_val desc limit 2;
+----
+logical_plan
+01)Sort: max(string_topk.val) DESC NULLS FIRST, fetch=2
+02)--Aggregate: groupBy=[[string_topk.category]], aggr=[[max(string_topk.val) AS max_val]]
+03)----TableScan: string_topk projection=[category, val]
+physical_plan
+01)SortPreservingMergeExec: [max(string_topk.val)@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[max(string_topk.val)@1 DESC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(val@1) as max_val], lim=[2]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(val@1) as max_val], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TI
+select category, max(val) from string_topk_view group by category order by max(val) desc limit 2;
+----
+x zebra
+z mango
+
+query TT
+explain select category, max(val) max_val from string_topk_view group by category order by max_val desc limit 2;
+----
+logical_plan
+01)Sort: max(string_topk_view.val) DESC NULLS FIRST, fetch=2
+02)--Aggregate: groupBy=[[string_topk_view.category]], aggr=[[max(string_topk_view.val) AS max_val]]
+03)----Projection: arrow_cast(string_topk.category, Utf8View) AS category, arrow_cast(string_topk.val, Utf8View) AS val
+04)------TableScan: string_topk projection=[category, val]
+physical_plan
+01)SortPreservingMergeExec: [max(string_topk_view.val)@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[max(string_topk_view.val)@1 DESC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(val@1) as max_val], lim=[2]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(val@1) as max_val], lim=[2]
+07)------------ProjectionExec: expr=[arrow_cast(category@0, Utf8View) as category, arrow_cast(val@1, Utf8View) as val]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
 query TII
 select trace_id, min(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
 ----

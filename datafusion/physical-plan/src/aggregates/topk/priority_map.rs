@@ -17,8 +17,10 @@
 
 //! A `Map<K, V>` / `PriorityQueue` combo that evicts the worst values after reaching `capacity`
 
-use crate::aggregates::topk::hash_table::{new_hash_table, ArrowHashTable};
-use crate::aggregates::topk::heap::{new_heap, ArrowHeap};
+use crate::aggregates::topk::hash_table::{
+    is_supported_hash_key_type, new_hash_table, ArrowHashTable,
+};
+use crate::aggregates::topk::heap::{is_supported_heap_type, new_heap, ArrowHeap};
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -32,6 +34,10 @@ pub struct PriorityMap {
 }
 
 impl PriorityMap {
+    pub fn supports(key_type: &DataType, val_type: &DataType) -> bool {
+        is_supported_hash_key_type(key_type) && is_supported_heap_type(val_type)
+    }
+
     pub fn new(
         key_type: DataType,
         val_type: DataType,

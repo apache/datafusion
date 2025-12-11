@@ -26,9 +26,8 @@ use arrow::array::{
     types::{IntervalDayTime, IntervalMonthDayNano},
 };
 use arrow::array::{
-    downcast_primitive, Array, ArrayRef, ArrowPrimitiveType, GenericStringArray,
-    GenericStringBuilder, OffsetSizeTrait, PrimitiveArray, StringViewArray,
-    StringViewBuilder,
+    downcast_primitive, ArrayRef, ArrowPrimitiveType, LargeStringArray, PrimitiveArray,
+    StringArray, StringViewArray,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{i256, DataType};
@@ -38,7 +37,6 @@ use datafusion_common::Result;
 use half::f16;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// A custom version of `Ord` that only exists to we can implement it for the Values in our heap
@@ -47,6 +45,12 @@ pub trait Comparable {
 }
 
 impl Comparable for Option<String> {
+    fn comp(&self, other: &Self) -> Ordering {
+        self.cmp(other)
+    }
+}
+
+impl Comparable for String {
     fn comp(&self, other: &Self) -> Ordering {
         self.cmp(other)
     }
@@ -167,6 +171,86 @@ where
         let arr = PrimitiveArray::<VAL>::new(ScalarBuffer::from(vals), nulls)
             .with_data_type(self.data_type.clone());
         (Arc::new(arr), map_idxs)
+    }
+}
+
+/// An implementation of `ArrowHeap` that deals with string values
+pub struct StringHeap {
+    batch: ArrayRef,
+    heap: TopKHeap<String>,
+    desc: bool,
+    data_type: DataType,
+}
+
+impl StringHeap {
+    pub fn new(limit: usize, desc: bool, data_type: DataType) -> Self {
+        let owned: ArrayRef = Arc::new(StringArray::from(Vec::<&str>::new()));
+        Self {
+            batch: owned,
+            heap: TopKHeap::new(limit, desc),
+            desc,
+            data_type,
+        }
+    }
+
+    fn value(&self, row_idx: usize) -> String {
+        match self.data_type {
+            DataType::Utf8 => self.batch.as_string::<i32>().value(row_idx).to_string(),
+            DataType::LargeUtf8 => {
+                self.batch.as_string::<i64>().value(row_idx).to_string()
+            }
+            DataType::Utf8View => self.batch.as_string_view().value(row_idx).to_string(),
+            _ => unreachable!("Unsupported string type: {:?}", self.data_type),
+        }
+    }
+}
+
+impl ArrowHeap for StringHeap {
+    fn set_batch(&mut self, vals: ArrayRef) {
+        self.batch = vals;
+    }
+
+    fn is_worse(&self, row_idx: usize) -> bool {
+        if !self.heap.is_full() {
+            return false;
+        }
+        let new_val = self.value(row_idx);
+        let worst_val = self.heap.worst_val().expect("Missing root");
+        (!self.desc && new_val > *worst_val) || (self.desc && new_val < *worst_val)
+    }
+
+    fn worst_map_idx(&self) -> usize {
+        self.heap.worst_map_idx()
+    }
+
+    fn renumber(&mut self, heap_to_map: &[(usize, usize)]) {
+        self.heap.renumber(heap_to_map);
+    }
+
+    fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
+        let new_val = self.value(row_idx);
+        self.heap.append_or_replace(new_val, map_idx, map);
+    }
+
+    fn replace_if_better(
+        &mut self,
+        heap_idx: usize,
+        row_idx: usize,
+        map: &mut Vec<(usize, usize)>,
+    ) {
+        let new_val = self.value(row_idx);
+        self.heap.replace_if_better(heap_idx, new_val, map);
+    }
+
+    fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
+        let (vals, map_idxs) = self.heap.drain();
+        let arr: ArrayRef = match self.data_type {
+            DataType::Utf8 => Arc::new(StringArray::from(vals)),
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(vals)),
+            DataType::Utf8View => Arc::new(StringViewArray::from(vals)),
+            _ => unreachable!("Unsupported string type: {:?}", self.data_type),
+        };
+        (arr, map_idxs)
     }
 }
 
@@ -465,183 +549,13 @@ compare_integer!(u8, u16, u32, u64);
 compare_integer!(IntervalDayTime, IntervalMonthDayNano);
 compare_float!(f16, f32, f64);
 
-/// A specialized heap for UTF-8 string values backed by `TopKHeap<Option<String>>`
-struct StringHeap<O: OffsetSizeTrait> {
-    batch: ArrayRef,
-    heap: TopKHeap<Option<String>>,
-    desc: bool,
-    marker: PhantomData<O>,
-}
-
-impl<O: OffsetSizeTrait> StringHeap<O> {
-    fn new(limit: usize, desc: bool) -> Self {
-        Self {
-            batch: Arc::new(GenericStringArray::<O>::from_iter_values(
-                std::iter::empty::<&str>(),
-            )),
-            heap: TopKHeap::new(limit, desc),
-            desc,
-            marker: PhantomData,
-        }
-    }
-
-    fn value_for_row(arr: &GenericStringArray<O>, row_idx: usize) -> Option<String> {
-        if arr.is_null(row_idx) {
-            None
-        } else {
-            Some(arr.value(row_idx).to_string())
-        }
-    }
-}
-
-impl<O> ArrowHeap for StringHeap<O>
-where
-    O: OffsetSizeTrait,
-{
-    fn set_batch(&mut self, vals: ArrayRef) {
-        self.batch = vals;
-    }
-
-    fn is_worse(&self, row_idx: usize) -> bool {
-        if !self.heap.is_full() {
-            return false;
-        }
-        let vals = self.batch.as_string::<O>();
-        let new_val = Self::value_for_row(vals, row_idx);
-        match self.heap.worst_val() {
-            None => false,
-            Some(worst_val) => match worst_val.comp(&new_val) {
-                Ordering::Less => !self.desc,
-                Ordering::Greater => self.desc,
-                Ordering::Equal => false,
-            },
-        }
-    }
-
-    fn worst_map_idx(&self) -> usize {
-        self.heap.worst_map_idx()
-    }
-
-    fn renumber(&mut self, heap_to_map: &[(usize, usize)]) {
-        self.heap.renumber(heap_to_map);
-    }
-
-    fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        let vals = self.batch.as_string::<O>();
-        let new_val = Self::value_for_row(vals, row_idx);
-        self.heap.append_or_replace(new_val, map_idx, map);
-    }
-
-    fn replace_if_better(
-        &mut self,
-        heap_idx: usize,
-        row_idx: usize,
-        map: &mut Vec<(usize, usize)>,
-    ) {
-        let vals = self.batch.as_string::<O>();
-        let new_val = Self::value_for_row(vals, row_idx);
-        self.heap.replace_if_better(heap_idx, new_val, map);
-    }
-
-    fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
-        let (vals, map_idxs) = self.heap.drain();
-        let mut builder = GenericStringBuilder::<O>::with_capacity(vals.len(), 0);
-        for val in vals {
-            match val {
-                Some(s) => builder.append_value(&s),
-                None => builder.append_null(),
-            }
-        }
-        let arr: ArrayRef = Arc::new(builder.finish());
-        (arr, map_idxs)
-    }
-}
-
-/// A specialized heap for `Utf8View` values backed by `TopKHeap<Option<String>>`
-struct StringViewHeap {
-    batch: ArrayRef,
-    heap: TopKHeap<Option<String>>,
-    desc: bool,
-}
-
-impl StringViewHeap {
-    fn new(limit: usize, desc: bool) -> Self {
-        Self {
-            batch: Arc::new(
-                StringViewArray::from_iter_values(std::iter::empty::<&str>()),
-            ),
-            heap: TopKHeap::new(limit, desc),
-            desc,
-        }
-    }
-
-    fn value_for_row(arr: &StringViewArray, row_idx: usize) -> Option<String> {
-        if arr.is_null(row_idx) {
-            None
-        } else {
-            Some(arr.value(row_idx).to_string())
-        }
-    }
-}
-
-impl ArrowHeap for StringViewHeap {
-    fn set_batch(&mut self, vals: ArrayRef) {
-        self.batch = vals;
-    }
-
-    fn is_worse(&self, row_idx: usize) -> bool {
-        if !self.heap.is_full() {
-            return false;
-        }
-        let vals = self.batch.as_string_view();
-        let new_val = Self::value_for_row(vals, row_idx);
-        match self.heap.worst_val() {
-            None => false,
-            Some(worst_val) => match worst_val.comp(&new_val) {
-                Ordering::Less => !self.desc,
-                Ordering::Greater => self.desc,
-                Ordering::Equal => false,
-            },
-        }
-    }
-
-    fn worst_map_idx(&self) -> usize {
-        self.heap.worst_map_idx()
-    }
-
-    fn renumber(&mut self, heap_to_map: &[(usize, usize)]) {
-        self.heap.renumber(heap_to_map);
-    }
-
-    fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        let vals = self.batch.as_string_view();
-        let new_val = Self::value_for_row(vals, row_idx);
-        self.heap.append_or_replace(new_val, map_idx, map);
-    }
-
-    fn replace_if_better(
-        &mut self,
-        heap_idx: usize,
-        row_idx: usize,
-        map: &mut Vec<(usize, usize)>,
-    ) {
-        let vals = self.batch.as_string_view();
-        let new_val = Self::value_for_row(vals, row_idx);
-        self.heap.replace_if_better(heap_idx, new_val, map);
-    }
-
-    fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
-        let (vals, map_idxs) = self.heap.drain();
-        let mut builder = StringViewBuilder::with_capacity(vals.len());
-        for val in vals {
-            match val {
-                Some(s) => builder.append_value(&s),
-                None => builder.append_null(),
-            }
-        }
-        let arr: ArrayRef = Arc::new(builder.finish());
-        (arr, map_idxs)
-    }
+/// Returns true if the given data type can be stored in a heap
+pub fn is_supported_heap_type(vt: &DataType) -> bool {
+    vt.is_primitive()
+        || matches!(
+            vt,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+        )
 }
 
 pub fn new_heap(
@@ -649,31 +563,39 @@ pub fn new_heap(
     desc: bool,
     vt: DataType,
 ) -> Result<Box<dyn ArrowHeap + Send>> {
+    if matches!(
+        vt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        return Ok(Box::new(StringHeap::new(limit, desc, vt)));
+    }
+
     macro_rules! downcast_helper {
         ($vt:ty, $d:ident) => {
             return Ok(Box::new(PrimitiveHeap::<$vt>::new(limit, desc, vt)))
         };
     }
 
+    let vt_clone = vt.clone();
     downcast_primitive! {
-        vt => (downcast_helper, vt),
+        vt_clone => (downcast_helper, vt_clone),
         _ => {}
     }
 
     match vt {
         DataType::Utf8 => {
-            return Ok(Box::new(StringHeap::<i32>::new(limit, desc)));
+            return Ok(Box::new(StringHeap::new(limit, desc, DataType::Utf8)));
         }
         DataType::LargeUtf8 => {
-            return Ok(Box::new(StringHeap::<i64>::new(limit, desc)));
+            return Ok(Box::new(StringHeap::new(limit, desc, DataType::LargeUtf8)));
         }
         DataType::Utf8View => {
-            return Ok(Box::new(StringViewHeap::new(limit, desc)));
+            return Ok(Box::new(StringHeap::new(limit, desc, DataType::Utf8View)));
         }
         _ => {}
     }
 
-    Err(exec_datafusion_err!("Can't group type: {vt:?}"))
+    Err(exec_datafusion_err!("Can't create heap for type: {vt:?}"))
 }
 
 #[cfg(test)]

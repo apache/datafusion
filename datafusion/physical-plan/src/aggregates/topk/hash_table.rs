@@ -83,6 +83,15 @@ pub trait ArrowHashTable {
     ) -> (usize, bool);
 }
 
+/// Returns true if the given data type can be used as a TopK hash key
+pub fn is_supported_hash_key_type(kt: &DataType) -> bool {
+    kt.is_primitive()
+        || matches!(
+            kt,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+        )
+}
+
 // An implementation of ArrowHashTable for String keys
 pub struct StringHashTable {
     owned: ArrayRef,
