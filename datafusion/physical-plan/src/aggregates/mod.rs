@@ -552,6 +552,26 @@ impl AggregateExec {
         }
     }
 
+    /// Clone this exec, overriding only the limit hint.
+    pub fn with_new_limit(&self, limit: Option<usize>) -> Self {
+        Self {
+            limit,
+            // clone the rest of the fields
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode: self.input_order_mode.clone(),
+            cache: self.cache.clone(),
+            mode: self.mode,
+            group_by: self.group_by.clone(),
+            aggr_expr: self.aggr_expr.clone(),
+            filter_expr: self.filter_expr.clone(),
+            input: Arc::clone(&self.input),
+            schema: Arc::clone(&self.schema),
+            input_schema: Arc::clone(&self.input_schema),
+            dynamic_filter: self.dynamic_filter.clone(),
+        }
+    }
+
     pub fn cache(&self) -> &PlanProperties {
         &self.cache
     }
