@@ -232,7 +232,7 @@ impl FFI_CatalogProviderList {
 /// This wrapper struct exists on the receiver side of the FFI interface, so it has
 /// no guarantees about being able to access the data in `private_data`. Any functions
 /// defined on this struct must only use the stable functions provided in
-/// FFI_CatalogProviderList to interact with the foreign table provider.
+/// FFI_CatalogProviderList to interact with the foreign catalog provider list.
 #[derive(Debug)]
 pub struct ForeignCatalogProviderList(FFI_CatalogProviderList);
 
