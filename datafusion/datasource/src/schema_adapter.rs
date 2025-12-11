@@ -1041,6 +1041,7 @@ mod tests {
             min_value: min_value.map_or_else(|| Precision::Absent, Precision::Exact),
             max_value: max_value.map_or_else(|| Precision::Absent, Precision::Exact),
             sum_value: sum_value.map_or_else(|| Precision::Absent, Precision::Exact),
+            byte_size: Precision::Absent,
         }
     }
 }

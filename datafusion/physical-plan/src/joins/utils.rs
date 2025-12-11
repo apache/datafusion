@@ -2083,6 +2083,7 @@ mod tests {
             max_value: max.map(ScalarValue::from),
             sum_value: Absent,
             null_count,
+            byte_size: Absent,
         }
     }
 
@@ -2667,12 +2668,12 @@ mod tests {
             &JoinType::LeftSemi,
             Statistics {
                 num_rows: Inexact(500),
-                total_byte_size: Absent,
+                    total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
             Statistics {
                 num_rows: Absent,
-                total_byte_size: Absent,
+                    total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
             },
             &join_on,

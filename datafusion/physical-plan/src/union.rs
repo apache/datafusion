@@ -800,6 +800,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -807,6 +808,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -814,6 +816,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(42.0))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -828,6 +831,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(1),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -835,6 +839,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("b")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -842,6 +847,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -857,6 +863,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
                     null_count: Precision::Exact(1),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -864,6 +871,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -871,6 +879,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };

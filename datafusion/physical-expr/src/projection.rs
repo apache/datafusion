@@ -504,29 +504,23 @@ impl ProjectionExprs {
     ///         total_byte_size: Precision::Exact(1200),
     ///         column_statistics: vec![
     ///             // Column a stats
-    ///             ColumnStatistics {
-    ///                 null_count: Precision::Exact(0),
-    ///                 distinct_count: Precision::Exact(100),
-    ///                 min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
-    ///                 max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
-    ///                 sum_value: Precision::Absent,
-    ///             },
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(0))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+    ///                 .with_distinct_count(Precision::Exact(100)),
     ///             // Column b stats
-    ///             ColumnStatistics {
-    ///                 null_count: Precision::Exact(0),
-    ///                 distinct_count: Precision::Exact(50),
-    ///                 min_value: Precision::Exact(ScalarValue::Int32(Some(10))),
-    ///                 max_value: Precision::Exact(ScalarValue::Int32(Some(60))),
-    ///                 sum_value: Precision::Absent,
-    ///             },
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(0))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(60))))
+    ///                 .with_distinct_count(Precision::Exact(50)),
     ///             // Column c stats
-    ///             ColumnStatistics {
-    ///                 null_count: Precision::Exact(5),
-    ///                 distinct_count: Precision::Exact(25),
-    ///                 min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
-    ///                 max_value: Precision::Exact(ScalarValue::Int32(Some(200))),
-    ///                 sum_value: Precision::Absent,
-    ///             },
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(5))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(-10))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(200))))
+    ///                 .with_distinct_count(Precision::Exact(25)),
     ///         ],
     ///     };
     ///
@@ -1866,6 +1860,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -1873,6 +1868,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -1880,6 +1876,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         }
@@ -1924,6 +1921,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -1931,6 +1929,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -1968,6 +1967,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -1975,6 +1975,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
