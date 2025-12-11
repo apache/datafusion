@@ -72,6 +72,7 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+pub use self::topk::priority_map::topk_supported;
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: ahash::RandomState =

@@ -105,6 +105,15 @@ impl PriorityMap {
     }
 }
 
+/// Returns true when the TopK aggregation heap can handle the provided grouping key and
+/// aggregate value types.
+pub fn topk_supported(key_type: &DataType, val_type: &DataType) -> bool {
+    // Using the actual constructors ensures the support matrix stays in sync with the
+    // underlying implementations without duplicating type lists.
+    new_hash_table(1, key_type.clone()).is_ok()
+        && new_heap(1, false, val_type.clone()).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

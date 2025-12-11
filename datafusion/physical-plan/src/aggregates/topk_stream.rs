@@ -18,7 +18,7 @@
 //! A memory-conscious aggregation implementation that limits group buckets to a fixed number
 
 use crate::aggregates::group_values::GroupByMetrics;
-use crate::aggregates::topk::priority_map::PriorityMap;
+use crate::aggregates::topk::priority_map::{topk_supported, PriorityMap};
 use crate::aggregates::{
     aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
     PhysicalGroupBy,
@@ -28,7 +28,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
-use datafusion_common::internal_datafusion_err;
+use datafusion_common::{exec_datafusion_err, internal_datafusion_err};
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -72,6 +72,12 @@ impl GroupedTopKAggregateStream {
         let (expr, _) = &aggr.group_expr().expr()[0];
         let kt = expr.data_type(&aggr.input().schema())?;
         let vt = val_field.data_type().clone();
+
+        if !topk_supported(&kt, &vt) {
+            return Err(exec_datafusion_err!(
+                "TopK aggregation does not support grouping type {kt:?} with value type {vt:?}"
+            ));
+        }
 
         let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
 
