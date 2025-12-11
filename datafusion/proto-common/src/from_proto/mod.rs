@@ -908,6 +908,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             double_quote: proto_opts.double_quote.first().map(|h| *h != 0),
             newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
+            compression_level: proto_opts.compression_level,
             schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
             date_format: (!proto_opts.date_format.is_empty())
                 .then(|| proto_opts.date_format.clone()),
@@ -1095,6 +1096,7 @@ impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
         let compression: protobuf::CompressionTypeVariant = proto_opts.compression();
         Ok(JsonOptions {
             compression: compression.into(),
+            compression_level: proto_opts.compression_level,
             schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
         })
     }
