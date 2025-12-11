@@ -85,7 +85,7 @@ impl ScalarUDFImpl for SparkBitwiseNot {
         let scalar_null_present = args
             .scalar_arguments
             .iter()
-            .any(|opt_s| opt_s.map_or(false, |sv| sv.is_null()));
+            .any(|opt_s| opt_s.is_some_and(|sv| sv.is_null()));
 
         if scalar_null_present {
             out_nullable = true;
