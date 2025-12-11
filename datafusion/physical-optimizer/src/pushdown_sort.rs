@@ -32,7 +32,8 @@
 //! 5. Returns **Inexact** ordering (keeps Sort but enables early termination)
 //! 6. Phase 2 will support more complex scenarios (file reordering) and detect perfect ordering
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -88,18 +89,13 @@ impl PushdownSort {
 }
 
 impl PhysicalOptimizerRule for PushdownSort {
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check if sort pushdown optimization is enabled
-        let enable_sort_pushdown = context
-            .session_config()
-            .options()
-            .execution
-            .parquet
-            .enable_sort_pushdown;
+        let enable_sort_pushdown = config.execution.parquet.enable_sort_pushdown;
 
         // Return early if not enabled
         if !enable_sort_pushdown {

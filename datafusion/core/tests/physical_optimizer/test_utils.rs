@@ -29,6 +29,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -36,7 +37,6 @@ use datafusion_common::{
     internal_err, ColumnStatistics, JoinType, NullEquality, Result, Statistics,
 };
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
-use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
@@ -48,7 +48,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
 use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
-use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -106,6 +106,7 @@ fn int64_stats() -> ColumnStatistics {
         max_value: Precision::Exact(1_000_000.into()),
         min_value: Precision::Exact(0.into()),
         distinct_count: Precision::Absent,
+        byte_size: Precision::Absent,
     }
 }
 
@@ -637,11 +638,10 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
 }
 
 pub fn get_optimized_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let config = ConfigOptions::new();
 
-    let optimized = LimitedDistinctAggregation::new()
-        .optimize_plan(Arc::clone(plan), &optimizer_context)?;
+    let optimized =
+        LimitedDistinctAggregation::new().optimize(Arc::clone(plan), &config)?;
 
     let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
 

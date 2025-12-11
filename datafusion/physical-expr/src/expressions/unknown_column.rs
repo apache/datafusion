@@ -27,7 +27,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::ColumnarValue;
 
 #[derive(Debug, Clone, Eq)]

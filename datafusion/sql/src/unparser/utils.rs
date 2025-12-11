@@ -18,17 +18,17 @@
 use std::{cmp::Ordering, sync::Arc, vec};
 
 use super::{
-    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
-    rewrite::TableAliasRewriter, Unparser,
+    Unparser, dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
+    rewrite::TableAliasRewriter,
 };
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_err,
+    Column, DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
-    Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
+    Window, expr, utils::grouping_set_to_exprlist,
 };
 
 use indexmap::IndexSet;
@@ -166,14 +166,12 @@ pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr>
                 // Check if the column is among the columns to run unnest on. 
                 // Currently, only List/Array columns (defined in `list_type_columns`) are supported for unnesting. 
                 if unnest.list_type_columns.iter().any(|e| e.1.output_column.name == col_ref.name) {
-                    if let Ok(idx) = unnest.schema.index_of_column(col_ref) {
-                        if let LogicalPlan::Projection(Projection { expr, .. }) = unnest.input.as_ref() {
-                            if let Some(unprojected_expr) = expr.get(idx) {
+                    if let Ok(idx) = unnest.schema.index_of_column(col_ref)
+                        && let LogicalPlan::Projection(Projection { expr, .. }) = unnest.input.as_ref()
+                            && let Some(unprojected_expr) = expr.get(idx) {
                                 let unnest_expr = Expr::Unnest(expr::Unnest::new(unprojected_expr.clone()));
                                 return Ok(Transformed::yes(unnest_expr));
                             }
-                        }
-                    }
                     return internal_err!(
                         "Tried to unproject unnest expr for column '{}' that was not found in the provided Unnest!", &col_ref.name
                     );
@@ -291,14 +289,14 @@ pub(crate) fn unproject_sort_expr(
                     }
 
                     // In case of aggregation there could be columns containing aggregation functions we need to unproject
-                    if let Some(agg) = agg {
-                        if agg.schema.is_column_from_schema(&col) {
-                            return Ok(Transformed::yes(unproject_agg_exprs(
-                                Expr::Column(col),
-                                agg,
-                                None,
-                            )?));
-                        }
+                    if let Some(agg) = agg
+                        && agg.schema.is_column_from_schema(&col)
+                    {
+                        return Ok(Transformed::yes(unproject_agg_exprs(
+                            Expr::Column(col),
+                            agg,
+                            None,
+                        )?));
                     }
 
                     // If SELECT and ORDER BY contain the same expression with a scalar function, the ORDER BY expression will
@@ -306,14 +304,12 @@ pub(crate) fn unproject_sort_expr(
                     // to transform it back to the actual expression.
                     if let LogicalPlan::Projection(Projection { expr, schema, .. }) =
                         input
+                        && let Ok(idx) = schema.index_of_column(&col)
+                        && let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx)
                     {
-                        if let Ok(idx) = schema.index_of_column(&col) {
-                            if let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx) {
-                                return Ok(Transformed::yes(Expr::ScalarFunction(
-                                    scalar_fn.clone(),
-                                )));
-                            }
-                        }
+                        return Ok(Transformed::yes(Expr::ScalarFunction(
+                            scalar_fn.clone(),
+                        )));
                     }
 
                     Ok(Transformed::no(Expr::Column(col)))

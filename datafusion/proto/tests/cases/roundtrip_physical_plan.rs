@@ -107,9 +107,11 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, DataFusionError, NullEquality,
     Result, UnnestOptions,
 };
+use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
-    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
-    Signature, SimpleAggregateUDF, WindowFrame, WindowFrameBound, WindowUDF,
+    Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
+    WindowFrame, WindowFrameBound, WindowUDF,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
@@ -2262,4 +2264,66 @@ async fn roundtrip_listing_table_with_schema_metadata() -> Result<()> {
         .await?;
 
     roundtrip_test(plan)
+}
+
+#[tokio::test]
+async fn roundtrip_async_func_exec() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestAsyncUDF {
+        signature: Signature,
+    }
+
+    impl TestAsyncUDF {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Int64], Volatility::Volatile),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestAsyncUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "test_async_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            not_impl_err!("Must call from `invoke_async_with_args`")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AsyncScalarUDFImpl for TestAsyncUDF {
+        async fn invoke_async_with_args(
+            &self,
+            args: ScalarFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let ctx = SessionContext::new();
+    let async_udf = AsyncScalarUDF::new(Arc::new(TestAsyncUDF::new()));
+    ctx.register_udf(async_udf.into_scalar_udf());
+
+    let physical_plan = ctx
+        .sql("select test_async_udf(1)")
+        .await?
+        .create_physical_plan()
+        .await?;
+
+    roundtrip_test_with_context(physical_plan, &ctx)?;
+
+    Ok(())
 }

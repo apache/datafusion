@@ -22,8 +22,8 @@ use tokio::sync::watch;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode},
     Result,
+    tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
@@ -420,7 +420,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
 #[cfg(test)]
 mod test {
     use crate::{
-        expressions::{col, lit, BinaryExpr},
+        expressions::{BinaryExpr, col, lit},
         utils::reassign_expr_columns,
     };
     use arrow::{

@@ -19,10 +19,17 @@ pub mod cache_manager;
 pub mod cache_unit;
 pub mod lru_queue;
 
-/// The cache accessor, users usually working on this interface while manipulating caches.
-/// This interface does not get `mut` references and thus has to handle its own
-/// locking via internal mutability. It can be accessed via multiple concurrent queries
-/// during planning and execution.
+mod file_metadata_cache;
+mod list_files_cache;
+
+pub use file_metadata_cache::DefaultFilesMetadataCache;
+pub use list_files_cache::DefaultListFilesCache;
+
+/// A trait that can be implemented to provide custom cache behavior for the caches managed by
+/// [`cache_manager::CacheManager`].
+///
+/// Implementations must handle their own locking via internal mutability, as methods do not
+/// take mutable references and may be accessed by multiple concurrent queries.
 pub trait CacheAccessor<K, V>: Send + Sync {
     // Extra info but not part of the cache key or cache value.
     type Extra: Clone;

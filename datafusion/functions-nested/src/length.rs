@@ -29,7 +29,7 @@ use arrow::datatypes::{
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_generic_list_array, as_int64_array,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
