@@ -721,14 +721,9 @@ impl OptimizationTest {
         let input = format_execution_plan(&input_plan);
         let input_schema = input_plan.schema();
 
-        let mut session_config = SessionConfig::new();
-        session_config
-            .options_mut()
-            .execution
-            .parquet
-            .enable_sort_pushdown = enable_sort_pushdown;
-        let optimizer_context = OptimizerContext::new(session_config.clone());
-        let output_result = opt.optimize_plan(input_plan, &optimizer_context);
+        let mut config = ConfigOptions::new();
+        config.execution.parquet.enable_sort_pushdown = enable_sort_pushdown;
+        let output_result = opt.optimize(input_plan, &config);
         let output = output_result
             .and_then(|plan| {
                 if opt.schema_check() && (plan.schema() != input_schema) {

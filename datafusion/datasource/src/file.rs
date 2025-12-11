@@ -31,6 +31,7 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
@@ -40,43 +41,6 @@ use object_store::ObjectStore;
 /// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
     Arc::new(source)
-}
-
-/// Result of attempting to push down sort ordering to a file source
-#[derive(Debug, Clone)]
-pub enum SortOrderPushdownResult<T> {
-    /// The source can guarantee exact ordering (data is perfectly sorted)
-    Exact { inner: T },
-    /// The source has optimized for the ordering but cannot guarantee perfect sorting
-    /// (e.g., reordered files/row groups based on statistics)
-    Inexact { inner: T },
-    /// The source cannot optimize for this ordering
-    Unsupported,
-}
-
-impl<T> SortOrderPushdownResult<T> {
-    /// Returns true if the result is Exact
-    pub fn is_exact(&self) -> bool {
-        matches!(self, Self::Exact { .. })
-    }
-
-    /// Returns true if the result is Inexact
-    pub fn is_inexact(&self) -> bool {
-        matches!(self, Self::Inexact { .. })
-    }
-
-    /// Returns true if optimization was successful (Exact or Inexact)
-    pub fn is_supported(&self) -> bool {
-        !matches!(self, Self::Unsupported)
-    }
-
-    /// Extract the inner value if present
-    pub fn into_inner(self) -> Option<T> {
-        match self {
-            Self::Exact { inner } | Self::Inexact { inner } => Some(inner),
-            Self::Unsupported => None,
-        }
-    }
 }
 
 /// file format specific behaviors for elements in [`DataSource`]

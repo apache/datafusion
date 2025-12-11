@@ -35,7 +35,6 @@ use datafusion_execution::{
 };
 use datafusion_expr::Operator;
 
-use crate::file::SortOrderPushdownResult;
 use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -44,6 +43,7 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjun
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::coop::cooperative;
 use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
@@ -849,24 +849,27 @@ impl DataSource for FileScanConfig {
     fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
-    ) -> Result<Option<Arc<dyn DataSource>>> {
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
         let current_ordering = match self.output_ordering.first() {
             Some(ordering) => ordering.as_ref(),
-            None => return Ok(None),
+            None => return Ok(SortOrderPushdownResult::Unsupported),
         };
 
         // Only support reverse ordering pushdown until now
         if !is_reverse_ordering(order, current_ordering) {
-            return Ok(None);
+            return Ok(SortOrderPushdownResult::Unsupported);
         }
 
         // Ask the file source if it can handle the sort pushdown
         let pushdown_result = self.file_source.try_pushdown_sort(order)?;
 
-        let new_file_source = match pushdown_result {
-            SortOrderPushdownResult::Exact { inner }
-            | SortOrderPushdownResult::Inexact { inner } => inner,
-            SortOrderPushdownResult::Unsupported => return Ok(None),
+        // Extract the new file source and determine result type
+        let (new_file_source, is_exact) = match pushdown_result {
+            SortOrderPushdownResult::Exact { inner } => (inner, true),
+            SortOrderPushdownResult::Inexact { inner } => (inner, false),
+            SortOrderPushdownResult::Unsupported => {
+                return Ok(SortOrderPushdownResult::Unsupported);
+            }
         };
 
         let mut new_config = self.clone();
@@ -894,7 +897,12 @@ impl DataSource for FileScanConfig {
 
         new_config.file_source = new_file_source;
 
-        Ok(Some(Arc::new(new_config)))
+        let new_config: Arc<dyn DataSource> = Arc::new(new_config);
+        if is_exact {
+            Ok(SortOrderPushdownResult::Exact { inner: new_config })
+        } else {
+            Ok(SortOrderPushdownResult::Inexact { inner: new_config })
+        }
     }
 }
 

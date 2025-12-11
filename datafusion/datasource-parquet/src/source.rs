@@ -35,7 +35,7 @@ use datafusion_datasource::file_stream::FileOpener;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::DataFusionError;
-use datafusion_datasource::file::{FileSource, SortOrderPushdownResult};
+use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::TableSchema;
 use datafusion_physical_expr::conjunction;
@@ -50,6 +50,7 @@ use datafusion_physical_plan::filter_pushdown::{
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::SortOrderPushdownResult;
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;

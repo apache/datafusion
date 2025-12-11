@@ -41,6 +41,7 @@ use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -197,16 +198,17 @@ pub trait DataSource: Send + Sync + Debug {
     /// * `order` - The desired output ordering
     ///
     /// # Returns
-    /// * `Ok(Some(source))` - Created a source that satisfies the ordering
-    /// * `Ok(None)` - Cannot optimize for this ordering
+    /// * `Ok(SortOrderPushdownResult::Exact { .. })` - Created a source that guarantees exact ordering
+    /// * `Ok(SortOrderPushdownResult::Inexact { .. })` - Created a source optimized for the ordering
+    /// * `Ok(SortOrderPushdownResult::Unsupported)` - Cannot optimize for this ordering
     /// * `Err(e)` - Error occurred
     ///
-    /// Default implementation returns `Ok(None)`.
+    /// Default implementation returns `Unsupported`.
     fn try_pushdown_sort(
         &self,
         _order: &[PhysicalSortExpr],
-    ) -> Result<Option<Arc<dyn DataSource>>> {
-        Ok(None)
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
     }
 }
 
@@ -382,14 +384,14 @@ impl ExecutionPlan for DataSourceExec {
     fn try_pushdown_sort(
         &self,
         order: &[PhysicalSortExpr],
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        match self.data_source.try_pushdown_sort(order)? {
-            Some(new_data_source) => {
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // Delegate to the data source and wrap result with DataSourceExec
+        self.data_source
+            .try_pushdown_sort(order)?
+            .try_map(|new_data_source| {
                 let new_exec = self.clone().with_data_source(new_data_source);
-                Ok(Some(Arc::new(new_exec)))
-            }
-            None => Ok(None),
-        }
+                Ok(Arc::new(new_exec) as Arc<dyn ExecutionPlan>)
+            })
     }
 }
 
