@@ -19,6 +19,7 @@
 
 use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::topk::priority_map::PriorityMap;
+use crate::aggregates::topk_types_supported;
 use crate::aggregates::{
     aggregate_expressions, evaluate_group_by, evaluate_many, AggregateExec,
     PhysicalGroupBy,
@@ -68,7 +69,6 @@ impl GroupedTopKAggregateStream {
         let vt = val_field.data_type();
 
         // Validate type support using the public API
-        use crate::aggregates::topk_types_supported;
         Ok(topk_types_supported(&kt, vt))
     }
 
@@ -97,7 +97,6 @@ impl GroupedTopKAggregateStream {
         // This debug assertion documents the contract without runtime overhead in release builds.
         #[cfg(debug_assertions)]
         {
-            use crate::aggregates::topk_types_supported;
             debug_assert!(
                 topk_types_supported(&kt, &vt),
                 "TopK type validation should have been performed by optimizer and can_use_topk(). \
