@@ -367,7 +367,7 @@ impl FileGroupPartitioner {
 ///
 /// # Statistics
 ///
-/// The group-level [`Self::statistics`] field contains merged statistics from all files
+/// The group-level [`FileGroup::file_statistics`] field contains merged statistics from all files
 /// in the group for the **full table schema** (file columns + partition columns).
 ///
 /// Partition column statistics are derived from the individual file partition values:
