@@ -629,7 +629,7 @@ data_tpch() {
     exit 1
 }
 
-# Points to TPCDS data generation instructions
+# Downloads TPC-DS data
 data_tpcds() {
     TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
