@@ -23,19 +23,19 @@ use std::vec;
 
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
+use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
-use datafusion_common::TableReference;
+use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
-    SchemaError,
+    DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
+    plan_datafusion_err,
 };
-use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
-use datafusion_expr::{col, Expr};
+use datafusion_expr::{Expr, col};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
@@ -202,7 +202,9 @@ impl FromStr for NullOrdering {
             "nulls_min" => Ok(Self::NullsMin),
             "nulls_first" => Ok(Self::NullsFirst),
             "nulls_last" => Ok(Self::NullsLast),
-            _ => plan_err!("Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"),
+            _ => plan_err!(
+                "Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"
+            ),
         }
     }
 }
@@ -593,10 +595,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         sql_type: &SQLDataType,
     ) -> Result<FieldRef> {
         // First check if any of the registered type_planner can handle this type
-        if let Some(type_planner) = self.context_provider.get_type_planner() {
-            if let Some(data_type) = type_planner.plan_type(sql_type)? {
-                return Ok(data_type.into_nullable_field_ref());
-            }
+        if let Some(type_planner) = self.context_provider.get_type_planner()
+            && let Some(data_type) = type_planner.plan_type(sql_type)?
+        {
+            return Ok(data_type.into_nullable_field_ref());
         }
 
         // If no type_planner can handle this type, use the default conversion

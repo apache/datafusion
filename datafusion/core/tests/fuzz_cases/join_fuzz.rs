@@ -974,6 +974,10 @@ impl JoinFuzzTestCase {
             if join_tests.contains(&NljHj) {
                 let err_msg_rowcnt = format!("NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {batch_size}");
                 assert_eq!(nlj_rows, hj_rows, "{}", err_msg_rowcnt.as_str());
+                if nlj_rows == 0 && hj_rows == 0 {
+                    // both joins returned no rows, skip content comparison
+                    continue;
+                }
 
                 let err_msg_contents = format!("NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {batch_size}");
                 // row level compare if any of joins returns the result

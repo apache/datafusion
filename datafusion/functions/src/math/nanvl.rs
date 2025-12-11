@@ -23,7 +23,7 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -110,11 +110,7 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Float64 => {
             let compute_nanvl = |x: f64, y: f64| {
-                if x.is_nan() {
-                    y
-                } else {
-                    x
-                }
+                if x.is_nan() { y } else { x }
             };
 
             let x = args[0].as_primitive() as &Float64Array;
@@ -125,11 +121,7 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         Float32 => {
             let compute_nanvl = |x: f32, y: f32| {
-                if x.is_nan() {
-                    y
-                } else {
-                    x
-                }
+                if x.is_nan() { y } else { x }
             };
 
             let x = args[0].as_primitive() as &Float32Array;
