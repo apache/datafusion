@@ -53,7 +53,13 @@ async fn utf8_grouping_min_max_limit_fallbacks() -> datafusion_common::Result<()
         .await?;
     let supported_batches = supported_df.collect().await?;
     assert_batches_eq!(
-        &["+---+---+", "| g | m |", "+---+---+", "| a | 3 |", "+---+---+"],
+        &[
+            "+---+---+",
+            "| g | m |",
+            "+---+---+",
+            "| a | 3 |",
+            "+---+---+"
+        ],
         &supported_batches
     );
 
@@ -65,14 +71,22 @@ async fn utf8_grouping_min_max_limit_fallbacks() -> datafusion_common::Result<()
     let unsupported_batches = unsupported_df.collect().await?;
 
     // Ensure the plan avoided the TopK-specific stream implementation.
-    let plan_display = displayable(unsupported_plan.as_ref()).indent(true).to_string();
+    let plan_display = displayable(unsupported_plan.as_ref())
+        .indent(true)
+        .to_string();
     assert!(
         !plan_display.contains("GroupedTopKAggregateStream"),
         "Unsupported UTF-8 aggregate value should not use TopK: {plan_display}"
     );
 
     assert_batches_eq!(
-        &["+---+---------+", "| g | s       |", "+---+---------+", "| a | charlie |", "+---+---------+"],
+        &[
+            "+---+---------+",
+            "| g | s       |",
+            "+---+---------+",
+            "| a | charlie |",
+            "+---+---------+"
+        ],
         &unsupported_batches
     );
 
