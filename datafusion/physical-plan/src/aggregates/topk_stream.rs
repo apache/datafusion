@@ -62,7 +62,9 @@ impl GroupedTopKAggregateStream {
         let kt = expr.data_type(&aggr.input().schema())?;
         let vt = val_field.data_type();
 
-        Ok(PriorityMap::supports(&kt, vt))
+        // Use the public API for consistency
+        use crate::aggregates::topk_types_supported;
+        Ok(topk_types_supported(&kt, vt))
     }
 
     pub fn new(
@@ -86,9 +88,12 @@ impl GroupedTopKAggregateStream {
         let kt = expr.data_type(&aggr.input().schema())?;
         let vt = val_field.data_type().clone();
 
-        if !PriorityMap::supports(&kt, &vt) {
+        // Double-check: should be guaranteed by AggregateExec stream selection logic,
+        // but we validate here for safety and to provide a clear error message.
+        use crate::aggregates::topk_types_supported;
+        if !topk_types_supported(&kt, &vt) {
             return Err(internal_datafusion_err!(
-                "Unsupported TopK types: key {kt:?} value {vt:?}"
+                "Unsupported TopK aggregation types: grouping key {kt:?}, aggregate value {vt:?}"
             ));
         }
 

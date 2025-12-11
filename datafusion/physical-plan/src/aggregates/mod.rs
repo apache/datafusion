@@ -72,11 +72,17 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
-pub use self::topk::priority_map::topk_supported;
 
-/// Returns true if TopK aggregation data structures support the provided key and value
+/// Returns true if TopK aggregation data structures support the provided key and value types.
+///
+/// This function checks whether both the key type (used for grouping) and value type
+/// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
+/// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
 pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
-    topk::priority_map::PriorityMap::supports(key_type, value_type)
+    use topk::hash_table::is_supported_hash_key_type;
+    use topk::heap::is_supported_heap_type;
+    is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
 }
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
