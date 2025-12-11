@@ -2911,6 +2911,299 @@ select make_date(2024, 1, '');
 
 
 ##########
+## make_time tests
+##########
+
+query D
+select make_time(14, 30, 45);
+----
+14:30:45
+
+query D
+select make_time(0, 0, 0);
+----
+00:00:00
+
+query D
+select make_time(23, 59, 59);
+----
+23:59:59
+
+query D
+select make_time('14', '30', '45');
+----
+14:30:45
+
+query D
+select make_time(12 + 2, '30', '45');
+----
+14:30:45
+
+query D
+select make_time(14::bigint, 30::bigint, 45::bigint);
+----
+14:30:45
+
+query D
+select make_time(arrow_cast(14, 'Int64'), arrow_cast(30, 'Int64'), arrow_cast(45, 'Int64'));
+----
+14:30:45
+
+query D
+select make_time(arrow_cast(14, 'Int32'), arrow_cast(30, 'Int32'), arrow_cast(45, 'Int32'));
+----
+14:30:45
+
+statement ok
+create table table_times (hour int, minute int, second int) as values
+    (14, 30, 45),
+    (9, 15, 30);
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_times t;
+----
+14:30:45
+09:15:30
+
+query D
+select make_time(12, t.minute, t.second) from table_times t;
+----
+12:30:45
+12:15:30
+
+query D
+select make_time(t.hour, 0, t.second) from table_times t;
+----
+14:00:45
+09:00:30
+
+query D
+select make_time(t.hour, t.minute, 0) from table_times t;
+----
+14:30:00
+09:15:00
+
+query D
+select make_time('12', t.minute, t.second) from table_times t;
+----
+12:30:45
+12:15:30
+
+query D
+select make_time(t.hour, '0', t.second) from table_times t;
+----
+14:00:45
+09:00:30
+
+query D
+select make_time(t.hour, t.minute, '0') from table_times t;
+----
+14:30:00
+09:15:00
+
+statement ok
+insert into table_times values (14, null, 45);
+
+query error DataFusion error: Execution error: Unable to parse time from 14, 0, 45
+select make_time(t.hour, t.minute, t.second) from table_times t;
+
+statement ok
+drop table table_times;
+
+statement ok
+create table table_time_strings (hour varchar(2), minute varchar(2), second varchar(2)) as values
+    ('14', '30', '45'),
+    ('9', '15', '30');
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_time_strings t;
+----
+14:30:45
+09:15:30
+
+statement ok
+insert into table_time_strings values (14, null, 45);
+
+query error DataFusion error: Execution error: Unable to parse time from 14, 0, 45
+select make_time(t.hour, t.minute, t.second) from table_time_strings t;
+
+statement ok
+drop table table_time_strings;
+
+query error DataFusion error: Execution error: Unable to parse time from 25, 30, 45
+select make_time(25, 30, 45);
+
+query error DataFusion error: Execution error: Unable to parse time from 14, 60, 45
+select make_time(14, 60, 45);
+
+query error DataFusion error: Execution error: Unable to parse time from 14, 30, 60
+select make_time(14, 30, 60);
+
+query error DataFusion error: Execution error: Hour value '-1' is out of range
+select make_time(-1, 30, 45);
+
+query error DataFusion error: Execution error: Minute value '-1' is out of range
+select make_time(14, -1, 45);
+
+query error DataFusion error: Execution error: Second value '-1' is out of range
+select make_time(14, 30, -1);
+
+query error DataFusion error: Execution error: Unable to parse time from null/empty value
+select make_time(null, 30, 45);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_time('', 30, 45);
+
+query error DataFusion error: Execution error: Unable to parse time from null/empty value
+select make_time(14, null, 45);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_time(14, '', 45);
+
+query error DataFusion error: Execution error: Unable to parse time from null/empty value
+select make_time(14, 30, null);
+
+query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+select make_time(14, 30, '');
+
+
+##########
+## to_time tests
+##########
+
+query D
+select to_time('14:30:45');
+----
+14:30:45
+
+query D
+select to_time('00:00:00');
+----
+00:00:00
+
+query D
+select to_time('23:59:59');
+----
+23:59:59
+
+query D
+select to_time('2023-01-31T14:30:45');
+----
+14:30:45
+
+query D
+select to_time('2023-01-31T14:30:45.123456789');
+----
+14:30:45.123456789
+
+query D
+select to_time('14:30:45.123', '%H:%M:%S%.f');
+----
+14:30:45.123000000
+
+query D
+select to_time('14:30:45', '%H:%M:%S');
+----
+14:30:45
+
+statement ok
+create table table_time_strings (time_str varchar) as values
+    ('14:30:45'),
+    ('09:15:30'),
+    ('23:59:59');
+
+query D
+select to_time(t.time_str) from table_time_strings t;
+----
+14:30:45
+09:15:30
+23:59:59
+
+statement ok
+insert into table_time_strings values (null);
+
+query D
+select to_time(t.time_str) from table_time_strings t;
+----
+14:30:45
+09:15:30
+23:59:59
+NULL
+
+statement ok
+drop table table_time_strings;
+
+query error DataFusion error: Execution error: Error parsing time from 'invalid' with provided formats
+select to_time('invalid', '%H:%M:%S');
+
+query D
+select to_time(null);
+----
+NULL
+
+
+##########
+## date_bin with Time64 tests
+##########
+
+query D
+select date_bin(INTERVAL '15 minutes', '14:30:45'::TIME);
+----
+14:30:00
+
+query D
+select date_bin(INTERVAL '15 minutes', '14:30:45'::TIME, '00:00:00'::TIME);
+----
+14:30:00
+
+query D
+select date_bin(INTERVAL '1 hour', '14:30:45'::TIME, '00:00:00'::TIME);
+----
+14:00:00
+
+query D
+select date_bin(INTERVAL '30 minutes', '14:30:45'::TIME, '00:00:00'::TIME);
+----
+14:30:00
+
+query D
+select date_bin(INTERVAL '1 hour', '14:30:45'::TIME, '01:00:00'::TIME);
+----
+14:00:00
+
+query D
+select date_bin(INTERVAL '15 minutes', '23:59:59'::TIME, '00:00:00'::TIME);
+----
+23:45:00
+
+statement ok
+create table table_times (t time) as values
+    ('14:30:45'::TIME),
+    ('09:15:30'::TIME),
+    ('23:59:59'::TIME);
+
+query D
+select date_bin(INTERVAL '15 minutes', t, '00:00:00'::TIME) from table_times;
+----
+14:30:00
+09:15:00
+23:45:00
+
+query D
+select date_bin(INTERVAL '1 hour', t, '00:00:00'::TIME) from table_times;
+----
+14:00:00
+09:00:00
+23:00:00
+
+statement ok
+drop table table_times;
+
+query error DataFusion error: Execution error: DATE_BIN with Time64 source requires Time64 origin
+select date_bin(INTERVAL '15 minutes', '14:30:45'::TIME, TIMESTAMP '1970-01-01T00:00:00Z');
+
+
+##########
 ## to_char tests
 ##########
 

@@ -2389,10 +2389,12 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [datetrunc](#datetrunc)
 - [from_unixtime](#from_unixtime)
 - [make_date](#make_date)
+- [make_time](#make_time)
 - [now](#now)
 - [to_char](#to_char)
 - [to_date](#to_date)
 - [to_local_time](#to_local_time)
+- [to_time](#to_time)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_micros](#to_timestamp_micros)
 - [to_timestamp_millis](#to_timestamp_millis)
@@ -2627,6 +2629,37 @@ make_date(year, month, day)
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
+### `make_time`
+
+Make a time from hour/minute/second component parts.
+
+```sql
+make_time(hour, minute, second)
+```
+
+#### Arguments
+
+- **hour**: Hour to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **minute**: Minute to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **second**: Second to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```sql
+> select make_time(14, 30, 45);
++-----------------------------------+
+|| make_time(Int64(14),Int64(30),Int64(45)) |
++-----------------------------------+
+|| 14:30:45                          |
++-----------------------------------+
+> select make_time('14', '30', '45');
++---------------------------------------+
+|| make_time(Utf8("14"),Utf8("30"),Utf8("45")) |
++---------------------------------------+
+|| 14:30:45                              |
++---------------------------------------+
+```
+
 ### `now`
 
 Returns the current timestamp in the system configured timezone (None by default).
@@ -2772,6 +2805,44 @@ FROM (
 | 2024-04-01T00:00:00+02:00 |
 +---------------------------+
 ```
+
+### `to_time`
+
+Converts a value to a time (`HH:MM:SS.nnnnnnnnn`). Supports strings as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00' or '05:44:00') if no [Chrono formats] are provided. If a full timestamp is provided, only the time component is extracted. Returns the corresponding time.
+
+```sql
+to_time(expression[, ..., format_n])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
+- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+
+#### Example
+
+```sql
+> select to_time('14:30:45');
++-------------------+
+|| to_time(Utf8("14:30:45")) |
++-------------------+
+|| 14:30:45          |
++-------------------+
+> select to_time('2023-01-31T14:30:45');
++-----------------------------------+
+|| to_time(Utf8("2023-01-31T14:30:45")) |
++-----------------------------------+
+|| 14:30:45                          |
++-----------------------------------+
+> select to_time('14:30:45.123456789', '%H:%M:%S%.f');
++---------------------------------------------------+
+|| to_time(Utf8("14:30:45.123456789"),Utf8("%H:%M:%S%.f")) |
++---------------------------------------------------+
+|| 14:30:45.123456789                                |
++---------------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp`
 
