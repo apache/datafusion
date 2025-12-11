@@ -41,16 +41,14 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use datafusion_proto::logical_plan::{
-    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
-};
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
 use tokio::runtime::Handle;
 
 use crate::arrow_wrappers::WrappedSchema;
-use crate::execution::{FFI_TaskContext, FFI_TaskContextProvider};
+use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::physical_expr::FFI_PhysicalExpr;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
@@ -64,73 +62,80 @@ use crate::{df_result, rresult, rresult_return};
 pub mod config;
 
 /// A stable struct for sharing [`Session`] across FFI boundaries.
+///
+/// Care must be taken when using this struct. Unlike most of the structs in
+/// this crate, the private data for [`FFI_SessionRef`] contains borrowed data.
+/// The lifetime of the borrow is lost when hidden within the ``*mut c_void``
+/// of the private data. For this reason, it is the user's responsibility to
+/// ensure the lifetime of the [`Session`] remains valid.
+///
+/// The reason for storing `&dyn Session` is because the primary motivation
+/// for implementing this struct is [`crate::table_provider::FFI_TableProvider`]
+/// which has methods that require `&dyn Session`. For usage within this crate
+/// we know the [`Session`] lifetimes are valid.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
-pub struct FFI_Session {
-    pub session_id: unsafe extern "C" fn(&Self) -> RStr,
+pub struct FFI_SessionRef {
+    session_id: unsafe extern "C" fn(&Self) -> RStr,
 
-    pub config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
+    config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
 
-    pub create_physical_plan:
-        unsafe extern "C" fn(
-            &Self,
-            logical_plan_serialized: RVec<u8>,
-        ) -> FfiFuture<FFIResult<FFI_ExecutionPlan>>,
+    create_physical_plan: unsafe extern "C" fn(
+        &Self,
+        logical_plan_serialized: RVec<u8>,
+    )
+        -> FfiFuture<FFIResult<FFI_ExecutionPlan>>,
 
-    pub create_physical_expr: unsafe extern "C" fn(
+    create_physical_expr: unsafe extern "C" fn(
         &Self,
         expr_serialized: RVec<u8>,
         schema: WrappedSchema,
     ) -> FFIResult<FFI_PhysicalExpr>,
 
-    pub scalar_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_ScalarUDF>,
+    scalar_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_ScalarUDF>,
 
-    pub aggregate_functions:
+    aggregate_functions:
         unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_AggregateUDF>,
 
-    pub window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
+    window_functions: unsafe extern "C" fn(&Self) -> RHashMap<RString, FFI_WindowUDF>,
 
-    // TODO: Expand scope of FFI to include runtime environment
-    // pub runtime_env: unsafe extern "C" fn(&Self) -> FFI_RuntimeEnv,
+    table_options: unsafe extern "C" fn(&Self) -> RHashMap<RString, RString>,
 
-    // pub execution_props: unsafe extern "C" fn(&Self) -> FFI_ExecutionProps,
-    pub table_options: unsafe extern "C" fn(&Self) -> RHashMap<RString, RString>,
+    default_table_options: unsafe extern "C" fn(&Self) -> RHashMap<RString, RString>,
 
-    pub default_table_options: unsafe extern "C" fn(&Self) -> RHashMap<RString, RString>,
+    task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
 
-    pub task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
-
-    pub logical_codec: FFI_LogicalExtensionCodec,
+    logical_codec: FFI_LogicalExtensionCodec,
 
     /// Used to create a clone on the provider of the registry. This should
     /// only need to be called by the receiver of the plan.
-    pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
+    clone: unsafe extern "C" fn(plan: &Self) -> Self,
 
     /// Release the memory of the private data when it is no longer being used.
-    pub release: unsafe extern "C" fn(arg: &mut Self),
+    release: unsafe extern "C" fn(arg: &mut Self),
 
     /// Return the major DataFusion version number of this registry.
     pub version: unsafe extern "C" fn() -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignSession`] should never attempt to access this data.
-    pub private_data: *mut c_void,
+    private_data: *mut c_void,
 
     /// Utility to identify when FFI objects are accessed locally through
     /// the foreign interface.
     pub library_marker_id: extern "C" fn() -> usize,
 }
 
-unsafe impl Send for FFI_Session {}
-unsafe impl Sync for FFI_Session {}
+unsafe impl Send for FFI_SessionRef {}
+unsafe impl Sync for FFI_SessionRef {}
 
 struct SessionPrivateData<'a> {
     session: &'a (dyn Session + Send + Sync),
     runtime: Option<Handle>,
 }
 
-impl FFI_Session {
+impl FFI_SessionRef {
     fn inner(&self) -> &(dyn Session + Send + Sync) {
         let private_data = self.private_data as *const SessionPrivateData;
         unsafe { (*private_data).session }
@@ -142,18 +147,18 @@ impl FFI_Session {
     }
 }
 
-unsafe extern "C" fn session_id_fn_wrapper(session: &FFI_Session) -> RStr<'_> {
+unsafe extern "C" fn session_id_fn_wrapper(session: &FFI_SessionRef) -> RStr<'_> {
     let session = session.inner();
     session.session_id().into()
 }
 
-unsafe extern "C" fn config_fn_wrapper(session: &FFI_Session) -> FFI_SessionConfig {
+unsafe extern "C" fn config_fn_wrapper(session: &FFI_SessionRef) -> FFI_SessionConfig {
     let session = session.inner();
     session.config().into()
 }
 
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
-    session: &FFI_Session,
+    session: &FFI_SessionRef,
     logical_plan_serialized: RVec<u8>,
 ) -> FfiFuture<FFIResult<FFI_ExecutionPlan>> {
     let runtime = session.runtime().clone();
@@ -175,7 +180,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
 }
 
 unsafe extern "C" fn create_physical_expr_fn_wrapper(
-    session: &FFI_Session,
+    session: &FFI_SessionRef,
     expr_serialized: RVec<u8>,
     schema: WrappedSchema,
 ) -> FFIResult<FFI_PhysicalExpr> {
@@ -195,7 +200,7 @@ unsafe extern "C" fn create_physical_expr_fn_wrapper(
 }
 
 unsafe extern "C" fn scalar_functions_fn_wrapper(
-    session: &FFI_Session,
+    session: &FFI_SessionRef,
 ) -> RHashMap<RString, FFI_ScalarUDF> {
     let session = session.inner();
     session
@@ -206,7 +211,7 @@ unsafe extern "C" fn scalar_functions_fn_wrapper(
 }
 
 unsafe extern "C" fn aggregate_functions_fn_wrapper(
-    session: &FFI_Session,
+    session: &FFI_SessionRef,
 ) -> RHashMap<RString, FFI_AggregateUDF> {
     let session = session.inner();
     session
@@ -222,7 +227,7 @@ unsafe extern "C" fn aggregate_functions_fn_wrapper(
 }
 
 unsafe extern "C" fn window_functions_fn_wrapper(
-    session: &FFI_Session,
+    session: &FFI_SessionRef,
 ) -> RHashMap<RString, FFI_WindowUDF> {
     let session = session.inner();
     session
@@ -241,7 +246,7 @@ fn table_options_to_rhash(options: &TableOptions) -> RHashMap<RString, RString> 
 }
 
 unsafe extern "C" fn table_options_fn_wrapper(
-    session: &FFI_Session,
+    session: &FFI_SessionRef,
 ) -> RHashMap<RString, RString> {
     let session = session.inner();
     let table_options = session.table_options();
@@ -249,7 +254,7 @@ unsafe extern "C" fn table_options_fn_wrapper(
 }
 
 unsafe extern "C" fn default_table_options_fn_wrapper(
-    session: &FFI_Session,
+    session: &FFI_SessionRef,
 ) -> RHashMap<RString, RString> {
     let session = session.inner();
     let table_options = session.default_table_options();
@@ -257,16 +262,16 @@ unsafe extern "C" fn default_table_options_fn_wrapper(
     table_options_to_rhash(&table_options)
 }
 
-unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_Session) -> FFI_TaskContext {
+unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskContext {
     session.inner().task_ctx().into()
 }
 
-unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_Session) {
+unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
     let private_data = Box::from_raw(provider.private_data as *mut SessionPrivateData);
     drop(private_data);
 }
 
-unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_Session) -> FFI_Session {
+unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionRef {
     let old_private_data = provider.private_data as *const SessionPrivateData;
 
     let private_data = Box::into_raw(Box::new(SessionPrivateData {
@@ -274,7 +279,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_Session) -> FFI_Session {
         runtime: (*old_private_data).runtime.clone(),
     })) as *mut c_void;
 
-    FFI_Session {
+    FFI_SessionRef {
         session_id: session_id_fn_wrapper,
         config: config_fn_wrapper,
         create_physical_plan: create_physical_plan_fn_wrapper,
@@ -295,32 +300,15 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_Session) -> FFI_Session {
     }
 }
 
-impl Drop for FFI_Session {
+impl Drop for FFI_SessionRef {
     fn drop(&mut self) {
         unsafe { (self.release)(self) }
     }
 }
 
-impl FFI_Session {
-    /// Creates a new [`FFI_Session`].
+impl FFI_SessionRef {
+    /// Creates a new [`FFI_SessionRef`].
     pub fn new(
-        session: &(dyn Session + Send + Sync),
-        runtime: Option<Handle>,
-        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
-        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
-    ) -> Self {
-        let task_ctx_provider = task_ctx_provider.into();
-        let logical_codec =
-            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            logical_codec,
-            runtime.clone(),
-            task_ctx_provider,
-        );
-        Self::new_with_ffi_codec(session, runtime, logical_codec)
-    }
-
-    pub fn new_with_ffi_codec(
         session: &(dyn Session + Send + Sync),
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
@@ -355,7 +343,7 @@ impl FFI_Session {
 /// FFI_Session to interact with the foreign table provider.
 #[derive(Debug)]
 pub struct ForeignSession {
-    session: FFI_Session,
+    session: FFI_SessionRef,
     config: SessionConfig,
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
@@ -368,7 +356,7 @@ pub struct ForeignSession {
 unsafe impl Send for ForeignSession {}
 unsafe impl Sync for ForeignSession {}
 
-impl FFI_Session {
+impl FFI_SessionRef {
     pub fn as_local(&self) -> Option<&(dyn Session + Send + Sync)> {
         if (self.library_marker_id)() == crate::get_library_marker_id() {
             return Some(self.inner());
@@ -377,9 +365,9 @@ impl FFI_Session {
     }
 }
 
-impl TryFrom<&FFI_Session> for ForeignSession {
+impl TryFrom<&FFI_SessionRef> for ForeignSession {
     type Error = DataFusionError;
-    fn try_from(session: &FFI_Session) -> Result<Self, Self::Error> {
+    fn try_from(session: &FFI_SessionRef) -> Result<Self, Self::Error> {
         unsafe {
             let table_options =
                 table_options_from_rhashmap((session.table_options)(session));
@@ -435,7 +423,7 @@ impl TryFrom<&FFI_Session> for ForeignSession {
     }
 }
 
-impl Clone for FFI_Session {
+impl Clone for FFI_SessionRef {
     fn clone(&self) -> Self {
         unsafe { (self.clone)(self) }
     }
@@ -557,19 +545,24 @@ impl Session for ForeignSession {
 mod tests {
     use std::sync::Arc;
 
+    use super::*;
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
-
-    use super::*;
+    use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 
     #[tokio::test]
     async fn test_ffi_session() -> Result<(), DataFusionError> {
         let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
         let state = ctx.state();
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            None,
+            task_ctx_provider,
+        );
 
-        let local_session = FFI_Session::new(&state, None, None, task_ctx_provider);
+        let local_session = FFI_SessionRef::new(&state, None, logical_codec);
         let foreign_session = ForeignSession::try_from(&local_session)?;
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
