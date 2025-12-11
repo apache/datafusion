@@ -898,7 +898,7 @@ impl AggregateExec {
         };
         match self.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.group_by.is_true_no_grouping() =>
+                if self.group_by.expr.is_empty() =>
             {
                 let total_byte_size =
                     Self::calculate_scaled_byte_size(child_statistics, 1);
