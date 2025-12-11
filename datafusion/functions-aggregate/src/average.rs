@@ -24,15 +24,15 @@ use arrow::array::{
 
 use arrow::compute::sum;
 use arrow::datatypes::{
-    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, DecimalType, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Field, FieldRef, Float64Type, TimeUnit,
-    UInt64Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
-    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
+    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType,
+    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type, i256,
 };
-use datafusion_common::types::{logical_float64, NativeType};
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::types::{NativeType, logical_float64};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -310,12 +310,14 @@ impl AggregateUDFImpl for Avg {
             };
             // Similar to datafusion_functions_aggregate::sum::Sum::state_fields
             // since the accumulator uses DistinctSumAccumulator internally.
-            Ok(vec![Field::new_list(
-                format_state_name(args.name, "avg distinct"),
-                Field::new_list_field(dt, true),
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new_list(
+                    format_state_name(args.name, "avg distinct"),
+                    Field::new_list_field(dt, true),
+                    false,
+                )
+                .into(),
+            ])
         } else {
             Ok(vec![
                 Field::new(

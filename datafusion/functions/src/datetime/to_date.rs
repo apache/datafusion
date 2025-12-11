@@ -20,7 +20,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
-use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
+use datafusion_common::{Result, arrow_err, exec_err, internal_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -351,7 +351,11 @@ mod tests {
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
                     let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
-                    assert_eq!(date_val, expected, "{}: to_date created wrong value for date '{}' with format string '{}'", tc.name, tc.formatted_date, tc.format_str);
+                    assert_eq!(
+                        date_val, expected,
+                        "{}: to_date created wrong value for date '{}' with format string '{}'",
+                        tc.name, tc.formatted_date, tc.format_str
+                    );
                 }
                 _ => panic!(
                     "Could not convert '{}' with format string '{}'to Date",
@@ -385,7 +389,8 @@ mod tests {
                     builder.append_value(expected.unwrap());
 
                     assert_eq!(
-                        &builder.finish() as &dyn Array, a.as_ref(),
+                        &builder.finish() as &dyn Array,
+                        a.as_ref(),
                         "{}: to_date created wrong value for date '{}' with format string '{}'",
                         tc.name,
                         tc.formatted_date,

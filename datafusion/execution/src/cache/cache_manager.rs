@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::cache::CacheAccessor;
-use crate::cache::cache_unit::DefaultFilesMetadataCache;
+use crate::cache::DefaultFilesMetadataCache;
 use datafusion_common::{Result, Statistics};
 use object_store::ObjectMeta;
 use object_store::path::Path;

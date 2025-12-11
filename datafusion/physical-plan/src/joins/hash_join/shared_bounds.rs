@@ -21,18 +21,25 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::joins::hash_join::partitioned_hash_eval::HashExpr;
+use crate::joins::hash_join::exec::HASH_JOIN_SEED;
+use crate::joins::hash_join::inlist_builder::build_struct_fields;
+use crate::joins::hash_join::partitioned_hash_eval::{HashExpr, HashTableLookupExpr};
+use crate::joins::utils::JoinHashMapType;
 use crate::joins::PartitionMode;
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 
 use ahash::RandomState;
+use arrow::array::ArrayRef;
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
+use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    lit, BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr,
+    lit, BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 use parking_lot::Mutex;
 use tokio::sync::Barrier;
@@ -72,11 +79,77 @@ impl PartitionBounds {
     }
 }
 
+/// Creates a membership predicate for filter pushdown.
+///
+/// If `inlist_values` is provided (for small build sides), creates an InList expression.
+/// Otherwise, creates a HashTableLookup expression (for large build sides).
+///
+/// Supports both single-column and multi-column joins using struct expressions.
+fn create_membership_predicate(
+    on_right: &[PhysicalExprRef],
+    pushdown: PushdownStrategy,
+    random_state: &RandomState,
+    schema: &Schema,
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    match pushdown {
+        // Use InList expression for small build sides
+        PushdownStrategy::InList(in_list_array) => {
+            // Build the expression to compare against
+            let expr = if on_right.len() == 1 {
+                // Single column: col IN (val1, val2, ...)
+                Arc::clone(&on_right[0])
+            } else {
+                let fields = build_struct_fields(
+                    on_right
+                        .iter()
+                        .map(|r| r.data_type(schema))
+                        .collect::<Result<Vec<_>>>()?
+                        .as_ref(),
+                )?;
+
+                // The return field name and the function field name don't really matter here.
+                let return_field =
+                    Arc::new(Field::new("struct", DataType::Struct(fields), true));
+
+                Arc::new(ScalarFunctionExpr::new(
+                    "struct",
+                    struct_func(),
+                    on_right.to_vec(),
+                    return_field,
+                    Arc::new(ConfigOptions::default()),
+                )) as Arc<dyn PhysicalExpr>
+            };
+
+            // Use in_list_from_array() helper to create InList with static_filter optimization (hash-based lookup)
+            Ok(Some(Arc::new(InListExpr::try_new_from_array(
+                expr,
+                in_list_array,
+                false,
+            )?)))
+        }
+        // Use hash table lookup for large build sides
+        PushdownStrategy::HashTable(hash_map) => {
+            let lookup_hash_expr = Arc::new(HashExpr::new(
+                on_right.to_vec(),
+                random_state.clone(),
+                "hash_join".to_string(),
+            )) as Arc<dyn PhysicalExpr>;
+
+            Ok(Some(Arc::new(HashTableLookupExpr::new(
+                lookup_hash_expr,
+                hash_map,
+                "hash_lookup".to_string(),
+            )) as Arc<dyn PhysicalExpr>))
+        }
+        // Empty partition - should not create a filter for this
+        PushdownStrategy::Empty => Ok(None),
+    }
+}
+
 /// Creates a bounds predicate from partition bounds.
 ///
-/// Returns a bound predicate (col >= min AND col <= max) for all key columns in the ON expression that have computed bounds from the build phase.
-///
 /// Returns `None` if no column bounds are available.
+/// Returns a combined predicate (col >= min AND col <= max) for all columns with bounds.
 fn create_bounds_predicate(
     on_right: &[PhysicalExprRef],
     bounds: &PartitionBounds,
@@ -158,41 +231,48 @@ pub(crate) struct SharedBuildAccumulator {
     /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
     /// Used for PartitionedHashLookupPhysicalExpr
     repartition_random_state: RandomState,
+    /// Schema of the probe (right) side for evaluating filter expressions
+    probe_schema: Arc<Schema>,
 }
 
+/// Strategy for filter pushdown (decided at collection time)
 #[derive(Clone)]
-pub(crate) enum PartitionBuildDataReport {
+pub(crate) enum PushdownStrategy {
+    /// Use InList for small build sides (< 128MB)
+    InList(ArrayRef),
+    /// Use hash table lookup for large build sides
+    HashTable(Arc<dyn JoinHashMapType>),
+    /// There was no data in this partition, do not build a dynamic filter for it
+    Empty,
+}
+
+/// Build-side data reported by a single partition
+pub(crate) enum PartitionBuildData {
     Partitioned {
         partition_id: usize,
-        /// Bounds computed from this partition's build side.
-        /// If the partition is empty (no rows) this will be None.
-        bounds: Option<PartitionBounds>,
+        pushdown: PushdownStrategy,
+        bounds: PartitionBounds,
     },
     CollectLeft {
-        /// Bounds computed from the collected build side.
-        /// If the build side is empty (no rows) this will be None.
-        bounds: Option<PartitionBounds>,
+        pushdown: PushdownStrategy,
+        bounds: PartitionBounds,
     },
 }
 
+/// Per-partition accumulated data (Partitioned mode)
 #[derive(Clone)]
-struct PartitionedBuildData {
-    partition_id: usize,
+struct PartitionData {
     bounds: PartitionBounds,
-}
-
-#[derive(Clone)]
-struct CollectLeftBuildData {
-    bounds: PartitionBounds,
+    pushdown: PushdownStrategy,
 }
 
 /// Build-side data organized by partition mode
 enum AccumulatedBuildData {
     Partitioned {
-        partitions: Vec<Option<PartitionedBuildData>>,
+        partitions: Vec<Option<PartitionData>>,
     },
     CollectLeft {
-        data: Option<CollectLeftBuildData>,
+        data: Option<PartitionData>,
     },
 }
 
@@ -261,6 +341,7 @@ impl SharedBuildAccumulator {
             dynamic_filter,
             on_right,
             repartition_random_state,
+            probe_schema: right_child.schema(),
         }
     }
 
@@ -276,10 +357,7 @@ impl SharedBuildAccumulator {
     ///
     /// # Returns
     /// * `Result<()>` - Ok if successful, Err if filter update failed or mode mismatch
-    pub(crate) async fn report_build_data(
-        &self,
-        data: PartitionBuildDataReport,
-    ) -> Result<()> {
+    pub(crate) async fn report_build_data(&self, data: PartitionBuildData) -> Result<()> {
         // Store data in the accumulator
         {
             let mut guard = self.inner.lock();
@@ -287,32 +365,23 @@ impl SharedBuildAccumulator {
             match (data, &mut *guard) {
                 // Partitioned mode
                 (
-                    PartitionBuildDataReport::Partitioned {
+                    PartitionBuildData::Partitioned {
                         partition_id,
+                        pushdown,
                         bounds,
                     },
                     AccumulatedBuildData::Partitioned { partitions },
                 ) => {
-                    if let Some(bounds) = bounds {
-                        partitions[partition_id] = Some(PartitionedBuildData {
-                            partition_id,
-                            bounds,
-                        });
-                    }
+                    partitions[partition_id] = Some(PartitionData { pushdown, bounds });
                 }
                 // CollectLeft mode (store once, deduplicate across partitions)
                 (
-                    PartitionBuildDataReport::CollectLeft { bounds },
+                    PartitionBuildData::CollectLeft { pushdown, bounds },
                     AccumulatedBuildData::CollectLeft { data },
                 ) => {
-                    match (bounds, data) {
-                        (None, _) | (_, Some(_)) => {
-                            // No bounds reported or already reported; do nothing
-                        }
-                        (Some(new_bounds), data) => {
-                            // First report, store the bounds
-                            *data = Some(CollectLeftBuildData { bounds: new_bounds });
-                        }
+                    // Deduplicate - all partitions report the same data in CollectLeft
+                    if data.is_none() {
+                        *data = Some(PartitionData { pushdown, bounds });
                     }
                 }
                 // Mismatched modes - should never happen
@@ -333,81 +402,182 @@ impl SharedBuildAccumulator {
                 // CollectLeft: Simple conjunction of bounds and membership check
                 AccumulatedBuildData::CollectLeft { data } => {
                     if let Some(partition_data) = data {
+                        // Create membership predicate (InList for small build sides, hash lookup otherwise)
+                        let membership_expr = create_membership_predicate(
+                            &self.on_right,
+                            partition_data.pushdown.clone(),
+                            &HASH_JOIN_SEED,
+                            self.probe_schema.as_ref(),
+                        )?;
+
                         // Create bounds check expression (if bounds available)
-                        let Some(filter_expr) = create_bounds_predicate(
+                        let bounds_expr = create_bounds_predicate(
                             &self.on_right,
                             &partition_data.bounds,
-                        ) else {
-                            // No bounds available, nothing to update
-                            return Ok(());
-                        };
+                        );
 
-                        self.dynamic_filter.update(filter_expr)?;
+                        // Combine membership and bounds expressions for multi-layer optimization:
+                        // - Bounds (min/max): Enable statistics-based pruning (Parquet row group/file skipping)
+                        // - Membership (InList/hash lookup): Enables:
+                        //   * Precise filtering (exact value matching)
+                        //   * Bloom filter utilization (if present in Parquet files)
+                        //   * Better pruning for data types where min/max isn't effective (e.g., UUIDs)
+                        // Together, they provide complementary benefits and maximize data skipping.
+                        // Only update the filter if we have something to push down
+                        if let Some(filter_expr) = match (membership_expr, bounds_expr) {
+                            (Some(membership), Some(bounds)) => {
+                                // Both available: combine with AND
+                                Some(Arc::new(BinaryExpr::new(
+                                    bounds,
+                                    Operator::And,
+                                    membership,
+                                ))
+                                    as Arc<dyn PhysicalExpr>)
+                            }
+                            (Some(membership), None) => {
+                                // Membership available but no bounds
+                                // This is reachable when we have data but bounds aren't available
+                                // (e.g., unsupported data types or no columns with bounds)
+                                Some(membership)
+                            }
+                            (None, Some(bounds)) => {
+                                // Bounds available but no membership.
+                                // This should be unreachable in practice: we can always push down a reference
+                                // to the hash table.
+                                // But it seems safer to handle it defensively.
+                                Some(bounds)
+                            }
+                            (None, None) => {
+                                // No filter available (e.g., empty build side)
+                                // Don't update the filter, but continue to mark complete
+                                None
+                            }
+                        } {
+                            self.dynamic_filter.update(filter_expr)?;
+                        }
                     }
                 }
                 // Partitioned: CASE expression routing to per-partition filters
                 AccumulatedBuildData::Partitioned { partitions } => {
-                    // Collect all partition data, skipping empty partitions
+                    // Collect all partition data (should all be Some at this point)
                     let partition_data: Vec<_> =
                         partitions.iter().filter_map(|p| p.as_ref()).collect();
 
-                    if partition_data.is_empty() {
-                        // All partitions are empty: no rows can match, skip the probe side entirely
-                        self.dynamic_filter.update(lit(false))?;
-                        return Ok(());
+                    if !partition_data.is_empty() {
+                        // Build a CASE expression that combines range checks AND membership checks
+                        // CASE (hash_repartition(join_keys) % num_partitions)
+                        //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...) AND membership_check_0
+                        //   WHEN 1 THEN (col >= min_1 AND col <= max_1 AND ...) AND membership_check_1
+                        //   ...
+                        //   ELSE false
+                        // END
+
+                        let num_partitions = partition_data.len();
+
+                        // Create base expression: hash_repartition(join_keys) % num_partitions
+                        let routing_hash_expr = Arc::new(HashExpr::new(
+                            self.on_right.clone(),
+                            self.repartition_random_state.clone(),
+                            "hash_repartition".to_string(),
+                        ))
+                            as Arc<dyn PhysicalExpr>;
+
+                        let modulo_expr = Arc::new(BinaryExpr::new(
+                            routing_hash_expr,
+                            Operator::Modulo,
+                            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+                        ))
+                            as Arc<dyn PhysicalExpr>;
+
+                        // Create WHEN branches for each partition
+                        let when_then_branches: Vec<(
+                            Arc<dyn PhysicalExpr>,
+                            Arc<dyn PhysicalExpr>,
+                        )> = partitions
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(partition_id, partition_opt)| {
+                                partition_opt.as_ref().and_then(|partition| {
+                                    // Skip empty partitions - they would always return false anyway
+                                    match &partition.pushdown {
+                                        PushdownStrategy::Empty => None,
+                                        _ => Some((partition_id, partition)),
+                                    }
+                                })
+                            })
+                            .map(|(partition_id, partition)| -> Result<_> {
+                                // WHEN partition_id
+                                let when_expr =
+                                    lit(ScalarValue::UInt64(Some(partition_id as u64)));
+
+                                // THEN: Combine bounds check AND membership predicate
+
+                                // 1. Create membership predicate (InList for small build sides, hash lookup otherwise)
+                                let membership_expr = create_membership_predicate(
+                                    &self.on_right,
+                                    partition.pushdown.clone(),
+                                    &HASH_JOIN_SEED,
+                                    self.probe_schema.as_ref(),
+                                )?;
+
+                                // 2. Create bounds check expression for this partition (if bounds available)
+                                let bounds_expr = create_bounds_predicate(
+                                    &self.on_right,
+                                    &partition.bounds,
+                                );
+
+                                // 3. Combine membership and bounds expressions
+                                let then_expr = match (membership_expr, bounds_expr) {
+                                    (Some(membership), Some(bounds)) => {
+                                        // Both available: combine with AND
+                                        Arc::new(BinaryExpr::new(
+                                            bounds,
+                                            Operator::And,
+                                            membership,
+                                        ))
+                                            as Arc<dyn PhysicalExpr>
+                                    }
+                                    (Some(membership), None) => {
+                                        // Membership available but no bounds (e.g., unsupported data types)
+                                        membership
+                                    }
+                                    (None, Some(bounds)) => {
+                                        // Bounds available but no membership.
+                                        // This should be unreachable in practice: we can always push down a reference
+                                        // to the hash table.
+                                        // But it seems safer to handle it defensively.
+                                        bounds
+                                    }
+                                    (None, None) => {
+                                        // No filter for this partition - should not happen due to filter_map above
+                                        // but handle defensively by returning a "true" literal
+                                        lit(true)
+                                    }
+                                };
+
+                                Ok((when_expr, then_expr))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+
+                        // Optimize for single partition: skip CASE expression entirely
+                        let filter_expr = if when_then_branches.is_empty() {
+                            // All partitions are empty: no rows can match
+                            lit(false)
+                        } else if when_then_branches.len() == 1 {
+                            // Single partition: just use the condition directly
+                            // since hash % 1 == 0 always, the WHEN 0 branch will always match
+                            Arc::clone(&when_then_branches[0].1)
+                        } else {
+                            // Multiple partitions: create CASE expression
+                            Arc::new(CaseExpr::try_new(
+                                Some(modulo_expr),
+                                when_then_branches,
+                                Some(lit(false)), // ELSE false
+                            )?) as Arc<dyn PhysicalExpr>
+                        };
+
+                        self.dynamic_filter.update(filter_expr)?;
                     }
-
-                    // Build a CASE expression that combines range checks AND membership checks
-                    // CASE (hash_repartition(join_keys) % num_partitions)
-                    //   WHEN 0 THEN (col >= min_0 AND col <= max_0 AND ...)
-                    //   WHEN 1 THEN (col >= min_1 AND col <= max_1 AND ...)
-                    //   ...
-                    //   ELSE false
-                    // END
-
-                    let num_partitions = partitions.len();
-
-                    // Create base expression: hash_repartition(join_keys) % num_partitions
-                    let routing_hash_expr = Arc::new(HashExpr::new(
-                        self.on_right.clone(),
-                        self.repartition_random_state.clone(),
-                        "hash_repartition".to_string(),
-                    ))
-                        as Arc<dyn PhysicalExpr>;
-
-                    let modulo_expr = Arc::new(BinaryExpr::new(
-                        routing_hash_expr,
-                        Operator::Modulo,
-                        lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                    )) as Arc<dyn PhysicalExpr>;
-
-                    // Create WHEN branches for each partition
-                    let when_then_branches: Vec<(
-                        Arc<dyn PhysicalExpr>,
-                        Arc<dyn PhysicalExpr>,
-                    )> = partition_data
-                        .into_iter()
-                        .map(|pdata| -> Result<_> {
-                            // WHEN partition_id
-                            let when_expr =
-                                lit(ScalarValue::UInt64(Some(pdata.partition_id as u64)));
-
-                            // Create bounds check expression for this partition (if bounds available)
-                            let bounds_expr =
-                                create_bounds_predicate(&self.on_right, &pdata.bounds)
-                                    .unwrap_or_else(|| lit(true)); // No bounds means all rows pass
-
-                            Ok((when_expr, bounds_expr))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-
-                    let case_expr = Arc::new(CaseExpr::try_new(
-                        Some(modulo_expr),
-                        when_then_branches,
-                        Some(lit(false)), // ELSE false
-                    )?) as Arc<dyn PhysicalExpr>;
-
-                    self.dynamic_filter.update(case_expr)?;
                 }
             }
             self.dynamic_filter.mark_complete();

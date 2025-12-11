@@ -24,19 +24,122 @@ use datafusion_common::{
     not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
+use datafusion_expr::planner::{
+    PlannedRelation, RelationPlannerContext, RelationPlanning,
+};
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
 
+struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
+    planner: &'a SqlToRel<'b, S>,
+    planner_context: &'a mut PlannerContext,
+}
+
+// Implement RelationPlannerContext
+impl<'a, 'b, S: ContextProvider> RelationPlannerContext
+    for SqlToRelRelationContext<'a, 'b, S>
+{
+    fn context_provider(&self) -> &dyn ContextProvider {
+        self.planner.context_provider
+    }
+
+    fn plan(&mut self, relation: TableFactor) -> Result<LogicalPlan> {
+        self.planner.create_relation(relation, self.planner_context)
+    }
+
+    fn sql_to_expr(
+        &mut self,
+        expr: sqlparser::ast::Expr,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        self.planner.sql_to_expr(expr, schema, self.planner_context)
+    }
+
+    fn sql_expr_to_logical_expr(
+        &mut self,
+        expr: sqlparser::ast::Expr,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        self.planner
+            .sql_expr_to_logical_expr(expr, schema, self.planner_context)
+    }
+
+    fn normalize_ident(&self, ident: sqlparser::ast::Ident) -> String {
+        self.planner.ident_normalizer.normalize(ident)
+    }
+
+    fn object_name_to_table_reference(
+        &self,
+        name: sqlparser::ast::ObjectName,
+    ) -> Result<TableReference> {
+        self.planner.object_name_to_table_reference(name)
+    }
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
-    /// Create a `LogicalPlan` that scans the named relation
+    /// Create a `LogicalPlan` that scans the named relation.
+    ///
+    /// First tries any registered extension planners. If no extension handles
+    /// the relation, falls back to the default planner.
     fn create_relation(
         &self,
         relation: TableFactor,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        let planned_relation =
+            match self.create_extension_relation(relation, planner_context)? {
+                RelationPlanning::Planned(planned) => planned,
+                RelationPlanning::Original(original) => {
+                    self.create_default_relation(original, planner_context)?
+                }
+            };
+
+        let optimized_plan = optimize_subquery_sort(planned_relation.plan)?.data;
+        if let Some(alias) = planned_relation.alias {
+            self.apply_table_alias(optimized_plan, alias)
+        } else {
+            Ok(optimized_plan)
+        }
+    }
+
+    fn create_extension_relation(
+        &self,
+        relation: TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<RelationPlanning> {
+        let planners = self.context_provider.get_relation_planners();
+        if planners.is_empty() {
+            return Ok(RelationPlanning::Original(relation));
+        }
+
+        let mut current_relation = relation;
+        for planner in planners.iter() {
+            let mut context = SqlToRelRelationContext {
+                planner: self,
+                planner_context,
+            };
+
+            match planner.plan_relation(current_relation, &mut context)? {
+                RelationPlanning::Planned(planned) => {
+                    return Ok(RelationPlanning::Planned(planned));
+                }
+                RelationPlanning::Original(original) => {
+                    current_relation = original;
+                }
+            }
+        }
+
+        Ok(RelationPlanning::Original(current_relation))
+    }
+
+    fn create_default_relation(
+        &self,
+        relation: TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<PlannedRelation> {
         let relation_span = relation.span();
         let (plan, alias) = match relation {
             TableFactor::Table {
@@ -190,13 +293,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 );
             }
         };
-
-        let optimized_plan = optimize_subquery_sort(plan)?.data;
-        if let Some(alias) = alias {
-            self.apply_table_alias(optimized_plan, alias)
-        } else {
-            Ok(optimized_plan)
-        }
+        Ok(PlannedRelation::new(plan, alias))
     }
 
     pub(crate) fn create_relation_subquery(

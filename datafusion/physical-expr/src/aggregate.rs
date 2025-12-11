@@ -21,7 +21,7 @@ pub(crate) mod groups_accumulator {
         pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::NullState;
     }
     pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::{
-        accumulate::NullState, GroupsAccumulatorAdapter,
+        GroupsAccumulatorAdapter, accumulate::NullState,
     };
 }
 pub(crate) mod stats {
@@ -29,8 +29,8 @@ pub(crate) mod stats {
 }
 pub mod utils {
     pub use datafusion_functions_aggregate_common::utils::{
-        get_accum_scalar_values_as_arrays, get_sort_options, ordering_fields,
-        DecimalAverager, Hashable,
+        DecimalAverager, Hashable, get_accum_scalar_values_as_arrays, get_sort_options,
+        ordering_fields,
     };
 }
 
@@ -42,7 +42,7 @@ use crate::expressions::Column;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::{
-    assert_or_internal_err, internal_err, not_impl_err, Result, ScalarValue,
+    Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
 };
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
@@ -226,7 +226,7 @@ impl AggregateExprBuilder {
             None => {
                 return internal_err!(
                     "AggregateExprBuilder::alias must be provided prior to calling build"
-                )
+                );
             }
             Some(alias) => alias,
         };
@@ -739,18 +739,18 @@ fn replace_order_by_clause(order_by: &mut String) {
         (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
     ];
 
-    if let Some(start) = order_by.find("ORDER BY [") {
-        if let Some(end) = order_by[start..].find(']') {
-            let order_by_start = start + 9;
-            let order_by_end = start + end;
+    if let Some(start) = order_by.find("ORDER BY [")
+        && let Some(end) = order_by[start..].find(']')
+    {
+        let order_by_start = start + 9;
+        let order_by_end = start + end;
 
-            let column_order = &order_by[order_by_start..=order_by_end];
-            for (suffix, replacement) in suffixes {
-                if column_order.ends_with(suffix) {
-                    let new_order = column_order.replace(suffix, replacement);
-                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
-                    break;
-                }
+        let column_order = &order_by[order_by_start..=order_by_end];
+        for (suffix, replacement) in suffixes {
+            if column_order.ends_with(suffix) {
+                let new_order = column_order.replace(suffix, replacement);
+                order_by.replace_range(order_by_start..=order_by_end, &new_order);
+                break;
             }
         }
     }

@@ -18,16 +18,16 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::PhysicalExpr;
 use crate::expressions::Column;
 use crate::utils::collect_columns;
-use crate::PhysicalExpr;
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::ColumnStatistics;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    assert_or_internal_err, internal_datafusion_err, plan_err, Result,
+    Result, assert_or_internal_err, internal_datafusion_err, plan_err,
 };
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -991,8 +991,8 @@ pub(crate) mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::equivalence::{convert_to_orderings, EquivalenceProperties};
-    use crate::expressions::{col, BinaryExpr, Literal};
+    use crate::equivalence::{EquivalenceProperties, convert_to_orderings};
+    use crate::expressions::{BinaryExpr, Literal, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
