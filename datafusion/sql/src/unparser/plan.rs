@@ -16,21 +16,21 @@
 // under the License.
 
 use super::{
+    Unparser,
     ast::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
     rewrite::{
-        inject_column_aliases_into_subquery, normalize_union_schema,
+        TableAliasRewriter, inject_column_aliases_into_subquery, normalize_union_schema,
         rewrite_plan_for_sort_on_non_projected_fields,
-        subquery_alias_inner_query_and_columns, TableAliasRewriter,
+        subquery_alias_inner_query_and_columns,
     },
     utils::{
         find_agg_node_within_select, find_unnest_node_within_select,
         find_window_nodes_within_select, try_transform_to_simple_table_scan_with_filters,
         unproject_sort_expr, unproject_unnest_expr, unproject_window_exprs,
     },
-    Unparser,
 };
 use crate::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
@@ -39,15 +39,15 @@ use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_expr
 use crate::unparser::{ast::UnnestRelationBuilder, rewrite::rewrite_qualify};
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
-    assert_or_internal_err, internal_err, not_impl_err,
+    Column, DataFusionError, Result, ScalarValue, TableReference, assert_or_internal_err,
+    internal_err, not_impl_err,
     tree_node::{TransformedResult, TreeNode},
-    Column, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
-    expr::Alias, BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
+    BinaryExpr, Distinct, Expr, JoinConstraint, JoinType, LogicalPlan,
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
-    UserDefinedLogicalNode,
+    UserDefinedLogicalNode, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::{sync::Arc, vec};
@@ -384,20 +384,19 @@ impl Unparser<'_> {
                 } else {
                     None
                 };
-                if self.dialect.unnest_as_table_factor() && unnest_input_type.is_some() {
-                    if let LogicalPlan::Unnest(unnest) = &p.input.as_ref() {
-                        if let Some(unnest_relation) =
-                            self.try_unnest_to_table_factor_sql(unnest)?
-                        {
-                            relation.unnest(unnest_relation);
-                            return self.select_to_sql_recursively(
-                                p.input.as_ref(),
-                                query,
-                                select,
-                                relation,
-                            );
-                        }
-                    }
+                if self.dialect.unnest_as_table_factor()
+                    && unnest_input_type.is_some()
+                    && let LogicalPlan::Unnest(unnest) = &p.input.as_ref()
+                    && let Some(unnest_relation) =
+                        self.try_unnest_to_table_factor_sql(unnest)?
+                {
+                    relation.unnest(unnest_relation);
+                    return self.select_to_sql_recursively(
+                        p.input.as_ref(),
+                        query,
+                        select,
+                        relation,
+                    );
                 }
 
                 // If it's a unnest projection, we should provide the table column alias
@@ -585,18 +584,17 @@ impl Unparser<'_> {
 
                 // If this distinct is the parent of a Union and we're in a query context,
                 // then we need to unparse as a `UNION` rather than a `UNION ALL`.
-                if let Distinct::All(input) = distinct {
-                    if matches!(input.as_ref(), LogicalPlan::Union(_)) {
-                        if let Some(query_mut) = query.as_mut() {
-                            query_mut.distinct_union();
-                            return self.select_to_sql_recursively(
-                                input.as_ref(),
-                                query,
-                                select,
-                                relation,
-                            );
-                        }
-                    }
+                if let Distinct::All(input) = distinct
+                    && matches!(input.as_ref(), LogicalPlan::Union(_))
+                    && let Some(query_mut) = query.as_mut()
+                {
+                    query_mut.distinct_union();
+                    return self.select_to_sql_recursively(
+                        input.as_ref(),
+                        query,
+                        select,
+                        relation,
+                    );
                 }
 
                 let (select_distinct, input) = match distinct {
@@ -847,7 +845,7 @@ impl Unparser<'_> {
                             Err(e) => {
                                 return internal_err!(
                                     "Failed to transform SubqueryAlias plan: {e}"
-                                )
+                                );
                             }
                         };
 
@@ -1015,15 +1013,14 @@ impl Unparser<'_> {
     ///
     /// `outer_ref` is the display result of [Expr::OuterReferenceColumn]
     fn check_unnest_placeholder_with_outer_ref(expr: &Expr) -> Option<UnnestInputType> {
-        if let Expr::Alias(Alias { expr, .. }) = expr {
-            if let Expr::Column(Column { name, .. }) = expr.as_ref() {
-                if let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER) {
-                    if prefix.starts_with(&format!("({OUTER_REFERENCE_COLUMN_PREFIX}(")) {
-                        return Some(UnnestInputType::OuterReference);
-                    }
-                    return Some(UnnestInputType::Scalar);
-                }
+        if let Expr::Alias(Alias { expr, .. }) = expr
+            && let Expr::Column(Column { name, .. }) = expr.as_ref()
+            && let Some(prefix) = name.strip_prefix(UNNEST_PLACEHOLDER)
+        {
+            if prefix.starts_with(&format!("({OUTER_REFERENCE_COLUMN_PREFIX}(")) {
+                return Some(UnnestInputType::OuterReference);
             }
+            return Some(UnnestInputType::Scalar);
         }
         None
     }
@@ -1091,42 +1088,40 @@ impl Unparser<'_> {
                 //
                 // Example:
                 //   select t1.c1 from t1 where t1.c1 > 1 -> select a.c1 from t1 as a where a.c1 > 1
-                if let Some(ref alias) = alias {
-                    if table_scan.projection.is_some() || !table_scan.filters.is_empty() {
-                        builder = builder.alias(alias.clone())?;
-                    }
+                if let Some(ref alias) = alias
+                    && (table_scan.projection.is_some() || !table_scan.filters.is_empty())
+                {
+                    builder = builder.alias(alias.clone())?;
                 }
 
                 // Avoid creating a duplicate Projection node, which would result in an additional subquery if a projection already exists.
                 // For example, if the `optimize_projection` rule is applied, there will be a Projection node, and duplicate projection
                 // information included in the TableScan node.
-                if !already_projected {
-                    if let Some(project_vec) = &table_scan.projection {
-                        if project_vec.is_empty() {
-                            builder = builder.project(vec![Expr::Literal(
-                                ScalarValue::Int64(Some(1)),
-                                None,
-                            )])?;
-                        } else {
-                            let project_columns = project_vec
-                                .iter()
-                                .cloned()
-                                .map(|i| {
-                                    let schema = table_scan.source.schema();
-                                    let field = schema.field(i);
-                                    if alias.is_some() {
-                                        Column::new(alias.clone(), field.name().clone())
-                                    } else {
-                                        Column::new(
-                                            Some(table_scan.table_name.clone()),
-                                            field.name().clone(),
-                                        )
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-                            builder = builder.project(project_columns)?;
-                        };
-                    }
+                if !already_projected && let Some(project_vec) = &table_scan.projection {
+                    if project_vec.is_empty() {
+                        builder = builder.project(vec![Expr::Literal(
+                            ScalarValue::Int64(Some(1)),
+                            None,
+                        )])?;
+                    } else {
+                        let project_columns = project_vec
+                            .iter()
+                            .cloned()
+                            .map(|i| {
+                                let schema = table_scan.source.schema();
+                                let field = schema.field(i);
+                                if alias.is_some() {
+                                    Column::new(alias.clone(), field.name().clone())
+                                } else {
+                                    Column::new(
+                                        Some(table_scan.table_name.clone()),
+                                        field.name().clone(),
+                                    )
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        builder = builder.project(project_columns)?;
+                    };
                 }
 
                 let filter_expr: Result<Option<Expr>> = table_scan
@@ -1159,10 +1154,11 @@ impl Unparser<'_> {
                 // So we will append the alias to this subquery.
                 // Example:
                 //   select * from t1 limit 10 -> (select * from t1 limit 10) as a
-                if let Some(alias) = alias {
-                    if table_scan.projection.is_none() && table_scan.filters.is_empty() {
-                        builder = builder.alias(alias)?;
-                    }
+                if let Some(alias) = alias
+                    && table_scan.projection.is_none()
+                    && table_scan.filters.is_empty()
+                {
+                    builder = builder.alias(alias)?;
                 }
 
                 Ok(Some(builder.build()?))
@@ -1173,11 +1169,11 @@ impl Unparser<'_> {
                     Some(subquery_alias.alias.clone()),
                     already_projected,
                 )?;
-                if let Some(alias) = alias {
-                    if let Some(plan) = ret {
-                        let plan = LogicalPlanBuilder::new(plan).alias(alias)?.build()?;
-                        return Ok(Some(plan));
-                    }
+                if let Some(alias) = alias
+                    && let Some(plan) = ret
+                {
+                    let plan = LogicalPlanBuilder::new(plan).alias(alias)?.build()?;
+                    return Ok(Some(plan));
                 }
                 Ok(ret)
             }
