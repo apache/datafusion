@@ -20,32 +20,32 @@
 
 use crate::file_groups::FileGroup;
 use crate::{
-    display::FileGroupsDisplay, file::FileSource,
+    PartitionedFile, display::FileGroupsDisplay, file::FileSource,
     file_compression_type::FileCompressionType, file_stream::FileStream,
-    source::DataSource, statistics::MinMaxStatistics, PartitionedFile,
+    source::DataSource, statistics::MinMaxStatistics,
 };
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, Constraints, Result, ScalarValue, Statistics,
+    Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
-    object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
+    SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
 };
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{split_conjunction, EquivalenceProperties, Partitioning};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::{
-    display::{display_orderings, ProjectSchemaDisplay},
+    DisplayAs, DisplayFormatType,
+    display::{ProjectSchemaDisplay, display_orderings},
     filter_pushdown::FilterPushdownPropagation,
     metrics::ExecutionPlanMetricsSet,
-    DisplayAs, DisplayFormatType,
 };
 use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
@@ -303,7 +303,9 @@ impl FileScanConfigBuilder {
         match self.clone().with_projection_indices(indices) {
             Ok(builder) => builder,
             Err(e) => {
-                warn!("Failed to push down projection in FileScanConfigBuilder::with_projection: {e}");
+                warn!(
+                    "Failed to push down projection in FileScanConfigBuilder::with_projection: {e}"
+                );
                 self
             }
         }
@@ -643,16 +645,16 @@ impl DataSource for FileScanConfig {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
             // Get statistics for a specific partition
-            if let Some(file_group) = self.file_groups.get(partition) {
-                if let Some(stat) = file_group.file_statistics(None) {
-                    // Project the statistics based on the projection
-                    let output_schema = self.projected_schema()?;
-                    return if let Some(projection) = self.file_source.projection() {
-                        projection.project_statistics(stat.clone(), &output_schema)
-                    } else {
-                        Ok(stat.clone())
-                    };
-                }
+            if let Some(file_group) = self.file_groups.get(partition)
+                && let Some(stat) = file_group.file_statistics(None)
+            {
+                // Project the statistics based on the projection
+                let output_schema = self.projected_schema()?;
+                return if let Some(projection) = self.file_source.projection() {
+                    projection.project_statistics(stat.clone(), &output_schema)
+                } else {
+                    Ok(stat.clone())
+                };
             }
             // If no statistics available for this partition, return unknown
             Ok(Statistics::new_unknown(self.projected_schema()?.as_ref()))
@@ -1217,8 +1219,8 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::test_util::col;
     use crate::TableSchema;
+    use crate::test_util::col;
     use crate::{
         generate_test_files, test_util::MockSource, tests::aggr_test_schema,
         verify_sort_integrity,
@@ -1226,7 +1228,7 @@ mod tests {
 
     use arrow::datatypes::Field;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{internal_err, ColumnStatistics};
+    use datafusion_common::{ColumnStatistics, internal_err};
     use datafusion_expr::{Operator, SortExpr};
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
@@ -1267,7 +1269,7 @@ mod tests {
         use chrono::TimeZone;
         use datafusion_common::DFSchema;
         use datafusion_expr::execution_props::ExecutionProps;
-        use object_store::{path::Path, ObjectMeta};
+        use object_store::{ObjectMeta, path::Path};
 
         struct File {
             name: &'static str,
@@ -1368,12 +1370,16 @@ mod tests {
                     true,
                 )]),
                 files: vec![
-                    File::new_nullable("0", "2023-01-01", vec![Some((Some(0.00), Some(0.49)))]),
+                    File::new_nullable(
+                        "0",
+                        "2023-01-01",
+                        vec![Some((Some(0.00), Some(0.49)))],
+                    ),
                     File::new_nullable("1", "2023-01-01", vec![Some((Some(0.50), None))]),
                     File::new_nullable("2", "2023-01-02", vec![Some((Some(0.00), None))]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]])
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
             TestCase {
                 name: "nullable sort columns, nulls first",
@@ -1384,11 +1390,15 @@ mod tests {
                 )]),
                 files: vec![
                     File::new_nullable("0", "2023-01-01", vec![Some((None, Some(0.49)))]),
-                    File::new_nullable("1", "2023-01-01", vec![Some((Some(0.50), Some(1.00)))]),
+                    File::new_nullable(
+                        "1",
+                        "2023-01-01",
+                        vec![Some((Some(0.50), Some(1.00)))],
+                    ),
                     File::new_nullable("2", "2023-01-02", vec![Some((None, Some(1.00)))]),
                 ],
                 sort: vec![col("value").sort(true, true)],
-                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]])
+                expected_result: Ok(vec![vec!["0", "1"], vec!["2"]]),
             },
             TestCase {
                 name: "all three non-overlapping",
@@ -1444,7 +1454,9 @@ mod tests {
                     File::new("2", "2023-01-02", vec![None]),
                 ],
                 sort: vec![col("value").sort(true, false)],
-                expected_result: Err("construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nget min/max for column: 'value'\ncaused by\nError during planning: statistics not found"),
+                expected_result: Err(
+                    "construct min/max statistics for split_groups_by_statistics\ncaused by\ncollect min/max values\ncaused by\nget min/max for column: 'value'\ncaused by\nError during planning: statistics not found",
+                ),
             },
         ];
 
@@ -1621,10 +1633,12 @@ mod tests {
                 "test.parquet".to_string(),
                 1024,
             )])])
-            .with_output_ordering(vec![[PhysicalSortExpr::new_default(Arc::new(
-                Column::new("date", 0),
-            ))]
-            .into()])
+            .with_output_ordering(vec![
+                [PhysicalSortExpr::new_default(Arc::new(Column::new(
+                    "date", 0,
+                )))]
+                .into(),
+            ])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
             .with_newlines_in_values(true)
             .build();

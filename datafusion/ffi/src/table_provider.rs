@@ -50,7 +50,7 @@ use crate::{
 
 use super::{
     execution_plan::FFI_ExecutionPlan, insert_op::FFI_InsertOp,
-    session_config::FFI_SessionConfig,
+    session::config::FFI_SessionConfig,
 };
 use crate::util::FFIResult;
 use datafusion::error::Result;

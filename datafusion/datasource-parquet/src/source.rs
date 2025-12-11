@@ -31,7 +31,6 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
-use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 
 use arrow::datatypes::TimeUnit;
 use datafusion_common::config::TableParquetOptions;
@@ -40,6 +39,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::TableSchema;
 use datafusion_physical_expr::conjunction;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -49,7 +49,6 @@ use datafusion_physical_plan::filter_pushdown::{
 };
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion_physical_plan::projection::ProjectionExprs;
 use datafusion_physical_plan::DisplayFormatType;
 
 #[cfg(feature = "parquet_encryption")]
@@ -284,8 +283,8 @@ pub struct ParquetSource {
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
-    /// Projection information for column pushdown
-    pub(crate) projection: SplitProjection,
+    /// Projection to apply to the output.
+    pub(crate) projection: ProjectionExprs,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
 }
@@ -298,8 +297,11 @@ impl ParquetSource {
     /// To set custom options, use [ParquetSource::with_table_parquet_options`].
     pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         let table_schema = table_schema.into();
+        // Projection over the full table schema (file columns + partition columns)
+        let full_schema = table_schema.table_schema();
+        let indices: Vec<usize> = (0..full_schema.fields().len()).collect();
         Self {
-            projection: SplitProjection::unprojected(&table_schema),
+            projection: ProjectionExprs::from_indices(&indices, full_schema),
             table_schema,
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
@@ -497,12 +499,10 @@ impl FileSource for ParquetSource {
         base_config: &FileScanConfig,
         partition: usize,
     ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
-        let split_projection = self.projection.clone();
-
         let expr_adapter_factory = base_config
             .expr_adapter_factory
             .clone()
-            .or_else(|| Some(Arc::new(DefaultPhysicalExprAdapterFactory) as _));
+            .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory) as _);
 
         let parquet_file_reader_factory =
             self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
@@ -525,9 +525,9 @@ impl FileSource for ParquetSource {
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
-        let mut opener = Arc::new(ParquetOpener {
+        let opener = Arc::new(ParquetOpener {
             partition_index: partition,
-            projection: Arc::from(split_projection.file_indices.clone()),
+            projection: self.projection.clone(),
             batch_size: self
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
@@ -550,12 +550,7 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
-        }) as Arc<dyn FileOpener>;
-        opener = ProjectionOpener::try_new(
-            split_projection.clone(),
-            Arc::clone(&opener),
-            self.table_schema.file_schema(),
-        )?;
+        });
         Ok(opener)
     }
 
@@ -582,15 +577,12 @@ impl FileSource for ParquetSource {
         projection: &ProjectionExprs,
     ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
         let mut source = self.clone();
-        let new_projection = self.projection.source.try_merge(projection)?;
-        let split_projection =
-            SplitProjection::new(self.table_schema.file_schema(), &new_projection);
-        source.projection = split_projection;
+        source.projection = self.projection.try_merge(projection)?;
         Ok(Some(Arc::new(source)))
     }
 
     fn projection(&self) -> Option<&ProjectionExprs> {
-        Some(&self.projection.source)
+        Some(&self.projection)
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {

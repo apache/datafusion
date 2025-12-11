@@ -104,6 +104,7 @@ fn int64_stats() -> ColumnStatistics {
         max_value: Precision::Exact(1_000_000.into()),
         min_value: Precision::Exact(0.into()),
         distinct_count: Precision::Absent,
+        byte_size: Precision::Absent,
     }
 }
 
