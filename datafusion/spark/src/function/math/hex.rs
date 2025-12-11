@@ -60,11 +60,9 @@ impl SparkHex {
             vec![TypeSignatureClass::Numeric],
             NativeType::Int64,
         );
-        let string = Coercion::new_implicit(
-            TypeSignatureClass::Native(logical_string()),
-            vec![TypeSignatureClass::Native(logical_string())],
-            NativeType::String,
-        );
+
+        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+
         let binary = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_binary()),
             vec![TypeSignatureClass::Binary],
@@ -76,10 +74,8 @@ impl SparkHex {
             TypeSignature::Coercible(vec![int64]),
             // accepts string types (Utf8, Utf8View, LargeUtf8)
             TypeSignature::Coercible(vec![string]),
-            // accepts binary types (Binary, FixedSizeBinary)
+            // accepts binary types (Binary, FixedSizeBinary, LargeBinary)
             TypeSignature::Coercible(vec![binary]),
-            // accepts large binary types (LargeBinary)
-            TypeSignature::Exact(vec![DataType::LargeBinary]),
         ];
 
         Self {
@@ -410,22 +406,5 @@ mod test {
         ]);
 
         assert_eq!(string_array, &expected_array);
-    }
-
-    #[test]
-    fn test_hex_multiple_arguments() {
-        let int_array1 = Int64Array::from(vec![Some(1), Some(2)]);
-        let int_array2 = Int64Array::from(vec![Some(3), Some(4)]);
-        let columnar_value1 = ColumnarValue::Array(Arc::new(int_array1));
-        let columnar_value2 = ColumnarValue::Array(Arc::new(int_array2));
-
-        let result = super::spark_hex(&[columnar_value1, columnar_value2]);
-
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains(" hex function requires 1 argument, got 2"),
-            "Expected error message about argument count, got: {error_msg}",
-        );
     }
 }

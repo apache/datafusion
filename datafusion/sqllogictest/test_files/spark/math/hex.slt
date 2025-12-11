@@ -48,3 +48,26 @@ SELECT hex(column1) FROM t_utf8view;
 666F6F
 NULL
 666F6F62617262617A
+
+statement ok
+CREATE TABLE t_largebinary as VALUES (arrow_cast(arrow_cast('hello', 'Binary'), 'LargeBinary')), (NULL), (arrow_cast(arrow_cast('world', 'Binary'), 'LargeBinary'));
+
+query T
+SELECT hex(column1) FROM t_largebinary;
+----
+68656C6C6F
+NULL
+776F726C64
+
+query T
+SELECT hex(arrow_cast(arrow_cast('!hallucinations!', 'Binary'), 'LargeBinary'));
+----
+2168616C6C7563696E6174696F6E7321
+
+statement error Function 'hex' expects 1 arguments but received 2
+SELECT hex(1, 2);
+
+query T
+SELECT hex(arrow_cast('test', 'LargeBinary')) as lar_b;
+----
+74657374
