@@ -33,7 +33,6 @@ use datafusion::catalog::{
     batched_function::helpers::materialized_batch_stream, BatchedTableFunctionImpl,
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
 };
-use datafusion_functions_table::generate_series_batched::GenerateSeriesFunction;
 use datafusion::common::{not_impl_err, DataFusionError, Result};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
@@ -47,6 +46,7 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_functions_table::generate_series_batched::GenerateSeriesFunction;
 
 use crate::is_spark_path;
 use async_trait::async_trait;

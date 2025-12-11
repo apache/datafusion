@@ -464,9 +464,7 @@ fn optimize_projections(
                 Some(existing_proj) => {
                     indices.into_mapped_indices(|idx| existing_proj[idx])
                 }
-                None => {
-                    indices.into_inner()
-                }
+                None => indices.into_inner(),
             };
 
             let new_projected_schema = {

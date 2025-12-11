@@ -362,7 +362,9 @@ impl LogicalPlan {
                 ..
             }) => schema,
             LogicalPlan::StandaloneBatchedTableFunction(
-                StandaloneBatchedTableFunction { projected_schema, .. },
+                StandaloneBatchedTableFunction {
+                    projected_schema, ..
+                },
             ) => projected_schema,
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 // we take the schema of the static term as the schema of the entire recursive query

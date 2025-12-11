@@ -25,8 +25,8 @@ use crate::{BatchedTableFunctionImpl, TableProvider};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Constraints};
 use datafusion_expr::{
-    BatchedTableFunctionSource, Expr, Signature, TableProviderFilterPushDown, TableSource,
-    TableType,
+    BatchedTableFunctionSource, Expr, Signature, TableProviderFilterPushDown,
+    TableSource, TableType,
 };
 
 /// Implements [`TableSource`] for a [`TableProvider`]
