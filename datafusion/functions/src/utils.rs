@@ -17,7 +17,9 @@
 
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::{DataType, DecimalType};
+use arrow::datatypes::{
+    DataType, DecimalType, validate_decimal32_precision, validate_decimal64_precision,
+};
 use arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
 use datafusion_expr::ColumnarValue;
@@ -219,6 +221,52 @@ pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
     }
 }
 
+pub fn decimal32_to_i32(value: i32, precision: u8, scale: i8) -> Result<i32, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale as u8 > precision {
+        Err(ArrowError::ComputeError(format!(
+            "scale {scale} is greater than precision {precision}"
+        )))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        validate_decimal32_precision(value, precision, scale)?;
+
+        match 10_i32.checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
+    }
+}
+
+pub fn decimal64_to_i64(value: i64, precision: u8, scale: i8) -> Result<i64, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale as u8 > precision {
+        Err(ArrowError::ComputeError(format!(
+            "scale {scale} is greater than precision {precision}"
+        )))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        validate_decimal64_precision(value, precision, scale)?;
+
+        match i64::from(10).checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod test {
     /// $FUNC ScalarUDFImpl to test
@@ -365,6 +413,72 @@ pub mod test {
 
         for (value, scale, expected) in cases {
             match decimal128_to_i128(value, scale) {
+                Ok(actual) => {
+                    assert_eq!(
+                        actual,
+                        expected.expect("Got value but expected none"),
+                        "{value} and {scale} vs {expected:?}"
+                    );
+                }
+                Err(_) => assert!(expected.is_none()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal32_to_i32() {
+        let cases = [
+            (123, 7, 0, Some(123)),
+            (1230, 7, 1, Some(123)),
+            (123000, 7, 3, Some(123)),
+            (1234567, 7, 2, Some(12345)),
+            (-1234567, 7, 2, Some(-12345)),
+            (1, 7, 0, Some(1)),
+            (123, 7, -3, None),
+            (123, 7, i8::MAX, None),
+            (999999999, 9, 0, Some(999999999)),
+            (999999999, 9, 3, Some(999999)),
+        ];
+
+        for (value, precision, scale, expected) in cases {
+            match decimal32_to_i32(value, precision, scale) {
+                Ok(actual) => {
+                    assert_eq!(
+                        actual,
+                        expected.expect("Got value but expected none"),
+                        "{value} and {precision} {scale} vs {expected:?}"
+                    );
+                }
+                Err(_) => assert!(expected.is_none()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal64_to_i64() {
+        let cases = [
+            (123, 18, 0, Some(123)),
+            (1234567890, 14, 2, Some(12345678)),
+            (-1234567890, 10, 2, Some(-12345678)),
+            (123, 18, -3, None),
+            (123, 18, i8::MAX, None),
+            (999999999999999999i64, 18, 0, Some(999999999999999999i64)),
+            (
+                999999999999999999i64,
+                18,
+                3,
+                Some(999999999999999999i64 / 1000),
+            ),
+            (
+                -999999999999999999i64,
+                18,
+                3,
+                Some(-999999999999999999i64 / 1000),
+            ),
+        ];
+
+        for (value, precision, scale, expected) in cases {
+            match decimal64_to_i64(value, precision, scale) {
                 Ok(actual) => {
                     assert_eq!(
                         actual,
