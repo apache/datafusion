@@ -41,17 +41,59 @@ use crate::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
     DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
     LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
-    Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window, dml::CopyTo,
+    Statement, Subquery, SubqueryAlias, TableScan, TableSource, Union, Unnest,
+    UserDefinedLogicalNode, Values, Window, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
 use crate::expr::{Exists, InSubquery};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion,
     TreeNodeRewriter, TreeNodeVisitor,
 };
 use datafusion_common::{Result, internal_err};
+use std::{any::Any, borrow::Cow, sync::Arc};
+
+/// Wrapper around a TableSource that replaces its logical plan
+/// without requiring the TableSource API to be modified
+struct TableSourceWithPlan {
+    inner: Arc<dyn TableSource>,
+    logical_plan: LogicalPlan,
+}
+
+impl TableSource for TableSourceWithPlan {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+
+    fn constraints(&self) -> Option<&datafusion_common::Constraints> {
+        self.inner.constraints()
+    }
+
+    fn table_type(&self) -> crate::TableType {
+        self.inner.table_type()
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<crate::TableProviderFilterPushDown>> {
+        self.inner.supports_filters_pushdown(filters)
+    }
+
+    fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
+        Some(Cow::Borrowed(&self.logical_plan))
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.inner.get_column_default(column)
+    }
+}
 
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
@@ -351,10 +393,11 @@ impl TreeNode for LogicalPlan {
                     let inner_plan_owned = inner_cow.into_owned();
 
                     inner_plan_owned.map_elements(f)?.update_data(|new_inner| {
-                        let new_source = scan
-                            .source
-                            .replace_logical_plan(new_inner)
-                            .expect("provider returned a logical plan but cannot rebuild itself");                    
+                        let new_source = Arc::new(TableSourceWithPlan {
+                            inner: Arc::clone(&scan.source),
+                            logical_plan: new_inner,
+                        })
+                            as Arc<dyn TableSource>;
                         LogicalPlan::TableScan(TableScan {
                             table_name: scan.table_name,
                             source: new_source,
@@ -937,16 +980,6 @@ mod tests {
         fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
             // return an owned LogicalPlan so tests don't need lifetime juggling
             self.plan.as_ref().map(|p| Cow::Owned(p.clone()))
-        }
-
-        fn replace_logical_plan(
-            &self,
-            new_plan: LogicalPlan,
-        ) -> Option<Arc<dyn TableSource>> {
-            Some(Arc::new(TestProvider {
-                plan: Some(new_plan),
-                schema: Arc::clone(&self.schema),
-            }))
         }
     }
 
