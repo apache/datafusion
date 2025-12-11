@@ -26,7 +26,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     util::bit_util,
 };
-use datafusion_common::{internal_datafusion_err, internal_err, Result};
+use datafusion_common::{Result, internal_datafusion_err, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
     DynHash, PhysicalExpr, PhysicalExprRef,
