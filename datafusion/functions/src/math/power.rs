@@ -23,12 +23,12 @@ use super::log::LogFunc;
 use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
-    ArrowNativeTypeOp, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, Float64Type, Int64Type,
+    ArrowNativeTypeOp, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, Float64Type, Int64Type,
 };
 use arrow::error::ArrowError;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, plan_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_datafusion_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::type_coercion::is_decimal;
@@ -226,81 +226,113 @@ impl ScalarUDFImpl for PowerFunc {
                     },
                 )?
             }
-            (DataType::Decimal32(precision, scale), DataType::Int64) =>
-                    calculate_binary_decimal_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
-                        &base,
-                        exponent,
-                        |b, e| pow_decimal_int(b, *scale, e),
+            (DataType::Decimal32(precision, scale), DataType::Int64) => {
+                calculate_binary_decimal_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
+                    &base,
+                    exponent,
+                    |b, e| pow_decimal_int(b, *scale, e),
                     *precision,
                     *scale,
-                )?,
-            (DataType::Decimal32(precision, scale), DataType::Float64) =>
-                    calculate_binary_decimal_math::<Decimal32Type, Float64Type, Decimal32Type, _>(
-                        &base,
-                        exponent,
-                        |b, e| pow_decimal_float(b, *scale, e),
+                )?
+            }
+            (DataType::Decimal32(precision, scale), DataType::Float64) => {
+                calculate_binary_decimal_math::<
+                    Decimal32Type,
+                    Float64Type,
+                    Decimal32Type,
+                    _,
+                >(
+                    &base,
+                    exponent,
+                    |b, e| pow_decimal_float(b, *scale, e),
                     *precision,
                     *scale,
-                )?,
-            (DataType::Decimal64(precision, scale), DataType::Int64) =>
-                    calculate_binary_decimal_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
-                        &base,
-                        exponent,
-                        |b, e| pow_decimal_int(b, *scale, e),
+                )?
+            }
+            (DataType::Decimal64(precision, scale), DataType::Int64) => {
+                calculate_binary_decimal_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
+                    &base,
+                    exponent,
+                    |b, e| pow_decimal_int(b, *scale, e),
                     *precision,
                     *scale,
-                )?,
-            (DataType::Decimal64(precision, scale), DataType::Float64) =>
-                    calculate_binary_decimal_math::<Decimal64Type, Float64Type, Decimal64Type, _>(
-                        &base,
-                        exponent,
-                        |b, e| pow_decimal_float(b, *scale, e),
+                )?
+            }
+            (DataType::Decimal64(precision, scale), DataType::Float64) => {
+                calculate_binary_decimal_math::<
+                    Decimal64Type,
+                    Float64Type,
+                    Decimal64Type,
+                    _,
+                >(
+                    &base,
+                    exponent,
+                    |b, e| pow_decimal_float(b, *scale, e),
                     *precision,
                     *scale,
-                )?,
-            (DataType::Decimal128(precision, scale), DataType::Int64) =>
-                    calculate_binary_decimal_math::<Decimal128Type, Int64Type, Decimal128Type, _>(
-                        &base,
-                        exponent,
-                        |b, e| pow_decimal_int(b, *scale, e),
+                )?
+            }
+            (DataType::Decimal128(precision, scale), DataType::Int64) => {
+                calculate_binary_decimal_math::<
+                    Decimal128Type,
+                    Int64Type,
+                    Decimal128Type,
+                    _,
+                >(
+                    &base,
+                    exponent,
+                    |b, e| pow_decimal_int(b, *scale, e),
                     *precision,
                     *scale,
-                )?,
-            (DataType::Decimal128(precision, scale), DataType::Float64) =>
-                    calculate_binary_decimal_math::<
-                        Decimal128Type,
-                        Float64Type,
-                        Decimal128Type,
-                        _,
-                    >(&base, exponent, |b, e|
-                        pow_decimal_float(b, *scale, e),
+                )?
+            }
+            (DataType::Decimal128(precision, scale), DataType::Float64) => {
+                calculate_binary_decimal_math::<
+                    Decimal128Type,
+                    Float64Type,
+                    Decimal128Type,
+                    _,
+                >(
+                    &base,
+                    exponent,
+                    |b, e| pow_decimal_float(b, *scale, e),
                     *precision,
                     *scale,
-                )?,
-            (DataType::Decimal256(precision, scale),DataType::Int64) =>
-                    calculate_binary_decimal_math::<Decimal256Type, Int64Type, Decimal256Type, _>(
-                        &base,
-                        exponent,
-                        |b, e| pow_decimal_int(b, *scale, e),
+                )?
+            }
+            (DataType::Decimal256(precision, scale), DataType::Int64) => {
+                calculate_binary_decimal_math::<
+                    Decimal256Type,
+                    Int64Type,
+                    Decimal256Type,
+                    _,
+                >(
+                    &base,
+                    exponent,
+                    |b, e| pow_decimal_int(b, *scale, e),
                     *precision,
                     *scale,
-                )?,
-                (DataType::Decimal256(precision, scale), DataType::Float64) =>
-                    calculate_binary_decimal_math::<
-                        Decimal256Type,
-                        Float64Type,
-                        Decimal256Type,
-                        _,
-                    >(&base, exponent, |b, e|
-                        pow_decimal_float(b, *scale, e) ,
-                      *precision,
+                )?
+            }
+            (DataType::Decimal256(precision, scale), DataType::Float64) => {
+                calculate_binary_decimal_math::<
+                    Decimal256Type,
+                    Float64Type,
+                    Decimal256Type,
+                    _,
+                >(
+                    &base,
+                    exponent,
+                    |b, e| pow_decimal_float(b, *scale, e),
+                    *precision,
                     *scale,
-                )?,
+                )?
+            }
             (base_type, exp_type) => {
                 return exec_err!(
                     "Unsupported data types for base {base_type:?} and exponent {exp_type:?} for function {}",
                     self.name()
-                )
+                );
             }
         };
         Ok(ColumnarValue::Array(arr))
@@ -359,7 +391,7 @@ fn is_log(func: &ScalarUDF) -> bool {
 mod tests {
     use super::*;
     use arrow::array::{Array, Decimal128Array, Float64Array, Int64Array};
-    use arrow::datatypes::{Field, DECIMAL128_MAX_SCALE};
+    use arrow::datatypes::{DECIMAL128_MAX_SCALE, Field};
     use arrow_buffer::NullBuffer;
     use datafusion_common::cast::{
         as_decimal128_array, as_float64_array, as_int64_array,

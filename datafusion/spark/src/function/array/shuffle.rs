@@ -26,7 +26,9 @@ use arrow::datatypes::FieldRef;
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_err, utils::take_function_args, Result, ScalarValue,
+};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl,
     Signature, TypeSignature, Volatility,
@@ -87,8 +89,16 @@ impl ScalarUDFImpl for SparkShuffle {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<FieldRef> {
+        // Shuffle returns an array with the same type and nullability as the input
+        Ok(Arc::clone(&args.arg_fields[0]))
     }
 
     fn invoke_with_args(
@@ -262,4 +272,52 @@ fn fixed_size_array_shuffle(
         arrow::array::make_array(data),
         Some(nulls.into()),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use datafusion_expr::ReturnFieldArgs;
+
+    #[test]
+    fn test_shuffle_nullability() {
+        let shuffle = SparkShuffle::new();
+
+        // Test with non-nullable array
+        let non_nullable_field = Arc::new(Field::new(
+            "arr",
+            List(Arc::new(Field::new("item", DataType::Int32, true))),
+            false, // not nullable
+        ));
+
+        let result = shuffle
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&non_nullable_field)],
+                scalar_arguments: &[None],
+            })
+            .unwrap();
+
+        // The result should not be nullable (same as input)
+        assert!(!result.is_nullable());
+        assert_eq!(result.data_type(), non_nullable_field.data_type());
+
+        // Test with nullable array
+        let nullable_field = Arc::new(Field::new(
+            "arr",
+            List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true, // nullable
+        ));
+
+        let result = shuffle
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&nullable_field)],
+                scalar_arguments: &[None],
+            })
+            .unwrap();
+
+        // The result should be nullable (same as input)
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), nullable_field.data_type());
+    }
 }
