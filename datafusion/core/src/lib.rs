@@ -36,7 +36,7 @@
     )
 )]
 #![warn(missing_docs, clippy::needless_borrow)]
-// Use `allow` instead of `expect` for test configuration to explicitly 
+// Use `allow` instead of `expect` for test configuration to explicitly
 // disable the lint for all test code rather than expecting violations
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
