@@ -2232,6 +2232,7 @@ name = "datafusion-execution"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "async-trait",
  "chrono",
  "dashmap",
