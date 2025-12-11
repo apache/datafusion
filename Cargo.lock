@@ -2307,6 +2307,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-proto",
  "datafusion-proto-common",
+ "datafusion-session",
  "doc-comment",
  "futures",
  "log",
