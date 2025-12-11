@@ -286,8 +286,9 @@ impl FileOpener for ParquetOpener {
             // - The table schema as defined by the TableProvider.
             //   This is what the user sees, what they get when they `SELECT * FROM table`, etc.
             // - The logical file schema: this is the table schema minus any hive partition columns and projections.
-            //   This is what the physicalfile schema is coerced to.
-            // - The physical file schema: this is the schema as defined by the parquet file. This is what the parquet file actually contains.
+            //   This is what the physical file schema is coerced to.
+            // - The physical file schema: this is the schema that the arrow-rs
+            //   parquet reader will actually produce.
             let mut physical_file_schema = Arc::clone(reader_metadata.schema());
 
             // The schema loaded from the file may not be the same as the
