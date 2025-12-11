@@ -22,7 +22,7 @@ use crate::{Expr, LogicalPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraints, Result};
 
-use std::{any::Any, borrow::Cow};
+use std::{any::Any, borrow::Cow, sync::Arc};
 
 /// Indicates how a filter expression is handled by
 /// [`TableProvider::scan`].
@@ -122,6 +122,13 @@ pub trait TableSource: Sync + Send {
     ///
     /// For example, a view may have a logical plan, but a CSV file does not.
     fn get_logical_plan(&'_ self) -> Option<Cow<'_, LogicalPlan>> {
+        None
+    }
+
+    fn replace_logical_plan(
+        &self,
+        _new_plan: LogicalPlan,
+    ) -> Option<Arc<dyn TableSource>> {
         None
     }
 
