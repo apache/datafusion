@@ -18,7 +18,20 @@
 # under the License.
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-echo "$SCRIPT_PATH: Checking document format with prettier"
+
+MODE="--check"
+ACTION="Checking"
+if [ $# -gt 0 ]; then
+  if [ "$1" = "--write" ]; then
+    MODE="--write"
+    ACTION="Formatting"
+  else
+    echo "Usage: $0 [--write]" >&2
+    exit 1
+  fi
+fi
+
+echo "$SCRIPT_PATH: $ACTION documents with prettier"
 
 # Ensure `npx` is available
 if ! command -v npx >/dev/null 2>&1; then
@@ -26,11 +39,8 @@ if ! command -v npx >/dev/null 2>&1; then
   exit 1
 fi
  
-# if you encounter error, change '--check' to '--write' in the below command, and
-# commit the change.
-#
 # Ignore subproject CHANGELOG.md because it is machine generated
-npx prettier@2.7.1 --check \
+npx prettier@2.7.1 $MODE \
   '{datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md' \
   '!datafusion/CHANGELOG.md' \
   README.md \
@@ -38,6 +48,10 @@ npx prettier@2.7.1 --check \
 status=$?
 
 if [ $status -ne 0 ]; then
-  echo "Prettier check failed. To fix, rerun `prettier` with --write (change --check to --write in the script), commit the formatted files, and re-run the check." >&2
+  if [ "$MODE" = "--check" ]; then
+    echo "Prettier check failed. Re-run with --write (e.g., ./ci/scripts/doc_prettier_check.sh --write) to format files, commit the changes, and re-run the check." >&2
+  else
+    echo "Prettier format failed. Files may have been modified; commit any changes and re-run." >&2
+  fi
   exit $status
 fi
