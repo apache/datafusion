@@ -51,6 +51,7 @@ impl Comparable for Option<String> {
 }
 
 impl Comparable for String {
+    /// Lexicographic string comparison used in heap ordering.
     fn comp(&self, other: &Self) -> Ordering {
         self.cmp(other)
     }
@@ -174,7 +175,12 @@ where
     }
 }
 
-/// An implementation of `ArrowHeap` that deals with string values
+/// An implementation of `ArrowHeap` that deals with string values.
+///
+/// Supports all three UTF-8 string types: `Utf8`, `LargeUtf8`, and `Utf8View`.
+/// String values are compared lexicographically. Null values are not explicitly handled
+/// and should not appear in the input; the aggregation layer ensures nulls are managed
+/// appropriately before calling this heap.
 pub struct StringHeap {
     batch: ArrayRef,
     heap: TopKHeap<String>,
@@ -193,6 +199,10 @@ impl StringHeap {
         }
     }
 
+    /// Extracts a string value from the current batch at the given row index.
+    ///
+    /// Panics if the row index is out of bounds or if the data type is not one of
+    /// the supported UTF-8 string types.
     fn value(&self, row_idx: usize) -> String {
         match self.data_type {
             DataType::Utf8 => self.batch.as_string::<i32>().value(row_idx).to_string(),
@@ -549,7 +559,11 @@ compare_integer!(u8, u16, u32, u64);
 compare_integer!(IntervalDayTime, IntervalMonthDayNano);
 compare_float!(f16, f32, f64);
 
-/// Returns true if the given data type can be stored in a heap
+/// Returns true if the given data type can be stored in a top-K aggregation heap.
+///
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals)
+/// and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`). This is used internally by
+/// `PriorityMap::supports()` to validate aggregate value type compatibility.
 pub fn is_supported_heap_type(vt: &DataType) -> bool {
     vt.is_primitive()
         || matches!(
@@ -595,7 +609,9 @@ pub fn new_heap(
         _ => {}
     }
 
-    Err(exec_datafusion_err!("Can't create heap for type: {vt:?}"))
+    Err(exec_datafusion_err!(
+        "Unsupported TopK aggregate value type: {vt:?}"
+    ))
 }
 
 #[cfg(test)]

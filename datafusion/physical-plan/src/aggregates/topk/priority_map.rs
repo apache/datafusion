@@ -34,7 +34,11 @@ pub struct PriorityMap {
 }
 
 impl PriorityMap {
-    pub fn supports(key_type: &DataType, val_type: &DataType) -> bool {
+    /// Returns true if the provided key and value types are supported by TopK aggregation.
+    ///
+    /// This is the internal method called by the public `topk_types_supported()` API.
+    /// All callers should use that public function instead of this method directly.
+    fn supports(key_type: &DataType, val_type: &DataType) -> bool {
         is_supported_hash_key_type(key_type) && is_supported_heap_type(val_type)
     }
 
