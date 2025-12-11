@@ -78,7 +78,16 @@ impl ScalarUDFImpl for SparkBitwiseNot {
         let input_field = &args.arg_fields[0];
 
         let out_dt = input_field.data_type().clone();
-        let out_nullable = input_field.is_nullable();
+        let mut out_nullable = input_field.is_nullable();
+
+        let scalar_null_present = args
+            .scalar_arguments
+            .iter()
+            .any(|opt_s| opt_s.map_or(false, |sv| sv.is_null()));
+
+        if scalar_null_present {
+            out_nullable = true;
+        }
 
         Ok(Arc::new(Field::new("bitwise_not", out_dt, out_nullable)))
     }
@@ -185,4 +194,34 @@ mod tests {
         assert!(out_i64_null.is_nullable());
         assert_eq!(out_i64_null.data_type(), &DataType::Int64);
     }
+
+    #[test]
+fn test_bitwise_not_nullability_with_null_scalar() -> Result<()> {
+    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{Field, DataType};
+    use std::sync::Arc;
+
+    let func = SparkBitwiseNot::new();
+
+    let non_nullable: FieldRef = Arc::new(Field::new("col", DataType::Int32, false));
+
+    let out = func.return_field_from_args(ReturnFieldArgs {
+        arg_fields: &[Arc::clone(&non_nullable)],
+        scalar_arguments: &[None],
+    })?;
+    assert!(!out.is_nullable());
+    assert_eq!(out.data_type(), &DataType::Int32);
+
+   
+    let null_scalar = ScalarValue::Int32(None);
+    let out_with_null_scalar = func.return_field_from_args(ReturnFieldArgs {
+        arg_fields: &[Arc::clone(&non_nullable)],
+        scalar_arguments: &[Some(&null_scalar)],
+    })?;
+    assert!(out_with_null_scalar.is_nullable());
+    assert_eq!(out_with_null_scalar.data_type(), &DataType::Int32);
+
+    Ok(())
+}
+
 }
