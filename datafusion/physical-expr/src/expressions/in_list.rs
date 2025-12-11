@@ -314,6 +314,22 @@ macro_rules! primitive_static_filter {
                 let needle_nulls = v.nulls();
                 let needle_has_nulls = v.null_count() > 0;
 
+                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
+                // ("-" means the value doesn't affect the result)
+                //
+                // | needle_null | haystack_null | negated | in set? | result |
+                // |-------------|---------------|---------|---------|--------|
+                // | true        | -             | false   | -       | null   |
+                // | true        | -             | true    | -       | null   |
+                // | false       | true          | false   | yes     | true   |
+                // | false       | true          | false   | no      | null   |
+                // | false       | true          | true    | yes     | false  |
+                // | false       | true          | true    | no      | null   |
+                // | false       | false         | false   | yes     | true   |
+                // | false       | false         | false   | no      | false  |
+                // | false       | false         | true    | yes     | false  |
+                // | false       | false         | true    | no      | true   |
+
                 // Compute the "contains" result using collect_bool (fast batched approach)
                 // This ignores nulls - we handle them separately
                 let contains_buffer = if negated {
@@ -340,24 +356,12 @@ macro_rules! primitive_static_filter {
                         needle_nulls.cloned()
                     }
                     (false, true) => {
-                        // Only haystack has nulls - null where not-in-set
-                        // For IN: null where contains is false
-                        // For NOT IN: null where contains is true (before negation, i.e., where original contains was false)
-                        // Since we already negated contains_buffer for NOT IN, we need to handle this:
-                        // - IN (negated=false): null where !contains_buffer
-                        // - NOT IN (negated=true): null where contains_buffer (which is !original_contains)
-                        // Actually both cases: null where the "not found" condition is true
-                        // For IN: not found = !contains_buffer
-                        // For NOT IN: not found = contains_buffer (since contains_buffer = !original_contains)
-                        // So the validity mask (valid = not null) is:
-                        // - IN: contains_buffer (found = valid)
-                        // - NOT IN: !contains_buffer (found in original = valid, but contains_buffer is negated)
+                        // Only haystack has nulls - result is null when value not in set
+                        // Valid (not null) when original "in set" is true
+                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
                         let validity = if negated {
-                            // For NOT IN: we want valid where original contains was true
-                            // contains_buffer = !original_contains, so validity = !contains_buffer
                             !&contains_buffer
                         } else {
-                            // For IN: valid where contains is true
                             contains_buffer.clone()
                         };
                         Some(NullBuffer::new(validity))
@@ -367,7 +371,7 @@ macro_rules! primitive_static_filter {
                         let needle_validity = needle_nulls.map(|n| n.inner().clone())
                             .unwrap_or_else(|| BooleanBuffer::new_set(needle_values.len()));
 
-                        // Haystack-induced validity (same logic as above)
+                        // Valid when original "in set" is true (see above)
                         let haystack_validity = if negated {
                             !&contains_buffer
                         } else {
@@ -448,6 +452,22 @@ macro_rules! float_static_filter {
                 let needle_nulls = v.nulls();
                 let needle_has_nulls = v.null_count() > 0;
 
+                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
+                // ("-" means the value doesn't affect the result)
+                //
+                // | needle_null | haystack_null | negated | in set? | result |
+                // |-------------|---------------|---------|---------|--------|
+                // | true        | -             | false   | -       | null   |
+                // | true        | -             | true    | -       | null   |
+                // | false       | true          | false   | yes     | true   |
+                // | false       | true          | false   | no      | null   |
+                // | false       | true          | true    | yes     | false  |
+                // | false       | true          | true    | no      | null   |
+                // | false       | false         | false   | yes     | true   |
+                // | false       | false         | false   | no      | false  |
+                // | false       | false         | true    | yes     | false  |
+                // | false       | false         | true    | no      | true   |
+
                 // Compute the "contains" result using collect_bool (fast batched approach)
                 // This ignores nulls - we handle them separately
                 let contains_buffer = if negated {
@@ -474,7 +494,9 @@ macro_rules! float_static_filter {
                         needle_nulls.cloned()
                     }
                     (false, true) => {
-                        // Only haystack has nulls - null where not-in-set
+                        // Only haystack has nulls - result is null when value not in set
+                        // Valid (not null) when original "in set" is true
+                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
                         let validity = if negated {
                             !&contains_buffer
                         } else {
@@ -487,6 +509,7 @@ macro_rules! float_static_filter {
                         let needle_validity = needle_nulls.map(|n| n.inner().clone())
                             .unwrap_or_else(|| BooleanBuffer::new_set(needle_values.len()));
 
+                        // Valid when original "in set" is true (see above)
                         let haystack_validity = if negated {
                             !&contains_buffer
                         } else {
