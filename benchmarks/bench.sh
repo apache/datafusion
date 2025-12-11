@@ -640,7 +640,7 @@ data_tpcds() {
         # Download the DataFusion benchmarks repository zip if it is not already downloaded
         if [ ! -f "${DATA_DIR}/datafusion-benchmarks.zip" ]; then
           echo "Downloading DataFusion benchmarks repository zip to: ${DATA_DIR}/datafusion-benchmarks.zip"
-          wget -O "${DATA_DIR}/datafusion-benchmarks.zip" https://github.com/apache/datafusion-benchmarks/archive/refs/heads/main.zip
+          wget --timeout=30 --tries=3 -O "${DATA_DIR}/datafusion-benchmarks.zip" https://github.com/apache/datafusion-benchmarks/archive/refs/heads/main.zip
         fi
         echo "Extracting TPC-DS parquet data to ${TPCDS_DIR}..."
         unzip -o -j -d "${TPCDS_DIR}" "${DATA_DIR}/datafusion-benchmarks.zip" datafusion-benchmarks-main/tpcds/data/sf1/*
