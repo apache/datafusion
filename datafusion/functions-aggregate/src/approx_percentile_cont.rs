@@ -25,14 +25,14 @@ use arrow::compute::{filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{
     array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+        Int64Array, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
     },
     datatypes::{DataType, Field},
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    DataFusionError, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -42,7 +42,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
     Volatility,
 };
-use datafusion_functions_aggregate_common::tdigest::{TDigest, DEFAULT_MAX_SIZE};
+use datafusion_functions_aggregate_common::tdigest::{DEFAULT_MAX_SIZE, TDigest};
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -190,7 +190,11 @@ impl ApproxPercentileCont {
             | DataType::Float32
             | DataType::Float64 => {
                 if let Some(max_size) = tdigest_max_size {
-                    ApproxPercentileAccumulator::new_with_max_size(percentile, data_type.clone(), max_size)
+                    ApproxPercentileAccumulator::new_with_max_size(
+                        percentile,
+                        data_type.clone(),
+                        max_size,
+                    )
                 } else {
                     ApproxPercentileAccumulator::new(percentile, data_type.clone())
                 }
@@ -198,7 +202,7 @@ impl ApproxPercentileCont {
             other => {
                 return not_impl_err!(
                     "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
-                )
+                );
             }
         };
 
@@ -227,8 +231,8 @@ fn validate_input_max_size_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
             return plan_err!(
                 "Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type {}).",
                 sv.data_type()
-            )
-        },
+            );
+        }
     };
 
     Ok(max_size)

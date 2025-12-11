@@ -24,13 +24,13 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 use datafusion_common::{
-    downcast_value, plan_err, unwrap_or_internal_err, Result, ScalarValue,
+    Result, ScalarValue, downcast_value, plan_err, unwrap_or_internal_err,
 };
 use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
     type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;

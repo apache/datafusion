@@ -135,6 +135,10 @@ pub trait PruningStatistics {
 /// This feeds into [`CompositePruningStatistics`] to allow pruning
 /// with filters that depend both on partition columns and data columns
 /// (e.g. `WHERE partition_col = data_col`).
+#[deprecated(
+    since = "52.0.0",
+    note = "This struct is no longer used internally. Use `replace_columns_with_literals` from `datafusion-physical-expr-adapter` to substitute partition column values before pruning. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+)]
 #[derive(Clone)]
 pub struct PartitionPruningStatistics {
     /// Values for each column for each container.
@@ -156,6 +160,7 @@ pub struct PartitionPruningStatistics {
     partition_schema: SchemaRef,
 }
 
+#[expect(deprecated)]
 impl PartitionPruningStatistics {
     /// Create a new instance of [`PartitionPruningStatistics`].
     ///
@@ -232,6 +237,7 @@ impl PartitionPruningStatistics {
     }
 }
 
+#[expect(deprecated)]
 impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
@@ -439,10 +445,15 @@ impl PruningStatistics for PrunableStatistics {
 /// the first one is returned without any regard for completeness or accuracy.
 /// That is: if the first statistics has information for a column, even if it is incomplete,
 /// that is returned even if a later statistics has more complete information.
+#[deprecated(
+    since = "52.0.0",
+    note = "This struct is no longer used internally. It may be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first. Please open an issue if you have a use case for it."
+)]
 pub struct CompositePruningStatistics {
     pub statistics: Vec<Box<dyn PruningStatistics>>,
 }
 
+#[expect(deprecated)]
 impl CompositePruningStatistics {
     /// Create a new instance of [`CompositePruningStatistics`] from
     /// a vector of [`PruningStatistics`].
@@ -457,6 +468,7 @@ impl CompositePruningStatistics {
     }
 }
 
+#[expect(deprecated)]
 impl PruningStatistics for CompositePruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         for stats in &self.statistics {
@@ -513,6 +525,7 @@ impl PruningStatistics for CompositePruningStatistics {
 }
 
 #[cfg(test)]
+#[expect(deprecated)]
 mod tests {
     use crate::{
         ColumnStatistics,

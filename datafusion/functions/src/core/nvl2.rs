@@ -16,13 +16,13 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{internal_err, utils::take_function_args, Result};
+use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, Volatility,
     conditional_expressions::CaseBuilder,
     simplify::{ExprSimplifyResult, SimplifyInfo},
     type_coercion::binary::comparison_coercion,
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 

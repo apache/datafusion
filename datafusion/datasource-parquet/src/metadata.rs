@@ -38,10 +38,11 @@ use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::parquet_to_arrow_schema;
+use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
 };
+use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -227,24 +228,36 @@ impl<'a> DFParquetMetadata<'a> {
     /// - Exact row count
     /// - Exact byte size
     /// - All column statistics marked as unknown via Statistics::unknown_column(&table_schema)
+    /// - Column byte sizes are still calculated and recorded
+    ///
     /// # When only some columns have statistics:
     ///
     /// For columns with statistics:
     /// - Min/max values are properly extracted and represented as Precision::Exact
     /// - Null counts are calculated by summing across row groups
+    /// - Byte sizes are calculated and recorded
     ///
     /// For columns without statistics,
     /// - For min/max, there are two situations:
     ///     1. The column isn't in arrow schema, then min/max values are set to Precision::Absent
     ///     2. The column is in arrow schema, but not in parquet schema due to schema revolution, min/max values are set to Precision::Exact(null)
     /// - Null counts are set to Precision::Exact(num_rows) (conservatively assuming all values could be null)
+    ///
+    /// # Byte Size Calculation:
+    ///
+    /// - For primitive types with known fixed size, exact byte size is calculated as (byte width * number of rows)
+    /// - For other types, uncompressed Parquet size is used as an estimate for in-memory size
+    /// - If neither method is applicable, byte size is marked as Precision::Absent
     pub fn statistics_from_parquet_metadata(
         metadata: &ParquetMetaData,
-        table_schema: &SchemaRef,
+        logical_file_schema: &SchemaRef,
     ) -> Result<Statistics> {
         let row_groups_metadata = metadata.row_groups();
 
-        let mut statistics = Statistics::new_unknown(table_schema);
+        // Use Statistics::default() as opposed to Statistics::new_unknown()
+        // because we are going to replace the column statistics below
+        // and we don't want to initialize them twice.
+        let mut statistics = Statistics::default();
         let mut has_statistics = false;
         let mut num_rows = 0_usize;
         for row_group_meta in row_groups_metadata {
@@ -258,33 +271,35 @@ impl<'a> DFParquetMetadata<'a> {
             }
         }
         statistics.num_rows = Precision::Exact(num_rows);
-        statistics.calculate_total_byte_size(table_schema);
 
         let file_metadata = metadata.file_metadata();
-        let mut file_schema = parquet_to_arrow_schema(
+        let mut physical_file_schema = parquet_to_arrow_schema(
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
         )?;
 
-        if let Some(merged) = apply_file_schema_type_coercions(table_schema, &file_schema)
+        if let Some(merged) =
+            apply_file_schema_type_coercions(logical_file_schema, &physical_file_schema)
         {
-            file_schema = merged;
+            physical_file_schema = merged;
         }
 
-        statistics.column_statistics = if has_statistics {
-            let (mut max_accs, mut min_accs) = create_max_min_accs(table_schema);
-            let mut null_counts_array =
-                vec![Precision::Exact(0); table_schema.fields().len()];
-            let mut is_max_value_exact = vec![Some(true); table_schema.fields().len()];
-            let mut is_min_value_exact = vec![Some(true); table_schema.fields().len()];
-            table_schema
-                .fields()
-                .iter()
-                .enumerate()
-                .for_each(|(idx, field)| {
-                    match StatisticsConverter::try_new(
+        statistics.column_statistics =
+            if has_statistics {
+                let (mut max_accs, mut min_accs) =
+                    create_max_min_accs(logical_file_schema);
+                let mut null_counts_array =
+                    vec![Precision::Absent; logical_file_schema.fields().len()];
+                let mut column_byte_sizes =
+                    vec![Precision::Absent; logical_file_schema.fields().len()];
+                let mut is_max_value_exact =
+                    vec![Some(true); logical_file_schema.fields().len()];
+                let mut is_min_value_exact =
+                    vec![Some(true); logical_file_schema.fields().len()];
+                logical_file_schema.fields().iter().enumerate().for_each(
+                    |(idx, field)| match StatisticsConverter::try_new(
                         field.name(),
-                        &file_schema,
+                        &physical_file_schema,
                         file_metadata.schema_descr(),
                     ) {
                         Ok(stats_converter) => {
@@ -294,8 +309,12 @@ impl<'a> DFParquetMetadata<'a> {
                                 null_counts_array: &mut null_counts_array,
                                 is_min_value_exact: &mut is_min_value_exact,
                                 is_max_value_exact: &mut is_max_value_exact,
+                                column_byte_sizes: &mut column_byte_sizes,
                             };
                             summarize_min_max_null_counts(
+                                file_metadata.schema_descr(),
+                                logical_file_schema,
+                                &physical_file_schema,
                                 &mut accumulators,
                                 idx,
                                 &stats_converter,
@@ -307,20 +326,53 @@ impl<'a> DFParquetMetadata<'a> {
                             debug!("Failed to create statistics converter: {e}");
                             null_counts_array[idx] = Precision::Exact(num_rows);
                         }
-                    }
-                });
+                    },
+                );
 
-            get_col_stats(
-                table_schema,
-                &null_counts_array,
-                &mut max_accs,
-                &mut min_accs,
-                &mut is_max_value_exact,
-                &mut is_min_value_exact,
-            )
-        } else {
-            Statistics::unknown_column(table_schema)
-        };
+                get_col_stats(
+                    logical_file_schema,
+                    &null_counts_array,
+                    &mut max_accs,
+                    &mut min_accs,
+                    &mut is_max_value_exact,
+                    &mut is_min_value_exact,
+                    &column_byte_sizes,
+                )
+            } else {
+                // Record column sizes
+                logical_file_schema
+                    .fields()
+                    .iter()
+                    .enumerate()
+                    .map(|(logical_file_schema_index, field)| {
+                        let arrow_field =
+                            logical_file_schema.field(logical_file_schema_index);
+                        let parquet_idx = parquet_column(
+                            file_metadata.schema_descr(),
+                            &physical_file_schema,
+                            arrow_field.name(),
+                        )
+                        .map(|(idx, _)| idx);
+                        let byte_size = compute_arrow_column_size(
+                            field.data_type(),
+                            row_groups_metadata,
+                            parquet_idx,
+                            num_rows,
+                        );
+                        ColumnStatistics::new_unknown().with_byte_size(byte_size)
+                    })
+                    .collect()
+            };
+
+        #[cfg(debug_assertions)]
+        {
+            // Check that the column statistics length matches the table schema fields length
+            assert_eq!(
+                statistics.column_statistics.len(),
+                logical_file_schema.fields().len(),
+                "Column statistics length does not match table schema fields length"
+            );
+        }
 
         Ok(statistics)
     }
@@ -365,6 +417,7 @@ fn get_col_stats(
     min_values: &mut [Option<MinAccumulator>],
     is_max_value_exact: &mut [Option<bool>],
     is_min_value_exact: &mut [Option<bool>],
+    column_byte_sizes: &[Precision<usize>],
 ) -> Vec<ColumnStatistics> {
     (0..schema.fields().len())
         .map(|i| {
@@ -398,6 +451,7 @@ fn get_col_stats(
                 min_value: min_value.unwrap_or(Precision::Absent),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                byte_size: column_byte_sizes[i],
             }
         })
         .collect()
@@ -410,11 +464,15 @@ struct StatisticsAccumulators<'a> {
     null_counts_array: &'a mut [Precision<usize>],
     is_min_value_exact: &'a mut [Option<bool>],
     is_max_value_exact: &'a mut [Option<bool>],
+    column_byte_sizes: &'a mut [Precision<usize>],
 }
 
 fn summarize_min_max_null_counts(
+    parquet_schema: &SchemaDescriptor,
+    logical_file_schema: &Schema,
+    physical_file_schema: &Schema,
     accumulators: &mut StatisticsAccumulators,
-    arrow_schema_index: usize,
+    logical_schema_index: usize,
     stats_converter: &StatisticsConverter,
     row_groups_metadata: &[RowGroupMetaData],
 ) -> Result<()> {
@@ -426,27 +484,27 @@ fn summarize_min_max_null_counts(
     let is_min_value_exact_stat =
         stats_converter.row_group_is_min_value_exact(row_groups_metadata)?;
 
-    if let Some(max_acc) = &mut accumulators.max_accs[arrow_schema_index] {
+    if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
         max_acc.update_batch(&[Arc::clone(&max_values)])?;
         let mut cur_max_acc = max_acc.clone();
-        accumulators.is_max_value_exact[arrow_schema_index] = has_any_exact_match(
+        accumulators.is_max_value_exact[logical_schema_index] = has_any_exact_match(
             &cur_max_acc.evaluate()?,
             &max_values,
             &is_max_value_exact_stat,
         );
     }
 
-    if let Some(min_acc) = &mut accumulators.min_accs[arrow_schema_index] {
+    if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
         min_acc.update_batch(&[Arc::clone(&min_values)])?;
         let mut cur_min_acc = min_acc.clone();
-        accumulators.is_min_value_exact[arrow_schema_index] = has_any_exact_match(
+        accumulators.is_min_value_exact[logical_schema_index] = has_any_exact_match(
             &cur_min_acc.evaluate()?,
             &min_values,
             &is_min_value_exact_stat,
         );
     }
 
-    accumulators.null_counts_array[arrow_schema_index] = match sum(&null_counts) {
+    accumulators.null_counts_array[logical_schema_index] = match sum(&null_counts) {
         Some(null_count) => Precision::Exact(null_count as usize),
         None => match null_counts.len() {
             // If sum() returned None we either have no rows or all values are null
@@ -455,7 +513,53 @@ fn summarize_min_max_null_counts(
         },
     };
 
+    // This is the same logic as parquet_column but we start from arrow schema index
+    // instead of looking up by name.
+    let parquet_index = parquet_column(
+        parquet_schema,
+        physical_file_schema,
+        logical_file_schema.field(logical_schema_index).name(),
+    )
+    .map(|(idx, _)| idx);
+
+    let arrow_field = logical_file_schema.field(logical_schema_index);
+    accumulators.column_byte_sizes[logical_schema_index] = compute_arrow_column_size(
+        arrow_field.data_type(),
+        row_groups_metadata,
+        parquet_index,
+        row_groups_metadata
+            .iter()
+            .map(|rg| rg.num_rows() as usize)
+            .sum(),
+    );
+
     Ok(())
+}
+
+/// Compute the Arrow in-memory size for a single column
+fn compute_arrow_column_size(
+    data_type: &DataType,
+    row_groups_metadata: &[RowGroupMetaData],
+    parquet_idx: Option<usize>,
+    num_rows: usize,
+) -> Precision<usize> {
+    // For primitive types with known fixed size, compute exact size
+    if let Some(byte_width) = data_type.primitive_width() {
+        return Precision::Exact(byte_width * num_rows);
+    }
+
+    // Use the uncompressed Parquet size as an estimate for other types
+    if let Some(parquet_idx) = parquet_idx {
+        let uncompressed_bytes: i64 = row_groups_metadata
+            .iter()
+            .filter_map(|rg| rg.columns().get(parquet_idx))
+            .map(|col| col.uncompressed_size())
+            .sum();
+        return Precision::Inexact(uncompressed_bytes as usize);
+    }
+
+    // Otherwise, we cannot determine the size
+    Precision::Absent
 }
 
 /// Checks if any occurrence of `value` in `array` corresponds to a `true`
