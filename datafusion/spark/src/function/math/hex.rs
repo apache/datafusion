@@ -26,9 +26,7 @@ use arrow::{
 };
 use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
-use datafusion_common::types::{
-    logical_binary, logical_int64, logical_string, NativeType,
-};
+use datafusion_common::types::{logical_int64, logical_string, NativeType};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
@@ -63,11 +61,7 @@ impl SparkHex {
 
         let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
 
-        let binary = Coercion::new_implicit(
-            TypeSignatureClass::Native(logical_binary()),
-            vec![TypeSignatureClass::Binary],
-            NativeType::Binary,
-        );
+        let binary = Coercion::new_exact(TypeSignatureClass::Binary);
 
         let variants = vec![
             // accepts numeric types

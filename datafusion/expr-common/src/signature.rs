@@ -337,7 +337,7 @@ pub enum TypeSignatureClass {
     Float,
     Decimal,
     Numeric,
-    /// Encompasses Binary, FixedSizeBinary, and LargeBinary types
+    /// Encompasses both the native Binary/LargeBinary types as well as arbitrarily sized FixedSizeBinary types
     Binary,
 }
 
