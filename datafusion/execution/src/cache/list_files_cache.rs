@@ -210,38 +210,35 @@ impl DefaultListFilesCacheState {
             return None;
         }
 
-        match prefix {
-            None => {
-                // No prefix filter, return all files
-                Some(Arc::clone(&entry.metas))
-            }
-            Some(prefix) => {
-                // Build the full prefix path: table_base/prefix
-                let full_prefix = if table_base.as_ref().is_empty() {
-                    prefix.clone()
-                } else if prefix.as_ref().is_empty() {
-                    table_base.clone()
-                } else {
-                    let mut parts: Vec<_> = table_base.parts().collect();
-                    parts.extend(prefix.parts());
-                    Path::from_iter(parts)
-                };
-                let full_prefix_str = full_prefix.as_ref();
+        // Early return if no prefix filter - return all files
+        let Some(prefix) = prefix else {
+            return Some(Arc::clone(&entry.metas));
+        };
 
-                // Filter files to only those matching the prefix
-                let filtered: Vec<ObjectMeta> = entry
-                    .metas
-                    .iter()
-                    .filter(|meta| meta.location.as_ref().starts_with(full_prefix_str))
-                    .cloned()
-                    .collect();
+        // Build the full prefix path: table_base/prefix
+        let full_prefix = if table_base.as_ref().is_empty() {
+            prefix.clone()
+        } else if prefix.as_ref().is_empty() {
+            table_base.clone()
+        } else {
+            let mut parts: Vec<_> = table_base.parts().collect();
+            parts.extend(prefix.parts());
+            Path::from_iter(parts)
+        };
+        let full_prefix_str = full_prefix.as_ref();
 
-                if filtered.is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(filtered))
-                }
-            }
+        // Filter files to only those matching the prefix
+        let filtered: Vec<ObjectMeta> = entry
+            .metas
+            .iter()
+            .filter(|meta| meta.location.as_ref().starts_with(full_prefix_str))
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            None
+        } else {
+            Some(Arc::new(filtered))
         }
     }
 
