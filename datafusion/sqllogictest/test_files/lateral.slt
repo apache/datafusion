@@ -711,6 +711,95 @@ statement ok
 DROP TABLE ranges_filter_test;
 
 ##########
+## Type Coercion Tests
+##########
+
+# Signature::exact - NULL and exact type matches work
+query I
+SELECT result FROM batched_coercion_exact(NULL, 42);
+----
+42
+
+query I
+SELECT result FROM batched_coercion_exact(10, 32);
+----
+42
+
+# Signature::coercible - supports NULL and Int64→Int32 narrowing
+query I
+SELECT result FROM batched_coercion_coercible(NULL, 42);
+----
+42
+
+query I
+SELECT result FROM batched_coercion_coercible(10, 32);
+----
+42
+
+# Coercion in LATERAL joins
+statement ok
+CREATE TABLE coercion_test(a BIGINT, b BIGINT) AS VALUES (10, 20), (15, 25), (5, 10);
+
+query III
+SELECT a, b, result
+FROM coercion_test
+CROSS JOIN LATERAL batched_coercion_coercible(a, b)
+ORDER BY a;
+----
+5 10 15
+10 20 30
+15 25 40
+
+statement ok
+DROP TABLE coercion_test;
+
+##########
+## Projection Handling Tests
+## Functions can optionally apply projection; DataFusion applies it automatically if not
+##########
+
+# Both functions produce identical results
+query III
+SELECT n, n_squared, n_cubed FROM batched_multi_column(CAST(1 AS INT), CAST(3 AS INT)) ORDER BY n;
+----
+1 1 1
+2 4 8
+3 9 27
+
+query III
+SELECT n, n_squared, n_cubed FROM batched_multi_column_no_proj(1, 3) ORDER BY n;
+----
+1 1 1
+2 4 8
+3 9 27
+
+# Automatic projection when function doesn't apply it
+query II
+SELECT n, n_squared FROM batched_multi_column_no_proj(1, 3) ORDER BY n;
+----
+1 1
+2 4
+3 9
+
+# Projection with LATERAL join
+statement ok
+CREATE TABLE proj_test(start BIGINT, stop BIGINT) AS VALUES (1, 2), (3, 4);
+
+query IIII
+SELECT start, stop, n, n_squared
+FROM proj_test
+CROSS JOIN LATERAL batched_multi_column_no_proj(start, stop)
+ORDER BY start, n;
+----
+1 2 1 1
+1 2 2 4
+3 4 3 9
+3 4 4 16
+
+statement ok
+DROP TABLE proj_test;
+
+##########
 ## Cleanup
 ##########
 

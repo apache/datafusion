@@ -257,6 +257,7 @@ impl ExecutionPlan for BatchedTableFunctionExec {
             args: self.args.clone(),
             input_stream,
             schema: Arc::clone(&self.projected_schema),
+            table_function_schema: Arc::clone(&self.table_function_schema),
             mode: self.mode,
             projection: self.projection.clone(),
             filters: self.filters.clone(),
@@ -286,6 +287,7 @@ struct BatchedTableFunctionStream {
     args: Vec<Arc<dyn PhysicalExpr>>,
     input_stream: SendableRecordBatchStream,
     schema: SchemaRef,
+    table_function_schema: SchemaRef,
     mode: BatchedTableFunctionMode,
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
@@ -300,13 +302,46 @@ impl BatchedTableFunctionStream {
         chunk: BatchResultChunk,
         input_batch: &RecordBatch,
     ) -> Result<RecordBatch> {
+        let chunk_schema = chunk.output.schema();
+
+        // Apply projection if function didn't apply it
+        // This follows the same pattern as MemoryStream and other ExecutionPlans
+        let function_output = if let Some(proj) = &self.projection {
+            // Compute what the projected function schema should be
+            let projected_func_schema = self.table_function_schema.project(proj)?;
+
+            // Check if function already applied projection by comparing schemas
+            if chunk_schema.as_ref() == self.table_function_schema.as_ref() {
+                // Function returned full schema, apply projection automatically
+                chunk.output.project(proj)?
+            } else if chunk_schema.as_ref() == &projected_func_schema {
+                // Function already applied projection (optimization)
+                chunk.output
+            } else {
+                return exec_err!(
+                    "Function '{}' returned unexpected schema. Expected either full schema ({} columns: {:?}) or projected schema ({} columns: {:?}), got {} columns: {:?}. Projection: {:?}",
+                    self.func.name(),
+                    self.table_function_schema.fields().len(),
+                    self.table_function_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>(),
+                    projected_func_schema.fields().len(),
+                    projected_func_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>(),
+                    chunk_schema.fields().len(),
+                    chunk_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>(),
+                    self.projection
+                );
+            }
+        } else {
+            // No projection requested
+            chunk.output
+        };
+
         match self.mode {
             BatchedTableFunctionMode::Lateral => combine_lateral_result(
                 input_batch,
-                &chunk.output,
+                &function_output,
                 &chunk.input_row_indices,
             ),
-            BatchedTableFunctionMode::Standalone => Ok(chunk.output),
+            BatchedTableFunctionMode::Standalone => Ok(function_output),
         }
     }
 }
