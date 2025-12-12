@@ -42,7 +42,7 @@ use crate::{hash_utils::create_hashes, joins::utils::JoinHashMapType};
 /// This is used for:
 /// - Computing routing hashes (with RepartitionExec's 0,0,0,0 seeds)
 /// - Computing lookup hashes (with HashJoin's 'J','O','I','N' seeds)
-pub(super) struct HashExpr {
+pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
     /// Random state for hashing
