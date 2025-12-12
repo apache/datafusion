@@ -16,6 +16,10 @@
 // under the License.
 
 //! Implementation of `InList` expressions: [`InListExpr`]
+//!
+//! This module provides optimized membership testing for SQL `IN` expressions.
+
+mod filter;
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -42,13 +46,7 @@ use ahash::RandomState;
 use datafusion_common::HashMap;
 use hashbrown::hash_map::RawEntryMut;
 
-/// Trait for InList static filters
-trait StaticFilter {
-    fn null_count(&self) -> usize;
-
-    /// Checks if values in `v` are contained in the filter
-    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
-}
+use filter::StaticFilter;
 
 /// InList
 pub struct InListExpr {
