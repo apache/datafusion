@@ -1125,6 +1125,11 @@ impl SessionStateBuilder {
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_window_functions());
 
+        self.extension_types
+            .get_or_insert_with(|| Arc::new(MemoryExtensionTypeRegistry::new()))
+            .extend(&SessionStateDefaults::default_extension_types())
+            .expect("MemoryExtensionTypeRegistry is not read-only.");
+
         self.table_functions
             .get_or_insert_with(HashMap::new)
             .extend(

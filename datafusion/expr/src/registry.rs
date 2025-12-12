@@ -22,7 +22,7 @@ use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use arrow_schema::Field;
 use datafusion_common::types::{LogicalTypeRef, NativeType};
-use datafusion_common::{HashMap, Result, not_impl_err, plan_datafusion_err};
+use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
@@ -272,6 +272,17 @@ pub trait ExtensionTypeRegistry: Debug + Send + Sync {
         extension_type: ExtensionTypeRegistrationRef,
     ) -> Result<Option<ExtensionTypeRegistrationRef>>;
 
+    /// Extends the registry with the provided extension types.
+    ///
+    /// Returns an error if the type cannot be registered, for example, if the registry is
+    /// read-only.
+    fn extend(&self, extension_types: &[ExtensionTypeRegistrationRef]) -> Result<()> {
+        for extension_type in extension_types {
+            self.register_extension_type(extension_type.clone())?;
+        }
+        Ok(())
+    }
+
     /// Deregisters an extension type registration with the name `name`, returning the
     /// implementation that was deregistered.
     ///
@@ -281,6 +292,41 @@ pub trait ExtensionTypeRegistry: Debug + Send + Sync {
         &self,
         name: &str,
     ) -> Result<Option<ExtensionTypeRegistrationRef>>;
+}
+
+/// A simple implementation of [ExtensionTypeRegistration] where the logical type instance can be
+/// obtained by cloning the inner [`LogicalTypeRef`].
+///
+/// As a result, the logical type instance cannot depend on any parameters. For example, if the
+/// logical type is `Opaque(Uuid)`, and the `create_logical_type` method should return an instance
+/// of `Opaque` where `Uuid` is a parameter, then this implementation cannot be used, as the inner
+/// type (`Uuid`) needs to be extracted from the field and passed into the `Opaque` constructor.
+#[derive(Debug)]
+pub struct SimpleExtensionTypeRegistration {
+    /// The name of the extension type.
+    name: String,
+    /// The logical type instance.
+    logical_type: LogicalTypeRef,
+}
+
+impl SimpleExtensionTypeRegistration {
+    /// Creates a new registration for the given `name` and `logical_type`.
+    pub fn new_arc(name: &str, logical_type: LogicalTypeRef) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            logical_type,
+        })
+    }
+}
+
+impl ExtensionTypeRegistration for SimpleExtensionTypeRegistration {
+    fn type_name(&self) -> &str {
+        &self.name
+    }
+
+    fn create_logical_type(&self, _field: &Field) -> Result<LogicalTypeRef> {
+        Ok(Arc::clone(&self.logical_type))
+    }
 }
 
 /// An [`ExtensionTypeRegistry`] that uses in memory [`HashMap`]s.
