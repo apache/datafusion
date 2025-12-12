@@ -33,7 +33,7 @@ use chrono::format::{Parsed, StrftimeItems, parse};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
-    DataFusionError, Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
     internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_expr::ColumnarValue;

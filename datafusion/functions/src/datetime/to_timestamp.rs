@@ -19,8 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
-use arrow::array::timezone::Tz;
 use arrow::array::Float64Array;
+use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
