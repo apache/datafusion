@@ -31,7 +31,6 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::windows::get_ordered_partition_by_indices;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics,
@@ -613,12 +612,13 @@ impl AggregateExec {
         // If existing ordering satisfies a prefix of the GROUP BY expressions,
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
-        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input)?;
-        let mut new_requirements = indices
-            .iter()
-            .map(|&idx| {
-                PhysicalSortRequirement::new(Arc::clone(&groupby_exprs[idx]), None)
-            })
+        // Copy the `PhysicalSortExpr`s to retain the sort options.
+        let (new_sort_exprs, indices) =
+            input_eq_properties.find_longest_permutation(&groupby_exprs)?;
+
+        let mut new_requirements = new_sort_exprs
+            .into_iter()
+            .map(PhysicalSortRequirement::from)
             .collect::<Vec<_>>();
 
         let req = get_finer_aggregate_exprs_requirement(
@@ -1815,7 +1815,7 @@ mod tests {
     use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
     use arrow::array::{
-        DictionaryArray, Float32Array, Float64Array, Int32Array, StructArray,
+        DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StructArray,
         UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
@@ -3602,6 +3602,85 @@ mod tests {
         let stats_zero = agg_zero.partition_statistics(None)?;
         assert_eq!(stats_zero.total_byte_size, Precision::Absent);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_order_is_retained_when_spilling() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+
+        let batches = vec![vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![2])),
+                    Arc::new(Int64Array::from(vec![2])),
+                    Arc::new(Int64Array::from(vec![1])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(Int64Array::from(vec![1])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![0])),
+                    Arc::new(Int64Array::from(vec![0])),
+                    Arc::new(Int64Array::from(vec![1])),
+                ],
+            )?,
+        ]];
+        let scan = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?;
+        let scan = scan.try_with_sort_information(vec![
+            LexOrdering::new([PhysicalSortExpr::new(
+                col("b", schema.as_ref())?,
+                SortOptions::default().desc(),
+            )])
+            .unwrap(),
+        ])?;
+
+        let aggr = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new(
+                vec![(col("b", schema.as_ref())?, "b".to_string())],
+                vec![],
+                vec![vec![false]],
+            ),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("c", schema.as_ref())?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(c)")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(scan) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?);
+
+        let task_ctx = new_spill_ctx(1, 80);
+        let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
+        assert_spill_count_metric(true, aggr);
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&result), @r"
+            +---+-------------+
+            | b | SUM(c)[sum] |
+            +---+-------------+
+            | 2 | 1           |
+            | 1 | 1           |
+            | 0 | 1           |
+            +---+-------------+
+        ");
+        }
         Ok(())
     }
 }
