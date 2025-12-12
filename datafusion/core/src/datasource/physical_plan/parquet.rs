@@ -1257,7 +1257,7 @@ mod tests {
             ("c3", c3.clone()),
         ]);
 
-        // batch2: c3(int8), c2(int64), c1(string), c4(string)
+        // batch2: c3(date64), c2(int64), c1(string)
         let batch2 = create_batch(vec![("c3", c4), ("c2", c2), ("c1", c1)]);
 
         let table_schema = Schema::new(vec![
@@ -1272,7 +1272,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await;
         assert_contains!(read.unwrap_err().to_string(),
-            "Cannot cast file schema field c3 of type Date64 to table schema field of type Int8");
+            "Cannot cast column 'c3' from 'Date64' (physical data type) to 'Int8' (logical data type)");
     }
 
     #[tokio::test]

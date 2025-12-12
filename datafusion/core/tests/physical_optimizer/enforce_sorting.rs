@@ -56,7 +56,7 @@ use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preservin
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
 use arrow::array::{Int32Array, RecordBatch};
 use arrow::datatypes::{Field};
@@ -175,10 +175,8 @@ impl EnforceSortingTest {
         let input_plan_string = displayable(self.plan.as_ref()).indent(true).to_string();
 
         // Run the actual optimizer
-        let session_config = SessionConfig::from(config);
-        let optimizer_context = OptimizerContext::new(session_config.clone());
         let optimized_physical_plan = EnforceSorting::new()
-            .optimize_plan(Arc::clone(&self.plan), &optimizer_context)
+            .optimize(Arc::clone(&self.plan), &config)
             .expect("enforce_sorting failed");
 
         // Get string representation of the plan
@@ -2365,18 +2363,15 @@ async fn test_commutativity() -> Result<()> {
     "#);
 
     let config = ConfigOptions::new();
-    let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let rules = vec![
         Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
     ];
     let mut first_plan = orig_plan.clone();
     for rule in rules {
-        first_plan = rule.optimize_plan(first_plan, &optimizer_context)?;
+        first_plan = rule.optimize(first_plan, &config)?;
     }
 
-    let optimizer_context2 = OptimizerContext::new(session_config.clone());
     let rules = vec![
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
         Arc::new(EnforceDistribution::new()) as Arc<dyn PhysicalOptimizerRule>,
@@ -2384,7 +2379,7 @@ async fn test_commutativity() -> Result<()> {
     ];
     let mut second_plan = orig_plan.clone();
     for rule in rules {
-        second_plan = rule.optimize_plan(second_plan, &optimizer_context2)?;
+        second_plan = rule.optimize(second_plan, &config)?;
     }
 
     assert_eq!(get_plan_string(&first_plan), get_plan_string(&second_plan));

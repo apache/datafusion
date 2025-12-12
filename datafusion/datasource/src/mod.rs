@@ -24,6 +24,7 @@
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
@@ -55,14 +56,14 @@ pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
+use datafusion_common::{ColumnStatistics, Result, exec_datafusion_err};
 use datafusion_common::{ScalarValue, Statistics};
 use futures::{Stream, StreamExt};
-use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+use object_store::{ObjectMeta, path::Path};
 pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
 use std::ops::Range;
@@ -433,6 +434,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 }],
             })),
             extensions: None,
@@ -577,12 +579,13 @@ mod tests {
 
         // as per documentation, when `ignore_subdirectory` is true, we should ignore files that aren't
         // a direct child of the `url`
-        assert!(url
-            .contains(
+        assert!(
+            url.contains(
                 &Path::parse("/var/data/mytable/mysubfolder/data.parquet").unwrap(),
                 true
             )
-            .not());
+            .not()
+        );
 
         // when we set `ignore_subdirectory` to false, we should not ignore the file
         assert!(url.contains(

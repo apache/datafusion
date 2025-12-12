@@ -18,9 +18,10 @@
 use crate::logical_plan::producer::{
     to_substrait_literal, to_substrait_named_struct, SubstraitProducer,
 };
-use datafusion::common::{not_impl_err, substrait_datafusion_err, DFSchema, ToDFSchema};
+use datafusion::common::{substrait_datafusion_err, DFSchema, ToDFSchema};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
+use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 use substrait::proto::expression::literal::Struct as LiteralStruct;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
@@ -146,26 +147,61 @@ pub fn from_table_scan(
     }))
 }
 
+/// Encodes an EmptyRelation as a Substrait VirtualTable.
+///
+/// EmptyRelation represents a relation with no input data. When `produce_one_row` is true,
+/// it generates a single row with all fields set to their default values (typically NULL).
+/// This is used for queries without a FROM clause, such as "SELECT 1 AS one" or
+/// "SELECT current_timestamp()".
+///
+/// When `produce_one_row` is false, it represents a truly empty relation with no rows,
+/// used in optimizations or as a placeholder.
 pub fn from_empty_relation(
     producer: &mut impl SubstraitProducer,
     e: &EmptyRelation,
 ) -> datafusion::common::Result<Box<Rel>> {
-    if e.produce_one_row {
-        return not_impl_err!("Producing a row from empty relation is unsupported");
-    }
-    #[allow(deprecated)]
+    let base_schema = to_substrait_named_struct(producer, &e.schema)?;
+
+    let read_type = if e.produce_one_row {
+        // Create one row with default scalar values for each field in the schema.
+        // For example, an Int32 field gets Int32(NULL), a Utf8 field gets Utf8(NULL), etc.
+        // This represents the "phantom row" that provides a context for evaluating
+        // scalar expressions in queries without a FROM clause.
+        let fields = e
+            .schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let scalar = ScalarValue::try_from(f.data_type())?;
+                to_substrait_literal(producer, &scalar)
+            })
+            .collect::<datafusion::common::Result<_>>()?;
+
+        ReadType::VirtualTable(VirtualTable {
+            // Use deprecated 'values' field instead of 'expressions' because the consumer's
+            // nested expression support (RexType::Nested) is not yet implemented.
+            // The 'values' field uses literal::Struct which the consumer can properly
+            // deserialize with field name preservation.
+            #[allow(deprecated)]
+            values: vec![LiteralStruct { fields }],
+            expressions: vec![],
+        })
+    } else {
+        ReadType::VirtualTable(VirtualTable {
+            #[allow(deprecated)]
+            values: vec![],
+            expressions: vec![],
+        })
+    };
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
-            base_schema: Some(to_substrait_named_struct(producer, &e.schema)?),
+            base_schema: Some(base_schema),
             filter: None,
             best_effort_filter: None,
             projection: None,
             advanced_extension: None,
-            read_type: Some(ReadType::VirtualTable(VirtualTable {
-                values: vec![],
-                expressions: vec![],
-            })),
+            read_type: Some(read_type),
         }))),
     }))
 }
@@ -203,6 +239,7 @@ pub fn from_values(
             projection: None,
             advanced_extension: None,
             read_type: Some(ReadType::VirtualTable(VirtualTable {
+                #[allow(deprecated)]
                 values,
                 expressions,
             })),

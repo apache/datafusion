@@ -26,10 +26,10 @@ use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, cast::as_boolean_array, internal_err};
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::statistics::Distribution::{self, Bernoulli};
-use datafusion_expr::ColumnarValue;
 
 /// Not expression
 #[derive(Debug, Eq)]
@@ -196,7 +196,7 @@ mod tests {
     use std::sync::LazyLock;
 
     use super::*;
-    use crate::expressions::{col, Column};
+    use crate::expressions::{Column, col};
 
     use arrow::{array::BooleanArray, datatypes::*};
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -265,28 +265,31 @@ mod tests {
         let expr = not(a)?;
 
         // Uniform with non-boolean bounds
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_uniform(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_uniform(
                 Interval::make_unbounded(&DataType::Float64)?
             )?])
-            .is_err());
+            .is_err()
+        );
 
         // Exponential
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_exponential(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_exponential(
                 ScalarValue::from(1.0),
                 ScalarValue::from(1.0),
                 true
             )?])
-            .is_err());
+            .is_err()
+        );
 
         // Gaussian
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_gaussian(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_gaussian(
                 ScalarValue::from(1.0),
                 ScalarValue::from(1.0),
             )?])
-            .is_err());
+            .is_err()
+        );
 
         // Bernoulli
         assert_eq!(
@@ -310,24 +313,26 @@ mod tests {
             Distribution::new_bernoulli(ScalarValue::from(0.75))?
         );
 
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_generic(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_generic(
                 ScalarValue::Null,
                 ScalarValue::Null,
                 ScalarValue::Null,
                 Interval::make_unbounded(&DataType::UInt8)?
             )?])
-            .is_err());
+            .is_err()
+        );
 
         // Unknown with non-boolean interval as range
-        assert!(expr
-            .evaluate_statistics(&[&Distribution::new_generic(
+        assert!(
+            expr.evaluate_statistics(&[&Distribution::new_generic(
                 ScalarValue::Null,
                 ScalarValue::Null,
                 ScalarValue::Null,
                 Interval::make_unbounded(&DataType::Float64)?
             )?])
-            .is_err());
+            .is_err()
+        );
 
         Ok(())
     }

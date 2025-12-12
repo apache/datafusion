@@ -29,7 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{exec_err, Result, ScalarType, ScalarValue};
+use datafusion_common::{Result, ScalarType, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
@@ -830,7 +830,7 @@ mod tests {
     use arrow::datatypes::{Field, TimeUnit};
     use chrono::{DateTime, FixedOffset, Utc};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{assert_contains, DataFusionError, ScalarValue};
+    use datafusion_common::{DataFusionError, ScalarValue, assert_contains};
     use datafusion_expr::{ScalarFunctionArgs, ScalarFunctionImplementation};
 
     use super::*;
@@ -1424,8 +1424,7 @@ mod tests {
         let string_array =
             ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef);
 
-        let expected_err =
-            "Arrow error: Parser error: Error parsing timestamp from '2020-09-08 - 13:42:29.19085Z': error parsing time";
+        let expected_err = "Arrow error: Parser error: Error parsing timestamp from '2020-09-08 - 13:42:29.19085Z': error parsing time";
         match to_timestamp(&[string_array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
@@ -1449,8 +1448,7 @@ mod tests {
         let string_array =
             ColumnarValue::Array(Arc::new(date_string_builder.finish()) as ArrayRef);
 
-        let expected_err =
-            "Arrow error: Parser error: Invalid timezone \"ZZ\": failed to parse timezone";
+        let expected_err = "Arrow error: Parser error: Invalid timezone \"ZZ\": failed to parse timezone";
         match to_timestamp(&[string_array]) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
@@ -1487,8 +1485,7 @@ mod tests {
             ColumnarValue::Array(Arc::new(format3_builder.finish()) as ArrayRef),
         ];
 
-        let expected_err =
-            "Execution error: Error parsing timestamp from '2020-09-08T13:42:29.19085Z' using format '%H:%M:%S': input contains invalid characters";
+        let expected_err = "Execution error: Error parsing timestamp from '2020-09-08T13:42:29.19085Z' using format '%H:%M:%S': input contains invalid characters";
         match to_timestamp(&string_array) {
             Ok(_) => panic!("Expected error but got success"),
             Err(e) => {
@@ -1567,7 +1564,9 @@ mod tests {
         ];
 
         for (s, f, ctx) in cases {
-            let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
+            let expected = format!(
+                "Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}"
+            );
             let actual = string_to_datetime_formatted(&Utc, s, f)
                 .unwrap_err()
                 .strip_backtrace();
@@ -1595,7 +1594,9 @@ mod tests {
         ];
 
         for (s, f, ctx) in cases {
-            let expected = format!("Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}");
+            let expected = format!(
+                "Execution error: Error parsing timestamp from '{s}' using format '{f}': {ctx}"
+            );
             let actual = string_to_datetime_formatted(&Utc, s, f)
                 .unwrap_err()
                 .strip_backtrace();
