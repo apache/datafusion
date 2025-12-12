@@ -203,7 +203,9 @@ impl DefaultListFilesCacheState {
         let entry = self.lru_queue.get(table_base)?;
 
         // Check expiration
-        if let Some(exp) = entry.expires && now > exp {
+        if let Some(exp) = entry.expires
+            && now > exp
+        {
             self.remove(table_base);
             return None;
         }
@@ -379,7 +381,11 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
     ///
     /// This enables efficient partition pruning - a single cached listing of the full table
     /// can serve queries for any partition subset without additional storage calls.
-    fn get_with_extra(&self, table_base: &Path, prefix: &Self::Extra) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn get_with_extra(
+        &self,
+        table_base: &Path,
+        prefix: &Self::Extra,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
         let mut state = self.state.lock().unwrap();
         let now = self.time_provider.now();
         state.get_with_prefix(table_base, prefix.as_ref(), now)
@@ -916,9 +922,11 @@ mod tests {
         assert!(result.is_some());
         let filtered = result.unwrap();
         assert_eq!(filtered.len(), 2);
-        assert!(filtered
-            .iter()
-            .all(|m| m.location.as_ref().starts_with("my_table/a=1")));
+        assert!(
+            filtered
+                .iter()
+                .all(|m| m.location.as_ref().starts_with("my_table/a=1"))
+        );
 
         // Query for partition a=2
         let prefix_a2 = Some(Path::from("a=2"));
@@ -927,9 +935,11 @@ mod tests {
         assert!(result_2.is_some());
         let filtered_2 = result_2.unwrap();
         assert_eq!(filtered_2.len(), 2);
-        assert!(filtered_2
-            .iter()
-            .all(|m| m.location.as_ref().starts_with("my_table/a=2")));
+        assert!(
+            filtered_2
+                .iter()
+                .all(|m| m.location.as_ref().starts_with("my_table/a=2"))
+        );
     }
 
     #[test]
@@ -1004,10 +1014,18 @@ mod tests {
 
         let table_base = Path::from("events");
         let files = Arc::new(vec![
-            create_object_meta_with_path("events/year=2024/month=01/day=01/file1.parquet"),
-            create_object_meta_with_path("events/year=2024/month=01/day=02/file2.parquet"),
-            create_object_meta_with_path("events/year=2024/month=02/day=01/file3.parquet"),
-            create_object_meta_with_path("events/year=2025/month=01/day=01/file4.parquet"),
+            create_object_meta_with_path(
+                "events/year=2024/month=01/day=01/file1.parquet",
+            ),
+            create_object_meta_with_path(
+                "events/year=2024/month=01/day=02/file2.parquet",
+            ),
+            create_object_meta_with_path(
+                "events/year=2024/month=02/day=01/file3.parquet",
+            ),
+            create_object_meta_with_path(
+                "events/year=2025/month=01/day=01/file4.parquet",
+            ),
         ]);
         cache.put(&table_base, files);
 
@@ -1038,9 +1056,9 @@ mod tests {
         let table_a = Path::from("table_a");
         let table_b = Path::from("table_b");
 
-        let files_a = Arc::new(vec![
-            create_object_meta_with_path("table_a/part=1/file1.parquet"),
-        ]);
+        let files_a = Arc::new(vec![create_object_meta_with_path(
+            "table_a/part=1/file1.parquet",
+        )]);
         let files_b = Arc::new(vec![
             create_object_meta_with_path("table_b/part=1/file1.parquet"),
             create_object_meta_with_path("table_b/part=2/file2.parquet"),

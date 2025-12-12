@@ -357,7 +357,9 @@ async fn list_with_cache<'b>(
             let relative_prefix = compute_relative_prefix(table_base_path, full_prefix);
 
             // Try cache lookup with optional prefix filter
-            let vec = if let Some(res) = cache.get_with_extra(table_base_path, &relative_prefix) {
+            let vec = if let Some(res) =
+                cache.get_with_extra(table_base_path, &relative_prefix)
+            {
                 debug!("Hit list files cache");
                 res.as_ref().clone()
             } else {
@@ -373,7 +375,9 @@ async fn list_with_cache<'b>(
                 if relative_prefix.is_some() {
                     let full_prefix_str = full_prefix.as_ref();
                     vec.into_iter()
-                        .filter(|meta| meta.location.as_ref().starts_with(full_prefix_str))
+                        .filter(|meta| {
+                            meta.location.as_ref().starts_with(full_prefix_str)
+                        })
                         .collect()
                 } else {
                     vec
