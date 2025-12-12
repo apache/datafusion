@@ -105,6 +105,7 @@ use datafusion_expr::{
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
 ///   to qualified or unqualified fields by name.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
