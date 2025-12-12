@@ -144,10 +144,10 @@ mod tests {
         // non-nullable field should produce non-nullable output
         let field_not_null = Arc::new(Field::new("data", DataType::Binary, false));
         let result = crc32_func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[field_not_null.clone()],
+            arg_fields: std::slice::from_ref(&field_not_null),
             scalar_arguments: &[None],
         })?;
-        assert_eq!(result.is_nullable(), false);
+        assert!(!result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Int64);
 
         // nullable field should produce nullable output
@@ -156,7 +156,7 @@ mod tests {
             arg_fields: &[field_nullable],
             scalar_arguments: &[None],
         })?;
-        assert_eq!(result.is_nullable(), true);
+        assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Int64);
 
         // null scalar value - user input literal NULL
@@ -165,7 +165,7 @@ mod tests {
             arg_fields: &[field_not_null],
             scalar_arguments: &[Some(&scalar_null)],
         })?;
-        assert_eq!(result.is_nullable(), true);
+        assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Int64);
 
         Ok(())
