@@ -172,18 +172,6 @@ impl ScalarUDFImpl for PowerFunc {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [arg1, arg2] = take_function_args(self.name(), arg_types)?;
 
-        fn coerced_type_base(name: &str, data_type: &DataType) -> Result<DataType> {
-            match data_type {
-                DataType::Null => Ok(DataType::Int64),
-                d if d.is_floating() => Ok(DataType::Float64),
-                d if d.is_integer() => Ok(DataType::Int64),
-                d if is_decimal(d) => Ok(d.clone()),
-                other => {
-                    exec_err!("Unsupported data type {other:?} for {} function", name)
-                }
-            }
-        }
-
         fn coerced_type_exp(name: &str, data_type: &DataType) -> Result<DataType> {
             match data_type {
                 DataType::Null => Ok(DataType::Int64),
@@ -196,9 +184,45 @@ impl ScalarUDFImpl for PowerFunc {
             }
         }
 
+        // Determine the exponent type first, as it affects base coercion
+        let exp_type = coerced_type_exp(self.name(), arg2)?;
+
+        // For base coercion: if exponent is Float64, we need Float64 base too
+        // (since integer power doesn't support negative/fractional exponents)
+        fn coerced_type_base(
+            name: &str,
+            data_type: &DataType,
+            exp_type: &DataType,
+        ) -> Result<DataType> {
+            match data_type {
+                DataType::Null => {
+                    // If exponent is float, use float for base too
+                    if exp_type == &DataType::Float64 {
+                        Ok(DataType::Float64)
+                    } else {
+                        Ok(DataType::Int64)
+                    }
+                }
+                d if d.is_floating() => Ok(DataType::Float64),
+                d if d.is_integer() => {
+                    // If exponent is float, we need float base since integer power
+                    // doesn't support negative/fractional exponents
+                    if exp_type == &DataType::Float64 {
+                        Ok(DataType::Float64)
+                    } else {
+                        Ok(DataType::Int64)
+                    }
+                }
+                d if is_decimal(d) => Ok(d.clone()),
+                other => {
+                    exec_err!("Unsupported data type {other:?} for {} function", name)
+                }
+            }
+        }
+
         Ok(vec![
-            coerced_type_base(self.name(), arg1)?,
-            coerced_type_exp(self.name(), arg2)?,
+            coerced_type_base(self.name(), arg1, &exp_type)?,
+            exp_type,
         ])
     }
 
@@ -646,5 +670,240 @@ mod tests {
             pow_decimal_int(25, -1, 4).unwrap_err().to_string(),
             "Not yet implemented: Negative scale is not yet supported value: -1"
         );
+    }
+
+    #[test]
+    fn test_power_coerce_types() {
+        let power_func = PowerFunc::new();
+
+        // Int64 base with Int64 exponent -> both stay Int64
+        let result = power_func
+            .coerce_types(&[DataType::Int64, DataType::Int64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Int64, DataType::Int64]);
+
+        // Float64 base with Float64 exponent -> both stay Float64
+        let result = power_func
+            .coerce_types(&[DataType::Float64, DataType::Float64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
+
+        // Int64 base with Float64 exponent -> base coerced to Float64
+        // This is needed because integer power doesn't support negative/fractional exponents
+        let result = power_func
+            .coerce_types(&[DataType::Int64, DataType::Float64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
+
+        // Int32 base with Float32 exponent -> both coerced to Float64
+        let result = power_func
+            .coerce_types(&[DataType::Int32, DataType::Float32])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
+
+        // Null base with Float64 exponent -> base coerced to Float64
+        let result = power_func
+            .coerce_types(&[DataType::Null, DataType::Float64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
+
+        // Null base with Int64 exponent -> base stays Int64
+        let result = power_func
+            .coerce_types(&[DataType::Null, DataType::Int64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Int64, DataType::Int64]);
+    }
+
+    /// Test for issue where pow(10, -2.0) was failing with overflow error
+    /// when integer base was used with negative float exponent
+    #[test]
+    fn test_power_int_base_negative_float_exp() {
+        // After coercion, Int64 base with Float64 exponent becomes Float64, Float64
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, true).into(),
+            Field::new("b", DataType::Float64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![10.0, 2.0, 4.0]))),
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![-2.0, -1.0, 0.5]))),
+            ],
+            arg_fields,
+            number_rows: 3,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+                assert_eq!(floats.len(), 3);
+                assert!((floats.value(0) - 0.01).abs() < 1e-10); // 10^-2 = 0.01
+                assert!((floats.value(1) - 0.5).abs() < 1e-10); // 2^-1 = 0.5
+                assert!((floats.value(2) - 2.0).abs() < 1e-10); // 4^0.5 = 2.0
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    /// Test edge cases: zero exponent (anything^0 = 1), one base (1^anything = 1),
+    /// zero base, and negative bases
+    #[test]
+    fn test_power_edge_cases_f64() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, true).into(),
+            Field::new("b", DataType::Float64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    5.0,  // 5^0 = 1
+                    1.0,  // 1^100 = 1
+                    0.0,  // 0^2 = 0
+                    0.0,  // 0^0 = 1 (by convention)
+                    -2.0, // (-2)^3 = -8
+                    -2.0, // (-2)^0.5 = NaN (sqrt of negative)
+                ]))),
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    0.0, 100.0, 2.0, 0.0, 3.0, 0.5,
+                ]))),
+            ],
+            arg_fields,
+            number_rows: 6,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+                assert_eq!(floats.len(), 6);
+                assert!((floats.value(0) - 1.0).abs() < 1e-10); // 5^0 = 1
+                assert!((floats.value(1) - 1.0).abs() < 1e-10); // 1^100 = 1
+                assert!((floats.value(2) - 0.0).abs() < 1e-10); // 0^2 = 0
+                assert!((floats.value(3) - 1.0).abs() < 1e-10); // 0^0 = 1
+                assert!((floats.value(4) - (-8.0)).abs() < 1e-10); // (-2)^3 = -8
+                assert!(floats.value(5).is_nan()); // (-2)^0.5 = NaN
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    /// Test edge cases for integer power
+    #[test]
+    fn test_power_edge_cases_i64() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("b", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![
+                    5,  // 5^0 = 1
+                    1,  // 1^100 = 1
+                    0,  // 0^2 = 0
+                    -2, // (-2)^3 = -8
+                    -2, // (-2)^4 = 16
+                ]))),
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![0, 100, 2, 3, 4]))),
+            ],
+            arg_fields,
+            number_rows: 5,
+            return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let ints =
+                    as_int64_array(&arr).expect("failed to convert result to an array");
+                assert_eq!(ints.len(), 5);
+                assert_eq!(ints.value(0), 1); // 5^0 = 1
+                assert_eq!(ints.value(1), 1); // 1^100 = 1
+                assert_eq!(ints.value(2), 0); // 0^2 = 0
+                assert_eq!(ints.value(3), -8); // (-2)^3 = -8
+                assert_eq!(ints.value(4), 16); // (-2)^4 = 16
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    /// Test that integer base with negative integer exponent fails
+    /// (since integer power doesn't support negative exponents)
+    #[test]
+    fn test_power_i64_negative_exp_fails() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Int64, true).into(),
+            Field::new("b", DataType::Int64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![2]))),
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![-1]))), // negative exponent
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Int64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new().invoke_with_args(args);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("out of bounds") || err.contains("overflow"),
+            "Expected overflow error, got: {err}"
+        );
+    }
+
+    /// Test zero base with negative exponent (results in infinity)
+    #[test]
+    fn test_power_zero_base_negative_exp() {
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, true).into(),
+            Field::new("b", DataType::Float64, true).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![0.0]))),
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![-1.0]))),
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = PowerFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function power");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+                assert_eq!(floats.len(), 1);
+                assert!(floats.value(0).is_infinite()); // 0^-1 = infinity
+                assert!(floats.value(0) > 0.0); // positive infinity
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
     }
 }
