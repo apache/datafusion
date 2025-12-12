@@ -35,7 +35,6 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
-use std::usize;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
