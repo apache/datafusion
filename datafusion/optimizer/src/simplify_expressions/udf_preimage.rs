@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{internal_err, tree_node::Transformed, Result};
-use datafusion_expr::{and, lit, or, simplify::SimplifyInfo, BinaryExpr, Expr, Operator};
+use datafusion_common::{Result, internal_err, tree_node::Transformed};
+use datafusion_expr::{BinaryExpr, Expr, Operator, and, lit, or, simplify::SimplifyInfo};
 use datafusion_expr_common::interval_arithmetic::Interval;
 
 /// Rewrites a binary expression using its "preimage"
