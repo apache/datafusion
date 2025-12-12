@@ -19,12 +19,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Date32Array};
-use arrow::datatypes::{DataType, Date32Type};
+use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use chrono::{Datelike, Duration, NaiveDate};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{exec_datafusion_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -60,7 +61,19 @@ impl ScalarUDFImpl for SparkLastDay {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Date32)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let Some(field) = args.arg_fields.first() else {
+            return internal_err!("Spark `last_day` expects exactly one argument");
+        };
+
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Date32,
+            field.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -118,4 +131,61 @@ fn spark_last_day(days: i32) -> Result<i32> {
     Ok(Date32Type::from_naive_date(
         first_day_next_month - Duration::days(1),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::function::utils::test::test_scalar_function;
+    use arrow::array::{Array, Date32Array};
+    use arrow::datatypes::Field;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs};
+
+    #[test]
+    fn test_last_day_nullability_matches_input() {
+        let func = SparkLastDay::new();
+
+        let non_nullable_arg = Arc::new(Field::new("arg", DataType::Date32, false));
+        let nullable_arg = Arc::new(Field::new("arg", DataType::Date32, true));
+
+        let non_nullable_out = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&non_nullable_arg)],
+                scalar_arguments: &[None],
+            })
+            .expect("non-nullable arg should succeed");
+        assert_eq!(non_nullable_out.data_type(), &DataType::Date32);
+        assert!(!non_nullable_out.is_nullable());
+
+        let nullable_out = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&nullable_arg)],
+                scalar_arguments: &[None],
+            })
+            .expect("nullable arg should succeed");
+        assert_eq!(nullable_out.data_type(), &DataType::Date32);
+        assert!(nullable_out.is_nullable());
+    }
+
+    #[test]
+    fn test_last_day_scalar_evaluation() {
+        test_scalar_function!(
+            SparkLastDay::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Date32(Some(0)))],
+            Ok(Some(30)),
+            i32,
+            DataType::Date32,
+            Date32Array
+        );
+
+        test_scalar_function!(
+            SparkLastDay::new(),
+            vec![ColumnarValue::Scalar(ScalarValue::Date32(None))],
+            Ok(None),
+            i32,
+            DataType::Date32,
+            Date32Array
+        );
+    }
 }
