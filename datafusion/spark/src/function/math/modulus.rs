@@ -17,12 +17,14 @@
 
 use arrow::compute::kernels::numeric::add;
 use arrow::compute::kernels::{cmp::lt, numeric::rem, zip::zip};
-use arrow::datatypes::DataType;
-use datafusion_common::{assert_eq_or_internal_err, Result, ScalarValue};
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{assert_eq_or_internal_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use std::any::Any;
+use std::sync::Arc;
 
 /// Spark-compatible `mod` function
 /// This function directly uses Arrow's arithmetic_op function for modulo operations
@@ -82,14 +84,16 @@ impl ScalarUDFImpl for SparkMod {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        internal_err("return_field_from_args should be used instead")
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-      let any_nullable = args.input_fields.iter().any(|f| f.is_nullable());
-      let data_type = args.input_fields[0].data_type().clone();
-      Ok(Arc::new(Field::new(args.name, data_type, any_nullable)))
+        // The mod function output is nullable only in the case that the input is nullable
+        // (notably, a mod 0 returns an error, not null). Thus this check is sufficient.
+        let any_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        let data_type = args.arg_fields[0].data_type().clone();
+        Ok(Arc::new(Field::new(self.name(), data_type, any_nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -130,16 +134,16 @@ impl ScalarUDFImpl for SparkPmod {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        assert_eq_or_internal_err!(
-            arg_types.len(),
-            2,
-            "pmod expects exactly two arguments"
-        );
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
 
-        // Return the same type as the first argument for simplicity
-        // Arrow's rem function handles type promotion internally
-        Ok(arg_types[0].clone())
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // The mod function output is nullable only in the case that the input is nullable
+        // (notably, a mod 0 returns an error, not null). Thus this check is sufficient.
+        let any_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        let data_type = args.arg_fields[0].data_type().clone();
+        Ok(Arc::new(Field::new(self.name(), data_type, any_nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -603,5 +607,73 @@ mod test {
         } else {
             panic!("Expected array result");
         }
+    }
+
+    #[test]
+    fn test_mod_return_type_error() {
+        let mod_func = SparkMod::new();
+        let result = mod_func.return_type(&[DataType::Int32, DataType::Int32]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mod_return_field_nullability() {
+        let mod_func = SparkMod::new();
+
+        // Non-nullable inputs -> non-nullable output.
+        let args = ReturnFieldArgs {
+            arg_fields: &[
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
+            ],
+            scalar_arguments: &[],
+        };
+        let field = mod_func.return_field_from_args(args).unwrap();
+        assert!(!field.is_nullable());
+
+        // Nullable input -> nullable output.
+        let args = ReturnFieldArgs {
+            arg_fields: &[
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
+            ],
+            scalar_arguments: &[],
+        };
+        let field = mod_func.return_field_from_args(args).unwrap();
+        assert!(field.is_nullable());
+    }
+
+    #[test]
+    fn test_pmod_return_type_error() {
+        let pmod_func = SparkPmod::new();
+        let result = pmod_func.return_type(&[DataType::Int32, DataType::Int32]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pmod_return_field_nullability() {
+        let pmod_func = SparkPmod::new();
+
+        // Non-nullable inputs -> non-nullable output.
+        let args = ReturnFieldArgs {
+            arg_fields: &[
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
+            ],
+            scalar_arguments: &[],
+        };
+        let field = pmod_func.return_field_from_args(args).unwrap();
+        assert!(!field.is_nullable());
+
+        // Nullable input -> nullable output.
+        let args = ReturnFieldArgs {
+            arg_fields: &[
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
+            ],
+            scalar_arguments: &[],
+        };
+        let field = pmod_func.return_field_from_args(args).unwrap();
+        assert!(field.is_nullable());
     }
 }
