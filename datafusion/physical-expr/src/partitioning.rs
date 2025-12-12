@@ -408,119 +408,170 @@ mod tests {
     }
 
     #[test]
-    fn test_subset_partitioning_basic() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-        ]));
-
-        let col_a = Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b = Arc::new(Column::new_with_schema("b", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-
-        // Hash([a]) satisfies Hash([a, b]) via subset logic when enabled
-        let partition = Partitioning::Hash(vec![col_a.clone()], 4);
-        let required = Distribution::HashPartitioned(vec![col_a.clone(), col_b.clone()]);
-        let result = partition.satisfy(&required, &eq_properties, true);
-        assert_eq!(result, PartitioningSatisfaction::Subset);
-
-        // Hash([a]) does NOT satisfy Hash([a, b]) when subset logic is disabled
-        let result = partition.satisfy(&required, &eq_properties, false);
-        assert_eq!(result, PartitioningSatisfaction::NotSatisfied);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_subset_partitioning_no_overlap() -> Result<()> {
+    fn test_subset_partitioning_normal() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
             Field::new("c", DataType::Int64, false),
         ]));
 
-        let col_a = Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b = Arc::new(Column::new_with_schema("b", &schema)?);
-        let col_c = Arc::new(Column::new_with_schema("c", &schema)?);
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let col_c: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("c", &schema)?);
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
-        // Hash([a]) does NOT satisfy Hash([b, c]) even with subset logic enabled
-        let partition = Partitioning::Hash(vec![col_a], 4);
-        let required = Distribution::HashPartitioned(vec![col_b, col_c]);
-        let result = partition.satisfy(&required, &eq_properties, true);
-        assert_eq!(result, PartitioningSatisfaction::NotSatisfied);
+        let test_cases = vec![
+            // Overlap: requirement is superset of partitions
+            (
+                "Overlap: Hash([a]) vs Hash([a, b])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Overlap: Hash([a]) vs Hash([a, b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Overlap: Hash([a, b]) vs Hash([a, b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            // No overlap: partitions and requirements are disjoint
+            (
+                "No overlap: Hash([a]) vs Hash([b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "No overlap: Hash([a, b]) vs Hash([c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![Arc::clone(&col_c)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            // Partial overlap: not a strict subset
+            (
+                "Partial overlap: Hash([a, c]) vs Hash([a, b])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_c)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                ]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+        ];
+
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            // Test with subset logic enabled
+            let result = partition.satisfy(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
+
+            // Test with subset logic disabled
+            let result = partition.satisfy(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
+        }
 
         Ok(())
     }
 
     #[test]
-    fn test_subset_with_unknown_column() -> Result<()> {
+    fn test_subset_partitioning_edge() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
         ]));
 
-        let col_a = Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b = Arc::new(Column::new_with_schema("b", &schema)?);
-        let unknown = Arc::new(UnKnownColumn::new("dropped"));
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let unknown: Arc<dyn PhysicalExpr> = Arc::new(UnKnownColumn::new("dropped"));
         let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
-        // Hash([UnKnownColumn]) should NOT satisfy Hash([a, b])
-        // because UnKnownColumn.eq() always returns false
-        let partition = Partitioning::Hash(vec![unknown], 4);
-        let required = Distribution::HashPartitioned(vec![col_a, col_b]);
-        let result = partition.satisfy(&required, &eq_properties, true);
-        assert_eq!(result, PartitioningSatisfaction::NotSatisfied);
+        let test_cases = vec![
+            // Exact match: should return Exact, not Subset
+            (
+                "Exact match: Hash([a, b]) vs Hash([a, b])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                ]),
+                PartitioningSatisfaction::Exact,
+                PartitioningSatisfaction::Exact,
+            ),
+            (
+                "Exact match: Hash([a]) vs Hash([a])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                PartitioningSatisfaction::Exact,
+                PartitioningSatisfaction::Exact,
+            ),
+            // Unknown column: should not satisfy
+            (
+                "Unknown column: Hash([UnKnownColumn]) vs Hash([a, b])",
+                Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                ]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+        ];
 
-        Ok(())
-    }
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            // Test with subset logic enabled
+            let result = partition.satisfy(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
 
-    #[test]
-    fn test_subset_partitioning_multiple_columns() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-            Field::new("c", DataType::Int64, false),
-        ]));
-
-        let col_a = Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b = Arc::new(Column::new_with_schema("b", &schema)?);
-        let col_c = Arc::new(Column::new_with_schema("c", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-
-        // Hash([a, b]) satisfies Hash([a, b, c]) via subset logic when enabled
-        let partition = Partitioning::Hash(vec![col_a.clone(), col_b.clone()], 4);
-        let required =
-            Distribution::HashPartitioned(vec![col_a.clone(), col_b.clone(), col_c]);
-        let result = partition.satisfy(&required, &eq_properties, true);
-        assert_eq!(result, PartitioningSatisfaction::Subset);
-
-        // Hash([a, b]) does NOT satisfy Hash([a, b, c]) when subset logic is disabled
-        let result = partition.satisfy(&required, &eq_properties, false);
-        assert_eq!(result, PartitioningSatisfaction::NotSatisfied);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_subset_partitioning_partial_overlap() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, false),
-            Field::new("b", DataType::Int64, false),
-            Field::new("c", DataType::Int64, false),
-        ]));
-
-        let col_a = Arc::new(Column::new_with_schema("a", &schema)?);
-        let col_b = Arc::new(Column::new_with_schema("b", &schema)?);
-        let col_c = Arc::new(Column::new_with_schema("c", &schema)?);
-        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-
-        // Hash([a, c]) does NOT satisfy Hash([a, b])
-        // because 'c' is not in the required set
-        let partition = Partitioning::Hash(vec![col_a.clone(), col_c], 4);
-        let required = Distribution::HashPartitioned(vec![col_a, col_b]);
-        let result = partition.satisfy(&required, &eq_properties, true);
-        assert_eq!(result, PartitioningSatisfaction::NotSatisfied);
+            // Test with subset logic disabled
+            let result = partition.satisfy(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
+        }
 
         Ok(())
     }

@@ -899,7 +899,7 @@ fn is_partitioned_join_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
 /// distribution is satisfied by adding a Hash repartition.
 fn add_hash_on_top(
     input: DistributionContext,
-    hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    hash_exprs: &[Arc<dyn PhysicalExpr>],
     n_target: usize,
     allow_subset: bool,
 ) -> Result<DistributionContext> {
@@ -909,7 +909,7 @@ fn add_hash_on_top(
         return Ok(input);
     }
 
-    let dist = Distribution::HashPartitioned(hash_exprs.clone());
+    let dist = Distribution::HashPartitioned(hash_exprs.to_owned());
     let satisfaction = input.plan.output_partitioning().satisfy(
         &dist,
         input.plan.equivalence_properties(),
@@ -1300,7 +1300,7 @@ pub fn ensure_distribution(
                     if hash_necessary {
                         child = add_hash_on_top(
                             child,
-                            exprs.to_vec(),
+                            &exprs.to_vec(),
                             target_partitions,
                             allow_subset_partition,
                         )?;
