@@ -211,16 +211,24 @@ impl FileOpener for ParquetOpener {
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
 
+        let constant_columns = constant_columns_from_stats(
+            partitioned_file.statistics.as_deref(),
+            &logical_file_schema,
+        );
+        if !constant_columns.is_empty() {
+            predicate = predicate
+                .map(|expr| replace_columns_with_literals(expr, &constant_columns))
+                .transpose()?;
+            projection = projection.try_map_exprs(|expr| {
+                replace_columns_with_literals(expr, &constant_columns)
+            })?;
+        }
+
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
                 .get_file_decryption_properties(&file_location)
                 .await?;
-
-            let constant_columns = constant_columns_from_stats(
-                partitioned_file.statistics.as_deref(),
-                &logical_file_schema,
-            );
 
             // Prune this file using the file level statistics and partition values.
             // Since dynamic filters may have been updated since planning it is possible that we are able
@@ -230,14 +238,6 @@ impl FileOpener for ParquetOpener {
             // We'll also check this after every record batch we read,
             // and if at some point we are able to prove we can prune the file using just the file level statistics
             // we can end the stream early.
-            if !constant_columns.is_empty() {
-                predicate = predicate
-                    .map(|expr| replace_columns_with_literals(expr, &constant_columns))
-                    .transpose()?;
-                projection = projection.try_map_exprs(|expr| {
-                    replace_columns_with_literals(expr, &constant_columns)
-                })?;
-            }
             let mut file_pruner = predicate
                 .as_ref()
                 .filter(|p| {
