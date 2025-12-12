@@ -6773,6 +6773,9 @@ impl FixtureDataGen {
         Ok(())
     }
 
+    // initializes basic data and writes it using via executing physical plan
+    //
+    // Available columns: c1, c2
     async fn prepare_execution_plan_writes(config: SessionConfig) -> Result<Self> {
         let tmp_dir = TempDir::new()?;
 
@@ -6800,8 +6803,6 @@ impl FixtureDataGen {
     // initializes basic data and writes it using `write_opts`
     //
     // Available columns: c1, c2
-    //
-    // Returns tuple of output directory and used context
     async fn prepare_direct_df_writes(
         config: SessionConfig,
         write_opts: DataFrameWriteOptions,
