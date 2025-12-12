@@ -239,13 +239,14 @@ impl ListingTableUrl {
         &'a self,
         ctx: &'a dyn Session,
         store: &'a dyn ObjectStore,
-        prefix: Option<Path>,
+        partition_prefix: Option<Path>,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         let exec_options = &ctx.config_options().execution;
         let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
 
-        let prefix = if let Some(prefix) = prefix {
+        // Build full_prefix for non-cached path and head() calls
+        let full_prefix = if let Some(ref prefix) = partition_prefix {
             let mut p = self.prefix.parts().collect::<Vec<_>>();
             p.extend(prefix.parts());
             Path::from_iter(p.into_iter())
@@ -254,16 +255,17 @@ impl ListingTableUrl {
         };
 
         let list: BoxStream<'a, Result<ObjectMeta>> = if self.is_collection() {
-            list_with_cache(ctx, store, &prefix, &self.prefix).await?
+            list_with_cache(ctx, store, &self.prefix, partition_prefix.as_ref()).await?
         } else {
-            match store.head(&prefix).await {
+            match store.head(&full_prefix).await {
                 Ok(meta) => futures::stream::once(async { Ok(meta) })
                     .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
                     .boxed(),
                 // If the head command fails, it is likely that object doesn't exist.
                 // Retry as though it were a prefix (aka a collection)
                 Err(object_store::Error::NotFound { .. }) => {
-                    list_with_cache(ctx, store, &prefix, &self.prefix).await?
+                    list_with_cache(ctx, store, &self.prefix, partition_prefix.as_ref())
+                        .await?
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -329,14 +331,14 @@ impl ListingTableUrl {
 /// # Arguments
 /// * `ctx` - The session context
 /// * `store` - The object store to list from
-/// * `full_prefix` - The full prefix to list (table_base + partition prefix)
 /// * `table_base_path` - The table's base path (the stable cache key)
+/// * `partition_prefix` - Optional partition prefix relative to table base
 ///
-/// # Cache Behavior :
+/// # Cache Behavior:
 /// The cache key is always `table_base_path`. When a partition-specific listing
-/// is requested (full_prefix includes partition path), the cache:
+/// is requested via `partition_prefix`, the cache:
 /// - Looks up `table_base_path` in the cache
-/// - Filters results to match `full_prefix`
+/// - Filters results to match `table_base_path/partition_prefix`
 /// - Returns filtered results without a storage call
 ///
 /// On cache miss, the full table is always listed and cached, ensuring
@@ -344,21 +346,31 @@ impl ListingTableUrl {
 async fn list_with_cache<'b>(
     ctx: &'b dyn Session,
     store: &'b dyn ObjectStore,
-    full_prefix: &Path,
     table_base_path: &Path,
+    partition_prefix: Option<&Path>,
 ) -> Result<BoxStream<'b, Result<ObjectMeta>>> {
+    // Build the full listing path (table_base + partition_prefix)
+    let full_prefix = match partition_prefix {
+        Some(prefix) if !prefix.as_ref().is_empty() => {
+            let mut parts: Vec<_> = table_base_path.parts().collect();
+            parts.extend(prefix.parts());
+            Path::from_iter(parts)
+        }
+        _ => table_base_path.clone(),
+    };
+
     match ctx.runtime_env().cache_manager.get_list_files_cache() {
         None => Ok(store
-            .list(Some(full_prefix))
+            .list(Some(&full_prefix))
             .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
             .boxed()),
         Some(cache) => {
-            // Compute the relative prefix (partition path relative to table base)
-            let relative_prefix = compute_relative_prefix(table_base_path, full_prefix);
+            // Convert partition_prefix to Option<Path> for cache lookup
+            let prefix_filter = partition_prefix.cloned();
 
             // Try cache lookup with optional prefix filter
             let vec = if let Some(res) =
-                cache.get_with_extra(table_base_path, &relative_prefix)
+                cache.get_with_extra(table_base_path, &prefix_filter)
             {
                 debug!("Hit list files cache");
                 res.as_ref().clone()
@@ -372,7 +384,7 @@ async fn list_with_cache<'b>(
                 cache.put(table_base_path, Arc::new(vec.clone()));
 
                 // If a prefix filter was requested, apply it to the results
-                if relative_prefix.is_some() {
+                if partition_prefix.is_some() {
                     let full_prefix_str = full_prefix.as_ref();
                     vec.into_iter()
                         .filter(|meta| {
@@ -385,41 +397,6 @@ async fn list_with_cache<'b>(
             };
             Ok(futures::stream::iter(vec.into_iter().map(Ok)).boxed())
         }
-    }
-}
-
-/// Computes the relative prefix between the table base path and the full prefix.
-///
-/// Returns `Some(relative_path)` if full_prefix is a sub-path of table_base_path,
-/// or `None` if they are the same (no partition filter needed).
-fn compute_relative_prefix(table_base_path: &Path, full_prefix: &Path) -> Option<Path> {
-    let base_str = table_base_path.as_ref();
-    let full_str = full_prefix.as_ref();
-
-    if base_str == full_str {
-        // No partition prefix, querying full table
-        None
-    } else if full_str.starts_with(base_str) {
-        // full_prefix is a sub-path of table_base_path
-        // Extract the relative portion
-        let relative = if base_str.is_empty() {
-            full_str.to_string()
-        } else {
-            full_str
-                .strip_prefix(base_str)
-                .and_then(|s| s.strip_prefix('/'))
-                .unwrap_or(full_str)
-                .to_string()
-        };
-        if relative.is_empty() {
-            None
-        } else {
-            Some(Path::from(relative))
-        }
-    } else {
-        // Unexpected: full_prefix is not under table_base_path
-        // Fall back to no prefix (will likely miss cache anyway)
-        None
     }
 }
 
@@ -826,6 +803,190 @@ mod tests {
         Ok(())
     }
 
+    /// Tests that the cached code path produces identical results to the non-cached path.
+    ///
+    /// This is critical: the cache is a transparent optimization, so both paths
+    /// MUST return the same files in the same order.
+    #[tokio::test]
+    async fn test_cache_path_equivalence() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+        use std::time::Duration;
+
+        let store = MockObjectStore {
+            in_mem: object_store::memory::InMemory::new(),
+            forbidden_paths: vec![],
+        };
+
+        // Create test files with partition-style paths
+        create_file(&store, "/table/year=2023/data1.parquet").await;
+        create_file(&store, "/table/year=2023/month=01/data2.parquet").await;
+        create_file(&store, "/table/year=2024/data3.parquet").await;
+        create_file(&store, "/table/year=2024/month=06/data4.parquet").await;
+        create_file(&store, "/table/year=2024/month=12/data5.parquet").await;
+
+        // Session WITHOUT cache
+        let session_no_cache = MockSession::new();
+
+        // Session WITH cache - use RuntimeEnvBuilder with cache limits
+        let runtime_with_cache = RuntimeEnvBuilder::new()
+            .with_object_list_cache_limit(1024 * 1024) // 1MB limit
+            .with_object_list_cache_ttl(Duration::from_secs(300))
+            .build_arc()?;
+        let session_with_cache = MockSessionWithRuntime::new(runtime_with_cache);
+
+        // Test cases: (url, prefix, description)
+        let test_cases = vec![
+            ("/table/", None, "full table listing"),
+            (
+                "/table/",
+                Some(Path::from("year=2023")),
+                "single partition filter",
+            ),
+            (
+                "/table/",
+                Some(Path::from("year=2024")),
+                "different partition filter",
+            ),
+            (
+                "/table/",
+                Some(Path::from("year=2024/month=06")),
+                "nested partition filter",
+            ),
+            (
+                "/table/",
+                Some(Path::from("year=2025")),
+                "non-existent partition",
+            ),
+        ];
+
+        for (url_str, prefix, description) in test_cases {
+            let url = ListingTableUrl::parse(url_str)?;
+
+            // Get results WITHOUT cache
+            let results_no_cache: Vec<String> = url
+                .list_prefixed_files(&session_no_cache, &store, prefix.clone(), "parquet")
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?
+                .into_iter()
+                .map(|m| m.location.to_string())
+                .collect();
+
+            // Get results WITH cache (first call - cache miss)
+            let results_with_cache_miss: Vec<String> = url
+                .list_prefixed_files(
+                    &session_with_cache,
+                    &store,
+                    prefix.clone(),
+                    "parquet",
+                )
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?
+                .into_iter()
+                .map(|m| m.location.to_string())
+                .collect();
+
+            // Get results WITH cache (second call - cache hit)
+            let results_with_cache_hit: Vec<String> = url
+                .list_prefixed_files(&session_with_cache, &store, prefix, "parquet")
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?
+                .into_iter()
+                .map(|m| m.location.to_string())
+                .collect();
+
+            // All three should be identical
+            assert_eq!(
+                results_no_cache, results_with_cache_miss,
+                "Cache miss path should match non-cached path for: {description}"
+            );
+            assert_eq!(
+                results_no_cache, results_with_cache_hit,
+                "Cache hit path should match non-cached path for: {description}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Tests that partition queries can be served from a cached full-table listing
+    #[tokio::test]
+    async fn test_cache_serves_partition_from_full_listing() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+        use std::time::Duration;
+
+        let store = MockObjectStore {
+            in_mem: object_store::memory::InMemory::new(),
+            forbidden_paths: vec![],
+        };
+
+        // Create test files
+        create_file(&store, "/sales/region=US/q1.parquet").await;
+        create_file(&store, "/sales/region=US/q2.parquet").await;
+        create_file(&store, "/sales/region=EU/q1.parquet").await;
+
+        // Create session with cache - use RuntimeEnvBuilder with cache limits
+        let runtime = RuntimeEnvBuilder::new()
+            .with_object_list_cache_limit(1024 * 1024) // 1MB limit
+            .with_object_list_cache_ttl(Duration::from_secs(300))
+            .build_arc()?;
+        let session = MockSessionWithRuntime::new(runtime);
+
+        let url = ListingTableUrl::parse("/sales/")?;
+
+        // First: query full table (populates cache)
+        let full_results: Vec<String> = url
+            .list_prefixed_files(&session, &store, None, "parquet")
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+        assert_eq!(full_results.len(), 3);
+
+        // Second: query partition (should be served from cache)
+        let us_results: Vec<String> = url
+            .list_prefixed_files(
+                &session,
+                &store,
+                Some(Path::from("region=US")),
+                "parquet",
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+
+        assert_eq!(
+            us_results,
+            vec!["sales/region=US/q1.parquet", "sales/region=US/q2.parquet"]
+        );
+
+        // Third: different partition (also from cache)
+        let eu_results: Vec<String> = url
+            .list_prefixed_files(
+                &session,
+                &store,
+                Some(Path::from("region=EU")),
+                "parquet",
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+
+        assert_eq!(eu_results, vec!["sales/region=EU/q1.parquet"]);
+
+        Ok(())
+    }
+
     /// Creates a file with "hello world" content at the specified path
     async fn create_file(object_store: &dyn ObjectStore, path: &str) {
         object_store
@@ -977,6 +1138,83 @@ mod tests {
                 config: SessionConfig::new(),
                 runtime_env: Arc::new(RuntimeEnv::default()),
             }
+        }
+    }
+
+    /// MockSession variant that accepts a custom RuntimeEnv (for cache testing)
+    struct MockSessionWithRuntime {
+        config: SessionConfig,
+        runtime_env: Arc<RuntimeEnv>,
+    }
+
+    impl MockSessionWithRuntime {
+        fn new(runtime_env: Arc<RuntimeEnv>) -> Self {
+            Self {
+                config: SessionConfig::new(),
+                runtime_env,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Session for MockSessionWithRuntime {
+        fn session_id(&self) -> &str {
+            unimplemented!()
+        }
+
+        fn config(&self) -> &SessionConfig {
+            &self.config
+        }
+
+        async fn create_physical_plan(
+            &self,
+            _logical_plan: &LogicalPlan,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn create_physical_expr(
+            &self,
+            _expr: Expr,
+            _df_schema: &DFSchema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            unimplemented!()
+        }
+
+        fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+            unimplemented!()
+        }
+
+        fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+            unimplemented!()
+        }
+
+        fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+            &self.runtime_env
+        }
+
+        fn execution_props(&self) -> &ExecutionProps {
+            unimplemented!()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+
+        fn table_options(&self) -> &TableOptions {
+            unimplemented!()
+        }
+
+        fn table_options_mut(&mut self) -> &mut TableOptions {
+            unimplemented!()
+        }
+
+        fn task_ctx(&self) -> Arc<TaskContext> {
+            unimplemented!()
         }
     }
 
