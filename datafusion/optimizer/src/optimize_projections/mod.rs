@@ -26,8 +26,7 @@ use std::sync::Arc;
 
 use datafusion_common::{
     assert_eq_or_internal_err, get_required_group_by_exprs_indices,
-    internal_datafusion_err, internal_err, Column, DFSchema, DataFusionError, HashMap,
-    JoinType, Result,
+    internal_datafusion_err, internal_err, Column, DFSchema, HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{

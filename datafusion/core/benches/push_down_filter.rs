@@ -20,10 +20,10 @@ use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, BytesMut};
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::config::ConfigOptions;
-use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::ExecutionPlan;
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -106,11 +106,13 @@ fn bench_push_down_filter(c: &mut Criterion) {
     config.execution.parquet.pushdown_filters = true;
     let plan = BenchmarkPlan { plan, config };
     let optimizer = FilterPushdown::new();
+    let session_config = SessionConfig::from(plan.config.clone());
+    let optimizer_context = OptimizerContext::new(session_config);
 
     c.bench_function("push_down_filter", |b| {
         b.iter(|| {
             optimizer
-                .optimize(Arc::clone(&plan.plan), &plan.config)
+                .optimize_plan(Arc::clone(&plan.plan), &optimizer_context)
                 .unwrap();
         });
     });

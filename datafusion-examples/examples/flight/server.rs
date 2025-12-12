@@ -189,6 +189,7 @@ impl FlightService for FlightServiceImpl {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn to_tonic_err(e: datafusion::error::DataFusionError) -> Status {
     Status::internal(format!("{e:?}"))
 }

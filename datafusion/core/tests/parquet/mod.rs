@@ -652,6 +652,7 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
 /// of the column. It is *not* a table named service.name
 ///
 /// name | service.name
+#[expect(clippy::needless_pass_by_value)]
 fn make_bytearray_batch(
     name: &str,
     string_values: Vec<&str>,
@@ -707,6 +708,7 @@ fn make_bytearray_batch(
 /// of the column. It is *not* a table named service.name
 ///
 /// name | service.name
+#[expect(clippy::needless_pass_by_value)]
 fn make_names_batch(name: &str, service_name_values: Vec<&str>) -> RecordBatch {
     let num_rows = service_name_values.len();
     let name: StringArray = std::iter::repeat_n(Some(name), num_rows).collect();
@@ -791,6 +793,7 @@ fn make_utf8_batch(value: Vec<Option<&str>>) -> RecordBatch {
     .unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn make_dictionary_batch(strings: Vec<&str>, integers: Vec<i32>) -> RecordBatch {
     let keys = Int32Array::from_iter(0..strings.len() as i32);
     let small_keys = Int16Array::from_iter(0..strings.len() as i16);
@@ -839,6 +842,7 @@ fn make_dictionary_batch(strings: Vec<&str>, integers: Vec<i32>) -> RecordBatch 
     .unwrap()
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Timestamps => {

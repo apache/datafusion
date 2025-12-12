@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::array::{AsArray, PrimitiveArray};
 use arrow::datatypes::{Float64Type, Int32Type};
 use datafusion::common::assert_batches_eq;
@@ -29,8 +31,7 @@ use futures::StreamExt;
 /// as [ArrayRef]
 ///
 /// [ArrayRef]: arrow::array::ArrayRef
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn deserialize_to_struct() -> Result<()> {
     // Run a query that returns two columns of data
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();

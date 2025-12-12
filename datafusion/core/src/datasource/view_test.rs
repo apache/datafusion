@@ -358,7 +358,10 @@ mod tests {
             .to_string();
         assert!(formatted.contains("DataSourceExec: "));
         assert!(formatted.contains("file_type=parquet"));
-        assert!(formatted.contains("projection=[bool_col, int_col], limit=10"));
+        assert!(
+            formatted.contains("projection=[bool_col, int_col], limit=10"),
+            "{formatted}"
+        );
         Ok(())
     }
 

@@ -271,6 +271,7 @@ fn bench_single_primitive<const NULLABLE: bool>(
 }
 
 /// Test `vectorized_equal_to` with different number of true in the initial results
+#[expect(clippy::needless_pass_by_value)]
 fn vectorized_equal_to<GroupColumnBuilder: GroupColumn>(
     group: &mut BenchmarkGroup<WallTime>,
     mut builder: GroupColumnBuilder,

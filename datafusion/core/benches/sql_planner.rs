@@ -93,6 +93,7 @@ fn create_context() -> SessionContext {
 
 /// Register the table definitions as a MemTable with the context and return the
 /// context
+#[expect(clippy::needless_pass_by_value)]
 fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     defs.iter().for_each(|TableDef { name, schema }| {
         ctx.register_table(

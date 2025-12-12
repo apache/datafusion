@@ -18,17 +18,17 @@
 //! [`DiskManager`]: Manages files generated during query execution
 
 use datafusion_common::{
-    config_err, resources_datafusion_err, resources_err, DataFusionError, Result,
+    DataFusionError, Result, config_err, resources_datafusion_err, resources_err,
 };
 use log::debug;
 use parking_lot::Mutex;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::{Builder, NamedTempFile, TempDir};
 
-use crate::memory_pool::human_readable_size;
+use datafusion_common::human_readable_size;
 
 pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
@@ -244,6 +244,24 @@ impl DiskManager {
 
     pub fn used_disk_space(&self) -> u64 {
         self.used_disk_space.load(Ordering::Relaxed)
+    }
+
+    /// Returns the maximum temporary directory size in bytes
+    pub fn max_temp_directory_size(&self) -> u64 {
+        self.max_temp_directory_size
+    }
+
+    /// Returns the temporary directory paths
+    pub fn temp_dir_paths(&self) -> Vec<PathBuf> {
+        self.local_dirs
+            .lock()
+            .as_ref()
+            .map(|dirs| {
+                dirs.iter()
+                    .map(|temp_dir| temp_dir.path().to_path_buf())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Return true if this disk manager supports creating temporary
@@ -490,7 +508,10 @@ mod tests {
         );
         assert!(!manager.tmp_files_enabled());
         assert_eq!(
-            manager.create_tmp_file("Testing").unwrap_err().strip_backtrace(),
+            manager
+                .create_tmp_file("Testing")
+                .unwrap_err()
+                .strip_backtrace(),
             "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)",
         )
     }

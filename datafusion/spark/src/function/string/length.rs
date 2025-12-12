@@ -18,10 +18,11 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArrayType, PrimitiveArray, StringArrayType,
 };
-use arrow::datatypes::{DataType, Int32Type};
+use arrow::datatypes::{DataType, Field, FieldRef, Int32Type};
 use datafusion_common::exec_err;
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 use std::sync::Arc;
@@ -78,8 +79,9 @@ impl ScalarUDFImpl for SparkLengthFunc {
     }
 
     fn return_type(&self, _args: &[DataType]) -> datafusion_common::Result<DataType> {
-        // spark length always returns Int32
-        Ok(DataType::Int32)
+        datafusion_common::internal_err!(
+            "return_type should not be called, use return_field_from_args instead"
+        )
     }
 
     fn invoke_with_args(
@@ -91,6 +93,15 @@ impl ScalarUDFImpl for SparkLengthFunc {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: ReturnFieldArgs,
+    ) -> datafusion_common::Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        // spark length always returns Int32
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
     }
 }
 
@@ -193,8 +204,9 @@ mod tests {
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::{Array, Int32Array};
     use arrow::datatypes::DataType::Int32;
+    use arrow::datatypes::{Field, FieldRef};
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarUDFImpl};
 
     macro_rules! test_spark_length_string {
         ($INPUT:expr, $EXPECTED:expr) => {
@@ -276,6 +288,38 @@ mod tests {
         );
         test_spark_length_binary!(Some(String::from("").into_bytes()), Ok(Some(0)));
         test_spark_length_binary!(None, Ok(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_length_nullability() -> Result<()> {
+        let func = SparkLengthFunc::new();
+
+        let nullable_field: FieldRef = Arc::new(Field::new("col", DataType::Utf8, true));
+
+        let out_nullable = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[nullable_field],
+            scalar_arguments: &[None],
+        })?;
+
+        assert!(
+            out_nullable.is_nullable(),
+            "length(col) should be nullable when child is nullable"
+        );
+
+        let non_nullable_field: FieldRef =
+            Arc::new(Field::new("col", DataType::Utf8, false));
+
+        let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[non_nullable_field],
+            scalar_arguments: &[None],
+        })?;
+
+        assert!(
+            !out_non_nullable.is_nullable(),
+            "length(col) should NOT be nullable when child is NOT nullable"
+        );
 
         Ok(())
     }

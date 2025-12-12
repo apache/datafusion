@@ -141,7 +141,7 @@ impl ScalarUDFImpl for ArrayDistance {
     }
 }
 
-pub fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_distance", args)?;
     match (array1.data_type(), array2.data_type()) {
         (List(_), List(_)) => general_array_distance::<i32>(args),

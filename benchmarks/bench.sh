@@ -87,6 +87,9 @@ tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB),
 tpch_csv10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single csv file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 
+# TPC-DS Benchmarks
+tpcds:                  TPCDS inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
+
 # Extended TPC-H Benchmarks
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
@@ -189,8 +192,8 @@ main() {
             echo "***************************"
             case "$BENCHMARK" in
                 all)
-                    data_tpch "1"
-                    data_tpch "10"
+                    data_tpch "1" "parquet"
+                    data_tpch "10" "parquet"
                     data_h2o "SMALL"
                     data_h2o "MEDIUM"
                     data_h2o "BIG"
@@ -203,18 +206,25 @@ main() {
                     # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 tpch_mem)
-                    # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
+                    ;;
+                tpch_csv)
+                    data_tpch "1" "csv"
                     ;;
                 tpch10)
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 tpch_mem10)
-                    # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
+                    ;;
+                tpch_csv10)
+                    data_tpch "10" "csv"
+                    ;;
+                tpcds)
+                    data_tpcds
                     ;;
                 clickbench_1)
                     data_clickbench_1
@@ -289,19 +299,19 @@ main() {
                     ;;
                 external_aggr)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 sort_tpch)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 sort_tpch10)
                     # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 topk_tpch)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 nlj)
                     # nlj uses range() function, no data generation needed
@@ -312,7 +322,7 @@ main() {
                     echo "HJ benchmark does not require data generation"
                     ;;
                 compile_profile)
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -384,6 +394,7 @@ main() {
                     run_external_aggr
                     run_nlj
                     run_hj
+                    run_tpcds
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -402,6 +413,9 @@ main() {
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
+                    ;;
+                tpcds)
+                    run_tpcds
                     ;;
                 cancellation)
                     run_cancellation
@@ -529,7 +543,7 @@ main() {
 # Creates TPCH data at a certain scale factor, if it doesn't already
 # exist
 #
-# call like: data_tpch($scale_factor)
+# call like: data_tpch($scale_factor, format)
 #
 # Creates data in $DATA_DIR/tpch_sf1 for scale factor 1
 # Creates data in $DATA_DIR/tpch_sf10 for scale factor 10
@@ -540,20 +554,23 @@ data_tpch() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
+    FORMAT=$2
+    if [ -z "$FORMAT" ] ; then
+        echo "Internal error: Format not specified"
+        exit 1
+    fi
 
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-    echo "Creating tpch dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
+    echo "Creating tpch $FORMAT dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
 
     # Ensure the target data directory exists
     mkdir -p "${TPCH_DIR}"
 
-    # Create 'tbl' (CSV format) data into $DATA_DIR if it does not already exist
-    FILE="${TPCH_DIR}/supplier.tbl"
-    if test -f "${FILE}"; then
-        echo " tbl files exist ($FILE exists)."
-    else
-        echo " creating tbl files with tpch_dbgen..."
-        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/scalytics/tpch-docker:main -vf -s "${SCALE_FACTOR}"
+    # check if tpchgen-cli is installed
+    if ! command -v tpchgen-cli &> /dev/null
+    then
+        echo "tpchgen-cli could not be found, please install it via 'cargo install tpchgen-cli'"
+        exit 1
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
@@ -566,27 +583,50 @@ data_tpch() {
         docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
-    # Create 'parquet' files from tbl
-    FILE="${TPCH_DIR}/supplier"
-    if test -d "${FILE}"; then
-        echo " parquet files exist ($FILE exists)."
-    else
-        echo " creating parquet files using benchmark binary ..."
-        pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
-        popd > /dev/null
+    if [ "$FORMAT" = "parquet" ]; then
+      # Create 'parquet' files, one directory per file
+      FILE="${TPCH_DIR}/supplier"
+      if test -d "${FILE}"; then
+          echo " parquet files exist ($FILE exists)."
+      else
+          echo " creating parquet files using tpchgen-cli ..."
+          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format parquet --parquet-compression='ZSTD(1)' --parts=1 --output-dir "${TPCH_DIR}"
+      fi
+      return
     fi
 
-    # Create 'csv' files from tbl
-    FILE="${TPCH_DIR}/csv/supplier"
-    if test -d "${FILE}"; then
-        echo " csv files exist ($FILE exists)."
-    else
-        echo " creating csv files using benchmark binary ..."
-        pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}/csv" --format csv
-        popd > /dev/null
+    # Create 'csv' files, one directory per file
+    if [ "$FORMAT" = "csv" ]; then
+      FILE="${TPCH_DIR}/csv/supplier"
+      if test -d "${FILE}"; then
+          echo " csv files exist ($FILE exists)."
+      else
+          echo " creating csv files using tpchgen-cli binary ..."
+          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format csv --parts=1 --output-dir "${TPCH_DIR}/csv"
+      fi
+      return
     fi
+
+    echo "Error: unknown format '$FORMAT' for tpch data generation, expected 'parquet' or 'csv'"
+    exit 1
+}
+
+# Points to TPCDS data generation instructions
+data_tpcds() {
+    TPCDS_DIR="${DATA_DIR}"
+
+    # Check if TPCDS data directory exists
+    if [ ! -d "${TPCDS_DIR}" ]; then
+        echo ""
+        echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
+        echo "  git clone https://github.com/apache/datafusion-benchmarks"
+        echo ""
+        return 1
+    fi
+
+    echo ""
+    echo "TPC-DS data already exists in ${TPCDS_DIR}"
+    echo ""
 }
 
 # Runs the tpch benchmark
@@ -603,10 +643,10 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     FORMAT=$2
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
-# Runs the tpch in memory
+# Runs the tpch in memory (needs tpch parquet data)
 run_tpch_mem() {
     SCALE_FACTOR=$1
     if [ -z "$SCALE_FACTOR" ] ; then
@@ -619,7 +659,38 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the tpcds benchmark
+run_tpcds() {
+    TPCDS_DIR="${DATA_DIR}"
+
+    # Check if TPCDS data directory exists
+    if [ ! -d "${TPCDS_DIR}" ]; then
+        echo "Error: TPC-DS data directory does not exist: ${TPCDS_DIR}" >&2
+        echo "" >&2
+        echo "Please prepare TPC-DS data first by following instructions:" >&2
+        echo "  ./bench.sh data tpcds" >&2
+        echo "" >&2
+        exit 1
+    fi
+
+    # Check if directory contains parquet files
+    if ! find "${TPCDS_DIR}" -name "*.parquet" -print -quit | grep -q .; then
+        echo "Error: TPC-DS data directory exists but contains no parquet files: ${TPCDS_DIR}" >&2
+        echo "" >&2
+        echo "Please prepare TPC-DS data first by following instructions:" >&2
+        echo "  ./bench.sh data tpcds" >&2
+        echo "" >&2
+        exit 1
+    fi
+
+    RESULTS_FILE="${RESULTS_DIR}/tpcds_sf1.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running tpcds benchmark..."
+
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the compile profile benchmark helper

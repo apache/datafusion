@@ -23,5 +23,6 @@ pub mod hj;
 pub mod imdb;
 pub mod nlj;
 pub mod sort_tpch;
+pub mod tpcds;
 pub mod tpch;
 pub mod util;

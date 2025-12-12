@@ -227,6 +227,7 @@ impl RecordBatchStream for SpillReaderStream {
     since = "46.0.0",
     note = "This method is deprecated. Use `SpillManager::spill_record_batch_by_size` instead."
 )]
+#[expect(clippy::needless_pass_by_value)]
 pub fn spill_record_batch_by_size(
     batch: &RecordBatch,
     path: PathBuf,

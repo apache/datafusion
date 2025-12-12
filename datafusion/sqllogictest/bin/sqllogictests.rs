@@ -407,6 +407,7 @@ async fn run_file_in_runner<D: AsyncDB, M: MakeConnection<Conn = D>>(
     Ok(())
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn get_record_count(path: &PathBuf, label: String) -> u64 {
     let records: Vec<Record<<DataFusion as AsyncDB>::ColumnType>> =
         parse_file(path).unwrap();

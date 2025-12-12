@@ -666,7 +666,6 @@ impl protobuf::PhysicalPlanNode {
         &self,
         scan: &protobuf::ParquetScanExecNode,
         ctx: &TaskContext,
-
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]

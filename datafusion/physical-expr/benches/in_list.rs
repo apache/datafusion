@@ -18,7 +18,7 @@
 use arrow::array::{Array, ArrayRef, Float32Array, Int32Array, StringArray};
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::{col, in_list, lit};
 use rand::distr::Alphanumeric;
@@ -49,10 +49,12 @@ fn do_benches(
     null_percent: f64,
 ) {
     let mut rng = StdRng::seed_from_u64(120320);
+    let non_null_percent = 1.0 - null_percent;
+
     for string_length in [5, 10, 20] {
         let values: StringArray = (0..array_length)
             .map(|_| {
-                rng.random_bool(null_percent)
+                rng.random_bool(non_null_percent)
                     .then(|| random_string(&mut rng, string_length))
             })
             .collect();
@@ -72,7 +74,7 @@ fn do_benches(
     }
 
     let values: Float32Array = (0..array_length)
-        .map(|_| rng.random_bool(null_percent).then(|| rng.random()))
+        .map(|_| rng.random_bool(non_null_percent).then(|| rng.random()))
         .collect();
 
     let in_list: Vec<_> = (0..in_list_length)
@@ -87,7 +89,7 @@ fn do_benches(
     );
 
     let values: Int32Array = (0..array_length)
-        .map(|_| rng.random_bool(null_percent).then(|| rng.random()))
+        .map(|_| rng.random_bool(non_null_percent).then(|| rng.random()))
         .collect();
 
     let in_list: Vec<_> = (0..in_list_length)

@@ -24,7 +24,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::vec::IntoIter;
 
-use crate::physical_expr::{fmt_sql, PhysicalExpr};
+use crate::physical_expr::{PhysicalExpr, fmt_sql};
 
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::datatypes::Schema;

@@ -19,13 +19,13 @@ use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
 use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::seedable_rng;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{case, col, lit, BinaryExpr};
+use datafusion_physical_expr::expressions::{BinaryExpr, case, col, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
-use rand::distr::uniform::SampleUniform;
 use rand::distr::Alphanumeric;
+use rand::distr::uniform::SampleUniform;
 use rand::rngs::StdRng;
 use rand::{Rng, RngCore};
 use std::fmt::{Display, Formatter};
@@ -293,7 +293,7 @@ fn create_random_string_generator(
 /// `null_percentage` is the percentage of null values
 /// The rest of the values will be outside the specified range
 fn generate_values_for_lookup<T, A>(
-    options: Options<T>,
+    options: &Options<T>,
     generate_other_value: impl Fn(&mut StdRng, &[T]) -> T,
 ) -> A
 where
@@ -416,7 +416,7 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                         &input,
                         |b, input| {
                             let array: Int32Array = generate_values_for_lookup(
-                                Options::<i32> {
+                                &Options::<i32> {
                                     number_of_rows: batch_size,
                                     range_of_values: when_thens_primitive_to_string
                                         .iter()
@@ -469,7 +469,7 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
                         &input,
                         |b, input| {
                             let array: StringArray = generate_values_for_lookup(
-                                Options::<String> {
+                                &Options::<String> {
                                     number_of_rows: batch_size,
                                     range_of_values: when_thens_string_to_primitive
                                         .iter()

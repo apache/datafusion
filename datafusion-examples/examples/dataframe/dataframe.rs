@@ -15,22 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::MemTable;
 use datafusion::common::config::CsvOptions;
 use datafusion::common::parsers::CompressionTypeVariant;
-use datafusion::common::DataFusionError;
 use datafusion::common::ScalarValue;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
-use std::fs::File;
+use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::sync::Arc;
-use tempfile::tempdir;
+use tempfile::{tempdir, TempDir};
 
 /// This example demonstrates using DataFusion's DataFrame API
 ///
@@ -39,6 +40,7 @@ use tempfile::tempdir;
 /// * [read_parquet]: execute queries against parquet files
 /// * [read_csv]: execute queries against csv files
 /// * [read_memory]: execute queries against in-memory arrow data
+/// * [read_memory_macro]: execute queries against in-memory arrow data using macro
 ///
 /// # Writing out to local storage
 ///
@@ -53,12 +55,7 @@ use tempfile::tempdir;
 /// * [where_scalar_subquery]: execute a scalar subquery
 /// * [where_in_subquery]: execute a subquery with an IN clause
 /// * [where_exist_subquery]: execute a subquery with an EXISTS clause
-///
-/// # Querying data
-///
-/// * [query_to_date]: execute queries against parquet files
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn dataframe_example() -> Result<()> {
     env_logger::init();
     // The SessionContext is the main high level API for interacting with DataFusion
     let ctx = SessionContext::new();
@@ -199,7 +196,7 @@ async fn read_memory_macro() -> Result<()> {
 /// 2. Write out a DataFrame to a parquet file
 /// 3. Write out a DataFrame to a csv file
 /// 4. Write out a DataFrame to a json file
-async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionError> {
+async fn write_out(ctx: &SessionContext) -> Result<()> {
     let array = StringViewArray::from(vec!["a", "b", "c"]);
     let schema = Arc::new(Schema::new(vec![Field::new(
         "tablecol1",
@@ -211,15 +208,26 @@ async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionEr
     ctx.register_table("initial_data", Arc::new(mem_table))?;
     let df = ctx.table("initial_data").await?;
 
-    ctx.sql(
-        "create external table
-    test(tablecol1 varchar)
-    stored as parquet
-    location './datafusion-examples/test_table/'",
-    )
-    .await?
-    .collect()
-    .await?;
+    // Create a single temp root with subdirectories
+    let tmp_root = TempDir::new()?;
+    let examples_root = tmp_root.path().join("datafusion-examples");
+    create_dir_all(&examples_root)?;
+    let table_dir = examples_root.join("test_table");
+    let parquet_dir = examples_root.join("test_parquet");
+    let csv_dir = examples_root.join("test_csv");
+    let json_dir = examples_root.join("test_json");
+    create_dir_all(&table_dir)?;
+    create_dir_all(&parquet_dir)?;
+    create_dir_all(&csv_dir)?;
+    create_dir_all(&json_dir)?;
+
+    let create_sql = format!(
+        "CREATE EXTERNAL TABLE test(tablecol1 varchar)
+         STORED AS parquet
+         LOCATION '{}'",
+        table_dir.display()
+    );
+    ctx.sql(&create_sql).await?.collect().await?;
 
     // This is equivalent to INSERT INTO test VALUES ('a'), ('b'), ('c').
     // The behavior of write_table depends on the TableProvider's implementation
@@ -230,7 +238,7 @@ async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionEr
 
     df.clone()
         .write_parquet(
-            "./datafusion-examples/test_parquet/",
+            parquet_dir.to_str().unwrap(),
             DataFrameWriteOptions::new(),
             None,
         )
@@ -238,7 +246,7 @@ async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionEr
 
     df.clone()
         .write_csv(
-            "./datafusion-examples/test_csv/",
+            csv_dir.to_str().unwrap(),
             // DataFrameWriteOptions contains options which control how data is written
             // such as compression codec
             DataFrameWriteOptions::new(),
@@ -248,7 +256,7 @@ async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionEr
 
     df.clone()
         .write_json(
-            "./datafusion-examples/test_json/",
+            json_dir.to_str().unwrap(),
             DataFrameWriteOptions::new(),
             None,
         )

@@ -58,6 +58,7 @@ async fn create_context(
     Ok((physical_plan, ctx.task_ctx()))
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn run(rt: &Runtime, plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>, asc: bool) {
     black_box(rt.block_on(async { aggregate(plan.clone(), ctx.clone(), asc).await }))
         .unwrap();

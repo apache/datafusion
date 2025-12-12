@@ -117,8 +117,7 @@ impl ScalarUDFImpl for Cardinality {
     }
 }
 
-/// Cardinality SQL function
-pub fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("cardinality", args)?;
     match array.data_type() {
         Null => Ok(Arc::new(UInt64Array::from_value(0, array.len()))),

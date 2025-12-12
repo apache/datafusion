@@ -1643,22 +1643,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let constraints =
             self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-            PlanCreateExternalTable {
-                schema: df_schema,
-                name,
-                location,
-                file_type,
-                table_partition_cols,
-                if_not_exists,
-                or_replace,
-                temporary,
-                definition,
-                order_exprs: ordered_exprs,
-                unbounded,
-                options: options_map,
-                constraints,
-                column_defaults,
-            },
+            PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                .with_partition_cols(table_partition_cols)
+                .with_if_not_exists(if_not_exists)
+                .with_or_replace(or_replace)
+                .with_temporary(temporary)
+                .with_definition(definition)
+                .with_order_exprs(ordered_exprs)
+                .with_unbounded(unbounded)
+                .with_options(options_map)
+                .with_constraints(constraints)
+                .with_column_defaults(column_defaults)
+                .build(),
         )))
     }
 
@@ -1869,7 +1865,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .iter()
                 .any(|opt| opt.key == variable);
 
-            if !is_valid_variable {
+            // Check if it's a runtime variable
+            let is_runtime_variable = variable.starts_with("datafusion.runtime.");
+
+            if !is_valid_variable && !is_runtime_variable {
                 return plan_err!(
                     "'{variable}' is not a variable which can be viewed with 'SHOW'"
                 );
@@ -2163,7 +2162,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     } else {
                         value_indices[column_index] = Some(i);
                     }
-                    Ok(table_schema.field(column_index).clone())
+                    Ok(Arc::clone(table_schema.field(column_index)))
                 })
                 .collect::<Result<Vec<_>>>()?;
             (Fields::from(fields), value_indices)

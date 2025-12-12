@@ -24,13 +24,14 @@ use crate::physical_optimizer::test_utils::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{col, lit, BinaryExpr};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
+use datafusion_physical_optimizer::OptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
@@ -101,8 +102,10 @@ fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> 
         ];
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
     let expected = [
             "StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true, fetch=5"
@@ -126,8 +129,10 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
         ];
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
     let expected = [
             "GlobalLimitExec: skip=2, fetch=5",
@@ -162,8 +167,10 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
         ];
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
     let expected = [
         "CoalescePartitionsExec: fetch=5",
@@ -194,8 +201,10 @@ fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
         ];
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
     let expected = [
             "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
@@ -226,8 +235,10 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
 
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
     let expected = [
             "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
@@ -268,8 +279,10 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
 
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
     let expected = [
             "SortPreservingMergeExec: [c1@0 ASC], fetch=5",
@@ -304,8 +317,10 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> R
         ];
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
     let expected = [
             "CoalescePartitionsExec: fetch=5",
@@ -334,8 +349,10 @@ fn merges_local_limit_with_local_limit() -> Result<()> {
 
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(parent_local_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(parent_local_limit, &optimizer_context)?;
 
     let expected = ["GlobalLimitExec: skip=0, fetch=10", "  EmptyExec"];
     assert_eq!(get_plan_string(&after_optimize), expected);
@@ -359,8 +376,10 @@ fn merges_global_limit_with_global_limit() -> Result<()> {
 
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(parent_global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(parent_global_limit, &optimizer_context)?;
 
     let expected = ["GlobalLimitExec: skip=20, fetch=20", "  EmptyExec"];
     assert_eq!(get_plan_string(&after_optimize), expected);
@@ -384,8 +403,10 @@ fn merges_global_limit_with_local_limit() -> Result<()> {
 
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(global_limit, &optimizer_context)?;
 
     let expected = ["GlobalLimitExec: skip=20, fetch=20", "  EmptyExec"];
     assert_eq!(get_plan_string(&after_optimize), expected);
@@ -409,8 +430,10 @@ fn merges_local_limit_with_global_limit() -> Result<()> {
 
     assert_eq!(initial, expected_initial);
 
+    let session_config = SessionConfig::new();
+    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        LimitPushdown::new().optimize(local_limit, &ConfigOptions::new())?;
+        LimitPushdown::new().optimize_plan(local_limit, &optimizer_context)?;
 
     let expected = ["GlobalLimitExec: skip=20, fetch=20", "  EmptyExec"];
     assert_eq!(get_plan_string(&after_optimize), expected);

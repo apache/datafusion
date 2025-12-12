@@ -20,7 +20,7 @@ use arrow::array::{ArrayRef, AsArray, Int32Array, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignatureClass};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::Coercion;
@@ -99,7 +99,7 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 }
 
-fn calculate_ascii<'a, V>(array: V) -> Result<ArrayRef, ArrowError>
+fn calculate_ascii<'a, V>(array: &V) -> Result<ArrayRef, ArrowError>
 where
     V: StringArrayType<'a, Item = &'a str>,
 {
@@ -124,15 +124,15 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         _ => internal_err!("Unsupported data type"),
     }

@@ -30,16 +30,16 @@ use crate::source::{DataSource, DataSourceExec};
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
-    assert_or_internal_err, plan_err, project_schema, DataFusionError, Result,
-    ScalarValue,
+    assert_or_internal_err, plan_err, project_schema, Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::project_orderings;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExpr,
+    all_alias_free_columns, new_projections_for_columns,
 };
 use datafusion_physical_plan::{
     common, ColumnarValue, DisplayAs, DisplayFormatType, Partitioning, PhysicalExpr,
@@ -230,15 +230,16 @@ impl DataSource for MemorySourceConfig {
 
     fn try_swapping_with_projection(
         &self,
-        projection: &[ProjectionExpr],
+        projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn DataSource>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
-        all_alias_free_columns(projection)
+        let exprs = projection.iter().cloned().collect_vec();
+        all_alias_free_columns(exprs.as_slice())
             .then(|| {
                 let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(
-                    projection,
+                    &exprs,
                     self.projection().as_ref().unwrap_or(&all_projections),
                 );
 

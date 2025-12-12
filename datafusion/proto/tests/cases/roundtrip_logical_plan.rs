@@ -1981,6 +1981,10 @@ fn roundtrip_binary_op() {
     test(Operator::RegexNotMatch);
     test(Operator::RegexIMatch);
     test(Operator::RegexMatch);
+    test(Operator::LikeMatch);
+    test(Operator::ILikeMatch);
+    test(Operator::NotLikeMatch);
+    test(Operator::NotILikeMatch);
     test(Operator::BitwiseShiftRight);
     test(Operator::BitwiseShiftLeft);
     test(Operator::BitwiseAnd);

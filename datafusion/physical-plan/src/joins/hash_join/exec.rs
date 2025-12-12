@@ -66,8 +66,8 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    assert_or_internal_err, plan_err, project_schema, DataFusionError, JoinSide,
-    JoinType, NullEquality, Result,
+    assert_or_internal_err, plan_err, project_schema, JoinSide, JoinType, NullEquality,
+    Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -142,7 +142,7 @@ impl JoinLeftData {
     }
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 /// Join execution plan: Evaluates equijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
 /// join.
@@ -387,7 +387,7 @@ impl HashJoinExec {
     ///
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -419,7 +419,7 @@ impl HashJoinExec {
         let cache = Self::compute_properties(
             &left,
             &right,
-            Arc::clone(&join_schema),
+            &join_schema,
             *join_type,
             &on,
             partition_mode,
@@ -550,7 +550,7 @@ impl HashJoinExec {
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         join_type: JoinType,
         on: JoinOnRef,
         mode: PartitionMode,
@@ -561,7 +561,7 @@ impl HashJoinExec {
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
-            Arc::clone(&schema),
+            Arc::clone(schema),
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
@@ -605,9 +605,8 @@ impl HashJoinExec {
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
-            let projection_mapping =
-                ProjectionMapping::from_indices(projection, &schema)?;
-            let out_schema = project_schema(&schema, Some(projection))?;
+            let projection_mapping = ProjectionMapping::from_indices(projection, schema)?;
+            let out_schema = project_schema(schema, Some(projection))?;
             output_partitioning =
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
@@ -852,7 +851,7 @@ impl ExecutionPlan for HashJoinExec {
             cache: Self::compute_properties(
                 &children[0],
                 &children[1],
-                Arc::clone(&self.join_schema),
+                &self.join_schema,
                 self.join_type,
                 &self.on,
                 self.mode,
@@ -1045,7 +1044,7 @@ impl ExecutionPlan for HashJoinExec {
         let stats = estimate_join_statistics(
             self.left.partition_statistics(None)?,
             self.right.partition_statistics(None)?,
-            self.on.clone(),
+            &self.on,
             &self.join_type,
             &self.join_schema,
         )?;
@@ -1065,6 +1064,7 @@ impl ExecutionPlan for HashJoinExec {
             return Ok(None);
         }
 
+        let schema = self.schema();
         if let Some(JoinData {
             projected_left_child,
             projected_right_child,
@@ -1075,7 +1075,7 @@ impl ExecutionPlan for HashJoinExec {
             self.left(),
             self.right(),
             self.on(),
-            self.schema(),
+            &schema,
             self.filter(),
         )? {
             Ok(Some(Arc::new(HashJoinExec::try_new(
@@ -1299,10 +1299,8 @@ impl BuildSideState {
             bounds_accumulators: should_compute_dynamic_filters
                 .then(|| {
                     on_left
-                        .iter()
-                        .map(|expr| {
-                            CollectLeftAccumulator::try_new(Arc::clone(expr), schema)
-                        })
+                        .into_iter()
+                        .map(|expr| CollectLeftAccumulator::try_new(expr, schema))
                         .collect::<Result<Vec<_>>>()
                 })
                 .transpose()?,
@@ -1338,7 +1336,7 @@ impl BuildSideState {
 /// # Returns
 /// `JoinLeftData` containing the hash map, consolidated batch, join key values,
 /// visited indices bitmap, and computed bounds (if requested).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,
@@ -1938,7 +1936,12 @@ mod tests {
             div_ceil(9, batch_size)
         };
 
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
@@ -2018,7 +2021,12 @@ mod tests {
             div_ceil(9, batch_size)
         };
 
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
@@ -2154,7 +2162,12 @@ mod tests {
             // and filtered later.
             div_ceil(6, batch_size)
         };
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
@@ -2179,7 +2192,12 @@ mod tests {
             // and filtered later.
             div_ceil(3, batch_size)
         };
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
@@ -3469,6 +3487,8 @@ mod tests {
         let mut hashes_buffer = vec![0; right.num_rows()];
         create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
@@ -3477,6 +3497,8 @@ mod tests {
             &hashes_buffer,
             8192,
             (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
         )?;
 
         let left_ids: UInt64Array = vec![0, 1].into();
@@ -3526,6 +3548,8 @@ mod tests {
         let mut hashes_buffer = vec![0; right.num_rows()];
         create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
@@ -3534,6 +3558,8 @@ mod tests {
             &hashes_buffer,
             8192,
             (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
         )?;
 
         // We still expect to match rows 0 and 1 on both sides
@@ -4199,10 +4225,11 @@ mod tests {
                     }
                     _ => div_ceil(expected_resultset_records, batch_size) + 1,
                 };
-                assert_eq!(
-                    batches.len(),
-                    expected_batch_count,
-                    "expected {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}"
+                // With batch coalescing, we may have fewer batches than expected
+                assert!(
+                    batches.len() <= expected_batch_count,
+                    "expected at most {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}, got {}",
+                    batches.len()
                 );
 
                 let expected = match join_type {
@@ -4212,7 +4239,17 @@ mod tests {
                     JoinType::LeftAnti => left_empty.to_vec(),
                     _ => common_result.to_vec(),
                 };
-                assert_batches_eq!(expected, &batches);
+                // For anti joins with empty results, we may get zero batches
+                // (with coalescing) instead of one empty batch with schema
+                if batches.is_empty() {
+                    // Verify this is an expected empty result case
+                    assert!(
+                        matches!(join_type, JoinType::RightAnti | JoinType::LeftAnti),
+                        "Unexpected empty result for {join_type} join"
+                    );
+                } else {
+                    assert_batches_eq!(expected, &batches);
+                }
             }
         }
     }
@@ -4475,9 +4512,15 @@ mod tests {
 
         assert_join_metrics!(metrics, 0);
 
-        let expected_null_neq =
-            ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
-        assert_batches_eq!(expected_null_neq, &batches_null_neq);
+        // With batch coalescing, empty results may not emit any batches
+        // Check that either we have no batches, or an empty batch with proper schema
+        if batches_null_neq.is_empty() {
+            // This is fine - no output rows
+        } else {
+            let expected_null_neq =
+                ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
+            assert_batches_eq!(expected_null_neq, &batches_null_neq);
+        }
 
         Ok(())
     }

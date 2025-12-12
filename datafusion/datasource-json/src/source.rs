@@ -29,10 +29,12 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     as_file_source, calculate_range, ListingTableUrl, PartitionedFile, RangeCalculation,
 };
+use datafusion_physical_plan::projection::ProjectionExprs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
@@ -79,13 +81,16 @@ pub struct JsonSource {
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    projection: SplitProjection,
 }
 
 impl JsonSource {
     /// Initialize a JsonSource with the provided schema
     pub fn new(table_schema: impl Into<datafusion_datasource::TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
-            table_schema: table_schema.into(),
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
             schema_adapter_factory: None,
@@ -105,15 +110,29 @@ impl FileSource for JsonSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        Arc::new(JsonOpener {
+    ) -> Result<Arc<dyn FileOpener>> {
+        // Get the projected file schema for JsonOpener
+        let file_schema = self.table_schema.file_schema();
+        let projected_schema =
+            Arc::new(file_schema.project(&self.projection.file_indices)?);
+
+        let mut opener = Arc::new(JsonOpener {
             batch_size: self
                 .batch_size
                 .expect("Batch size must set before creating opener"),
-            projected_schema: base_config.projected_file_schema(),
+            projected_schema,
             file_compression_type: base_config.file_compression_type,
             object_store,
-        })
+        }) as Arc<dyn FileOpener>;
+
+        // Wrap with ProjectionOpener
+        opener = ProjectionOpener::try_new(
+            self.projection.clone(),
+            Arc::clone(&opener),
+            self.table_schema.file_schema(),
+        )?;
+
+        Ok(opener)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -130,8 +149,20 @@ impl FileSource for JsonSource {
         Arc::new(conf)
     }
 
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        let new_projection = self.projection.source.try_merge(projection)?;
+        let split_projection =
+            SplitProjection::new(self.table_schema.file_schema(), &new_projection);
+        source.projection = split_projection;
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection.source)
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
