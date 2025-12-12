@@ -285,7 +285,7 @@ impl ParquetTestCase {
 
         if let Some(predicate) = &self.predicate {
             let filter_expr =
-                logical2physical(predicate, self.table_schema.table_schema());
+                logical2physical(predicate, Arc::clone(self.table_schema.table_schema()));
             let mut config = ConfigOptions::default();
             config.execution.parquet.pushdown_filters = self.push_down_filters;
             let result = file_source.try_pushdown_filters(vec![filter_expr], &config)?;
