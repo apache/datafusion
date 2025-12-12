@@ -179,7 +179,11 @@ impl HashTableLookupExpr {
     /// * `hash_expr` - Expression that computes hash values
     /// * `hash_map` - Hash table to check membership
     /// * `description` - Description for debugging
-    pub(super) fn new(
+    ///
+    /// # Note
+    /// This is public for internal testing purposes only and is not
+    /// guaranteed to be stable across versions.
+    pub fn new(
         hash_expr: PhysicalExprRef,
         hash_map: Arc<dyn JoinHashMapType>,
         description: String,
