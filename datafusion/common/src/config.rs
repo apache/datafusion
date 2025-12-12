@@ -35,6 +35,7 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 #[cfg(feature = "parquet_encryption")]
 use std::sync::Arc;
+use std::usize;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -999,6 +1000,29 @@ config_namespace! {
         ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
         /// ```
         pub repartition_sorts: bool, default = true
+
+        /// Should DataFusion still repartition if the required partitioning
+        /// expresssion is a subset of the current partitonin expresssion.
+        ///
+        /// How the option is used:
+        ///     - repartition_subset_satisfactions=true: Always repartition on a subset satisfactioh.
+        ///     - repartition_subset_satisfactions=false: Only repartition if target_partitions > current partitions (increases parallelism).
+        ///
+        /// Example (repartition_subset_satisfactions = false)
+        /// ```text
+        ///     Hash(a) satisfies Hash(a, b) (Hash(a, b) is subset of Hash(a))
+        ///
+        /// If target_partitions > number of partitions:
+        /// AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///   RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
+        ///     AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
+        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3),
+        ///
+        /// If target_partitions <= number of partitions:
+        /// AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///   DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8),
+        /// ```
+        pub repartition_subset_satisfactions: bool, default = false
 
         /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
         /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and
