@@ -226,6 +226,25 @@ impl ScalarUDF {
         self.inner.simplify(args, info)
     }
 
+    /// Return a preimage
+    ///
+    /// See [`ScalarUDFImpl::preimage`] for more details.
+    pub fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &dyn SimplifyInfo,
+    ) -> Result<Option<Interval>> {
+        self.inner.preimage(args, lit_expr, info)
+    }
+
+    /// Return inner column from function args
+    ///
+    /// See [`ScalarUDFImpl::column_expr`]
+    pub fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
+        self.inner.column_expr(args)
+    }
+
     #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         #[allow(deprecated)]
@@ -696,30 +715,33 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
-    /// Attempts to convert a literal value to in interval of the corresponding datatype
-    /// of a column expression so that a **preimage** can be computed for
-    /// pruning comparison predicates.
+    /// Returns the [preimage] for this function and the specified scalar value, if any.
     ///
-    /// This is used during predicate-pushdown optimization
-    /// (see `datafusion-optimizer-udf_preimage::preimage_in_comparison_for_binary`)
+    /// A preimage is a single contiguous [`Interval`] of values where the function
+    /// will always return `lit_value`
     ///
-    /// Currently is only implemented by:
-    /// - `date_part(YEAR, expr)`
+    /// This rewrite is described in the [ClickHouse Paper] and is particularly
+    /// useful for simplifying expressions `date_part` or equivalent functions. The
+    /// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
+    /// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
+    /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
+    /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
     ///
-    /// # Arguments:
-    /// * `lit_value`:  The literal `&ScalarValue` used in comparison
-    /// * `target_type`: The datatype of the column expression inside the function
+    /// This should only return a preimage if the function takes a single argument
     ///
-    /// # Returns
-    ///
-    /// Returns an `Interval` of the appropriate target type if a
-    /// preimage cast is supported for the given function/operator combination;
-    /// otherwise returns `None`.
+    /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+    /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
     fn preimage(
         &self,
-        _lit_value: &ScalarValue,
-        _target_type: &DataType,
-    ) -> Option<Interval> {
+        _args: &[Expr],
+        _lit_expr: &Expr,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<Option<Interval>> {
+        Ok(None)
+    }
+
+    // Return the inner column expression from this function
+    fn column_expr(&self, _args: &[Expr]) -> Option<Expr> {
         None
     }
 
@@ -955,10 +977,15 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn preimage(
         &self,
-        lit_value: &ScalarValue,
-        target_type: &DataType,
-    ) -> Option<Interval> {
-        self.inner.preimage(lit_value, target_type)
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &dyn SimplifyInfo,
+    ) -> Result<Option<Interval>> {
+        self.inner.preimage(args, lit_expr, info)
+    }
+
+    fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
+        self.inner.column_expr(args)
     }
 
     fn conditional_arguments<'a>(

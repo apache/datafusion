@@ -27,6 +27,9 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use arrow::temporal_conversions::{
+    MICROSECONDS_IN_DAY, MILLISECONDS_IN_DAY, NANOSECONDS_IN_DAY, SECONDS_IN_DAY,
+};
 use chrono::{Datelike, NaiveDate};
 use datafusion_common::types::{logical_date, NativeType};
 
@@ -42,7 +45,8 @@ use datafusion_common::{
     utils::take_function_args,
     Result, ScalarValue,
 };
-use datafusion_expr::interval_arithmetic;
+use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::{interval_arithmetic, Expr};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -239,25 +243,59 @@ impl ScalarUDFImpl for DatePartFunc {
     // date_part(col, MONTH) = 1 => col = '2023-01-01' or col = '2024-01-01' or ... or col = '3000-01-01'
     fn preimage(
         &self,
-        lit_value: &ScalarValue,
-        target_type: &DataType,
-    ) -> Option<interval_arithmetic::Interval> {
-        let year = match lit_value {
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &dyn SimplifyInfo,
+    ) -> Result<Option<interval_arithmetic::Interval>> {
+        let [part, col_expr] = take_function_args(self.name(), args)?;
+
+        // Get the interval unit from the part argument
+        let interval_unit = part
+            .as_literal()
+            .and_then(|sv| sv.try_as_str().flatten())
+            .map(part_normalization)
+            .and_then(|s| IntervalUnit::from_str(s).ok());
+
+        // only support extracting year
+        match interval_unit {
+            Some(IntervalUnit::Year) => (),
+            _ => return Ok(None),
+        }
+
+        // Check if the argument is a literal (e.g. date_part(YEAR, col) = 2024)
+        let Some(argument_literal) = lit_expr.as_literal() else {
+            return Ok(None);
+        };
+
+        // Extract i32 year from Scalar value
+        let year = match argument_literal {
             ScalarValue::Int32(Some(y)) => *y,
-            _ => return None,
-        };
-        // Can only extract year from Date32/64 and Timestamp
-        match target_type {
-            Date32 | Date64 | Timestamp(_, _) => {}
-            _ => return None,
+            _ => return Ok(None),
         };
 
-        let start_time = NaiveDate::from_ymd_opt(year, 1, 1)?;
-        let end_time = start_time.with_year(year + 1)?;
-        let lower = date_to_scalar(start_time, target_type)?;
-        let upper = date_to_scalar(end_time, target_type)?;
+        // Can only extract year from Date32/64 and Timestamp column
+        let target_type = match info.get_data_type(col_expr)? {
+            Date32 | Date64 | Timestamp(_, _) => &info.get_data_type(col_expr)?,
+            _ => return Ok(None),
+        };
 
-        interval_arithmetic::Interval::try_new(lower, upper).ok()
+        // Compute the Interval bounds
+        let start_time =
+            NaiveDate::from_ymd_opt(year, 1, 1).expect("Expect computed start time");
+        let end_time = start_time
+            .with_year(year + 1)
+            .expect("Expect computed end time");
+
+        // Convert to ScalarValues
+        let lower = date_to_scalar(start_time, target_type)
+            .expect("Expect preimage interval lower bound");
+        let upper = date_to_scalar(end_time, target_type)
+            .expect("Expect preimage interval upper bound");
+        Ok(Some(interval_arithmetic::Interval::try_new(lower, upper)?))
+    }
+
+    fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
+        Some(args[1].clone())
     }
 
     fn aliases(&self) -> &[String] {
@@ -270,41 +308,32 @@ impl ScalarUDFImpl for DatePartFunc {
 }
 
 fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
-    let scalar = match target_type {
-        Date32 => {
-            let days = date
-                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
-                .num_days() as i32;
-            ScalarValue::Date32(Some(days))
-        }
-        Date64 => {
-            let milis = date
-                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
-                .num_milliseconds();
-            ScalarValue::Date64(Some(milis))
-        }
-        Timestamp(unit, tz) => {
-            let days = date
-                .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1)?)
-                .num_days();
-            match unit {
-                Second => ScalarValue::TimestampSecond(Some(days * 86_400), tz.clone()),
-                Millisecond => {
-                    ScalarValue::TimestampMillisecond(Some(days * 86_400_000), tz.clone())
-                }
-                Microsecond => ScalarValue::TimestampMicrosecond(
-                    Some(days * 86_400_000_000),
-                    tz.clone(),
-                ),
-                Nanosecond => ScalarValue::TimestampNanosecond(
-                    Some(days * 86_400_000_000_000),
-                    tz.clone(),
-                ),
+    let days = date
+        .signed_duration_since(NaiveDate::from_epoch_days(0)?)
+        .num_days();
+
+    Some(match target_type {
+        Date32 => ScalarValue::Date32(Some(days as i32)),
+        Date64 => ScalarValue::Date64(Some(days * MILLISECONDS_IN_DAY)),
+        Timestamp(unit, tz) => match unit {
+            Second => {
+                ScalarValue::TimestampSecond(Some(days * SECONDS_IN_DAY), tz.clone())
             }
-        }
+            Millisecond => ScalarValue::TimestampMillisecond(
+                Some(days * MILLISECONDS_IN_DAY),
+                tz.clone(),
+            ),
+            Microsecond => ScalarValue::TimestampMicrosecond(
+                Some(days * MICROSECONDS_IN_DAY),
+                tz.clone(),
+            ),
+            Nanosecond => ScalarValue::TimestampNanosecond(
+                Some(days * NANOSECONDS_IN_DAY),
+                tz.clone(),
+            ),
+        },
         _ => return None,
-    };
-    Some(scalar)
+    })
 }
 
 fn is_epoch(part: &str) -> bool {
@@ -444,4 +473,159 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::datetime::expr_fn;
+    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
+    use datafusion_expr::expr_fn::col;
+    use datafusion_expr::or;
+    use datafusion_expr::{
+        and, execution_props::ExecutionProps, lit, simplify::SimplifyContext, Expr,
+    };
+    use datafusion_optimizer::simplify_expressions::ExprSimplifier;
+    use std::{collections::HashMap, sync::Arc};
+
+    #[test]
+    fn test_preimage_date_part_date32_eq() {
+        let schema = expr_test_schema();
+        // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
+        let expr_lt = expr_fn::date_part(lit("year"), col("date32")).eq(lit(2024i32));
+        let expected = and(
+            col("date32").gt_eq(lit(ScalarValue::Date32(Some(19723)))),
+            col("date32").lt(lit(ScalarValue::Date32(Some(20089)))),
+        );
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    #[test]
+    fn test_preimage_date_part_date64_not_eq() {
+        let schema = expr_test_schema();
+        // date_part(c1, DatePart::Year) <> 2024 -> c1 < 2024-01-01 AND c1 >= 2025-01-01
+        let expr_lt = expr_fn::date_part(lit("year"), col("date64")).not_eq(lit(2024i32));
+        let expected = or(
+            col("date64").lt(lit(ScalarValue::Date64(Some(19723 * 86_400_000)))),
+            col("date64").gt_eq(lit(ScalarValue::Date64(Some(20089 * 86_400_000)))),
+        );
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    #[test]
+    fn test_preimage_date_part_timestamp_nano_lt() {
+        let schema = expr_test_schema();
+        let expr_lt =
+            expr_fn::date_part(lit("year"), col("ts_nano_none")).lt(lit(2024i32));
+        let expected = col("ts_nano_none").lt(lit(ScalarValue::TimestampNanosecond(
+            Some(19723 * 86_400_000_000_000),
+            None,
+        )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    #[test]
+    fn test_preimage_date_part_timestamp_nano_utc_gt() {
+        let schema = expr_test_schema();
+        let expr_lt =
+            expr_fn::date_part(lit("year"), col("ts_nano_utc")).gt(lit(2024i32));
+        let expected = col("ts_nano_utc").gt_eq(lit(ScalarValue::TimestampNanosecond(
+            Some(20089 * 86_400_000_000_000),
+            None,
+        )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    #[test]
+    fn test_preimage_date_part_timestamp_sec_est_gt_eq() {
+        let schema = expr_test_schema();
+        let expr_lt =
+            expr_fn::date_part(lit("year"), col("ts_sec_est")).gt_eq(lit(2024i32));
+        let expected = col("ts_sec_est").gt_eq(lit(ScalarValue::TimestampSecond(
+            Some(19723 * 86_400),
+            None,
+        )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    #[test]
+    fn test_preimage_date_part_timestamp_sec_est_lt_eq() {
+        let schema = expr_test_schema();
+        let expr_lt =
+            expr_fn::date_part(lit("year"), col("ts_mic_pt")).lt_eq(lit(2024i32));
+        let expected = col("ts_mic_pt").lt(lit(ScalarValue::TimestampMicrosecond(
+            Some(20089 * 86_400_000_000),
+            None,
+        )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    #[test]
+    fn test_preimage_date_part_timestamp_nano_lt_swap() {
+        let schema = expr_test_schema();
+        let expr_lt =
+            lit(2024i32).gt(expr_fn::date_part(lit("year"), col("ts_nano_none")));
+        let expected = col("ts_nano_none").lt(lit(ScalarValue::TimestampNanosecond(
+            Some(19723 * 86_400_000_000_000),
+            None,
+        )));
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    #[test]
+    // Should not simplify
+    fn test_preimage_date_part_not_year_date32_eq() {
+        let schema = expr_test_schema();
+        // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
+        let expr_lt = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
+        let expected = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
+        assert_eq!(optimize_test(expr_lt, &schema), expected)
+    }
+
+    fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
+        let props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&props).with_schema(Arc::clone(schema)),
+        );
+
+        simplifier.simplify(expr).unwrap()
+    }
+
+    fn expr_test_schema() -> DFSchemaRef {
+        Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![
+                    Field::new("date32", DataType::Date32, false),
+                    Field::new("date64", DataType::Date64, false),
+                    Field::new("ts_nano_none", timestamp_nano_none_type(), false),
+                    Field::new("ts_nano_utc", timestamp_nano_utc_type(), false),
+                    Field::new("ts_sec_est", timestamp_sec_est_type(), false),
+                    Field::new("ts_mic_pt", timestamp_mic_pt_type(), false),
+                ]
+                .into(),
+                HashMap::new(),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn timestamp_nano_none_type() -> DataType {
+        DataType::Timestamp(TimeUnit::Nanosecond, None)
+    }
+
+    // this is the type that now() returns
+    fn timestamp_nano_utc_type() -> DataType {
+        let utc = Some("+0:00".into());
+        DataType::Timestamp(TimeUnit::Nanosecond, utc)
+    }
+
+    fn timestamp_sec_est_type() -> DataType {
+        let est = Some("-5:00".into());
+        DataType::Timestamp(TimeUnit::Second, est)
+    }
+
+    fn timestamp_mic_pt_type() -> DataType {
+        let pt = Some("-8::00".into());
+        DataType::Timestamp(TimeUnit::Microsecond, pt)
+    }
 }

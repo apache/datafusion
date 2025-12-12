@@ -52,10 +52,7 @@ use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
-use crate::simplify_expressions::udf_preimage::{
-    is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary,
-    preimage_in_comparison_for_binary,
-};
+use crate::simplify_expressions::udf_preimage::rewrite_with_preimage;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
@@ -64,6 +61,7 @@ use crate::simplify_expressions::unwrap_cast::{
 use crate::simplify_expressions::SimplifyInfo;
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
+use datafusion_expr_common::interval_arithmetic::Interval;
 use indexmap::IndexSet;
 use regex::Regex;
 
@@ -1977,32 +1975,55 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             // For a complex predicate like `date_part('YEAR', c1) < 2000`, pruning is not possible.
             // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
             Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary(
-                    info, &left, op, &right,
-                ) =>
+                if get_preimage(&left, &right, info)?.0.is_some()
+                    && get_preimage(&left, &right, info)?.1.is_some() =>
             {
-                preimage_in_comparison_for_binary(info, *left, *right, op)?
+                // todo use let binding (if let Some(interval) = ...) once stabilized to avoid computing this thrice😢
+                let (Some(interval), Some(col_expr)) =
+                    get_preimage(left.as_ref(), &right, info)?
+                else {
+                    unreachable!(
+                        "The above if statement insures interval and col_expr are Some"
+                    )
+                };
+                rewrite_with_preimage(info, interval, op, Box::new(col_expr))?
             }
             // literal op date_part(literal, expression)
             // -->
             // date_part(literal, expression) op_swap literal
             Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary(
-                    info, &right, op, &left,
-                ) && op.swap().is_some() =>
+                if get_preimage(&right, &left, info)?.0.is_some()
+                    && get_preimage(&right, &left, info)?.1.is_some()
+                    && op.swap().is_some() =>
             {
-                preimage_in_comparison_for_binary(
-                    info,
-                    *right,
-                    *left,
-                    op.swap().unwrap(),
-                )?
+                let swapped = op.swap().unwrap();
+                let (Some(interval), Some(col_expr)) = get_preimage(&right, &left, info)?
+                else {
+                    unreachable!(
+                        "The above if statement insures interval and col_expr are Some"
+                    )
+                };
+                rewrite_with_preimage(info, interval, swapped, Box::new(col_expr))?
             }
 
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
     }
+}
+
+fn get_preimage(
+    left_expr: &Expr,
+    right_expr: &Expr,
+    info: &dyn SimplifyInfo,
+) -> Result<(Option<Interval>, Option<Expr>)> {
+    let Expr::ScalarFunction(ScalarFunction { func, args }) = left_expr else {
+        return Ok((None, None));
+    };
+    Ok((
+        func.preimage(args, right_expr, info)?,
+        func.column_expr(args),
+    ))
 }
 
 fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {

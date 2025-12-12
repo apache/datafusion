@@ -15,61 +15,56 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::str::FromStr;
+use datafusion_common::{internal_err, tree_node::Transformed, Result};
+use datafusion_expr::{and, lit, or, simplify::SimplifyInfo, BinaryExpr, Expr, Operator};
+use datafusion_expr_common::interval_arithmetic::Interval;
 
-use arrow::compute::kernels::cast_utils::IntervalUnit;
-use datafusion_common::{internal_err, tree_node::Transformed, Result, ScalarValue};
-use datafusion_expr::{
-    and, expr::ScalarFunction, lit, or, simplify::SimplifyInfo, BinaryExpr, Expr,
-    Operator, ScalarUDFImpl,
-};
-use datafusion_functions::datetime::date_part::DatePartFunc;
-
-pub(super) fn preimage_in_comparison_for_binary(
-    info: &dyn SimplifyInfo,
-    udf_expr: Expr,
-    literal: Expr,
+/// Rewrites a binary expression using its "preimage"
+///
+/// Specifically it rewrites expressions of the form `<expr> OP x` (e.g. `<expr> =
+/// x`) where `<expr>` is known to have a pre-image (aka the entire single
+/// range for which it is valid)
+///
+/// This rewrite is described in the [ClickHouse Paper] and is particularly
+/// useful for simplifying expressions `date_part` or equivalent functions. The
+/// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
+/// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
+/// covering the entire year of 2024. Thus, you can rewrite the expression to `k
+/// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
+///
+/// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+/// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
+///
+pub(super) fn rewrite_with_preimage(
+    _info: &dyn SimplifyInfo,
+    preimage_interval: Interval,
     op: Operator,
+    expr: Box<Expr>,
 ) -> Result<Transformed<Expr>> {
-    let (func, args, lit_value) = match (udf_expr, literal) {
-        (
-            Expr::ScalarFunction(ScalarFunction { func, args }),
-            Expr::Literal(lit_value, _),
-        ) => (func, args, lit_value),
-        _ => return internal_err!("Expect scalar function expr and literal"),
-    };
-    let expr = Box::new(args[1].clone());
-
-    let Ok(expr_type) = info.get_data_type(&expr) else {
-        return internal_err!("Can't get the data type of the expr {:?}", &expr);
-    };
-
-    let preimage_interval = match func.name() {
-        "date_part" => DatePartFunc::new()
-            .preimage(&lit_value, &expr_type)
-            .expect("Preimage interval should be created"),
-        _ => return internal_err!("Preimage is not supported for {:?}", func.name()),
-    };
-
-    let lower = lit(preimage_interval.lower().clone());
-    let upper = lit(preimage_interval.upper().clone());
+    let (lower, upper) = preimage_interval.into_bounds();
+    let (lower, upper) = (lit(lower), lit(upper));
 
     let rewritten_expr = match op {
+        // <expr> < x   ==>  <expr> < upper
+        // <expr> >= x  ==>  <expr> >= lower
         Operator::Lt | Operator::GtEq => Expr::BinaryExpr(BinaryExpr {
             left: expr,
             op,
             right: Box::new(lower),
         }),
+        // <expr> > x ==> <expr> >= upper
         Operator::Gt => Expr::BinaryExpr(BinaryExpr {
             left: expr,
             op: Operator::GtEq,
             right: Box::new(upper),
         }),
+        // <expr> <= x ==> <expr> < upper
         Operator::LtEq => Expr::BinaryExpr(BinaryExpr {
             left: expr,
             op: Operator::Lt,
             right: Box::new(upper),
         }),
+        // <expr> = x ==> (<expr> >= lower) and (<expr> < upper)
         Operator::Eq => and(
             Expr::BinaryExpr(BinaryExpr {
                 left: expr.clone(),
@@ -82,6 +77,7 @@ pub(super) fn preimage_in_comparison_for_binary(
                 right: Box::new(upper),
             }),
         ),
+        // <expr> != x ==> (<expr> < lower) or (<expr> >= upper)
         Operator::NotEq => or(
             Expr::BinaryExpr(BinaryExpr {
                 left: expr.clone(),
@@ -94,6 +90,7 @@ pub(super) fn preimage_in_comparison_for_binary(
                 right: Box::new(upper),
             }),
         ),
+        // <expr> is distinct from x ==> (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL and x is not NULL) or (<expr> is not NULL and x is NULL)
         Operator::IsDistinctFrom => or(
             or(
                 Expr::BinaryExpr(BinaryExpr {
@@ -112,6 +109,7 @@ pub(super) fn preimage_in_comparison_for_binary(
                 and(expr.is_not_null(), lower.is_null()),
             ),
         ),
+        // <expr> is distinct from x ==> (<expr> is NULL and x is NULL) or ((<expr> >= lower) and (<expr> < upper))
         Operator::IsNotDistinctFrom => or(
             Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(expr.clone().is_null()),
@@ -134,207 +132,4 @@ pub(super) fn preimage_in_comparison_for_binary(
         _ => return internal_err!("Expect comparison operators"),
     };
     Ok(Transformed::yes(rewritten_expr))
-}
-
-pub(super) fn is_scalar_udf_expr_and_support_preimage_in_comparison_for_binary<
-    S: SimplifyInfo,
->(
-    info: &S,
-    expr: &Expr,
-    op: Operator,
-    literal: &Expr,
-) -> bool {
-    let (func, args, lit_value) = match (expr, op, literal) {
-        (
-            Expr::ScalarFunction(ScalarFunction { func, args }),
-            Operator::Eq
-            | Operator::NotEq
-            | Operator::Gt
-            | Operator::Lt
-            | Operator::GtEq
-            | Operator::LtEq
-            | Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom,
-            Expr::Literal(lit_value, _),
-        ) => (func, args, lit_value),
-        _ => return false,
-    };
-
-    match func.name() {
-        "date_part" => {
-            let left_expr = Box::new(args[1].clone());
-            let Some(ScalarValue::Utf8(Some(part))) = args[0].as_literal() else {
-                return false;
-            };
-            match IntervalUnit::from_str(part) {
-                Ok(IntervalUnit::Year) => {}
-                _ => return false,
-            };
-            let Ok(expr_type) = info.get_data_type(&left_expr) else {
-                return false;
-            };
-            let Ok(_lit_type) = info.get_data_type(literal) else {
-                return false;
-            };
-            DatePartFunc::new()
-                .preimage(lit_value, &expr_type)
-                .is_some()
-        }
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::simplify_expressions::ExprSimplifier;
-    use arrow::datatypes::{DataType, Field, TimeUnit};
-    use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
-    use datafusion_expr::expr_fn::col;
-    use datafusion_expr::or;
-    use datafusion_expr::{
-        and, execution_props::ExecutionProps, lit, simplify::SimplifyContext, Expr,
-    };
-    use datafusion_functions::datetime::expr_fn;
-    use std::{collections::HashMap, sync::Arc};
-
-    #[test]
-    fn test_preimage_date_part_date32_eq() {
-        let schema = expr_test_schema();
-        // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
-        let expr_lt = expr_fn::date_part(lit("year"), col("date32")).eq(lit(2024i32));
-        let expected = and(
-            col("date32").gt_eq(lit(ScalarValue::Date32(Some(19723)))),
-            col("date32").lt(lit(ScalarValue::Date32(Some(20089)))),
-        );
-        assert_eq!(optimize_test(expr_lt, &schema), expected)
-    }
-
-    #[test]
-    fn test_preimage_date_part_date64_not_eq() {
-        let schema = expr_test_schema();
-        // date_part(c1, DatePart::Year) <> 2024 -> c1 < 2024-01-01 AND c1 >= 2025-01-01
-        let expr_lt = expr_fn::date_part(lit("year"), col("date64")).not_eq(lit(2024i32));
-        let expected = or(
-            col("date64").lt(lit(ScalarValue::Date64(Some(19723 * 86_400_000)))),
-            col("date64").gt_eq(lit(ScalarValue::Date64(Some(20089 * 86_400_000)))),
-        );
-        assert_eq!(optimize_test(expr_lt, &schema), expected)
-    }
-
-    #[test]
-    fn test_preimage_date_part_timestamp_nano_lt() {
-        let schema = expr_test_schema();
-        let expr_lt =
-            expr_fn::date_part(lit("year"), col("ts_nano_none")).lt(lit(2024i32));
-        let expected = col("ts_nano_none").lt(lit(ScalarValue::TimestampNanosecond(
-            Some(19723 * 86_400_000_000_000),
-            None,
-        )));
-        assert_eq!(optimize_test(expr_lt, &schema), expected)
-    }
-
-    #[test]
-    fn test_preimage_date_part_timestamp_nano_utc_gt() {
-        let schema = expr_test_schema();
-        let expr_lt =
-            expr_fn::date_part(lit("year"), col("ts_nano_utc")).gt(lit(2024i32));
-        let expected = col("ts_nano_utc").gt_eq(lit(ScalarValue::TimestampNanosecond(
-            Some(20089 * 86_400_000_000_000),
-            None,
-        )));
-        assert_eq!(optimize_test(expr_lt, &schema), expected)
-    }
-
-    #[test]
-    fn test_preimage_date_part_timestamp_sec_est_gt_eq() {
-        let schema = expr_test_schema();
-        let expr_lt =
-            expr_fn::date_part(lit("year"), col("ts_sec_est")).gt_eq(lit(2024i32));
-        let expected = col("ts_sec_est").gt_eq(lit(ScalarValue::TimestampSecond(
-            Some(19723 * 86_400),
-            None,
-        )));
-        assert_eq!(optimize_test(expr_lt, &schema), expected)
-    }
-
-    #[test]
-    fn test_preimage_date_part_timestamp_sec_est_lt_eq() {
-        let schema = expr_test_schema();
-        let expr_lt =
-            expr_fn::date_part(lit("year"), col("ts_mic_pt")).lt_eq(lit(2024i32));
-        let expected = col("ts_mic_pt").lt(lit(ScalarValue::TimestampMicrosecond(
-            Some(20089 * 86_400_000_000),
-            None,
-        )));
-        assert_eq!(optimize_test(expr_lt, &schema), expected)
-    }
-
-    #[test]
-    fn test_preimage_date_part_timestamp_nano_lt_swap() {
-        let schema = expr_test_schema();
-        let expr_lt =
-            lit(2024i32).gt(expr_fn::date_part(lit("year"), col("ts_nano_none")));
-        let expected = col("ts_nano_none").lt(lit(ScalarValue::TimestampNanosecond(
-            Some(19723 * 86_400_000_000_000),
-            None,
-        )));
-        assert_eq!(optimize_test(expr_lt, &schema), expected)
-    }
-
-    #[test]
-    // Should not simplify
-    fn test_preimage_date_part_not_year_date32_eq() {
-        let schema = expr_test_schema();
-        // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
-        let expr_lt = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
-        let expected = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
-        assert_eq!(optimize_test(expr_lt, &schema), expected)
-    }
-
-    fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
-        let props = ExecutionProps::new();
-        let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&props).with_schema(Arc::clone(schema)),
-        );
-
-        simplifier.simplify(expr).unwrap()
-    }
-
-    fn expr_test_schema() -> DFSchemaRef {
-        Arc::new(
-            DFSchema::from_unqualified_fields(
-                vec![
-                    Field::new("date32", DataType::Date32, false),
-                    Field::new("date64", DataType::Date64, false),
-                    Field::new("ts_nano_none", timestamp_nano_none_type(), false),
-                    Field::new("ts_nano_utc", timestamp_nano_utc_type(), false),
-                    Field::new("ts_sec_est", timestamp_sec_est_type(), false),
-                    Field::new("ts_mic_pt", timestamp_mic_pt_type(), false),
-                ]
-                .into(),
-                HashMap::new(),
-            )
-            .unwrap(),
-        )
-    }
-
-    fn timestamp_nano_none_type() -> DataType {
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
-    }
-
-    // this is the type that now() returns
-    fn timestamp_nano_utc_type() -> DataType {
-        let utc = Some("+0:00".into());
-        DataType::Timestamp(TimeUnit::Nanosecond, utc)
-    }
-
-    fn timestamp_sec_est_type() -> DataType {
-        let est = Some("-5:00".into());
-        DataType::Timestamp(TimeUnit::Second, est)
-    }
-
-    fn timestamp_mic_pt_type() -> DataType {
-        let pt = Some("-8::00".into());
-        DataType::Timestamp(TimeUnit::Microsecond, pt)
-    }
 }
