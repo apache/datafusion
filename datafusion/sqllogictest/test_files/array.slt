@@ -6600,7 +6600,27 @@ select count(*) from arrays where 'X'=any(column3);
 0
 
 query error DataFusion error: Error during planning: Unsupported AnyOp: '>', only '=' is supported
-select count(*) from arrays where 'X'>any(column3);
+select count(*) from arrays where 'X'<>any(column3);
+
+query I
+select count(*) from arrays where 10.0<any(column2);
+----
+3
+
+query I
+select count(*) from arrays where 10.0<=any(column2);
+----
+3
+
+query I
+select count(*) from arrays where 10.0>any(column2);
+----
+3
+
+query I
+select count(*) from arrays where 10.0>=any(column2);
+----
+3
 
 ## array_distinct
 

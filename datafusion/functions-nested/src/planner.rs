@@ -35,9 +35,11 @@ use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use std::sync::Arc;
 
+use crate::expr_fn::array_has;
 use crate::map::map_udf;
+use crate::min_max::{array_max, array_min};
 use crate::{
-    array_has::{array_has_all, array_has_udf},
+    array_has::{array_has_all},
     expr_fn::{array_append, array_concat, array_prepend},
     extract::{array_element, array_slice},
     make_array::make_array,
@@ -122,17 +124,15 @@ impl ExprPlanner for NestedFunctionPlanner {
     }
 
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-        if expr.op == BinaryOperator::Eq {
-            Ok(PlannerResult::Planned(Expr::ScalarFunction(
-                ScalarFunction::new_udf(
-                    array_has_udf(),
-                    // left and right are reversed here so `needle=any(haystack)` -> `array_has(haystack, needle)`
-                    vec![expr.right, expr.left],
-                ),
-            )))
-        } else {
-            plan_err!("Unsupported AnyOp: '{}', only '=' is supported", expr.op)
-        }
+	match expr.op {
+	    BinaryOperator::Eq => Ok(PlannerResult::Planned(array_has(expr.right, expr.left))),
+	    BinaryOperator::Gt => Ok(PlannerResult::Planned(array_min(expr.right).lt(expr.left))),
+	    BinaryOperator::Lt => Ok(PlannerResult::Planned(array_max(expr.right).gt(expr.left))),
+	    BinaryOperator::GtEq => Ok(PlannerResult::Planned(array_min(expr.right).lt_eq(expr.left))),
+	    BinaryOperator::LtEq => Ok(PlannerResult::Planned(array_max(expr.right).gt_eq(expr.left))),
+	    BinaryOperator::NotEq => Ok(PlannerResult::Planned(Expr::Not(Box::new(array_has(expr.right, expr.left))))),
+	    _ => plan_err!("Unsupported AnyOp: '{}', only '=', '>', '<', '>=', '<=', '<>', '!=' are supported", expr.op)
+	}
     }
 }
 
