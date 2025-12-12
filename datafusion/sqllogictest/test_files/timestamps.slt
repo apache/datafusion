@@ -2934,7 +2934,7 @@ NULL
 query error DataFusion error: Error during planning: Function 'make_date' expects 3 arguments but received 1
 select make_date(1);
 
-query error No function matches the given name and argument types
+query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int32\), Int32\)\) but received NativeType::Interval\(MonthDayNano\), DataType: Interval\(MonthDayNano\)
 select make_date(interval '1 day', '2001-05-21'::timestamp, '2001-05-21'::timestamp);
 
 ##########
