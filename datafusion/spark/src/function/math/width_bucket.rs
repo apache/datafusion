@@ -22,9 +22,9 @@ use arrow::array::{
     Array, ArrayRef, DurationMicrosecondArray, Float64Array, IntervalMonthDayNanoArray,
     IntervalYearMonthArray,
 };
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Duration, Float64, Int32, Interval};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{
     as_duration_microsecond_array, as_float64_array, as_int32_array,
     as_interval_mdn_array, as_interval_ym_array,
@@ -36,8 +36,8 @@ use datafusion_common::types::{
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -130,7 +130,12 @@ impl ScalarUDFImpl for SparkWidthBucket {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Int32)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), Int32, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -781,5 +786,51 @@ mod tests {
             msg.contains("width_bucket received unexpected data types"),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn test_width_bucket_nullability() -> Result<()> {
+        use arrow::datatypes::Field;
+        use datafusion_expr::ReturnFieldArgs;
+
+        let func = SparkWidthBucket::new();
+
+        // Test with all non-nullable args - result should be non-nullable
+        let non_nullable_v: FieldRef = Arc::new(Field::new("v", Float64, false));
+        let non_nullable_lo: FieldRef = Arc::new(Field::new("lo", Float64, false));
+        let non_nullable_hi: FieldRef = Arc::new(Field::new("hi", Float64, false));
+        let non_nullable_n: FieldRef = Arc::new(Field::new("n", Int32, false));
+
+        let result = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[
+                Arc::clone(&non_nullable_v),
+                Arc::clone(&non_nullable_lo),
+                Arc::clone(&non_nullable_hi),
+                Arc::clone(&non_nullable_n),
+            ],
+            scalar_arguments: &[None, None, None, None],
+        })?;
+        assert!(
+            !result.is_nullable(),
+            "width_bucket should NOT be nullable when all args are non-nullable"
+        );
+
+        // Test with nullable value - result should be nullable
+        let nullable_v: FieldRef = Arc::new(Field::new("v", Float64, true));
+        let result = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[
+                nullable_v,
+                Arc::clone(&non_nullable_lo),
+                Arc::clone(&non_nullable_hi),
+                Arc::clone(&non_nullable_n),
+            ],
+            scalar_arguments: &[None, None, None, None],
+        })?;
+        assert!(
+            result.is_nullable(),
+            "width_bucket should be nullable when any arg is nullable"
+        );
+
+        Ok(())
     }
 }
