@@ -272,3 +272,19 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+## Temporary arrow-rs patch until 52.1.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/sketch_boolean_selection" }
