@@ -18,7 +18,6 @@
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::functions_nested::map::map;
-use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_plan::Accumulator;
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
@@ -35,8 +34,9 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
-    EmptyRelation, Extension, InvariantLevel, LogicalPlan, PartitionEvaluator,
-    Repartition, UserDefinedLogicalNode, Values, Volatility,
+    col, lit, EmptyRelation, Extension, InvariantLevel, LogicalPlan, LogicalPlanBuilder,
+    PartitionEvaluator, RecursiveQuery, Repartition, UserDefinedLogicalNode, Values,
+    Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -1915,6 +1915,15 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     Ok(())
 }
 
+/// Helper to convert a logical plan to Substrait and back without optimization.
+async fn plan_to_substrait_and_back(
+    plan: &LogicalPlan,
+    ctx: &SessionContext,
+) -> Result<LogicalPlan> {
+    let proto = to_substrait_plan(plan, &ctx.state())?;
+    from_substrait_plan(&ctx.state(), &proto).await
+}
+
 async fn roundtrip_logical_plan_with_ctx(
     plan: LogicalPlan,
     ctx: SessionContext,
@@ -2097,4 +2106,274 @@ async fn create_all_type_context() -> Result<SessionContext> {
         .await?;
 
     Ok(ctx)
+}
+
+#[tokio::test]
+async fn roundtrip_recursive_query() -> Result<()> {
+    let ctx = create_context().await?;
+
+    // Build a simple RecursiveQuery manually
+    let empty_plan = LogicalPlanBuilder::empty(false).build()?;
+    let static_term = LogicalPlanBuilder::from(empty_plan.clone())
+        .project(vec![lit(1i64).alias("id")])?
+        .build()?;
+
+    // Create a simple scan from the data table
+    let table = ctx.table("data").await?;
+    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
+        .filter(col("a").lt(lit(10i64)))?
+        .project(vec![col("a").add(lit(1i64)).alias("id")])?
+        .build()?;
+
+    let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+        name: "nodes".to_string(),
+        static_term: Arc::new(static_term),
+        recursive_term: Arc::new(recursive_term),
+        is_distinct: false,
+    });
+
+    // Convert to substrait and back
+    let plan2 = plan_to_substrait_and_back(&plan, &ctx).await?;
+
+    // The deserialized plan may have projection wrappers, unwrap to find RecursiveQuery
+    let recursive_query = match plan2 {
+        LogicalPlan::RecursiveQuery(ref rq) => rq,
+        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(ref rq) => rq,
+            _ => panic!("Expected RecursiveQuery inside Projection, got: {plan2:?}"),
+        },
+        _ => panic!("Expected RecursiveQuery or Projection, got: {plan2:?}"),
+    };
+
+    assert_eq!(recursive_query.name, "nodes");
+    assert!(!recursive_query.is_distinct);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn serialize_recursive_query_with_empty_name_errors() -> Result<()> {
+    let ctx = create_context().await?;
+
+    let empty_plan = LogicalPlanBuilder::empty(false).build()?;
+    let static_term = LogicalPlanBuilder::from(empty_plan.clone())
+        .project(vec![lit(1i64).alias("id")])?
+        .build()?;
+
+    let table = ctx.table("data").await?;
+    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
+        .filter(col("a").lt(lit(10i64)))?
+        .project(vec![col("a").add(lit(1i64)).alias("id")])?
+        .build()?;
+
+    let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+        name: "".to_string(),
+        static_term: Arc::new(static_term),
+        recursive_term: Arc::new(recursive_term),
+        is_distinct: false,
+    });
+
+    let result = to_substrait_plan(&plan, &ctx.state());
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("RecursiveQuery name cannot be empty"));
+
+    Ok(())
+}
+
+#[test]
+fn decode_recursive_query_detail_malformed_bytes_errors() {
+    let res =
+        datafusion_substrait::logical_plan::recursive::decode_recursive_query_detail(&[
+            1, 2, 3,
+        ]);
+    assert!(res.is_err());
+    let msg = res.unwrap_err().to_string();
+    assert!(msg.contains("Failed to decode RecursiveQueryDetail"));
+}
+
+#[test]
+fn decode_recursive_scan_detail_malformed_bytes_errors() {
+    let res =
+        datafusion_substrait::logical_plan::recursive::decode_recursive_scan_detail(&[
+            1, 2, 3,
+        ]);
+    assert!(res.is_err());
+    let msg = res.unwrap_err().to_string();
+    assert!(msg.contains("Failed to decode RecursiveScanDetail"));
+}
+
+#[tokio::test]
+async fn roundtrip_recursive_query_distinct() -> Result<()> {
+    let ctx = create_context().await?;
+
+    // Build a RecursiveQuery with is_distinct=true
+    let empty_plan = LogicalPlanBuilder::empty(false).build()?;
+    let static_term = LogicalPlanBuilder::from(empty_plan.clone())
+        .project(vec![lit(1i64).alias("id")])?
+        .build()?;
+
+    // Create a simple scan from the data table
+    let table = ctx.table("data").await?;
+    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
+        .filter(col("a").lt(lit(5i64)))?
+        .project(vec![col("a").add(lit(1i64)).alias("id")])?
+        .build()?;
+
+    let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+        name: "cte".to_string(),
+        static_term: Arc::new(static_term),
+        recursive_term: Arc::new(recursive_term),
+        is_distinct: true,
+    });
+
+    // Convert to substrait and back
+    let plan2 = plan_to_substrait_and_back(&plan, &ctx).await?;
+
+    // The deserialized plan may have projection wrappers, unwrap to find RecursiveQuery
+    let recursive_query = match plan2 {
+        LogicalPlan::RecursiveQuery(ref rq) => rq,
+        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(ref rq) => rq,
+            _ => panic!("Expected RecursiveQuery inside Projection, got: {plan2:?}"),
+        },
+        _ => panic!("Expected RecursiveQuery or Projection, got: {plan2:?}"),
+    };
+
+    assert_eq!(recursive_query.name, "cte");
+    assert!(recursive_query.is_distinct);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
+    let ctx = create_context().await?;
+
+    // Build a RecursiveQuery with specific child plan structures
+    let empty_plan = LogicalPlanBuilder::empty(false).build()?;
+    let static_term = LogicalPlanBuilder::from(empty_plan.clone())
+        .project(vec![lit(42i64).alias("value")])? // Use specific value
+        .build()?;
+
+    // Create a more complex recursive term with filter and projection
+    let table = ctx.table("data").await?;
+    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
+        .filter(col("a").gt(lit(5i64)))? // Specific filter condition
+        .project(vec![
+            (col("a") * lit(2i64)).alias("value"), // Specific projection
+        ])?
+        .build()?;
+
+    let original_plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
+        name: "test_cte".to_string(),
+        static_term: Arc::new(static_term),
+        recursive_term: Arc::new(recursive_term),
+        is_distinct: false,
+    });
+
+    // Convert to substrait and back
+    let roundtrip_plan = plan_to_substrait_and_back(&original_plan, &ctx).await?;
+
+    // Extract the RecursiveQuery from potential projection wrapper
+    let roundtrip_rq = match roundtrip_plan {
+        LogicalPlan::RecursiveQuery(ref rq) => rq,
+        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(ref rq) => rq,
+            _ => panic!(
+                "Expected RecursiveQuery inside Projection, got: {roundtrip_plan:?}"
+            ),
+        },
+        _ => panic!("Expected RecursiveQuery or Projection, got: {roundtrip_plan:?}"),
+    };
+
+    // Verify metadata is preserved
+    assert_eq!(roundtrip_rq.name, "test_cte");
+    assert!(!roundtrip_rq.is_distinct);
+
+    // Verify static_term structure is preserved
+    // The static term should contain a projection
+    match roundtrip_rq.static_term.as_ref() {
+        LogicalPlan::Projection(proj) => {
+            assert_eq!(proj.expr.len(), 1, "Static term should have 1 projection");
+            // Verify the projection contains our literal 42
+            let expr_str = format!("{:?}", proj.expr[0]);
+            assert!(
+                expr_str.contains("42") || expr_str.contains("Int64(42)"),
+                "Static term should contain literal 42, got: {expr_str}"
+            );
+        }
+        other => panic!("Expected static_term to be Projection, got: {other:?}"),
+    }
+
+    // Verify recursive_term structure is preserved
+    // The recursive term should contain a projection over a filter over a table scan
+    match roundtrip_rq.recursive_term.as_ref() {
+        LogicalPlan::Projection(proj) => {
+            assert_eq!(
+                proj.expr.len(),
+                1,
+                "Recursive term should have 1 projection"
+            );
+            // Check that the input is a filter
+            match proj.input.as_ref() {
+                LogicalPlan::Filter(filter) => {
+                    // Verify filter condition references column 'a' and value 5
+                    let filter_str = format!("{:?}", filter.predicate);
+                    assert!(
+                        filter_str.contains("a") && filter_str.contains("5"),
+                        "Filter should contain 'a > 5', got: {filter_str}"
+                    );
+                    // Verify there's a table scan underneath
+                    assert!(
+                        matches!(filter.input.as_ref(), LogicalPlan::TableScan(_)),
+                        "Expected TableScan under filter"
+                    );
+                }
+                other => panic!("Expected Filter under projection, got: {other:?}"),
+            }
+        }
+        other => panic!("Expected recursive_term to be Projection, got: {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_recursive_query_with_work_table_scan_executes() -> Result<()> {
+    let ctx = create_context().await?;
+
+    ctx.register_csv(
+        "balance",
+        "../core/tests/data/recursive_cte/balance.csv",
+        CsvReadOptions::new().has_header(true),
+    )
+    .await?;
+
+    let sql = r#"
+        WITH RECURSIVE balances AS (
+            SELECT * from balance
+            UNION ALL
+            SELECT time + 1 as time, name, account_balance + 10 as account_balance
+            FROM balances
+            WHERE time < 10
+        )
+        SELECT * FROM balances
+        ORDER BY time, name, account_balance
+    "#;
+
+    let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    let substrait = to_substrait_plan(&plan, &ctx.state())?;
+    let roundtrip = from_substrait_plan(&ctx.state(), &substrait).await?;
+
+    let batches = ctx.execute_logical_plan(roundtrip).await?.collect().await?;
+
+    assert!(
+        !batches.is_empty(),
+        "Recursive CTE roundtrip should yield at least one batch"
+    );
+
+    Ok(())
 }

@@ -18,9 +18,9 @@
 use super::{
     from_aggregate_rel, from_cast, from_cross_rel, from_exchange_rel, from_fetch_rel,
     from_field_reference, from_filter_rel, from_if_then, from_join_rel, from_literal,
-    from_project_rel, from_read_rel, from_scalar_function, from_set_rel,
-    from_singular_or_list, from_sort_rel, from_subquery, from_substrait_rel,
-    from_substrait_rex, from_window_function,
+    from_project_rel, from_read_rel, from_recursive_query_rel, from_scalar_function,
+    from_set_rel, from_singular_or_list, from_sort_rel, from_subquery,
+    from_substrait_rel, from_substrait_rex, from_window_function,
 };
 use crate::extensions::Extensions;
 use async_trait::async_trait;
@@ -507,6 +507,14 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         let Some(ext_detail) = &rel.detail else {
             return substrait_err!("Unexpected empty detail in ExtensionMultiRel");
         };
+
+        // Check if this is a RecursiveQuery extension
+        if ext_detail.type_url == crate::logical_plan::recursive::RECURSIVE_QUERY_TYPE_URL
+        {
+            return from_recursive_query_rel(self, rel).await;
+        }
+
+        // Otherwise handle as a general extension
         let plan = self
             .state
             .serializer_registry()
