@@ -242,10 +242,13 @@ pub fn serialize_physical_expr(
     // In distributed execution, the remote worker won't have access to the hash
     // table anyway, so the best we can do is skip this optimization.
     if expr.downcast_ref::<HashTableLookupExpr>().is_some() {
-        return Ok(protobuf::PhysicalExprNode {
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                datafusion_common::ScalarValue::Boolean(Some(true)),
+        let value = datafusion_proto_common::ScalarValue {
+            value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
+                true,
             )),
+        };
+        return Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(value)),
         });
     }
 
