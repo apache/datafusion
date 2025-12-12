@@ -81,7 +81,7 @@ fn test_sort_pushdown_basic_phase1() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
@@ -89,8 +89,8 @@ fn test_sort_pushdown_basic_phase1() {
       output:
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 
@@ -117,7 +117,7 @@ fn test_sort_with_limit_phase1() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
@@ -125,8 +125,8 @@ fn test_sort_with_limit_phase1() {
       output:
         Ok:
           - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 
@@ -182,7 +182,7 @@ fn test_sort_multiple_columns_phase1() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet, reverse_scan_inexact=true
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
     "
     );
 }
@@ -226,7 +226,7 @@ fn test_prefix_match_single_column() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
@@ -234,8 +234,8 @@ fn test_prefix_match_single_column() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 
@@ -285,7 +285,7 @@ fn test_prefix_match_with_limit() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: TopK(fetch=100), expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
@@ -293,8 +293,8 @@ fn test_prefix_match_with_limit() {
       output:
         Ok:
           - SortExec: TopK(fetch=100), expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
-          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 DESC NULLS LAST, c@2 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 
@@ -342,7 +342,7 @@ fn test_prefix_match_through_transparent_nodes() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
@@ -352,10 +352,10 @@ fn test_prefix_match_through_transparent_nodes() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+          -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
           -     CoalesceBatchesExec: target_batch_size=1024
-          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC, c@2 DESC NULLS LAST], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 
@@ -495,7 +495,7 @@ fn test_sort_through_coalesce_batches() {
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   CoalesceBatchesExec: target_batch_size=1024
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
     "
     );
 }
@@ -530,8 +530,8 @@ fn test_sort_through_repartition() {
       output:
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
+          -   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
     "
     );
 }
@@ -559,7 +559,7 @@ fn test_nested_sorts() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
@@ -569,8 +569,8 @@ fn test_nested_sorts() {
         Ok:
           - SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
           -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 
@@ -627,7 +627,7 @@ fn test_sort_through_coalesce_partitions() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
@@ -638,9 +638,9 @@ fn test_sort_through_coalesce_partitions() {
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   CoalescePartitionsExec
-          -     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
-          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 
@@ -667,7 +667,7 @@ fn test_complex_plan_with_multiple_operators() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
@@ -679,10 +679,10 @@ fn test_complex_plan_with_multiple_operators() {
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   CoalescePartitionsExec
-          -     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+          -     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
           -       CoalesceBatchesExec: target_batch_size=1024
-          -         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 
@@ -711,7 +711,7 @@ fn test_multiple_sorts_different_columns() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
@@ -721,8 +721,8 @@ fn test_multiple_sorts_different_columns() {
         Ok:
           - SortExec: expr=[c@2 ASC], preserve_partitioning=[false]
           -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet, reverse_scan_inexact=true
-    "###
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_scan_inexact=true
+    "
     );
 }
 

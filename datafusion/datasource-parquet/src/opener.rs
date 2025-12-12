@@ -48,6 +48,7 @@ use datafusion_physical_plan::metrics::{
 };
 use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
 
+use crate::sort::reverse_row_selection;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
@@ -489,67 +490,9 @@ impl FileOpener for ParquetOpener {
 
                 // If we have a row selection, we need to rebuild it for the reversed order
                 if let Some(row_selection) = row_selection_opt {
-                    // Build a mapping of row group index to its row range in the file
-                    let mut rg_row_ranges: Vec<(usize, usize, usize)> = Vec::new(); // (rg_index, start_row, end_row)
-                    let mut current_row = 0;
-                    for (rg_idx, rg_meta) in rg_metadata.iter().enumerate() {
-                        let num_rows = rg_meta.num_rows() as usize;
-                        rg_row_ranges.push((rg_idx, current_row, current_row + num_rows));
-                        current_row += num_rows;
-                    }
-
-                    // Extract which rows are selected for each row group from the overall selection
-                    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
-
-                    let mut rg_selections: HashMap<usize, Vec<RowSelector>> =
-                        HashMap::new();
-
-                    // Parse the overall row selection to determine which rows in each row group are selected
-                    let mut current_file_row = 0;
-                    for selector in row_selection.iter() {
-                        let selector_end = current_file_row + selector.row_count;
-
-                        // Find which row groups this selector spans
-                        for (rg_idx, rg_start, rg_end) in rg_row_ranges.iter() {
-                            if current_file_row < *rg_end && selector_end > *rg_start {
-                                // This selector overlaps with this row group
-                                let overlap_start = current_file_row.max(*rg_start);
-                                let overlap_end = selector_end.min(*rg_end);
-                                let overlap_count = overlap_end - overlap_start;
-
-                                if overlap_count > 0 {
-                                    let entry = rg_selections.entry(*rg_idx).or_default();
-                                    if selector.skip {
-                                        entry.push(RowSelector::skip(overlap_count));
-                                    } else {
-                                        entry.push(RowSelector::select(overlap_count));
-                                    }
-                                }
-                            }
-                        }
-
-                        current_file_row = selector_end;
-                    }
-
-                    // Now rebuild the overall selection in reversed row group order
-                    let mut reversed_selectors = Vec::new();
-                    for &rg_idx in reversed_indexes.iter() {
-                        if let Some(selectors) = rg_selections.get(&rg_idx) {
-                            reversed_selectors.extend(selectors.iter().cloned());
-                        } else {
-                            // No specific selection for this row group means select all
-                            if let Some((_, start, end)) =
-                                rg_row_ranges.iter().find(|(idx, _, _)| *idx == rg_idx)
-                            {
-                                reversed_selectors.push(RowSelector::select(end - start));
-                            }
-                        }
-                    }
-
-                    if !reversed_selectors.is_empty() {
-                        builder = builder
-                            .with_row_selection(RowSelection::from(reversed_selectors));
-                    }
+                    let reversed_selection =
+                        reverse_row_selection(&row_selection, file_metadata.as_ref())?;
+                    builder = builder.with_row_selection(reversed_selection);
                 }
 
                 builder = builder.with_row_groups(reversed_indexes);

@@ -474,12 +474,15 @@ impl ParquetSource {
         }
     }
 
-    pub fn with_reverse_scan_inexact(mut self, reverse_scan_inexact: bool) -> Self {
+    pub(crate) fn with_reverse_scan_inexact(
+        mut self,
+        reverse_scan_inexact: bool,
+    ) -> Self {
         self.reverse_scan_inexact = reverse_scan_inexact;
         self
     }
-
-    pub fn reverse_scan_inexact(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn reverse_scan_inexact(&self) -> bool {
         self.reverse_scan_inexact
     }
 }

@@ -54,21 +54,6 @@ pub enum SortOrderPushdownResult<T> {
 }
 
 impl<T> SortOrderPushdownResult<T> {
-    /// Returns true if the result is Exact
-    pub fn is_exact(&self) -> bool {
-        matches!(self, Self::Exact { .. })
-    }
-
-    /// Returns true if the result is Inexact
-    pub fn is_inexact(&self) -> bool {
-        matches!(self, Self::Inexact { .. })
-    }
-
-    /// Returns true if optimization was successful (Exact or Inexact)
-    pub fn is_supported(&self) -> bool {
-        !matches!(self, Self::Unsupported)
-    }
-
     /// Extract the inner value if present
     pub fn into_inner(self) -> Option<T> {
         match self {

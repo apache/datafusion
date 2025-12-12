@@ -886,14 +886,13 @@ impl DataSource for FileScanConfig {
             })
             .collect();
 
-        // Phase 1: DO NOT change output_ordering
-        // The ordering is still the same as before (e.g., ASC) because:
-        // 1. We're only reversing row groups, not rows within groups
-        // 2. This makes the scan "closer" to DESC but not guaranteed
-        // 3. The Sort operator above will still be needed
-        //
-        // Keep the original output_ordering unchanged
-        // new_config.output_ordering = ... (NO CHANGE)
+        // Phase 1: Make output_ordering unknown since we're only reversing row groups,
+        // not guaranteeing perfect ordering. The rows within row groups are not reversed.
+        // This is correct because:
+        // 1. We're only reversing row group read order
+        // 2. Rows within each row group maintain their original order
+        // 3. This provides approximate ordering, not guaranteed ordering
+        new_config.output_ordering = vec![];
 
         new_config.file_source = new_file_source;
 
