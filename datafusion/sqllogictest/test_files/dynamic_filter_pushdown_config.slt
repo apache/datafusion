@@ -632,6 +632,104 @@ ORDER BY id DESC LIMIT 5;
 statement ok
 SET datafusion.execution.parquet.enable_sort_pushdown = true;
 
+# Test 6.7: Sort pushdown with more than one partition
+# Create multiple parquet files to trigger it
+
+# Split data into multiple files
+statement ok
+CREATE TABLE sorted_data_part1(id INT, value INT, name VARCHAR) AS VALUES
+(1, 100, 'a'),
+(2, 200, 'b'),
+(3, 300, 'c');
+
+statement ok
+CREATE TABLE sorted_data_part2(id INT, value INT, name VARCHAR) AS VALUES
+(4, 400, 'd'),
+(5, 500, 'e'),
+(6, 600, 'f');
+
+statement ok
+CREATE TABLE sorted_data_part3(id INT, value INT, name VARCHAR) AS VALUES
+(7, 700, 'g'),
+(8, 800, 'h'),
+(9, 900, 'i'),
+(10, 1000, 'j');
+
+# Create directory for multi-file parquet
+query I
+COPY (SELECT * FROM sorted_data_part1 ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part1.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM sorted_data_part2 ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part2.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM sorted_data_part3 ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part3.parquet';
+----
+4
+
+# Create external table pointing to directory with multiple files
+statement ok
+CREATE EXTERNAL TABLE sorted_parquet_multi(id INT, value INT, name VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/'
+WITH ORDER (id ASC);
+
+# Enable multiple partitions
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+# Now we should see RepartitionExec because we have 3 input partitions (3 files)
+query TT
+EXPLAIN SELECT * FROM sorted_parquet_multi ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_parquet_multi.id DESC NULLS FIRST, fetch=3
+02)--TableScan: sorted_parquet_multi projection=[id, value, name]
+physical_plan
+01)SortPreservingMergeExec: [id@0 DESC], fetch=3
+02)--SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[true]
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part3.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_scan_inexact=true
+
+# Verify correctness with repartitioning and multiple files
+query IIT
+SELECT * FROM sorted_parquet_multi ORDER BY id DESC LIMIT 3;
+----
+10 1000 j
+9 900 i
+8 800 h
+
+# Test ASC order (should not trigger reverse scan)
+query IIT
+SELECT * FROM sorted_parquet_multi ORDER BY id ASC LIMIT 3;
+----
+1 100 a
+2 200 b
+3 300 c
+
+# Cleanup
+statement ok
+DROP TABLE sorted_data_part1;
+
+statement ok
+DROP TABLE sorted_data_part2;
+
+statement ok
+DROP TABLE sorted_data_part3;
+
+statement ok
+DROP TABLE sorted_parquet_multi;
+
+# Reset to default
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
 # Cleanup
 statement ok
 DROP TABLE multi_rg_data;
