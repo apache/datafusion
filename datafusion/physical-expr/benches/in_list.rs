@@ -29,6 +29,7 @@ use rand::prelude::*;
 use std::any::TypeId;
 use std::hint::black_box;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Measures how long `in_list(col("a"), exprs)` takes to evaluate against a single RecordBatch.
 fn do_bench(c: &mut Criterion, name: &str, values: ArrayRef, exprs: &[ScalarValue]) {
@@ -190,5 +191,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_millis(20))
+        .measurement_time(Duration::from_millis(150));
+    targets = criterion_benchmark
+}
 criterion_main!(benches);
