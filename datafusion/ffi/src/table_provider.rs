@@ -20,7 +20,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use abi_stable::StableAbi;
-use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use abi_stable::std_types::{ROption, RResult, RVec};
 use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
@@ -215,7 +215,7 @@ fn supports_filters_pushdown_internal(
 unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: RVec<u8>,
-) -> RResult<RVec<FFI_TableProviderFilterPushDown>, RString> {
+) -> FFIResult<RVec<FFI_TableProviderFilterPushDown>> {
     let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
     let task_ctx = rresult_return!(<Arc<TaskContext>>::try_from(
         &provider.logical_codec.task_ctx_provider
@@ -244,8 +244,16 @@ unsafe extern "C" fn scan_fn_wrapper(
     let internal_provider = Arc::clone(provider.inner());
 
     async move {
-        let foreign_session = rresult_return!(ForeignSession::try_from(&session));
-        let session = session.as_local().unwrap_or(&foreign_session);
+        let mut foreign_session = None;
+        let session = rresult_return!(
+            session
+                .as_local()
+                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .unwrap_or_else(|| {
+                    foreign_session = Some(ForeignSession::try_from(&session)?);
+                    Ok(foreign_session.as_ref().unwrap())
+                })
+        );
 
         let task_ctx = rresult_return!(task_ctx);
         let filters = match filters_serialized.is_empty() {
@@ -286,8 +294,16 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     let input = input.clone();
 
     async move {
-        let foreign_session = rresult_return!(ForeignSession::try_from(&session));
-        let session = session.as_local().unwrap_or(&foreign_session);
+        let mut foreign_session = None;
+        let session = rresult_return!(
+            session
+                .as_local()
+                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .unwrap_or_else(|| {
+                    foreign_session = Some(ForeignSession::try_from(&session)?);
+                    Ok(foreign_session.as_ref().unwrap())
+                })
+        );
 
         let input = rresult_return!(<Arc<dyn ExecutionPlan>>::try_from(&input));
 
