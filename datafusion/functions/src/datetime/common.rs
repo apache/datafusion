@@ -23,9 +23,7 @@ use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
     StringArrayType, StringViewArray,
 };
-use arrow::compute::kernels::cast_utils::{
-    string_to_datetime, string_to_timestamp_nanos,
-};
+use arrow::compute::kernels::cast_utils::string_to_datetime;
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow_buffer::ArrowNativeType;
 use chrono::LocalResult::Single;
@@ -43,12 +41,6 @@ use num_traits::{PrimInt, ToPrimitive};
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
 static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
-
-#[expect(unused)]
-/// Calls string_to_timestamp_nanos and converts the error type
-pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
-    string_to_timestamp_nanos(s).map_err(|e| e.into())
-}
 
 pub(crate) fn string_to_timestamp_nanos_with_timezone(
     timezone: &Option<Tz>,
@@ -179,7 +171,7 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 }
 
 /// Accepts a string with a `chrono` format and converts it to a
-/// nanosecond precision timestamp.
+/// nanosecond precision timestamp relative to the provided `timezone`.
 ///
 /// See [`chrono::format::strftime`] for the full set of supported formats.
 ///
@@ -205,18 +197,6 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 #[inline]
-#[expect(unused)]
-pub(crate) fn string_to_timestamp_nanos_formatted(
-    s: &str,
-    format: &str,
-) -> Result<i64, DataFusionError> {
-    string_to_datetime_formatted(&Utc, s, format)?
-        .naive_utc()
-        .and_utc()
-        .timestamp_nanos_opt()
-        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
-}
-
 pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
     timezone: &Option<Tz>,
     s: &str,
@@ -231,7 +211,7 @@ pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
 }
 
 /// Accepts a string with a `chrono` format and converts it to a
-/// millisecond precision timestamp.
+/// millisecond precision timestamp relative to the provided `timezone`.
 ///
 /// See [`chrono::format::strftime`] for the full set of supported formats.
 ///
