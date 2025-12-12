@@ -135,6 +135,10 @@ pub trait PruningStatistics {
 /// This feeds into [`CompositePruningStatistics`] to allow pruning
 /// with filters that depend both on partition columns and data columns
 /// (e.g. `WHERE partition_col = data_col`).
+#[deprecated(
+    since = "52.0.0",
+    note = "This struct is no longer used internally. Use `replace_columns_with_literals` from `datafusion-physical-expr-adapter` to substitute partition column values before pruning. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+)]
 #[derive(Clone)]
 pub struct PartitionPruningStatistics {
     /// Values for each column for each container.
@@ -156,6 +160,7 @@ pub struct PartitionPruningStatistics {
     partition_schema: SchemaRef,
 }
 
+#[expect(deprecated)]
 impl PartitionPruningStatistics {
     /// Create a new instance of [`PartitionPruningStatistics`].
     ///
@@ -169,6 +174,36 @@ impl PartitionPruningStatistics {
     ///   This must **not** be the schema of the entire file or table:
     ///   instead it must only be the schema of the partition columns,
     ///   in the same order as the values in `partition_values`.
+    ///
+    /// # Example
+    ///
+    /// To create [`PartitionPruningStatistics`] for two partition columns `a` and `b`,
+    /// for three containers like this:
+    ///
+    /// | a | b |
+    /// | - | - |
+    /// | 1 | 2 |
+    /// | 3 | 4 |
+    /// | 5 | 6 |
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion_common::ScalarValue;
+    /// # use arrow::datatypes::{DataType, Field};
+    /// # use datafusion_common::pruning::PartitionPruningStatistics;
+    ///
+    /// let partition_values = vec![
+    ///     vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
+    ///     vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
+    ///     vec![ScalarValue::from(5i32), ScalarValue::from(6i32)],
+    /// ];
+    /// let partition_fields = vec![
+    ///     Arc::new(Field::new("a", DataType::Int32, false)),
+    ///     Arc::new(Field::new("b", DataType::Int32, false)),
+    /// ];
+    /// let partition_stats =
+    ///     PartitionPruningStatistics::try_new(partition_values, partition_fields).unwrap();
+    /// ```
     pub fn try_new(
         partition_values: Vec<Vec<ScalarValue>>,
         partition_fields: Vec<FieldRef>,
@@ -202,6 +237,7 @@ impl PartitionPruningStatistics {
     }
 }
 
+#[expect(deprecated)]
 impl PruningStatistics for PartitionPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let index = self.partition_schema.index_of(column.name()).ok()?;
@@ -409,10 +445,15 @@ impl PruningStatistics for PrunableStatistics {
 /// the first one is returned without any regard for completeness or accuracy.
 /// That is: if the first statistics has information for a column, even if it is incomplete,
 /// that is returned even if a later statistics has more complete information.
+#[deprecated(
+    since = "52.0.0",
+    note = "This struct is no longer used internally. It may be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first. Please open an issue if you have a use case for it."
+)]
 pub struct CompositePruningStatistics {
     pub statistics: Vec<Box<dyn PruningStatistics>>,
 }
 
+#[expect(deprecated)]
 impl CompositePruningStatistics {
     /// Create a new instance of [`CompositePruningStatistics`] from
     /// a vector of [`PruningStatistics`].
@@ -427,6 +468,7 @@ impl CompositePruningStatistics {
     }
 }
 
+#[expect(deprecated)]
 impl PruningStatistics for CompositePruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         for stats in &self.statistics {
@@ -483,6 +525,7 @@ impl PruningStatistics for CompositePruningStatistics {
 }
 
 #[cfg(test)]
+#[expect(deprecated)]
 mod tests {
     use crate::{
         ColumnStatistics,
@@ -493,8 +536,14 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use std::sync::Arc;
 
-    #[test]
-    fn test_partition_pruning_statistics() {
+    /// return a PartitionPruningStatistics for two columns 'a' and 'b'
+    /// and the following stats
+    ///
+    /// | a | b |
+    /// | - | - |
+    /// | 1 | 2 |
+    /// | 3 | 4 |
+    fn partition_pruning_statistics_setup() -> PartitionPruningStatistics {
         let partition_values = vec![
             vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
             vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
@@ -503,9 +552,12 @@ mod tests {
             Arc::new(Field::new("a", DataType::Int32, false)),
             Arc::new(Field::new("b", DataType::Int32, false)),
         ];
-        let partition_stats =
-            PartitionPruningStatistics::try_new(partition_values, partition_fields)
-                .unwrap();
+        PartitionPruningStatistics::try_new(partition_values, partition_fields).unwrap()
+    }
+
+    #[test]
+    fn test_partition_pruning_statistics() {
+        let partition_stats = partition_pruning_statistics_setup();
 
         let column_a = Column::new_unqualified("a");
         let column_b = Column::new_unqualified("b");
@@ -562,23 +614,29 @@ mod tests {
 
     #[test]
     fn test_partition_pruning_statistics_multiple_positive_values() {
-        let partition_values = vec![
-            vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
-            vec![ScalarValue::from(3i32), ScalarValue::from(4i32)],
-        ];
-        let partition_fields = vec![
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            Arc::new(Field::new("b", DataType::Int32, false)),
-        ];
-        let partition_stats =
-            PartitionPruningStatistics::try_new(partition_values, partition_fields)
-                .unwrap();
+        let partition_stats = partition_pruning_statistics_setup();
 
         let column_a = Column::new_unqualified("a");
 
+        // The two containers have `a` values 1 and 3, so they both only contain values from 1 and 3
         let values = HashSet::from([ScalarValue::from(1i32), ScalarValue::from(3i32)]);
         let contained_a = partition_stats.contained(&column_a, &values).unwrap();
         let expected_contained_a = BooleanArray::from(vec![true, true]);
+        assert_eq!(contained_a, expected_contained_a);
+    }
+
+    #[test]
+    fn test_partition_pruning_statistics_multiple_negative_values() {
+        let partition_stats = partition_pruning_statistics_setup();
+
+        let column_a = Column::new_unqualified("a");
+
+        // The two containers have `a` values 1 and 3,
+        // so the first contains ONLY values from 1,2
+        // but the second does not
+        let values = HashSet::from([ScalarValue::from(1i32), ScalarValue::from(2i32)]);
+        let contained_a = partition_stats.contained(&column_a, &values).unwrap();
+        let expected_contained_a = BooleanArray::from(vec![true, false]);
         assert_eq!(contained_a, expected_contained_a);
     }
 

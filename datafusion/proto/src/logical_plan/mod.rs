@@ -606,27 +606,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable {
-                        schema: pb_schema.try_into()?,
-                        name: from_table_reference(
+                    CreateExternalTable::builder(
+                        from_table_reference(
                             create_extern_table.name.as_ref(),
                             "CreateExternalTable",
                         )?,
-                        location: create_extern_table.location.clone(),
-                        file_type: create_extern_table.file_type.clone(),
-                        table_partition_cols: create_extern_table
-                            .table_partition_cols
-                            .clone(),
-                        order_exprs,
-                        if_not_exists: create_extern_table.if_not_exists,
-                        or_replace: create_extern_table.or_replace,
-                        temporary: create_extern_table.temporary,
-                        definition,
-                        unbounded: create_extern_table.unbounded,
-                        options: create_extern_table.options.clone(),
-                        constraints: constraints.into(),
-                        column_defaults,
-                    },
+                        create_extern_table.location.clone(),
+                        create_extern_table.file_type.clone(),
+                        pb_schema.try_into()?,
+                    )
+                    .with_partition_cols(create_extern_table.table_partition_cols.clone())
+                    .with_order_exprs(order_exprs)
+                    .with_if_not_exists(create_extern_table.if_not_exists)
+                    .with_or_replace(create_extern_table.or_replace)
+                    .with_temporary(create_extern_table.temporary)
+                    .with_definition(definition)
+                    .with_unbounded(create_extern_table.unbounded)
+                    .with_options(create_extern_table.options.clone())
+                    .with_constraints(constraints.into())
+                    .with_column_defaults(column_defaults)
+                    .build(),
                 )))
             }
             LogicalPlanType::CreateView(create_view) => {

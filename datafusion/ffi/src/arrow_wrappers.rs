@@ -24,6 +24,7 @@ use arrow::{
     error::ArrowError,
     ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
 };
+use datafusion_common::{DataFusionError, ScalarValue};
 use log::error;
 
 /// This is a wrapper struct around FFI_ArrowSchema simply to indicate
@@ -93,5 +94,23 @@ impl TryFrom<&ArrayRef> for WrappedArray {
         let schema = WrappedSchema(schema);
 
         Ok(WrappedArray { array, schema })
+    }
+}
+
+impl TryFrom<&ScalarValue> for WrappedArray {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ScalarValue) -> Result<Self, Self::Error> {
+        let array = value.to_array()?;
+        WrappedArray::try_from(&array).map_err(Into::into)
+    }
+}
+
+impl TryFrom<WrappedArray> for ScalarValue {
+    type Error = DataFusionError;
+
+    fn try_from(value: WrappedArray) -> Result<Self, Self::Error> {
+        let array: ArrayRef = value.try_into()?;
+        ScalarValue::try_from_array(array.as_ref(), 0)
     }
 }

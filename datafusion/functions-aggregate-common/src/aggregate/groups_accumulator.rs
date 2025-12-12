@@ -32,7 +32,7 @@ use arrow::{
     compute::take_arrays,
     datatypes::UInt32Type,
 };
-use datafusion_common::{arrow_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 

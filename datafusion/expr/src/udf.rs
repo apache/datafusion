@@ -26,7 +26,7 @@ use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    assert_or_internal_err, not_impl_err, ExprSchema, Result, ScalarValue,
+    ExprSchema, Result, ScalarValue, assert_or_internal_err, not_impl_err,
 };
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -91,7 +91,8 @@ impl PartialOrd for ScalarUDF {
             "Detected incorrect implementation of PartialEq when comparing functions: '{}' and '{}'. \
             The functions compare as equal, but they are not equal based on general properties that \
             the PartialOrd implementation observes,",
-            self.name(), other.name()
+            self.name(),
+            other.name()
         );
         Some(cmp)
     }
@@ -227,7 +228,7 @@ impl ScalarUDF {
 
     #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -901,7 +902,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 

@@ -3022,9 +3022,7 @@ impl ScalarValue {
                 )
             }
             ScalarValue::Utf8(e) => match e {
-                Some(value) => {
-                    Arc::new(StringArray::from_iter_values(repeat_n(value, size)))
-                }
+                Some(value) => Arc::new(StringArray::new_repeated(value, size)),
                 None => new_null_array(&DataType::Utf8, size),
             },
             ScalarValue::Utf8View(e) => match e {
@@ -3034,15 +3032,13 @@ impl ScalarValue {
                 None => new_null_array(&DataType::Utf8View, size),
             },
             ScalarValue::LargeUtf8(e) => match e {
-                Some(value) => {
-                    Arc::new(LargeStringArray::from_iter_values(repeat_n(value, size)))
-                }
+                Some(value) => Arc::new(LargeStringArray::new_repeated(value, size)),
                 None => new_null_array(&DataType::LargeUtf8, size),
             },
             ScalarValue::Binary(e) => match e {
-                Some(value) => Arc::new(
-                    repeat_n(Some(value.as_slice()), size).collect::<BinaryArray>(),
-                ),
+                Some(value) => {
+                    Arc::new(BinaryArray::new_repeated(value.as_slice(), size))
+                }
                 None => new_null_array(&DataType::Binary, size),
             },
             ScalarValue::BinaryView(e) => match e {
@@ -3069,9 +3065,9 @@ impl ScalarValue {
                 }
             },
             ScalarValue::LargeBinary(e) => match e {
-                Some(value) => Arc::new(
-                    repeat_n(Some(value.as_slice()), size).collect::<LargeBinaryArray>(),
-                ),
+                Some(value) => {
+                    Arc::new(LargeBinaryArray::new_repeated(value.as_slice(), size))
+                }
                 None => new_null_array(&DataType::LargeBinary, size),
             },
             ScalarValue::List(arr) => {

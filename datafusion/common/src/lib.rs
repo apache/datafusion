@@ -69,6 +69,9 @@ pub use dfschema::{
     DFSchema, DFSchemaRef, ExprSchema, SchemaExt, ToDFSchema, qualified_name,
 };
 pub use diagnostic::Diagnostic;
+pub use display::human_readable::{
+    human_readable_count, human_readable_duration, human_readable_size, units,
+};
 pub use error::{
     DataFusionError, Result, SchemaError, SharedResult, field_not_found,
     unqualified_field_not_found,
@@ -102,9 +105,9 @@ pub use utils::project_schema;
 // https://github.com/rust-lang/rust/pull/52234#issuecomment-976702997
 #[doc(hidden)]
 pub use error::{
-    _config_datafusion_err, _exec_datafusion_err, _internal_datafusion_err,
-    _not_impl_datafusion_err, _plan_datafusion_err, _resources_datafusion_err,
-    _substrait_datafusion_err,
+    _config_datafusion_err, _exec_datafusion_err, _ffi_datafusion_err,
+    _internal_datafusion_err, _not_impl_datafusion_err, _plan_datafusion_err,
+    _resources_datafusion_err, _substrait_datafusion_err,
 };
 
 // The HashMap and HashSet implementations that should be used as the uniform defaults

@@ -23,7 +23,7 @@ use crate::utils::{
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::{ArrayRef, UInt64Array};
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_datafusion_err, exec_err, Result};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };

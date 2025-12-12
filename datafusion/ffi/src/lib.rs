@@ -28,12 +28,16 @@
 pub mod arrow_wrappers;
 pub mod catalog_provider;
 pub mod catalog_provider_list;
+pub mod execution;
 pub mod execution_plan;
+pub mod expr;
 pub mod insert_op;
+pub mod physical_expr;
 pub mod plan_properties;
+pub mod proto;
 pub mod record_batch_stream;
 pub mod schema_provider;
-pub mod session_config;
+pub mod session;
 pub mod table_provider;
 pub mod table_source;
 pub mod udaf;

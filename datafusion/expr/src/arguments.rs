@@ -18,7 +18,7 @@
 //! Argument resolution logic for named function parameters
 
 use crate::Expr;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use std::collections::HashMap;
 
 /// Resolves function arguments, handling named and positional notation.
@@ -229,10 +229,12 @@ mod tests {
 
         let result = resolve_function_arguments(&param_names, args, arg_names);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Positional argument"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Positional argument")
+        );
     }
 
     #[test]
@@ -245,10 +247,12 @@ mod tests {
 
         let result = resolve_function_arguments(&param_names, args, arg_names);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unknown parameter"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown parameter")
+        );
     }
 
     #[test]
@@ -261,10 +265,12 @@ mod tests {
 
         let result = resolve_function_arguments(&param_names, args, arg_names);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("specified multiple times"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("specified multiple times")
+        );
     }
 
     #[test]
@@ -277,9 +283,11 @@ mod tests {
 
         let result = resolve_function_arguments(&param_names, args, arg_names);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Missing required parameter"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required parameter")
+        );
     }
 }
