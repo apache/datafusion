@@ -612,7 +612,6 @@ mod tests {
         use crate::PartitionedFile;
         use datafusion_common::stats::Precision;
         use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
-        use object_store::path::Path;
 
         // Create a PartitionedFile with partition values
         let mut pf = PartitionedFile::new(
