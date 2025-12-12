@@ -579,6 +579,71 @@ C 1 300
 D 1 400
 E 1 500
 
+query TT
+EXPLAIN SELECT env, time_bin, AVG(max_bin_val)
+FROM
+  (
+    SELECT  f_dkey,
+            date_bin(INTERVAL '30 seconds', timestamp) AS time_bin,
+            MAX(env) AS env,   -- TRICK: Add MAX here to avoid putting it in the group by. d_fkey (represent all columns in a fact file) is unique so env is also unique
+            MAX(value) AS max_bin_val
+    FROM
+    (
+        SELECT f.f_dkey, f.timestamp, d.env, f.value
+        FROM
+            (SELECT DISTINCT d_dkey, env
+            FROM   dimension_table
+            WHERE  service = 'log'
+            ) AS d,
+            fact_table_ordered AS f
+        WHERE d.d_dkey = f.f_dkey
+    ) AS j
+    GROUP BY f_dkey, time_bin
+  ) AS a
+GROUP BY env, time_bin
+ORDER BY env, time_bin;
+----
+logical_plan
+01)Sort: a.env ASC NULLS LAST, a.time_bin ASC NULLS LAST
+02)--Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_val)]]
+03)----SubqueryAlias: a
+04)------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, max(j.env) AS env, max(j.value) AS max_bin_val
+05)--------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp)]], aggr=[[max(j.env), max(j.value)]]
+06)----------SubqueryAlias: j
+07)------------Projection: f.f_dkey, f.timestamp, d.env, f.value
+08)--------------Inner Join: d.d_dkey = f.f_dkey
+09)----------------SubqueryAlias: d
+10)------------------Aggregate: groupBy=[[dimension_table.d_dkey, dimension_table.env]], aggr=[[]]
+11)--------------------Projection: dimension_table.d_dkey, dimension_table.env
+12)----------------------Filter: dimension_table.service = Utf8View("log")
+13)------------------------TableScan: dimension_table projection=[d_dkey, env, service], partial_filters=[dimension_table.service = Utf8View("log")]
+14)----------------SubqueryAlias: f
+15)------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
+physical_plan
+01)SortPreservingMergeExec: [env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
+02)--SortExec: expr=[env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[avg(a.max_bin_val)]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([env@0, time_bin@1], 3), input_partitions=3
+06)----------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[avg(a.max_bin_val)]
+07)------------ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as time_bin, max(j.env)@2 as env, max(j.value)@3 as max_bin_val]
+08)--------------AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)], aggr=[max(j.env), max(j.value)], ordering_mode=Sorted
+09)----------------SortExec: expr=[f_dkey@0 ASC NULLS LAST, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 ASC NULLS LAST], preserve_partitioning=[true]
+10)------------------CoalesceBatchesExec: target_batch_size=8192
+11)--------------------RepartitionExec: partitioning=Hash([f_dkey@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1], 3), input_partitions=3
+12)----------------------AggregateExec: mode=Partial, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)], aggr=[max(j.env), max(j.value)], ordering_mode=Sorted
+13)------------------------ProjectionExec: expr=[f_dkey@3 as f_dkey, timestamp@1 as timestamp, env@0 as env, value@2 as value]
+14)--------------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d_dkey@0, f_dkey@2)], projection=[env@1, timestamp@2, value@3, f_dkey@4]
+15)----------------------------CoalescePartitionsExec
+16)------------------------------AggregateExec: mode=FinalPartitioned, gby=[d_dkey@0 as d_dkey, env@1 as env], aggr=[]
+17)--------------------------------CoalesceBatchesExec: target_batch_size=8192
+18)----------------------------------RepartitionExec: partitioning=Hash([d_dkey@0, env@1], 3), input_partitions=3
+19)------------------------------------AggregateExec: mode=Partial, gby=[d_dkey@0 as d_dkey, env@1 as env], aggr=[]
+20)--------------------------------------FilterExec: service@2 = log, projection=[d_dkey@0, env@1]
+21)----------------------------------------RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+22)------------------------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/dimension/data.parquet]]}, projection=[d_dkey, env, service], file_type=parquet, predicate=service@2 = log, pruning_predicate=service_null_count@2 != row_count@3 AND service_min@0 <= log AND log <= service_max@1, required_guarantees=[service in (log)]
+23)----------------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/preserve_file_partitioning/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+
 ##########
 # CLEANUP
 ##########
