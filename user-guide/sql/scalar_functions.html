@@ -3215,7 +3215,7 @@ Can be a constant, column, or function.</p></li>
 <section id="to-date">
 <h3><code class="docutils literal notranslate"><span class="pre">to_date</span></code><a class="headerlink" href="#to-date" title="Link to this heading">#</a></h3>
 <p>Converts a value to a date (<code class="docutils literal notranslate"><span class="pre">YYYY-MM-DD</span></code>).
-Supports strings, integer and double types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. ‘2023-07-20’) if no <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a>s are provided.
 Integers and doubles are interpreted as days since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>).
 Returns the corresponding date.</p>
