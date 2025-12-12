@@ -108,20 +108,22 @@ fn decimal_scale(dt: &DataType) -> Option<i8> {
 #[derive(Clone, Copy, Debug)]
 struct DecimalVarianceParams {
     input_scale: i8,
+    full_two_scale: i32,
     result_precision: u8,
     result_scale: i8,
 }
 
 fn decimal_variance_params(data_type: &DataType) -> Option<DecimalVarianceParams> {
     decimal_scale(data_type).map(|input_scale| {
-        let base_scale = input_scale.saturating_mul(2);
-        let target_scale = base_scale
-            .saturating_add(DECIMAL_VARIANCE_SCALE_INCREMENT)
-            .min(DECIMAL256_MAX_SCALE);
+        let input_scale_i32 = input_scale as i32;
+        let full_two_scale = input_scale_i32.saturating_mul(2);
+        let target_scale = (full_two_scale + DECIMAL_VARIANCE_SCALE_INCREMENT as i32)
+            .min(DECIMAL256_MAX_SCALE as i32);
         DecimalVarianceParams {
             input_scale,
+            full_two_scale,
             result_precision: DECIMAL256_MAX_PRECISION,
-            result_scale: target_scale,
+            result_scale: target_scale as i8,
         }
     })
 }
@@ -370,9 +372,10 @@ impl DecimalVarianceState {
             return Ok(None);
         }
 
-        let two_scale = params.input_scale.saturating_mul(2);
-        if params.result_scale >= two_scale {
-            let up = params.result_scale - two_scale;
+        let two_scale = params.full_two_scale;
+        let result_scale = params.result_scale as i32;
+        if result_scale >= two_scale {
+            let up = result_scale - two_scale;
             let factor = pow10_i256(up as u32)?;
             let scaled_numerator = numerator
                 .checked_mul(factor)
@@ -383,7 +386,7 @@ impl DecimalVarianceState {
             return Ok(Some(value));
         }
 
-        let down = two_scale - params.result_scale;
+        let down = two_scale - result_scale;
         let factor = pow10_i256(down as u32)?;
         let scaled_numerator = numerator
             .checked_div(factor)
@@ -1437,7 +1440,18 @@ mod tests {
             StatsType::Population,
         )?;
         acc.update_batch(&[array])?;
-        assert_decimal_variance(acc.evaluate()?, 1e-152, params.result_scale);
+        match acc.evaluate()? {
+            ScalarValue::Decimal256(Some(raw), precision, scale) => {
+                // With input scale at the maximum, 2*scale exceeds the maximum representable
+                // scale for Decimal256, so the result rounds down to zero at scale=76.
+                assert_eq!(
+                    raw,
+                    i256::ZERO,
+                    "variance should round to zero at max scale (precision={precision}, scale={scale})"
+                );
+            }
+            other => panic!("expected Decimal256 result, got {other:?}"),
+        }
         Ok(())
     }
 
