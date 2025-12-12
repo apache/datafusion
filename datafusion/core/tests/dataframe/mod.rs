@@ -6897,7 +6897,7 @@ async fn write_physical_plan_results_with_prefix() -> Result<()> {
         ctx,
     } = FixtureDataGen::prepare_execution_plan_writes(config).await?;
 
-    let partitioned_file = format!("{out_dir}/c2=123/prefix-*");
+    let partitioned_file = format!("{out_dir}/prefix-*");
 
     let df = ctx
         .read_parquet(&partitioned_file, Default::default())

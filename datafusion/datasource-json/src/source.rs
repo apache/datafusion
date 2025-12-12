@@ -277,15 +277,13 @@ pub async fn plan_to_json(
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let exec_options = &task_ctx.session_config().options().execution;
     let writer_buffer_size = exec_options.objectstore_writer_buffer_size;
+    let file_name_prefix = exec_options.partitioned_file_prefix_name.as_str();
+
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let storeref = Arc::clone(&store);
         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
-        let filename = format!(
-            "{}/{}part-{i}.json",
-            exec_options.partitioned_file_prefix_name,
-            parsed.prefix()
-        );
+        let filename = format!("{}/{file_name_prefix}part-{i}.json", parsed.prefix());
         let file = object_store::path::Path::parse(filename)?;
 
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;

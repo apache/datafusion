@@ -40,13 +40,11 @@ pub async fn plan_to_parquet(
     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
     let mut join_set = JoinSet::new();
     let exec_options = &task_ctx.session_config().options().execution;
+    let file_name_prefix = exec_options.partitioned_file_prefix_name.as_str();
+
     for i in 0..plan.output_partitioning().partition_count() {
         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
-        let filename = format!(
-            "{}/{}part-{i}.parquet",
-            exec_options.partitioned_file_prefix_name,
-            parsed.prefix()
-        );
+        let filename = format!("{}/{file_name_prefix}part-{i}.parquet", parsed.prefix());
         let file = Path::parse(filename)?;
         let propclone = writer_properties.clone();
 
