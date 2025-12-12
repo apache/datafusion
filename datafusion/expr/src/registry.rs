@@ -20,10 +20,12 @@
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
-use datafusion_common::{HashMap, Result, not_impl_err, plan_datafusion_err};
+use arrow_schema::Field;
+use datafusion_common::types::{LogicalTypeRef, NativeType};
+use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// A registry knows how to build logical expressions out of user-defined function' names
 pub trait FunctionRegistry {
@@ -213,5 +215,217 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn udwfs(&self) -> HashSet<String> {
         self.udwfs.keys().cloned().collect()
+    }
+}
+
+/// The registration of an extension type.
+///
+/// Implementations of this trait are responsible for *creating* instances of [LogicalType] that
+/// represent the semantics of an extension type. One cannot directly register the [LogicalType]
+/// instances because some extension types may have parameters that are unknown at compile time
+/// (e.g., the unknown type in [Opaque](arrow_schema::extension::Opaque)).
+pub trait ExtensionTypeRegistration: Debug + Send + Sync {
+    /// The name of the extension type.
+    ///
+    /// This name will be used to find the correct [ExtensionTypeRegistration] when an extension
+    /// type is encountered.
+    fn type_name(&self) -> &str;
+
+    /// Creates a logical type instance from the provided `field`.
+    ///
+    /// The resulting [LogicalTypeRef] should only capture the *type information*, not any other
+    /// metadata or nullability information that is part of the field.
+    fn create_logical_type(&self, field: &Field) -> Result<LogicalTypeRef>;
+}
+
+/// A cheaply cloneable pointer to an [ExtensionTypeRegistration].
+pub type ExtensionTypeRegistrationRef = Arc<dyn ExtensionTypeRegistration>;
+
+/// Supports registering custom [LogicalType]s, including native types.
+pub trait ExtensionTypeRegistry: Debug + Send + Sync {
+    /// Returns a reference to the logical type named `name`.
+    ///
+    /// Returns an error if there is no extension type with that name.
+    fn extension_type(&self, name: &str) -> Result<ExtensionTypeRegistrationRef>;
+
+    /// Creates a [LogicalTypeRef] from the type information in the `field`.
+    fn create_logical_type_for_field(&self, field: &Field) -> Result<LogicalTypeRef> {
+        match field.extension_type_name() {
+            None => Ok(Arc::new(NativeType::from(field.data_type()))),
+            Some(name) => {
+                let extension_type = self.extension_type(name)?;
+                extension_type.create_logical_type(field)
+            }
+        }
+    }
+
+    /// Returns all registered [ExtensionTypeRegistration].
+    fn extension_types(&self) -> Vec<Arc<dyn ExtensionTypeRegistration>>;
+
+    /// Registers a new [ExtensionTypeRegistrationRef], returning any previously registered
+    /// implementation.
+    ///
+    /// Returns an error if the type cannot be registered, for example, if the registry is
+    /// read-only.
+    fn register_extension_type(
+        &self,
+        extension_type: ExtensionTypeRegistrationRef,
+    ) -> Result<Option<ExtensionTypeRegistrationRef>>;
+
+    /// Extends the registry with the provided extension types.
+    ///
+    /// Returns an error if the type cannot be registered, for example, if the registry is
+    /// read-only.
+    fn extend(&self, extension_types: &[ExtensionTypeRegistrationRef]) -> Result<()> {
+        for extension_type in extension_types {
+            self.register_extension_type(extension_type.clone())?;
+        }
+        Ok(())
+    }
+
+    /// Deregisters an extension type registration with the name `name`, returning the
+    /// implementation that was deregistered.
+    ///
+    /// Returns an error if the type cannot be deregistered, for example, if the registry is
+    /// read-only.
+    fn deregister_extension_type(
+        &self,
+        name: &str,
+    ) -> Result<Option<ExtensionTypeRegistrationRef>>;
+}
+
+/// A simple implementation of [ExtensionTypeRegistration] where the logical type instance can be
+/// obtained by cloning the inner [`LogicalTypeRef`].
+///
+/// As a result, the logical type instance cannot depend on any parameters. For example, if the
+/// logical type is `Opaque(Uuid)`, and the `create_logical_type` method should return an instance
+/// of `Opaque` where `Uuid` is a parameter, then this implementation cannot be used, as the inner
+/// type (`Uuid`) needs to be extracted from the field and passed into the `Opaque` constructor.
+#[derive(Debug)]
+pub struct SimpleExtensionTypeRegistration {
+    /// The name of the extension type.
+    name: String,
+    /// The logical type instance.
+    logical_type: LogicalTypeRef,
+}
+
+impl SimpleExtensionTypeRegistration {
+    /// Creates a new registration for the given `name` and `logical_type`.
+    pub fn new_arc(name: &str, logical_type: LogicalTypeRef) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            logical_type,
+        })
+    }
+}
+
+impl ExtensionTypeRegistration for SimpleExtensionTypeRegistration {
+    fn type_name(&self) -> &str {
+        &self.name
+    }
+
+    fn create_logical_type(&self, _field: &Field) -> Result<LogicalTypeRef> {
+        Ok(Arc::clone(&self.logical_type))
+    }
+}
+
+/// An [`ExtensionTypeRegistry`] that uses in memory [`HashMap`]s.
+#[derive(Clone, Debug)]
+pub struct MemoryExtensionTypeRegistry {
+    /// Holds a mapping between the name of an extension type and its logical type.
+    extension_types: Arc<RwLock<HashMap<String, ExtensionTypeRegistrationRef>>>,
+}
+
+impl Default for MemoryExtensionTypeRegistry {
+    fn default() -> Self {
+        MemoryExtensionTypeRegistry {
+            extension_types: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl MemoryExtensionTypeRegistry {
+    /// Creates an empty [MemoryExtensionTypeRegistry].
+    pub fn new() -> Self {
+        Self {
+            extension_types: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Creates a new [MemoryExtensionTypeRegistry] with the provided `types`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one of the `types` is a native type.
+    pub fn new_with_types(
+        types: impl IntoIterator<Item = ExtensionTypeRegistrationRef>,
+    ) -> Result<Self> {
+        let extension_types = types
+            .into_iter()
+            .map(|t| (t.type_name().to_owned(), t))
+            .collect::<HashMap<_, _>>();
+        Ok(Self {
+            extension_types: Arc::new(RwLock::new(extension_types)),
+        })
+    }
+
+    /// Returns a list of all registered types.
+    pub fn all_extension_types(&self) -> Vec<ExtensionTypeRegistrationRef> {
+        self.extension_types
+            .read()
+            .expect("Extension type registry lock poisoned")
+            .values()
+            .cloned()
+            .collect()
+    }
+}
+
+impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
+    fn extension_type(&self, name: &str) -> Result<ExtensionTypeRegistrationRef> {
+        self.extension_types
+            .write()
+            .expect("Extension type registry lock poisoned")
+            .get(name)
+            .ok_or_else(|| plan_datafusion_err!("Logical type not found."))
+            .cloned()
+    }
+
+    fn extension_types(&self) -> Vec<Arc<dyn ExtensionTypeRegistration>> {
+        self.extension_types
+            .read()
+            .expect("Extension type registry lock poisoned")
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    fn register_extension_type(
+        &self,
+        extension_type: ExtensionTypeRegistrationRef,
+    ) -> Result<Option<ExtensionTypeRegistrationRef>> {
+        Ok(self
+            .extension_types
+            .write()
+            .expect("Extension type registry lock poisoned")
+            .insert(extension_type.type_name().to_owned(), extension_type))
+    }
+
+    fn deregister_extension_type(
+        &self,
+        name: &str,
+    ) -> Result<Option<ExtensionTypeRegistrationRef>> {
+        Ok(self
+            .extension_types
+            .write()
+            .expect("Extension type registry lock poisoned")
+            .remove(name))
+    }
+}
+
+impl From<HashMap<String, ExtensionTypeRegistrationRef>> for MemoryExtensionTypeRegistry {
+    fn from(value: HashMap<String, ExtensionTypeRegistrationRef>) -> Self {
+        Self {
+            extension_types: Arc::new(RwLock::new(value)),
+        }
     }
 }

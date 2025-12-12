@@ -30,12 +30,16 @@ use crate::execution::context::SessionState;
 #[cfg(feature = "nested_expressions")]
 use crate::functions_nested;
 use crate::{functions, functions_aggregate, functions_table, functions_window};
+use arrow_schema::extension::{ExtensionType, Uuid};
 use datafusion_catalog::TableFunction;
 use datafusion_catalog::{MemoryCatalogProvider, MemorySchemaProvider};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::registry::{
+    ExtensionTypeRegistrationRef, SimpleExtensionTypeRegistration,
+};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -120,6 +124,14 @@ impl SessionStateDefaults {
     /// returns the list of default [`WindowUDF`]s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
         functions_window::all_default_window_functions()
+    }
+
+    /// returns the list of default [`WindowUDF`]s
+    pub fn default_extension_types() -> Vec<ExtensionTypeRegistrationRef> {
+        vec![SimpleExtensionTypeRegistration::new_arc(
+            Uuid::NAME,
+            Arc::new(Uuid),
+        )]
     }
 
     /// returns the list of default [`TableFunction`]s

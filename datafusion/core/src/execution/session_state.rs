@@ -54,7 +54,10 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
-use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
+use datafusion_expr::registry::{
+    ExtensionTypeRegistration, ExtensionTypeRegistrationRef, ExtensionTypeRegistry,
+    FunctionRegistry, MemoryExtensionTypeRegistry, SerializerRegistry,
+};
 use datafusion_expr::simplify::SimplifyInfo;
 #[cfg(feature = "sql")]
 use datafusion_expr::TableSource;
@@ -160,6 +163,8 @@ pub struct SessionState {
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions registered in the context
     window_functions: HashMap<String, Arc<WindowUDF>>,
+    /// Extension types registry for extensions.
+    extension_types: Arc<dyn ExtensionTypeRegistry>,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Holds registered external FileFormat implementations
@@ -977,6 +982,7 @@ pub struct SessionStateBuilder {
     scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
     aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
     window_functions: Option<Vec<Arc<WindowUDF>>>,
+    extension_types: Option<Arc<dyn ExtensionTypeRegistry>>,
     serializer_registry: Option<Arc<dyn SerializerRegistry>>,
     file_formats: Option<Vec<Arc<dyn FileFormatFactory>>>,
     config: Option<SessionConfig>,
@@ -1017,6 +1023,7 @@ impl SessionStateBuilder {
             scalar_functions: None,
             aggregate_functions: None,
             window_functions: None,
+            extension_types: None,
             serializer_registry: None,
             file_formats: None,
             table_options: None,
@@ -1072,6 +1079,7 @@ impl SessionStateBuilder {
                 existing.aggregate_functions.into_values().collect_vec(),
             ),
             window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
             config: Some(new_config),
@@ -1116,6 +1124,11 @@ impl SessionStateBuilder {
         self.window_functions
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_window_functions());
+
+        self.extension_types
+            .get_or_insert_with(|| Arc::new(MemoryExtensionTypeRegistry::new()))
+            .extend(&SessionStateDefaults::default_extension_types())
+            .expect("MemoryExtensionTypeRegistry is not read-only.");
 
         self.table_functions
             .get_or_insert_with(HashMap::new)
@@ -1307,6 +1320,15 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Set the map of [`ExtensionTypeRegistration`]s
+    pub fn with_extension_type(
+        mut self,
+        registry: Arc<dyn ExtensionTypeRegistry>,
+    ) -> Self {
+        self.extension_types = Some(registry);
+        self
+    }
+
     /// Set the [`SerializerRegistry`]
     pub fn with_serializer_registry(
         mut self,
@@ -1445,6 +1467,7 @@ impl SessionStateBuilder {
             scalar_functions,
             aggregate_functions,
             window_functions,
+            extension_types,
             serializer_registry,
             file_formats,
             table_options,
@@ -1481,6 +1504,7 @@ impl SessionStateBuilder {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
+            extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
             serializer_registry: serializer_registry
                 .unwrap_or_else(|| Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
@@ -1548,6 +1572,10 @@ impl SessionStateBuilder {
                     debug!("Overwrote an existing UDF: {}", existing_udf.name());
                 }
             });
+        }
+
+        if let Some(extension_types) = extension_types {
+            state.extension_types = extension_types;
         }
 
         if state.config.create_default_catalog_and_schema() {
@@ -2051,6 +2079,33 @@ impl FunctionRegistry for SessionState {
 impl datafusion_execution::TaskContextProvider for SessionState {
     fn task_ctx(&self) -> Arc<TaskContext> {
         SessionState::task_ctx(self)
+    }
+}
+
+impl ExtensionTypeRegistry for SessionState {
+    fn extension_type(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<ExtensionTypeRegistrationRef> {
+        self.extension_types.extension_type(name)
+    }
+
+    fn extension_types(&self) -> Vec<Arc<dyn ExtensionTypeRegistration>> {
+        self.extension_types.extension_types()
+    }
+
+    fn register_extension_type(
+        &self,
+        extension_type: ExtensionTypeRegistrationRef,
+    ) -> datafusion_common::Result<Option<ExtensionTypeRegistrationRef>> {
+        self.extension_types.register_extension_type(extension_type)
+    }
+
+    fn deregister_extension_type(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<ExtensionTypeRegistrationRef>> {
+        self.extension_types.deregister_extension_type(name)
     }
 }
 
