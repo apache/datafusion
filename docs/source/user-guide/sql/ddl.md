@@ -71,7 +71,7 @@ LOCATION <literal>
 
 <ordered_column_list> := (<column_name> <sort_clause>, ...)
 
-<key_value_list> := (<literal> <literal, <literal> <literal>, ...)
+<key_value_list> := (<literal> <literal>, <literal> <literal>, ...)
 ```
 
 For a comprehensive list of format-specific options that can be specified in the `OPTIONS` clause, see [Format Options](format_options.md).

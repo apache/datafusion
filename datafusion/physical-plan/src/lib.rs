@@ -33,26 +33,26 @@
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
-pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::PhysicalSortExpr;
+pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, Distribution, Partitioning, PhysicalExpr,
+    Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::execution_plan::{
-    collect, collect_partitioned, displayable, execute_input_stream, execute_stream,
-    execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
+    displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
+    get_plan_string, with_new_children_if_necessary,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
-pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
+pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
 pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
 

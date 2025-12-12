@@ -25,9 +25,9 @@ use std::{
 };
 
 use crate::{
-    common, execution_plan::Boundedness, DisplayAs, DisplayFormatType, ExecutionPlan,
-    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, common,
+    execution_plan::Boundedness,
 };
 use crate::{
     execution_plan::EmissionType,
@@ -36,7 +36,7 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -522,8 +522,8 @@ pub struct StatisticsExec {
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
         assert_eq!(
-            stats
-                .column_statistics.len(), schema.fields().len(),
+            stats.column_statistics.len(),
+            schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
         let cache = Self::compute_properties(Arc::new(schema.clone()));

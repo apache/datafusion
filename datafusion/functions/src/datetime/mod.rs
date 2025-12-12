@@ -29,6 +29,7 @@ pub mod date_part;
 pub mod date_trunc;
 pub mod from_unixtime;
 pub mod make_date;
+pub mod make_time;
 pub mod now;
 pub mod planner;
 pub mod to_char;
@@ -44,6 +45,7 @@ make_udf_function!(date_bin::DateBinFunc, date_bin);
 make_udf_function!(date_part::DatePartFunc, date_part);
 make_udf_function!(date_trunc::DateTruncFunc, date_trunc);
 make_udf_function!(make_date::MakeDateFunc, make_date);
+make_udf_function!(make_time::MakeTimeFunc, make_time);
 make_udf_function!(from_unixtime::FromUnixtimeFunc, from_unixtime);
 make_udf_function!(to_char::ToCharFunc, to_char);
 make_udf_function!(to_date::ToDateFunc, to_date);
@@ -90,6 +92,10 @@ pub mod expr_fn {
         make_date,
         "make a date from year, month and day component parts",
         year month day
+    ),(
+        make_time,
+        "make a time from hour, minute and second component parts",
+        hour minute second
     ),(
         now,
         "returns the current timestamp in nanoseconds, using the same value for all instances of now() in same statement",
@@ -267,6 +273,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_trunc(),
         from_unixtime(),
         make_date(),
+        make_time(),
         now(&ConfigOptions::default()),
         to_char(),
         to_date(),
