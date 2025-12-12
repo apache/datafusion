@@ -224,6 +224,36 @@ SELECT to_date(null::double), to_date(0.0::double), to_date(19260.1::double), to
 ----
 NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
 
+# verify date cast with decimal32 input (Decimal32)
+query DDDDDD
+SELECT to_date(arrow_cast(null, 'Decimal32(8,2)')), to_date(arrow_cast(0.0, 'Decimal32(8,2)')), to_date(arrow_cast(19260.1, 'Decimal32(8,2)')), to_date(arrow_cast(1.1, 'Decimal32(8,2)')), to_date(arrow_cast(-1.1, 'Decimal32(8,2)')), to_date(0-arrow_cast(1.1, 'Decimal32(8,2)'))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with Decimal64 input
+query DDDDDD
+SELECT to_date(arrow_cast(null, 'Decimal64(8,2)')), to_date(arrow_cast(0.0, 'Decimal64(8,2)')), to_date(arrow_cast(19260.1, 'Decimal64(8,2)')), to_date(arrow_cast(1.1, 'Decimal64(8,2)')), to_date(arrow_cast(-1.1, 'Decimal64(8,2)')), to_date(0-arrow_cast(1.1, 'Decimal64(8,2)'))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with Decimal128 input
+query DDDDDD
+SELECT to_date(arrow_cast(null, 'Decimal128(8,2)')), to_date(arrow_cast(0.0, 'Decimal128(8,2)')), to_date(arrow_cast(19260.1, 'Decimal128(8,2)')), to_date(arrow_cast(1.1, 'Decimal128(8,2)')), to_date(arrow_cast(-1.1, 'Decimal128(8,2)')), to_date(0-arrow_cast(1.1, 'Decimal128(8,2)'))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with decimal input (Decimal128)
+query DDDDDD
+SELECT to_date(null::decimal(10,2)), to_date(0.0::decimal(10,2)), to_date(19260.1::decimal(10,2)), to_date(1.1::decimal(10,2)), to_date(-1.1::decimal(10,2)), to_date(0-1.1::decimal(10,2))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with Decimal256 input
+query DDDDDD
+SELECT to_date(arrow_cast(null, 'Decimal256(8,2)')), to_date(arrow_cast(0.0, 'Decimal256(8,2)')), to_date(arrow_cast(19260.1, 'Decimal256(8,2)')), to_date(arrow_cast(1.1, 'Decimal256(8,2)')), to_date(arrow_cast(-1.1, 'Decimal256(8,2)')), to_date(0-arrow_cast(1.1, 'Decimal256(8,2)'))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
 # verify date cast with date input
 query DDDD
 SELECT to_date('2024-12-1'::date), to_date('1920-01-12'::date), to_date('1970-01-01'::date), to_date('-0200-07-22'::date)

@@ -32,7 +32,7 @@ use std::any::Any;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r"Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer, double and timestamp types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
@@ -171,9 +171,15 @@ impl ScalarUDFImpl for ToDateFunc {
                     }
                 }
             }
-            Float16 | Float32 | Float64 => {
+            Float16
+            | Float32
+            | Float64
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
                 // The only way this makes sense is to get the Int64 value of the float
-                // and then cast that to Date32.
+                // or decimal and then cast that to Date32.
                 args[0].cast_to(&Int64, None)?.cast_to(&Date32, None)
             }
             Utf8View | LargeUtf8 | Utf8 => self.to_date(&args),
