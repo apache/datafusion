@@ -122,14 +122,14 @@ unsafe impl Send for FFI_LogicalExtensionCodec {}
 unsafe impl Sync for FFI_LogicalExtensionCodec {}
 
 struct LogicalExtensionCodecPrivateData {
-    provider: Arc<dyn LogicalExtensionCodec>,
+    codec: Arc<dyn LogicalExtensionCodec>,
     runtime: Option<Handle>,
 }
 
 impl FFI_LogicalExtensionCodec {
     fn inner(&self) -> &Arc<dyn LogicalExtensionCodec> {
         let private_data = self.private_data as *const LogicalExtensionCodecPrivateData;
-        unsafe { &(*private_data).provider }
+        unsafe { &(*private_data).codec }
     }
 
     fn runtime(&self) -> &Option<Handle> {
@@ -293,13 +293,12 @@ impl Drop for FFI_LogicalExtensionCodec {
 impl FFI_LogicalExtensionCodec {
     /// Creates a new [`FFI_LogicalExtensionCodec`].
     pub fn new(
-        provider: Arc<dyn LogicalExtensionCodec + Send>,
+        codec: Arc<dyn LogicalExtensionCodec + Send>,
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
         let task_ctx_provider = task_ctx_provider.into();
-        let private_data =
-            Box::new(LogicalExtensionCodecPrivateData { provider, runtime });
+        let private_data = Box::new(LogicalExtensionCodecPrivateData { codec, runtime });
 
         Self {
             try_decode_table_provider: try_decode_table_provider_fn_wrapper,
