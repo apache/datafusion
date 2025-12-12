@@ -244,7 +244,7 @@ pub fn serialize_physical_expr(
     if expr.downcast_ref::<HashTableLookupExpr>().is_some() {
         return Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(
-                (&datafusion_common::ScalarValue::Boolean(Some(true))).try_into()?,
+                datafusion_common::ScalarValue::Boolean(Some(true)),
             )),
         });
     }
