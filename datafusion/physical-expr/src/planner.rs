@@ -418,7 +418,7 @@ mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
 
-    use datafusion_expr::{col, lit, Operator};
+    use datafusion_expr::{Operator, col, lit};
 
     use super::*;
 
@@ -471,7 +471,8 @@ mod tests {
         let df_schema = DFSchema::try_from(schema)?;
 
         // This should not stack overflow
-        let _physical_expr = create_physical_expr(&expr, &df_schema, &ExecutionProps::new())?;
+        let _physical_expr =
+            create_physical_expr(&expr, &df_schema, &ExecutionProps::new())?;
 
         Ok(())
     }
