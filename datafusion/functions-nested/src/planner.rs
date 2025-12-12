@@ -39,7 +39,7 @@ use crate::expr_fn::array_has;
 use crate::map::map_udf;
 use crate::min_max::{array_max, array_min};
 use crate::{
-    array_has::{array_has_all},
+    array_has::array_has_all,
     expr_fn::{array_append, array_concat, array_prepend},
     extract::{array_element, array_slice},
     make_array::make_array,
@@ -124,15 +124,27 @@ impl ExprPlanner for NestedFunctionPlanner {
     }
 
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-	match expr.op {
-	    BinaryOperator::Eq => Ok(PlannerResult::Planned(array_has(expr.right, expr.left))),
-	    BinaryOperator::Gt => Ok(PlannerResult::Planned(array_min(expr.right).lt(expr.left))),
-	    BinaryOperator::Lt => Ok(PlannerResult::Planned(array_max(expr.right).gt(expr.left))),
-	    BinaryOperator::GtEq => Ok(PlannerResult::Planned(array_min(expr.right).lt_eq(expr.left))),
-	    BinaryOperator::LtEq => Ok(PlannerResult::Planned(array_max(expr.right).gt_eq(expr.left))),
-	    BinaryOperator::NotEq => Ok(PlannerResult::Planned(Expr::Not(Box::new(array_has(expr.right, expr.left))))),
-	    _ => plan_err!("Unsupported AnyOp: '{}', only '=', '>', '<', '>=', '<=', '<>', '!=' are supported", expr.op)
-	}
+        match expr.op {
+            BinaryOperator::Eq => {
+                Ok(PlannerResult::Planned(array_has(expr.right, expr.left)))
+            }
+            BinaryOperator::Gt => {
+                Ok(PlannerResult::Planned(array_min(expr.right).lt(expr.left)))
+            }
+            BinaryOperator::Lt => {
+                Ok(PlannerResult::Planned(array_max(expr.right).gt(expr.left)))
+            }
+            BinaryOperator::GtEq => Ok(PlannerResult::Planned(
+                array_min(expr.right).lt_eq(expr.left),
+            )),
+            BinaryOperator::LtEq => Ok(PlannerResult::Planned(
+                array_max(expr.right).gt_eq(expr.left),
+            )),
+            _ => plan_err!(
+                "Unsupported AnyOp: '{}', only '=', '>', '<', '>=', '<=' are supported",
+                expr.op
+            ),
+        }
     }
 }
 
