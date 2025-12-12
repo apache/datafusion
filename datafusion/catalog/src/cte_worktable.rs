@@ -17,21 +17,18 @@
 
 //! CteWorkTable implementation used for recursive queries
 
+use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
-use std::{any::Any, borrow::Cow};
 
-use crate::Session;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::{assert_or_internal_err, DataFusionError};
-use datafusion_physical_plan::work_table::WorkTableExec;
-
-use datafusion_physical_plan::ExecutionPlan;
-
 use datafusion_common::error::Result;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
+use datafusion_physical_plan::work_table::WorkTableExec;
+use datafusion_physical_plan::ExecutionPlan;
 
-use crate::TableProvider;
+use crate::{ScanArgs, ScanResult, Session, TableProvider};
 
 /// The temporary working table where the previous iteration of a recursive query is stored
 /// Naming is based on PostgreSQL's implementation.
@@ -86,24 +83,28 @@ impl TableProvider for CteWorkTable {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_or_internal_err!(
-            filters.is_empty(),
-            "CteWorkTable does not support pushing filters"
-        );
-        assert_or_internal_err!(
-            limit.is_none(),
-            "CteWorkTable does not support limit pushdown"
-        );
-        Ok(Arc::new(WorkTableExec::new(
+        let options = ScanArgs::default()
+            .with_projection(projection.map(|p| p.as_slice()))
+            .with_filters(Some(filters))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.into_inner())
+    }
+
+    async fn scan_with_args<'a>(
+        &self,
+        _state: &dyn Session,
+        args: ScanArgs<'a>,
+    ) -> Result<ScanResult> {
+        Ok(ScanResult::new(Arc::new(WorkTableExec::new(
             self.name.clone(),
             Arc::clone(&self.table_schema),
-            projection.cloned(),
-        )?))
+            args.projection().map(|p| p.to_vec()),
+        )?)))
     }
 
     fn supports_filters_pushdown(
