@@ -46,11 +46,11 @@ use datafusion_common::{
     utils::take_function_args,
 };
 use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_expr::{interval_arithmetic, Expr};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
+use datafusion_expr::{Expr, interval_arithmetic};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
@@ -483,7 +483,7 @@ mod tests {
     use datafusion_expr::expr_fn::col;
     use datafusion_expr::or;
     use datafusion_expr::{
-        and, execution_props::ExecutionProps, lit, simplify::SimplifyContext, Expr,
+        Expr, and, execution_props::ExecutionProps, lit, simplify::SimplifyContext,
     };
     use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     use std::{collections::HashMap, sync::Arc};
