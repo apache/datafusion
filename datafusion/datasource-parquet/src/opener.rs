@@ -140,34 +140,6 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
-        // Build partition values map for replacing partition column references
-        // with their literal values from this file's partition values.
-        //
-        // For example, given
-        // 1. `region` is a partition column,
-        // 2. predicate `host IN ('us-east-1', 'eu-central-1')`:
-        // 3. The file path is `/data/region=us-west-2/...`
-        //    (that is the partition column value is `us-west-2`)
-        //
-        // The predicate would be rewritten to
-        // ```sql
-        // 'us-west-2` IN ('us-east-1', 'eu-central-1')
-        // ```
-        // which can be further simplified to `FALSE`, meaning
-        // the file can be skipped entirely.
-        //
-        // While this particular optimization is done during logical planning,
-        // there are other cases where partition columns may appear in more
-        // complex predicates that cannot be simplified until we are about to
-        // open the file (such as dynamic predicates)
-        let partition_values: HashMap<&str, &ScalarValue> = self
-            .table_schema
-            .table_partition_cols()
-            .iter()
-            .zip(partitioned_file.partition_values.iter())
-            .map(|(field, value)| (field.name().as_str(), value))
-            .collect();
-
         // Calculate the output schema from the original projection (before literal replacement)
         // so we get correct field names from column references
         let logical_file_schema = Arc::clone(self.table_schema.file_schema());
@@ -176,23 +148,51 @@ impl FileOpener for ParquetOpener {
                 .project_schema(self.table_schema.table_schema())?,
         );
 
-        // Apply partition column replacement to projection expressions
+        // Build a combined map for replacing column references with literal values.
+        // This includes:
+        // 1. Partition column values from the file path (e.g., region=us-west-2)
+        // 2. Constant columns detected from file statistics (where min == max)
+        // 
+        // Although partition columns *are* constant columns, we don't want to rely on
+        // statistics for them being populated if we can use the partition values
+        // (which are guaranteed to be present).
+        //
+        // For example, given a partition column `region` and predicate
+        // `region IN ('us-east-1', 'eu-central-1')` with file path
+        // `/data/region=us-west-2/...`, the predicate is rewritten to
+        // `'us-west-2' IN ('us-east-1', 'eu-central-1')` which simplifies to FALSE.
+        //
+        // While partition column optimization is done during logical planning,
+        // there are cases where partition columns may appear in more complex
+        // predicates that cannot be simplified until we open the file (such as
+        // dynamic predicates).
+        let mut literal_columns: HashMap<String, ScalarValue> = self
+            .table_schema
+            .table_partition_cols()
+            .iter()
+            .zip(partitioned_file.partition_values.iter())
+            .map(|(field, value)| (field.name().clone(), value.clone()))
+            .collect();
+
+        // Add constant columns from file statistics (partition columns and file
+        // columns are disjoint, so no overlap is possible)
+        literal_columns.extend(constant_columns_from_stats(
+            partitioned_file.statistics.as_deref(),
+            &logical_file_schema,
+        ));
+
+        // Apply literal replacements to projection and predicate
         let mut projection = self.projection.clone();
-        if !partition_values.is_empty() {
+        let mut predicate = self.predicate.clone();
+        if !literal_columns.is_empty() {
             projection = projection.try_map_exprs(|expr| {
-                replace_columns_with_literals(Arc::clone(&expr), &partition_values)
+                replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
             })?;
+            predicate = predicate
+                .map(|p| replace_columns_with_literals(p, &literal_columns))
+                .transpose()?;
         }
 
-        // Apply partition column replacement to predicate
-        let mut predicate = if partition_values.is_empty() {
-            self.predicate.clone()
-        } else {
-            self.predicate
-                .clone()
-                .map(|p| replace_columns_with_literals(p, &partition_values))
-                .transpose()?
-        };
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -210,19 +210,6 @@ impl FileOpener for ParquetOpener {
         #[cfg(feature = "parquet_encryption")]
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
-
-        let constant_columns = constant_columns_from_stats(
-            partitioned_file.statistics.as_deref(),
-            &logical_file_schema,
-        );
-        if !constant_columns.is_empty() {
-            predicate = predicate
-                .map(|expr| replace_columns_with_literals(expr, &constant_columns))
-                .transpose()?;
-            projection = projection.try_map_exprs(|expr| {
-                replace_columns_with_literals(expr, &constant_columns)
-            })?;
-        }
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
