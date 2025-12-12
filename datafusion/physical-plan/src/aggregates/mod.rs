@@ -94,11 +94,15 @@ mod topk_stream;
 /// // Supported: Numeric keys with numeric aggregates
 /// assert!(topk_types_supported(&DataType::Int64, &DataType::Int64));
 ///
+/// // Supported: Numeric keys with string aggregates (strings use lexicographic ordering)
+/// assert!(topk_types_supported(&DataType::Int64, &DataType::Utf8));
+/// assert!(topk_types_supported(&DataType::Float64, &DataType::Utf8View));
+///
 /// // Unsupported: Binary keys
 /// assert!(!topk_types_supported(&DataType::Binary, &DataType::Int64));
 ///
-/// // Unsupported: String aggregate values (only min/max of numeric types supported)
-/// assert!(!topk_types_supported(&DataType::Int64, &DataType::Utf8));
+/// // Unsupported: Binary aggregate values
+/// assert!(!topk_types_supported(&DataType::Int64, &DataType::Binary));
 /// ```
 pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
