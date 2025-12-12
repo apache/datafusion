@@ -125,3 +125,16 @@ query T
 select encode(digest('hello', 'sha256'), 'hex');
 ----
 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+
+# test for FixedSizeBinary support for encode
+statement ok
+CREATE TABLE test_fsb AS
+SELECT arrow_cast(X'0123456789ABCDEF', 'FixedSizeBinary(8)') as fsb_col;
+
+query TT
+SELECT
+  encode(fsb_col, 'base64') AS fsb_base64,
+  encode(fsb_col, 'hex') AS fsb_hex
+FROM test_fsb;
+----
+ASNFZ4mrze8 0123456789abcdef
