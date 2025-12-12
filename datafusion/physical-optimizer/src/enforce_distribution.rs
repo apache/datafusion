@@ -918,10 +918,11 @@ fn add_hash_on_top(
     }
 
     let dist = Distribution::HashPartitioned(hash_exprs.clone());
-    let satisfaction = input
-        .plan
-        .output_partitioning()
-        .satisfy(&dist, input.plan.equivalence_properties(), allow_subset);
+    let satisfaction = input.plan.output_partitioning().satisfy(
+        &dist,
+        input.plan.equivalence_properties(),
+        allow_subset,
+    );
 
     // Add hash repartitioning when:
     // - The hash distribution requirement is not satisfied, or
@@ -1201,6 +1202,8 @@ pub fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
+    let repartition_subset_satisfactions =
+        config.optimizer.repartition_subset_satisfactions;
     let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
         && matches!(
             dist_context.plan.pipeline_behavior(),
@@ -1267,12 +1270,19 @@ pub fn ensure_distribution(
                 hash_necessary,
             },
         )| {
+            let increases_partition_count =
+                child.plan.output_partitioning().partition_count() < target_partitions;
+
             let add_roundrobin = enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
                 && roundrobin_beneficial
                 && roundrobin_beneficial_stats
                 // Unless partitioning increases the partition count, it is not beneficial:
-                && child.plan.output_partitioning().partition_count() < target_partitions;
+                && increases_partition_count;
+
+            let allow_subset_partition = !repartition_subset_satisfactions
+                && !is_partitioned_join
+                && !increases_partition_count;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
@@ -1301,7 +1311,7 @@ pub fn ensure_distribution(
                             child,
                             exprs.to_vec(),
                             target_partitions,
-                            !is_partitioned_join,
+                            allow_subset_partition,
                         )?;
                     }
                 }
