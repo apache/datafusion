@@ -800,6 +800,134 @@ statement ok
 DROP TABLE proj_test;
 
 ##########
+## Comma LATERAL Syntax Tests
+## Test that `FROM x, LATERAL y` works the same as `FROM x CROSS JOIN LATERAL y`
+##########
+
+# Test basic comma LATERAL syntax
+query II
+SELECT start_val, value
+FROM ranges, LATERAL batched_generate_series(start_val, end_val)
+ORDER BY start_val, value;
+----
+1 1
+1 2
+1 3
+5 5
+5 6
+5 7
+10 10
+10 11
+10 12
+
+# Verify it produces the same results as CROSS JOIN LATERAL
+query II
+SELECT start_val, value
+FROM ranges CROSS JOIN LATERAL batched_generate_series(start_val, end_val)
+ORDER BY start_val, value;
+----
+1 1
+1 2
+1 3
+5 5
+5 6
+5 7
+10 10
+10 11
+10 12
+
+# Test multiple LATERAL functions with comma syntax
+statement ok
+CREATE TABLE lateral_multi_test (start_val INT, end_val INT);
+
+statement ok
+INSERT INTO lateral_multi_test VALUES (10, 12);
+
+query IIII
+SELECT s.start_val, s.end_val, g1.value as value1, g2.value as value2
+FROM lateral_multi_test s,
+     LATERAL batched_generate_series(s.start_val, s.end_val) g1,
+     LATERAL batched_generate_series(s.start_val, s.start_val + 1) g2
+ORDER BY value1, value2;
+----
+10 12 10 10
+10 12 10 11
+10 12 11 10
+10 12 11 11
+10 12 12 10
+10 12 12 11
+
+statement ok
+DROP TABLE lateral_multi_test;
+
+# Test chained LATERAL functions where second references first
+statement ok
+CREATE TABLE lateral_chain_test (start_val INT);
+
+statement ok
+INSERT INTO lateral_chain_test VALUES (1), (3);
+
+query III
+SELECT s.start_val, g1.value as first_value, g2.value as second_value
+FROM lateral_chain_test s,
+     LATERAL batched_generate_series(s.start_val, s.start_val + 1) g1,
+     LATERAL batched_generate_series(g1.value, g1.value + 1) g2
+ORDER BY start_val, first_value, second_value;
+----
+1 1 1
+1 1 2
+1 2 2
+1 2 3
+3 3 3
+3 3 4
+3 4 4
+3 4 5
+
+statement ok
+DROP TABLE lateral_chain_test;
+
+# Test comma LATERAL with multi-column function
+statement ok
+CREATE TABLE comma_test(start BIGINT, stop BIGINT) AS VALUES (1, 2), (3, 4);
+
+query IIII
+SELECT start, stop, n, n_squared
+FROM comma_test, LATERAL batched_multi_column_no_proj(start, stop)
+ORDER BY start, n;
+----
+1 2 1 1
+1 2 2 4
+3 4 3 9
+3 4 4 16
+
+# Verify same as CROSS JOIN LATERAL
+query IIII
+SELECT start, stop, n, n_squared
+FROM comma_test CROSS JOIN LATERAL batched_multi_column_no_proj(start, stop)
+ORDER BY start, n;
+----
+1 2 1 1
+1 2 2 4
+3 4 3 9
+3 4 4 16
+
+# Test EXPLAIN shows correct plan for comma LATERAL
+query TT
+EXPLAIN SELECT start, stop, value
+FROM comma_test, LATERAL batched_generate_series(start, stop);
+----
+logical_plan
+01)LateralBatchedTableFunction: batched_generate_series(comma_test.start, comma_test.stop)
+02)--TableScan: comma_test projection=[start, stop]
+physical_plan
+01)BatchedTableFunctionExec: function=batched_generate_series, args=[start@0, stop@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Cleanup
+statement ok
+DROP TABLE comma_test;
+
+##########
 ## Cleanup
 ##########
 

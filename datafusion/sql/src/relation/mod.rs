@@ -36,6 +36,7 @@ use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
+pub(crate) use join::is_lateral;
 
 struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
     planner: &'a SqlToRel<'b, S>,

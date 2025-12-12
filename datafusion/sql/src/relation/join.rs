@@ -226,7 +226,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Try to create a LateralBatchedTableFunction node if this is a lateral batched table function
-    fn try_create_lateral_table_function(
+    pub(crate) fn try_create_lateral_table_function(
         &self,
         input_plan: &LogicalPlan,
         relation: &TableFactor,
