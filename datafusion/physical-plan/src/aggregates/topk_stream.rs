@@ -53,25 +53,6 @@ pub struct GroupedTopKAggregateStream {
 }
 
 impl GroupedTopKAggregateStream {
-    /// Returns true if this aggregate can use the TopK optimization.
-    ///
-    /// This check is primarily for use by `AggregateExec` stream selection logic.
-    /// Type validation is performed by the optimizer rule; this method focuses on
-    /// structural requirements (single min/max aggregate, single grouping key).
-    pub fn can_use_topk(aggr: &AggregateExec) -> Result<bool> {
-        let (val_field, _) = match aggr.get_minmax_desc() {
-            Some(values) => values,
-            None => return Ok(false),
-        };
-
-        let (expr, _) = &aggr.group_expr().expr()[0];
-        let kt = expr.data_type(&aggr.input().schema())?;
-        let vt = val_field.data_type();
-
-        // Validate type support using the public API
-        Ok(topk_types_supported(&kt, vt))
-    }
-
     pub fn new(
         aggr: &AggregateExec,
         context: &Arc<TaskContext>,
