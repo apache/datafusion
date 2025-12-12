@@ -254,7 +254,7 @@ impl ListingTableUrl {
         };
 
         let list: BoxStream<'a, Result<ObjectMeta>> = if self.is_collection() {
-            list_with_cache(ctx, store, &prefix).await?
+            list_with_cache(ctx, store, &prefix, &self.prefix).await?
         } else {
             match store.head(&prefix).await {
                 Ok(meta) => futures::stream::once(async { Ok(meta) })
@@ -263,7 +263,7 @@ impl ListingTableUrl {
                 // If the head command fails, it is likely that object doesn't exist.
                 // Retry as though it were a prefix (aka a collection)
                 Err(object_store::Error::NotFound { .. }) => {
-                    list_with_cache(ctx, store, &prefix).await?
+                    list_with_cache(ctx, store, &prefix, &self.prefix).await?
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -324,30 +324,98 @@ impl ListingTableUrl {
     }
 }
 
+/// Lists files with cache support, using prefix-aware lookups.
+///
+/// # Arguments
+/// * `ctx` - The session context
+/// * `store` - The object store to list from
+/// * `full_prefix` - The full prefix to list (table_base + partition prefix)
+/// * `table_base_path` - The table's base path (the stable cache key)
+///
+/// # Cache Behavior :
+/// The cache key is always `table_base_path`. When a partition-specific listing
+/// is requested (full_prefix includes partition path), the cache:
+/// - Looks up `table_base_path` in the cache
+/// - Filters results to match `full_prefix`
+/// - Returns filtered results without a storage call
+///
+/// On cache miss, the full table is always listed and cached, ensuring
+/// subsequent partition queries can be served from cache.
 async fn list_with_cache<'b>(
     ctx: &'b dyn Session,
     store: &'b dyn ObjectStore,
-    prefix: &Path,
+    full_prefix: &Path,
+    table_base_path: &Path,
 ) -> Result<BoxStream<'b, Result<ObjectMeta>>> {
     match ctx.runtime_env().cache_manager.get_list_files_cache() {
         None => Ok(store
-            .list(Some(prefix))
+            .list(Some(full_prefix))
             .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
             .boxed()),
         Some(cache) => {
-            let vec = if let Some(res) = cache.get(prefix) {
-                debug!("Hit list all files cache");
+            // Compute the relative prefix (partition path relative to table base)
+            let relative_prefix = compute_relative_prefix(table_base_path, full_prefix);
+
+            // Try cache lookup with optional prefix filter
+            let vec = if let Some(res) = cache.get_with_extra(table_base_path, &relative_prefix) {
+                debug!("Hit list files cache");
                 res.as_ref().clone()
             } else {
+                // Cache miss - always list and cache the full table
+                // This ensures we have complete data for future partition queries
                 let vec = store
-                    .list(Some(prefix))
+                    .list(Some(table_base_path))
                     .try_collect::<Vec<ObjectMeta>>()
                     .await?;
-                cache.put(prefix, Arc::new(vec.clone()));
-                vec
+                cache.put(table_base_path, Arc::new(vec.clone()));
+
+                // If a prefix filter was requested, apply it to the results
+                if relative_prefix.is_some() {
+                    let full_prefix_str = full_prefix.as_ref();
+                    vec.into_iter()
+                        .filter(|meta| meta.location.as_ref().starts_with(full_prefix_str))
+                        .collect()
+                } else {
+                    vec
+                }
             };
             Ok(futures::stream::iter(vec.into_iter().map(Ok)).boxed())
         }
+    }
+}
+
+/// Computes the relative prefix between the table base path and the full prefix.
+///
+/// Returns `Some(relative_path)` if full_prefix is a sub-path of table_base_path,
+/// or `None` if they are the same (no partition filter needed).
+fn compute_relative_prefix(table_base_path: &Path, full_prefix: &Path) -> Option<Path> {
+    let base_str = table_base_path.as_ref();
+    let full_str = full_prefix.as_ref();
+
+    if base_str == full_str {
+        // No partition prefix, querying full table
+        None
+    } else if full_str.starts_with(base_str) {
+        // full_prefix is a sub-path of table_base_path
+        // Extract the relative portion
+        let relative = if base_str.is_empty() {
+            full_str.to_string()
+        } else {
+            full_str
+                .strip_prefix(base_str)
+                .and_then(|s| s.strip_prefix('/'))
+                .unwrap_or(full_str)
+                .to_string()
+        };
+        if relative.is_empty() {
+            None
+        } else {
+            Some(Path::from(relative))
+        }
+    } else {
+        // Unexpected: full_prefix is not under table_base_path
+        // Fall back to no prefix (will likely miss cache anyway)
+        None
     }
 }
 
