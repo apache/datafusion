@@ -790,7 +790,7 @@ Different queries are included to test nested loop joins under various workloads
 
 ## Hash Join
 
-This benchmark focuses on the performance of queries with nested hash joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+This benchmark focuses on the performance of queries with hash joins, minimizing other overheads such as scanning data sources or evaluating predicates.
 
 Several queries are included to test hash joins under various workloads.
 
@@ -802,6 +802,19 @@ Several queries are included to test hash joins under various workloads.
 ./bench.sh run hj
 ```
 
+## Sort Merge Join
+
+This benchmark focuses on the performance of queries with sort merge joins joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Several queries are included to test sort merge joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run smj
+```
 ## Cancellation
 
 Test performance of cancelling queries.
@@ -832,3 +845,41 @@ Getting results...
 cancelling thread
 done dropping runtime in 83.531417ms
 ```
+
+## Sorted Data Benchmarks
+
+### Data Sorted ClickBench
+
+Benchmark for queries on pre-sorted data to test sort order optimization.
+This benchmark uses a subset of the ClickBench dataset (hits.parquet, ~14GB) that has been pre-sorted by the EventTime column. The queries are designed to test DataFusion's performance when the data is already sorted as is common in timeseries workloads.
+
+The benchmark includes queries that:
+- Scan pre-sorted data with ORDER BY clauses that match the sort order
+- Test reverse scans on sorted data
+- Verify the performance result
+
+#### Generating Sorted Data
+
+The sorted dataset is automatically generated from the ClickBench partitioned dataset. You can configure the memory used during the sorting process with the `DATAFUSION_MEMORY_GB` environment variable. The default memory limit is 12GB.
+```bash
+./bench.sh data data_sorted_clickbench
+```
+
+To create the sorted dataset, for example with 16GB of memory, run:
+
+```bash
+DATAFUSION_MEMORY_GB=16 ./bench.sh data data_sorted_clickbench
+```
+
+This command will:
+1. Download the ClickBench partitioned dataset if not present
+2. Sort hits.parquet by EventTime in ascending order
+3. Save the sorted file as hits_sorted.parquet
+
+#### Running the Benchmark
+
+```bash
+./bench.sh run data_sorted_clickbench
+```
+
+This runs queries against the pre-sorted dataset with the `--sorted-by EventTime` flag, which informs DataFusion that the data is pre-sorted, allowing it to optimize away redundant sort operations.

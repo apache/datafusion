@@ -102,6 +102,9 @@ clickbench_partitioned: ClickBench queries against partitioned (100 files) parqu
 clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 
+# Sorted Data Benchmarks (ORDER BY Optimization)
+clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
+
 # H2O.ai Benchmarks (Group By, Join, Window)
 h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
 h2o_medium:                     h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
@@ -129,6 +132,7 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
+smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -321,8 +325,15 @@ main() {
                     # hj uses range() function, no data generation needed
                     echo "HJ benchmark does not require data generation"
                     ;;
+                smj)
+                    # smj uses range() function, no data generation needed
+                    echo "SMJ benchmark does not require data generation"
+                    ;;
                 compile_profile)
                     data_tpch "1" "parquet"
+                    ;;
+                clickbench_sorted)
+                    clickbench_sorted
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -395,6 +406,7 @@ main() {
                     run_nlj
                     run_hj
                     run_tpcds
+                    run_smj
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -459,7 +471,7 @@ main() {
                 h2o_medium_window)
                     run_h2o_window "MEDIUM" "CSV" "window"
                     ;;
-                h2o_big_window) 
+                h2o_big_window)
                     run_h2o_window "BIG" "CSV" "window"
                     ;;
                 h2o_small_parquet)
@@ -508,8 +520,14 @@ main() {
                 hj)
                     run_hj
                     ;;
+                smj)
+                    run_smj
+                    ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
+                    ;;
+                clickbench_sorted)
+                    run_clickbench_sorted
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -611,22 +629,24 @@ data_tpch() {
     exit 1
 }
 
-# Points to TPCDS data generation instructions
+# Downloads TPC-DS data
 data_tpcds() {
-    TPCDS_DIR="${DATA_DIR}"
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
-    # Check if TPCDS data directory exists
-    if [ ! -d "${TPCDS_DIR}" ]; then
-        echo ""
-        echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
-        echo "  git clone https://github.com/apache/datafusion-benchmarks"
-        echo ""
-        return 1
+    # Check if `web_site.parquet` exists in the TPCDS data directory to verify data presence
+    echo "Checking TPC-DS data directory: ${TPCDS_DIR}"
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
+        mkdir -p "${TPCDS_DIR}"
+        # Download the DataFusion benchmarks repository zip if it is not already downloaded
+        if [ ! -f "${DATA_DIR}/datafusion-benchmarks.zip" ]; then
+          echo "Downloading DataFusion benchmarks repository zip to: ${DATA_DIR}/datafusion-benchmarks.zip"
+          wget --timeout=30 --tries=3 -O "${DATA_DIR}/datafusion-benchmarks.zip" https://github.com/apache/datafusion-benchmarks/archive/refs/heads/main.zip
+        fi
+        echo "Extracting TPC-DS parquet data to ${TPCDS_DIR}..."
+        unzip -o -j -d "${TPCDS_DIR}" "${DATA_DIR}/datafusion-benchmarks.zip" datafusion-benchmarks-main/tpcds/data/sf1/*
+        echo "TPC-DS data extracted."
     fi
-
-    echo ""
-    echo "TPC-DS data already exists in ${TPCDS_DIR}"
-    echo ""
+    echo "Done."
 }
 
 # Runs the tpch benchmark
@@ -664,21 +684,10 @@ run_tpch_mem() {
 
 # Runs the tpcds benchmark
 run_tpcds() {
-    TPCDS_DIR="${DATA_DIR}"
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
-    # Check if TPCDS data directory exists
-    if [ ! -d "${TPCDS_DIR}" ]; then
-        echo "Error: TPC-DS data directory does not exist: ${TPCDS_DIR}" >&2
-        echo "" >&2
-        echo "Please prepare TPC-DS data first by following instructions:" >&2
-        echo "  ./bench.sh data tpcds" >&2
-        echo "" >&2
-        exit 1
-    fi
-
-    # Check if directory contains parquet files
-    if ! find "${TPCDS_DIR}" -name "*.parquet" -print -quit | grep -q .; then
-        echo "Error: TPC-DS data directory exists but contains no parquet files: ${TPCDS_DIR}" >&2
+    # Check if TPCDS data directory and representative file exists
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
         echo "" >&2
         echo "Please prepare TPC-DS data first by following instructions:" >&2
         echo "  ./bench.sh data tpcds" >&2
@@ -1225,6 +1234,14 @@ run_hj() {
     debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
+# Runs the smj benchmark
+run_smj() {
+    RESULTS_FILE="${RESULTS_DIR}/smj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running smj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
 
 compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"
@@ -1258,6 +1275,113 @@ compare_benchmarks() {
         fi
     done
 
+}
+
+# Creates sorted ClickBench data from hits.parquet (full dataset)
+# The data is sorted by EventTime in ascending order
+# Uses datafusion-cli to reduce dependencies
+clickbench_sorted() {
+    SORTED_FILE="${DATA_DIR}/hits_sorted.parquet"
+    ORIGINAL_FILE="${DATA_DIR}/hits.parquet"
+
+    # Default memory limit is 12GB, can be overridden with DATAFUSION_MEMORY_GB env var
+    MEMORY_LIMIT_GB=${DATAFUSION_MEMORY_GB:-12}
+
+    echo "Creating sorted ClickBench dataset from hits.parquet..."
+    echo "Configuration:"
+    echo "  Memory limit: ${MEMORY_LIMIT_GB}G"
+    echo "  Row group size: 64K rows"
+    echo "  Compression: uncompressed"
+
+    if [ ! -f "${ORIGINAL_FILE}" ]; then
+        echo "hits.parquet not found. Running data_clickbench_1 first..."
+        data_clickbench_1
+    fi
+
+    if [ -f "${SORTED_FILE}" ]; then
+        echo "Sorted hits.parquet already exists at ${SORTED_FILE}"
+        return 0
+    fi
+
+    echo "Sorting hits.parquet by EventTime (this may take several minutes)..."
+
+    pushd "${DATAFUSION_DIR}" > /dev/null
+    echo "Building datafusion-cli..."
+    cargo build --release --bin datafusion-cli
+    DATAFUSION_CLI="${DATAFUSION_DIR}/target/release/datafusion-cli"
+    popd > /dev/null
+
+
+    START_TIME=$(date +%s)
+    echo "Start time: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "Using datafusion-cli to create sorted parquet file..."
+    "${DATAFUSION_CLI}" << EOF
+-- Memory and performance configuration
+SET datafusion.runtime.memory_limit = '${MEMORY_LIMIT_GB}G';
+SET datafusion.execution.spill_compression = 'uncompressed';
+SET datafusion.execution.sort_spill_reservation_bytes = 10485760; -- 10MB
+SET datafusion.execution.batch_size = 8192;
+SET datafusion.execution.target_partitions = 1;
+
+-- Parquet output configuration
+SET datafusion.execution.parquet.max_row_group_size = 65536;
+SET datafusion.execution.parquet.compression = 'uncompressed';
+
+-- Execute sort and write
+COPY (SELECT * FROM '${ORIGINAL_FILE}' ORDER BY "EventTime")
+TO '${SORTED_FILE}'
+STORED AS PARQUET;
+EOF
+
+    local result=$?
+
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    echo "End time: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    if [ $result -eq 0 ]; then
+        echo "✓ Successfully created sorted ClickBench dataset"
+
+        INPUT_SIZE=$(stat -f%z "${ORIGINAL_FILE}" 2>/dev/null || stat -c%s "${ORIGINAL_FILE}" 2>/dev/null)
+        OUTPUT_SIZE=$(stat -f%z "${SORTED_FILE}" 2>/dev/null || stat -c%s "${SORTED_FILE}" 2>/dev/null)
+        INPUT_MB=$((INPUT_SIZE / 1024 / 1024))
+        OUTPUT_MB=$((OUTPUT_SIZE / 1024 / 1024))
+
+        echo "  Input:  ${INPUT_MB} MB"
+        echo "  Output: ${OUTPUT_MB} MB"
+
+        echo ""
+        echo "Time Statistics:"
+        echo "  Total duration: ${DURATION} seconds ($(printf '%02d:%02d:%02d' $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60))))"
+        echo "  Throughput: $((INPUT_MB / DURATION)) MB/s"
+
+        return 0
+    else
+        echo "✗ Error: Failed to create sorted dataset"
+        echo "💡 Tip: Try increasing memory with: DATAFUSION_MEMORY_GB=16 ./bench.sh data clickbench_sorted"
+        return 1
+    fi
+}
+
+# Runs the sorted data benchmark with prefer_existing_sort configuration
+run_clickbench_sorted() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_sorted.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sorted data benchmark with prefer_existing_sort optimization..."
+
+    # Ensure sorted data exists
+    clickbench_sorted
+
+    # Run benchmark with prefer_existing_sort configuration
+    # This allows DataFusion to optimize away redundant sorts while maintaining parallelism
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
+        --iterations 5 \
+        --path "${DATA_DIR}/hits_sorted.parquet" \
+        --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
+        --sorted-by "EventTime" \
+        -c datafusion.optimizer.prefer_existing_sort=true \
+        -o "${RESULTS_FILE}" \
+        ${QUERY_ARG}
 }
 
 setup_venv() {

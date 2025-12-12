@@ -247,7 +247,7 @@ impl ScalarUDF {
 
     #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -951,7 +951,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 

@@ -18,15 +18,15 @@
 //! [`ScalarUDFImpl`] definitions for array_replace, array_replace_n and array_replace_all functions.
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, Capacities, GenericListArray,
-    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
+    NullBufferBuilder, OffsetSizeTrait, new_null_array,
 };
 use arrow::datatypes::{DataType, Field};
 
 use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,

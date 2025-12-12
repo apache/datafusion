@@ -23,8 +23,8 @@ use std::fmt::{self, Debug};
 use std::ops::Sub;
 
 use arrow::datatypes::ArrowNativeType;
-use hashbrown::hash_table::Entry::{Occupied, Vacant};
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
@@ -120,6 +120,9 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns `true` if the join hash map contains no entries.
     fn is_empty(&self) -> bool;
+
+    /// Returns the number of entries in the join hash map.
+    fn len(&self) -> usize;
 }
 
 pub struct JoinHashMapU32 {
@@ -190,6 +193,10 @@ impl JoinHashMapType for JoinHashMapU32 {
     fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+
+    fn len(&self) -> usize {
+        self.map.len()
+    }
 }
 
 pub struct JoinHashMapU64 {
@@ -259,6 +266,10 @@ impl JoinHashMapType for JoinHashMapU64 {
 
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 

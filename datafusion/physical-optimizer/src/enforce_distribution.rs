@@ -30,7 +30,6 @@ use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
-use crate::OptimizerContext;
 
 use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
@@ -191,12 +190,11 @@ impl EnforceDistribution {
 }
 
 impl PhysicalOptimizerRule for EnforceDistribution {
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.session_config().options();
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
 
         let adjusted = if top_down_join_key_reordering {
@@ -1276,11 +1274,6 @@ pub fn ensure_distribution(
                 }
                 Distribution::HashPartitioned(exprs) => {
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
-                    if add_roundrobin && !hash_necessary {
-                        // Add round-robin repartitioning on top of the operator
-                        // to increase parallelism.
-                        child = add_roundrobin_on_top(child, target_partitions)?;
-                    }
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
                         child =

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[allow(clippy::allow_attributes)]
 #[allow(clippy::all)]
 #[rustfmt::skip]
 pub mod datafusion_proto_common {
