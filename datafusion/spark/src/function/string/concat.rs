@@ -249,8 +249,11 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::StringArray;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
+    use datafusion_expr::ReturnFieldArgs;
+    use std::sync::Arc;
+
 
     #[test]
     fn test_concat_basic() -> Result<()> {
@@ -284,4 +287,51 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn test_spark_concat_return_field_non_nullable() -> Result<()> {
+        let func = SparkConcat::new();
+
+        let fields = vec![
+            Arc::new(Field::new("a", DataType::Utf8, false)),
+            Arc::new(Field::new("b", DataType::Utf8, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &fields,
+            scalar_arguments: &[],
+        };
+
+        let field = func.return_field_from_args(args)?;
+
+        assert!(
+            !field.is_nullable(),
+            "Expected concat result to be non-nullable when all inputs are non-nullable"
+        );
+
+        Ok(())
+    }
+    #[test]
+    fn test_spark_concat_return_field_nullable() -> Result<()> {
+        let func = SparkConcat::new();
+
+        let fields = vec![
+            Arc::new(Field::new("a", DataType::Utf8, false)),
+            Arc::new(Field::new("b", DataType::Utf8, true)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &fields,
+            scalar_arguments: &[],
+        };
+
+        let field = func.return_field_from_args(args)?;
+
+        assert!(
+            field.is_nullable(),
+            "Expected concat result to be nullable when any input is nullable"
+        );
+
+        Ok(())
+    }
+
 }
