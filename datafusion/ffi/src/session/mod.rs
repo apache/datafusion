@@ -719,7 +719,7 @@ impl FFI_RuntimeEnv {
 
 unsafe extern "C" fn runtime_env_fn_wrapper(session: &FFI_SessionRef) -> FFI_RuntimeEnv {
     let session = session.inner();
-    session.runtime_env().clone().into()
+    Arc::clone(session.runtime_env()).into()
 }
 
 unsafe extern "C" fn execution_props_fn_wrapper(
