@@ -136,6 +136,7 @@ To get started, see
    library-user-guide/upgrading
    library-user-guide/extensions
    library-user-guide/using-the-sql-api
+   library-user-guide/extending-sql
    library-user-guide/working-with-exprs
    library-user-guide/using-the-dataframe-api
    library-user-guide/building-logical-plans
