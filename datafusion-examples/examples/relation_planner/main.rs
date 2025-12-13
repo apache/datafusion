@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
 
     let example: ExampleKind = std::env::args()
         .nth(1)
-        .unwrap_or(ExampleKind::All.to_string())
+        .unwrap_or_else(|| ExampleKind::All.to_string())
         .parse()
         .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
