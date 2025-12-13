@@ -587,10 +587,12 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Run
+      - name: Setup nightly Rust toolchain
+        run: rustup toolchain install nightly --component rustfmt
+      - name: Run cargo fmt check (including doc comments)
         run: |
           echo '' > datafusion/proto/src/generated/datafusion.rs
-          ci/scripts/rust_fmt.sh
+          cargo +nightly fmt --all -- --check --config format_code_in_doc_comments=true
 
   # Coverage job disabled due to
   # https://github.com/apache/datafusion/issues/3678

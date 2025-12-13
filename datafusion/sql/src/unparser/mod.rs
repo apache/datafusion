@@ -44,7 +44,7 @@ pub mod extension_unparser;
 /// use datafusion_sql::unparser::Unparser;
 /// let expr = col("a").gt(lit(4)); // form an expression `a > 4`
 /// let unparser = Unparser::default();
-/// let sql = unparser.expr_to_sql(&expr).unwrap();// convert to AST
+/// let sql = unparser.expr_to_sql(&expr).unwrap(); // convert to AST
 /// // use the Display impl to convert to SQL text
 /// assert_eq!(sql.to_string(), "(a > 4)");
 /// // now convert to pretty sql
