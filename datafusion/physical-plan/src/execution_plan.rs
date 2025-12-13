@@ -26,12 +26,12 @@ pub use crate::stream::EmptyRecordBatchStream;
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, Distribution, Partitioning, PhysicalExpr,
+    Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 use std::any::Any;
@@ -48,8 +48,8 @@ use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, exec_err, Constraints,
-    DataFusionError, Result,
+    Constraints, DataFusionError, Result, assert_eq_or_internal_err,
+    assert_or_internal_err, exec_err,
 };
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
@@ -921,7 +921,7 @@ pub(crate) fn boundedness_from_children<'a>(
             } => {
                 return Boundedness::Unbounded {
                     requires_infinite_memory: true,
-                }
+                };
             }
             Boundedness::Unbounded {
                 requires_infinite_memory: false,

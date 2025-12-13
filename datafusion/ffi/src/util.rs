@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow_wrappers::WrappedSchema;
-use abi_stable::std_types::{RResult, RString, RVec};
-use arrow::datatypes::Field;
-use arrow::{datatypes::DataType, ffi::FFI_ArrowSchema};
-use arrow_schema::FieldRef;
 use std::sync::Arc;
+
+use abi_stable::std_types::{RResult, RString, RVec};
+use arrow::datatypes::{DataType, Field};
+use arrow::ffi::FFI_ArrowSchema;
+use arrow_schema::FieldRef;
+
+use crate::arrow_wrappers::WrappedSchema;
 
 /// Convenience type for results passed through the FFI boundary. Since the
 /// `DataFusionError` enum is complex and little value is gained from creating
@@ -124,10 +126,25 @@ pub fn rvec_wrapped_to_vec_datatype(
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::util::FFIResult;
+pub(crate) mod tests {
+    use std::sync::Arc;
+
     use abi_stable::std_types::{RResult, RString};
     use datafusion::error::DataFusionError;
+    use datafusion::prelude::SessionContext;
+    use datafusion_execution::TaskContextProvider;
+
+    use crate::execution::FFI_TaskContextProvider;
+    use crate::util::FFIResult;
+
+    pub(crate) fn test_session_and_ctx() -> (Arc<SessionContext>, FFI_TaskContextProvider)
+    {
+        let ctx = Arc::new(SessionContext::new());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+
+        (ctx, task_ctx_provider)
+    }
 
     fn wrap_result(result: Result<String, DataFusionError>) -> FFIResult<String> {
         RResult::ROk(rresult_return!(result))

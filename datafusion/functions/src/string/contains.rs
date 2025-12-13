@@ -21,7 +21,7 @@ use arrow::compute::contains as arrow_contains;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -153,8 +153,8 @@ mod test {
     use crate::expr_fn::contains;
     use arrow::array::{BooleanArray, StringArray};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 

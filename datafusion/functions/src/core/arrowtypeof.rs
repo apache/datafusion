@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, utils::take_function_args};
 use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;

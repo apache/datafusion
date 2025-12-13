@@ -15,17 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, Float32Array, Int32Array, StringArray};
+use arrow::array::{
+    Array, ArrayRef, Float32Array, Int32Array, StringArray, StringViewArray,
+};
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::{col, in_list, lit};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
+use std::any::TypeId;
 use std::hint::black_box;
 use std::sync::Arc;
 
+/// Measures how long `in_list(col("a"), exprs)` takes to evaluate against a single RecordBatch.
 fn do_bench(c: &mut Criterion, name: &str, values: ArrayRef, exprs: &[ScalarValue]) {
     let schema = Schema::new(vec![Field::new("a", values.data_type().clone(), true)]);
     let exprs = exprs.iter().map(|s| lit(s.clone())).collect();
@@ -37,77 +41,128 @@ fn do_bench(c: &mut Criterion, name: &str, values: ArrayRef, exprs: &[ScalarValu
     });
 }
 
+/// Generates a random alphanumeric string of the specified length.
 fn random_string(rng: &mut StdRng, len: usize) -> String {
     let value = rng.sample_iter(&Alphanumeric).take(len).collect();
     String::from_utf8(value).unwrap()
 }
 
-fn do_benches(
-    c: &mut Criterion,
-    array_length: usize,
-    in_list_length: usize,
-    null_percent: f64,
-) {
-    let mut rng = StdRng::seed_from_u64(120320);
-    for string_length in [5, 10, 20] {
-        let values: StringArray = (0..array_length)
-            .map(|_| {
-                rng.random_bool(null_percent)
-                    .then(|| random_string(&mut rng, string_length))
-            })
-            .collect();
+const IN_LIST_LENGTHS: [usize; 3] = [3, 8, 100];
+const NULL_PERCENTS: [f64; 2] = [0., 0.2];
+const STRING_LENGTHS: [usize; 3] = [3, 12, 100];
+const ARRAY_LENGTH: usize = 1024;
 
-        let in_list: Vec<_> = (0..in_list_length)
-            .map(|_| ScalarValue::from(random_string(&mut rng, string_length)))
-            .collect();
-
-        do_bench(
-            c,
-            &format!(
-                "in_list_utf8({string_length}) ({array_length}, {null_percent}) IN ({in_list_length}, 0)"
-            ),
-            Arc::new(values),
-            &in_list,
-        )
+/// Returns a friendly type name for the array type.
+fn array_type_name<A: 'static>() -> &'static str {
+    let id = TypeId::of::<A>();
+    if id == TypeId::of::<StringArray>() {
+        "Utf8"
+    } else if id == TypeId::of::<StringViewArray>() {
+        "Utf8View"
+    } else if id == TypeId::of::<Float32Array>() {
+        "Float32"
+    } else if id == TypeId::of::<Int32Array>() {
+        "Int32"
+    } else {
+        "Unknown"
     }
+}
 
-    let values: Float32Array = (0..array_length)
-        .map(|_| rng.random_bool(null_percent).then(|| rng.random()))
-        .collect();
-
-    let in_list: Vec<_> = (0..in_list_length)
-        .map(|_| ScalarValue::Float32(Some(rng.random())))
-        .collect();
-
-    do_bench(
-        c,
-        &format!("in_list_f32 ({array_length}, {null_percent}) IN ({in_list_length}, 0)"),
-        Arc::new(values),
-        &in_list,
-    );
-
-    let values: Int32Array = (0..array_length)
-        .map(|_| rng.random_bool(null_percent).then(|| rng.random()))
-        .collect();
-
-    let in_list: Vec<_> = (0..in_list_length)
-        .map(|_| ScalarValue::Int32(Some(rng.random())))
-        .collect();
-
-    do_bench(
-        c,
-        &format!("in_list_i32 ({array_length}, {null_percent}) IN ({in_list_length}, 0)"),
-        Arc::new(values),
-        &in_list,
+/// Builds a benchmark name from array type, list size, and null percentage.
+fn bench_name<A: 'static>(in_list_length: usize, null_percent: f64) -> String {
+    format!(
+        "in_list/{}/list={in_list_length}/nulls={}%",
+        array_type_name::<A>(),
+        (null_percent * 100.0) as u32
     )
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
-    for in_list_length in [1, 3, 10, 100] {
-        for null_percent in [0., 0.2] {
-            do_benches(c, 1024, in_list_length, null_percent)
+/// Runs in_list benchmarks for a string array type across all list-size × null-ratio × string-length combinations.
+fn bench_string_type<A>(
+    c: &mut Criterion,
+    rng: &mut StdRng,
+    make_scalar: fn(String) -> ScalarValue,
+) where
+    A: Array + FromIterator<Option<String>> + 'static,
+{
+    for in_list_length in IN_LIST_LENGTHS {
+        for null_percent in NULL_PERCENTS {
+            for string_length in STRING_LENGTHS {
+                let values: A = (0..ARRAY_LENGTH)
+                    .map(|_| {
+                        rng.random_bool(1.0 - null_percent)
+                            .then(|| random_string(rng, string_length))
+                    })
+                    .collect();
+
+                let in_list: Vec<_> = (0..in_list_length)
+                    .map(|_| make_scalar(random_string(rng, string_length)))
+                    .collect();
+
+                do_bench(
+                    c,
+                    &format!(
+                        "{}/str={string_length}",
+                        bench_name::<A>(in_list_length, null_percent)
+                    ),
+                    Arc::new(values),
+                    &in_list,
+                )
+            }
         }
     }
+}
+
+/// Runs in_list benchmarks for a numeric array type across all list-size × null-ratio combinations.
+fn bench_numeric_type<T, A>(
+    c: &mut Criterion,
+    rng: &mut StdRng,
+    mut gen_value: impl FnMut(&mut StdRng) -> T,
+    make_scalar: fn(T) -> ScalarValue,
+) where
+    A: Array + FromIterator<Option<T>> + 'static,
+{
+    for in_list_length in IN_LIST_LENGTHS {
+        for null_percent in NULL_PERCENTS {
+            let values: A = (0..ARRAY_LENGTH)
+                .map(|_| rng.random_bool(1.0 - null_percent).then(|| gen_value(rng)))
+                .collect();
+
+            let in_list: Vec<_> = (0..in_list_length)
+                .map(|_| make_scalar(gen_value(rng)))
+                .collect();
+
+            do_bench(
+                c,
+                &bench_name::<A>(in_list_length, null_percent),
+                Arc::new(values),
+                &in_list,
+            );
+        }
+    }
+}
+
+/// Entry point: registers in_list benchmarks for Utf8, Utf8View, Float32, and Int32 arrays.
+fn criterion_benchmark(c: &mut Criterion) {
+    let mut rng = StdRng::seed_from_u64(120320);
+
+    // Benchmarks for string array types (Utf8, Utf8View)
+    bench_string_type::<StringArray>(c, &mut rng, |s| ScalarValue::Utf8(Some(s)));
+    bench_string_type::<StringViewArray>(c, &mut rng, |s| ScalarValue::Utf8View(Some(s)));
+
+    // Benchmarks for numeric types
+    bench_numeric_type::<f32, Float32Array>(
+        c,
+        &mut rng,
+        |rng| rng.random(),
+        |v| ScalarValue::Float32(Some(v)),
+    );
+    bench_numeric_type::<i32, Int32Array>(
+        c,
+        &mut rng,
+        |rng| rng.random(),
+        |v| ScalarValue::Int32(Some(v)),
+    );
 }
 
 criterion_group!(benches, criterion_benchmark);

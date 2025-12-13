@@ -23,17 +23,17 @@ use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{
-    ArrowPrimitiveType, Date32Type, Date64Type, FieldRef, Int16Type, Int32Type,
-    Int64Type, Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    ArrowPrimitiveType, Date32Type, Date64Type, FieldRef, Int8Type, Int16Type, Int32Type,
+    Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{
-    downcast_value, internal_datafusion_err, internal_err, not_impl_err, DataFusionError,
-    Result,
+    DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
+    not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -328,19 +328,23 @@ impl AggregateUDFImpl for ApproxDistinct {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.input_fields[0].data_type().is_null() {
-            Ok(vec![Field::new(
-                format_state_name(args.name, self.name()),
-                DataType::Null,
-                true,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, self.name()),
+                    DataType::Null,
+                    true,
+                )
+                .into(),
+            ])
         } else {
-            Ok(vec![Field::new(
-                format_state_name(args.name, "hll_registers"),
-                DataType::Binary,
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "hll_registers"),
+                    DataType::Binary,
+                    false,
+                )
+                .into(),
+            ])
         }
     }
 
@@ -395,8 +399,8 @@ impl AggregateUDFImpl for ApproxDistinct {
             }
             other => {
                 return not_impl_err!(
-                "Support for 'approx_distinct' for data type {other} is not implemented"
-            )
+                    "Support for 'approx_distinct' for data type {other} is not implemented"
+                );
             }
         };
         Ok(accumulator)

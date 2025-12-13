@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int32Array};
 use datafusion_physical_plan::aggregates::order::GroupOrderingPartial;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 const BATCH_SIZE: usize = 8192;
 

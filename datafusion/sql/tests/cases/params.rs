@@ -18,9 +18,8 @@
 use crate::logical_plan;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{
-    assert_contains,
-    metadata::{format_type_and_metadata, ScalarAndMetadata},
-    ParamValues, ScalarValue,
+    ParamValues, ScalarValue, assert_contains,
+    metadata::{ScalarAndMetadata, format_type_and_metadata},
 };
 use datafusion_expr::{LogicalPlan, Prepare, Statement};
 use insta::assert_snapshot;
@@ -129,10 +128,12 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
-    assert!(logical_plan(sql)
-        .unwrap_err()
-        .strip_backtrace()
-        .contains("Expected: AS, found: SELECT"))
+    assert!(
+        logical_plan(sql)
+            .unwrap_err()
+            .strip_backtrace()
+            .contains("Expected: AS, found: SELECT")
+    )
 }
 
 #[test]
@@ -375,8 +376,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 #[test]
 fn test_infer_types_from_join() {
     let test = ParameterTest {
-        sql:
-            "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1",
+        sql: "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1",
         expected_types: vec![("$1", Some(DataType::Int32))],
         param_values: vec![ScalarValue::Int32(Some(10))],
     };
@@ -403,7 +403,7 @@ fn test_prepare_statement_infer_types_from_join() {
     let test = ParameterTest {
         sql: "PREPARE my_plan AS SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1",
         expected_types: vec![("$1", Some(DataType::Int32))],
-        param_values: vec![ScalarValue::Int32(Some(10))]
+        param_values: vec![ScalarValue::Int32(Some(10))],
     };
 
     assert_snapshot!(
@@ -527,7 +527,7 @@ fn test_infer_types_subquery() {
     let test = ParameterTest {
         sql: "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)",
         expected_types: vec![("$1", Some(DataType::UInt32))],
-        param_values: vec![ScalarValue::UInt32(Some(10))]
+        param_values: vec![ScalarValue::UInt32(Some(10))],
     };
 
     assert_snapshot!(
@@ -560,7 +560,7 @@ fn test_prepare_statement_infer_types_subquery() {
     let test = ParameterTest {
         sql: "PREPARE my_plan AS SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)",
         expected_types: vec![("$1", Some(DataType::UInt32))],
-        param_values: vec![ScalarValue::UInt32(Some(10))]
+        param_values: vec![ScalarValue::UInt32(Some(10))],
     };
 
     assert_snapshot!(
@@ -690,7 +690,7 @@ fn test_prepare_statement_insert_infer() {
             ScalarValue::UInt32(Some(1)),
             ScalarValue::from("Alan"),
             ScalarValue::from("Turing"),
-        ]
+        ],
     };
     assert_snapshot!(
         test.run(),
@@ -788,7 +788,7 @@ fn test_update_infer_with_metadata() {
     let test = ParameterTestWithMetadata {
         sql: "PREPARE my_plan AS update person_with_uuid_extension set last_name=$1 where id=$2",
         expected_types,
-        param_values
+        param_values,
     };
 
     assert_snapshot!(
@@ -839,7 +839,7 @@ fn test_insert_infer_with_metadata() {
     let test = ParameterTestWithMetadata {
         sql: "insert into person_with_uuid_extension (id, first_name, last_name) values ($1, $2, $3)",
         expected_types: expected_types.clone(),
-        param_values: param_values.clone()
+        param_values: param_values.clone(),
     };
 
     assert_snapshot!(
@@ -860,7 +860,7 @@ fn test_insert_infer_with_metadata() {
     let test = ParameterTestWithMetadata {
         sql: "PREPARE my_plan AS insert into person_with_uuid_extension (id, first_name, last_name) values ($1, $2, $3)",
         expected_types,
-        param_values
+        param_values,
     };
 
     assert_snapshot!(
@@ -1058,5 +1058,8 @@ fn test_prepare_statement_bad_list_idx() {
     let param_values = ParamValues::List(vec![]);
 
     let err = plan.replace_params_with_values(&param_values).unwrap_err();
-    assert_contains!(err.to_string(), "Error during planning: Failed to parse placeholder id: invalid digit found in string");
+    assert_contains!(
+        err.to_string(),
+        "Error during planning: Failed to parse placeholder id: invalid digit found in string"
+    );
 }

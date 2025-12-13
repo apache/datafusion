@@ -73,6 +73,7 @@ serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = [
     "sql",
     "datetime_expressions",

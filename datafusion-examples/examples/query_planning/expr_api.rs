@@ -303,6 +303,7 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
         min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
         sum_value: Precision::Absent,
         distinct_count: Precision::Absent,
+        byte_size: Precision::Absent,
     };
 
     // We can then build our expression boundaries from the column statistics
@@ -370,6 +371,7 @@ fn boundary_analysis_in_conjunctions_demo() -> Result<()> {
         min_value: Precision::Exact(ScalarValue::Int64(Some(14))),
         sum_value: Precision::Absent,
         distinct_count: Precision::Absent,
+        byte_size: Precision::Absent,
     };
 
     let initial_boundaries =

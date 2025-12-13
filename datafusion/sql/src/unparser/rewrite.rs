@@ -20,8 +20,8 @@ use std::{collections::HashSet, sync::Arc};
 use arrow::datatypes::Schema;
 use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, HashMap, Result, TableReference,
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
@@ -311,7 +311,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     //     Projection: j1.j1_id AS id
     //       Projection: j1.j1_id
     for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
-        let Expr::Alias(ref outer_alias) = &outer_projections.expr[i] else {
+        let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
             return (plan, vec![]);
         };
 
@@ -360,15 +360,14 @@ pub(super) fn find_unnest_column_alias(
         if projection.expr.len() != 1 {
             return (plan, None);
         }
-        if let Some(Expr::Alias(alias)) = projection.expr.first() {
-            if alias
+        if let Some(Expr::Alias(alias)) = projection.expr.first()
+            && alias
                 .expr
                 .schema_name()
                 .to_string()
                 .starts_with(&format!("{UNNEST_COLUMN_PREFIX}("))
-            {
-                return (projection.input.as_ref(), Some(alias.name.clone()));
-            }
+        {
+            return (projection.input.as_ref(), Some(alias.name.clone()));
         }
     }
     (plan, None)

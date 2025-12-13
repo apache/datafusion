@@ -21,7 +21,7 @@ use arrow::datatypes::DataType::Time64;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use chrono::TimeZone;
 use chrono::Timelike;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
@@ -225,6 +225,9 @@ mod tests {
         // 10 hours in nanoseconds
         let expected_offset = 10i64 * 3600 * 1_000_000_000;
 
-        assert_eq!(difference, expected_offset, "Expected 10-hour offset difference in nanoseconds between UTC+05:00 and UTC-05:00");
+        assert_eq!(
+            difference, expected_offset,
+            "Expected 10-hour offset difference in nanoseconds between UTC+05:00 and UTC-05:00"
+        );
     }
 }

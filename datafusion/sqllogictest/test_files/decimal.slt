@@ -1080,3 +1080,6 @@ query I
 SELECT power(2, null)
 ----
 NULL
+
+query error Arrow error: Invalid argument error: 1.10 is too large to store in a Decimal128 of precision 2. Max is 0.99
+select cast(1.1 as decimal(2, 2)) + 1;

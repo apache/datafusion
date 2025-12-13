@@ -27,13 +27,13 @@ use std::mem;
 use std::sync::Arc;
 
 use self::dependency::{
-    construct_prefix_orderings, generate_dependency_orderings, referred_dependencies,
-    Dependencies, DependencyMap,
+    Dependencies, DependencyMap, construct_prefix_orderings,
+    generate_dependency_orderings, referred_dependencies,
 };
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{with_new_schema, CastExpr, Column, Literal};
+use crate::expressions::{CastExpr, Column, Literal, with_new_schema};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -41,7 +41,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_err, Constraint, Constraints, HashMap, Result};
+use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::sort_expr::options_compatible;

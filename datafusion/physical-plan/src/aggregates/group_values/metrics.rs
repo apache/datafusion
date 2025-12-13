@@ -53,7 +53,7 @@ mod tests {
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::metrics::MetricsSet;
     use crate::test::TestMemoryExec;
-    use crate::{collect, ExecutionPlan};
+    use crate::{ExecutionPlan, collect};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;

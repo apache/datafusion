@@ -23,15 +23,14 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    assert_eq_or_internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
+    DataFusionError, HashSet, Result, assert_eq_or_internal_err, tree_node::Transformed,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
-    col,
+    Expr, col,
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan},
-    Expr,
 };
 
 /// single distinct to group by optimizer rule
@@ -288,8 +287,8 @@ mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::test::*;
-    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::ExprFunctionExt;
+    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};

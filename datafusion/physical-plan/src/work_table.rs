@@ -31,9 +31,9 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{assert_eq_or_internal_err, internal_datafusion_err, Result};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// A vector of record batches with a memory reservation.

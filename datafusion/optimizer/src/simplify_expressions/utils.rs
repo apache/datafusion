@@ -18,11 +18,11 @@
 //! Utility functions for expression simplification
 
 use arrow::datatypes::i256;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
+    Case, Expr, Like, Operator,
     expr::{Between, BinaryExpr, InList},
     expr_fn::{and, bitwise_and, bitwise_or, or},
-    Case, Expr, Like, Operator,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [

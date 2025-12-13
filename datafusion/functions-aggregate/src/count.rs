@@ -22,24 +22,24 @@ use arrow::{
     compute,
     datatypes::{
         DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        FieldRef, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-        Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+        Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
         Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, stats::Precision,
-    utils::expr::COUNT_STAR_EXPANSION, HashMap, Result, ScalarValue,
+    HashMap, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
+    stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    expr::WindowFunction,
-    function::{AccumulatorArgs, StateFieldsArgs},
-    utils::format_state_name,
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
     ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
     WindowFunctionDefinition,
+    expr::WindowFunction,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::format_state_name,
 };
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::BytesDistinctCountAccumulator,
@@ -307,20 +307,24 @@ impl AggregateUDFImpl for Count {
                 &dtype => dtype.clone(),
             };
 
-            Ok(vec![Field::new_list(
-                format_state_name(args.name, "count distinct"),
-                // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(dtype, true),
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new_list(
+                    format_state_name(args.name, "count distinct"),
+                    // See COMMENTS.md to understand why nullable is set to true
+                    Field::new_list_field(dtype, true),
+                    false,
+                )
+                .into(),
+            ])
         } else {
-            Ok(vec![Field::new(
-                format_state_name(args.name, "count"),
-                DataType::Int64,
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "count"),
+                    DataType::Int64,
+                    false,
+                )
+                .into(),
+            ])
         }
     }
 
@@ -373,27 +377,26 @@ impl AggregateUDFImpl for Count {
         if statistics_args.is_distinct {
             return None;
         }
-        if let Precision::Exact(num_rows) = statistics_args.statistics.num_rows {
-            if statistics_args.exprs.len() == 1 {
-                // TODO optimize with exprs other than Column
-                if let Some(col_expr) = statistics_args.exprs[0]
-                    .as_any()
-                    .downcast_ref::<expressions::Column>()
-                {
-                    let current_val = &statistics_args.statistics.column_statistics
-                        [col_expr.index()]
-                    .null_count;
-                    if let &Precision::Exact(val) = current_val {
-                        return Some(ScalarValue::Int64(Some((num_rows - val) as i64)));
-                    }
-                } else if let Some(lit_expr) = statistics_args.exprs[0]
-                    .as_any()
-                    .downcast_ref::<expressions::Literal>()
-                {
-                    if lit_expr.value() == &COUNT_STAR_EXPANSION {
-                        return Some(ScalarValue::Int64(Some(num_rows as i64)));
-                    }
+        if let Precision::Exact(num_rows) = statistics_args.statistics.num_rows
+            && statistics_args.exprs.len() == 1
+        {
+            // TODO optimize with exprs other than Column
+            if let Some(col_expr) = statistics_args.exprs[0]
+                .as_any()
+                .downcast_ref::<expressions::Column>()
+            {
+                let current_val = &statistics_args.statistics.column_statistics
+                    [col_expr.index()]
+                .null_count;
+                if let &Precision::Exact(val) = current_val {
+                    return Some(ScalarValue::Int64(Some((num_rows - val) as i64)));
                 }
+            } else if let Some(lit_expr) = statistics_args.exprs[0]
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+                && lit_expr.value() == &COUNT_STAR_EXPANSION
+            {
+                return Some(ScalarValue::Int64(Some(num_rows as i64)));
             }
         }
         None
@@ -466,12 +469,12 @@ impl Accumulator for SlidingDistinctCountAccumulator {
         let arr = &values[0];
         for i in 0..arr.len() {
             let v = ScalarValue::try_from_array(arr, i)?;
-            if !v.is_null() {
-                if let Some(cnt) = self.counts.get_mut(&v) {
-                    *cnt -= 1;
-                    if *cnt == 0 {
-                        self.counts.remove(&v);
-                    }
+            if !v.is_null()
+                && let Some(cnt) = self.counts.get_mut(&v)
+            {
+                *cnt -= 1;
+                if *cnt == 0 {
+                    self.counts.remove(&v);
                 }
             }
         }
@@ -854,7 +857,7 @@ mod tests {
         datatypes::{DataType, Field, Int32Type, Schema},
     };
     use datafusion_expr::function::AccumulatorArgs;
-    use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
+    use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use std::sync::Arc;
     /// Helper function to create a dictionary array with non-null keys but some null values
     /// Returns a dictionary array where:

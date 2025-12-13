@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 
-use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::common::Result;
 use datafusion::config::{ConfigOptions, TableParquetOptions};
@@ -35,7 +35,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::record_batch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{ColumnStatistics, ScalarValue};
+use datafusion_common::ColumnStatistics;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
@@ -193,11 +193,10 @@ struct UppercasePhysicalExprAdapterFactory;
 impl PhysicalExprAdapterFactory for UppercasePhysicalExprAdapterFactory {
     fn create(
         &self,
-        logical_file_schema: SchemaRef,
+        _logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Arc<dyn PhysicalExprAdapter> {
         Arc::new(UppercasePhysicalExprAdapter {
-            logical_file_schema,
             physical_file_schema,
         })
     }
@@ -205,7 +204,6 @@ impl PhysicalExprAdapterFactory for UppercasePhysicalExprAdapterFactory {
 
 #[derive(Debug)]
 struct UppercasePhysicalExprAdapter {
-    logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
 }
 
@@ -225,16 +223,6 @@ impl PhysicalExprAdapter for UppercasePhysicalExprAdapter {
             Ok(Transformed::no(e))
         })
         .data()
-    }
-
-    fn with_partition_values(
-        &self,
-        _partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(Self {
-            logical_file_schema: self.logical_file_schema.clone(),
-            physical_file_schema: self.physical_file_schema.clone(),
-        })
     }
 }
 

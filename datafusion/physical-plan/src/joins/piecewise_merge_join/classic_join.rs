@@ -17,8 +17,8 @@
 
 //! Stream Implementation for PiecewiseMergeJoin's Classic Join (Left, Right, Full, Inner)
 
-use arrow::array::{new_null_array, Array, PrimitiveBuilder};
-use arrow::compute::{take, BatchCoalescer};
+use arrow::array::{Array, PrimitiveBuilder, new_null_array};
+use arrow::compute::{BatchCoalescer, take};
 use arrow::datatypes::UInt32Type;
 use arrow::{
     array::{ArrayRef, RecordBatch, UInt32Array},
@@ -26,7 +26,7 @@ use arrow::{
 };
 use arrow_schema::{Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
@@ -37,8 +37,8 @@ use std::{sync::Arc, task::Poll};
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
-use crate::joins::utils::{compare_join_arrays, get_final_indices_from_shared_bitmap};
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
+use crate::joins::utils::{compare_join_arrays, get_final_indices_from_shared_bitmap};
 
 pub(super) enum PiecewiseMergeJoinStreamState {
     WaitBufferedSide,
@@ -188,11 +188,12 @@ impl ClassicPWMJStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        let buffered_data = ready!(self
-            .buffered_side
-            .try_as_initial_mut()?
-            .buffered_fut
-            .get_shared(cx))?;
+        let buffered_data = ready!(
+            self.buffered_side
+                .try_as_initial_mut()?
+                .buffered_fut
+                .get_shared(cx)
+        )?;
         build_timer.done();
 
         // We will start fetching stream batches for classic joins
@@ -548,7 +549,7 @@ fn resolve_classic_join(
                     return internal_err!(
                         "PiecewiseMergeJoin should not contain operator, {}",
                         operator
-                    )
+                    );
                 }
             };
 
@@ -653,17 +654,16 @@ fn create_unmatched_batch(
 mod tests {
     use super::*;
     use crate::{
-        common,
+        ExecutionPlan, common,
         joins::PiecewiseMergeJoinExec,
-        test::{build_table_i32, TestMemoryExec},
-        ExecutionPlan,
+        test::{TestMemoryExec, build_table_i32},
     };
     use arrow::array::{Date32Array, Date64Array};
     use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
     use datafusion_expr::JoinType;
-    use datafusion_physical_expr::{expressions::Column, PhysicalExpr};
+    use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use insta::assert_snapshot;
     use std::sync::Arc;
 

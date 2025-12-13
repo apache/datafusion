@@ -17,7 +17,7 @@
 
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
 };

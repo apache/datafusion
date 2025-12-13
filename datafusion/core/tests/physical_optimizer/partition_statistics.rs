@@ -120,21 +120,27 @@ mod test {
         max_value: i32,
         include_date_column: bool,
     ) -> Statistics {
+        // Int32 is 4 bytes per row
+        let int32_byte_size = num_rows * 4;
         let mut column_stats = vec![ColumnStatistics {
             null_count: Precision::Exact(0),
             max_value: Precision::Exact(ScalarValue::Int32(Some(max_value))),
             min_value: Precision::Exact(ScalarValue::Int32(Some(min_value))),
             sum_value: Precision::Absent,
             distinct_count: Precision::Absent,
+            byte_size: Precision::Exact(int32_byte_size),
         }];
 
         if include_date_column {
+            // The date column is a partition column (from the directory path),
+            // not stored in the parquet file, so byte_size is Absent
             column_stats.push(ColumnStatistics {
                 null_count: Precision::Absent,
                 max_value: Precision::Absent,
                 min_value: Precision::Absent,
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
             });
         }
 
@@ -323,6 +329,8 @@ mod test {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, scan)?);
         let full_statistics = filter.partition_statistics(None)?;
+        // Filter preserves original total_rows and byte_size from input
+        // (4 total rows = 2 partitions * 2 rows each, byte_size = 4 * 4 = 16 bytes for int32)
         let expected_full_statistic = Statistics {
             num_rows: Precision::Inexact(0),
             total_byte_size: Precision::Inexact(0),
@@ -333,6 +341,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Null),
                     sum_value: Precision::Exact(ScalarValue::Null),
                     distinct_count: Precision::Exact(0),
+                    byte_size: Precision::Exact(16),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -340,6 +349,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Null),
                     sum_value: Precision::Exact(ScalarValue::Null),
                     distinct_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -349,8 +359,31 @@ mod test {
             .map(|idx| filter.partition_statistics(Some(idx)))
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
-        assert_eq!(statistics[0], expected_full_statistic);
-        assert_eq!(statistics[1], expected_full_statistic);
+        // Per-partition stats: each partition has 2 rows, byte_size = 2 * 4 = 8
+        let expected_partition_statistic = Statistics {
+            num_rows: Precision::Inexact(0),
+            total_byte_size: Precision::Inexact(0),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Null),
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    sum_value: Precision::Exact(ScalarValue::Null),
+                    distinct_count: Precision::Exact(0),
+                    byte_size: Precision::Exact(8),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Null),
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    sum_value: Precision::Exact(ScalarValue::Null),
+                    distinct_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
+                },
+            ],
+        };
+        assert_eq!(statistics[0], expected_partition_statistic);
+        assert_eq!(statistics[1], expected_partition_statistic);
         Ok(())
     }
 
@@ -415,6 +448,7 @@ mod test {
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(stats.len(), 2);
 
+        // Each partition gets half of combined input, total_rows per partition = 4
         let expected_stats = Statistics {
             num_rows: Precision::Inexact(4),
             total_byte_size: Precision::Inexact(32),
@@ -460,28 +494,67 @@ mod test {
             .collect::<Result<Vec<_>>>()?;
         // Check that we have 2 partitions
         assert_eq!(statistics.len(), 2);
-        let mut expected_statistic_partition_1 =
-            create_partition_statistics(8, 512, 1, 4, true);
-        expected_statistic_partition_1
-            .column_statistics
-            .push(ColumnStatistics {
-                null_count: Precision::Exact(0),
-                max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
-                min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
-                sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
-            });
-        let mut expected_statistic_partition_2 =
-            create_partition_statistics(8, 512, 1, 4, true);
-        expected_statistic_partition_2
-            .column_statistics
-            .push(ColumnStatistics {
-                null_count: Precision::Exact(0),
-                max_value: Precision::Exact(ScalarValue::Int32(Some(2))),
-                min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
-                sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
-            });
+        // Cross join doesn't propagate Column's byte_size
+        let expected_statistic_partition_1 = Statistics {
+            num_rows: Precision::Exact(8),
+            total_byte_size: Precision::Exact(512),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+            ],
+        };
+        let expected_statistic_partition_2 = Statistics {
+            num_rows: Precision::Exact(8),
+            total_byte_size: Precision::Exact(512),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(2))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+            ],
+        };
         assert_eq!(statistics[0], expected_statistic_partition_1);
         assert_eq!(statistics[1], expected_statistic_partition_2);
 
@@ -622,12 +695,9 @@ mod test {
 
         let p0_statistics = aggregate_exec_partial.partition_statistics(Some(0))?;
 
+        // Aggregate doesn't propagate num_rows and ColumnStatistics byte_size from input
         let expected_p0_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            // Each row produces 8 bytes of data:
-            // - id column: Int32 (4 bytes) × 2 rows = 8 bytes
-            // - id + 1 column: Int32 (4 bytes) × 2 rows = 8 bytes
-            // AggregateExec cannot yet derive byte sizes for the COUNT(c) column
             total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
@@ -636,6 +706,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
@@ -646,10 +717,6 @@ mod test {
 
         let expected_p1_statistics = Statistics {
             num_rows: Precision::Inexact(2),
-            // Each row produces 8 bytes of data:
-            // - id column: Int32 (4 bytes) × 2 rows = 8 bytes
-            // - id + 1 column: Int32 (4 bytes) × 2 rows = 8 bytes
-            // AggregateExec cannot yet derive byte sizes for the COUNT(c) column
             total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
@@ -658,6 +725,7 @@ mod test {
                     min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
@@ -854,6 +922,7 @@ mod test {
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 3);
 
+        // Repartition preserves original total_rows from input (4 rows total)
         let expected_stats = Statistics {
             num_rows: Precision::Inexact(1),
             total_byte_size: Precision::Inexact(10),
@@ -958,6 +1027,7 @@ mod test {
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(stats.len(), 2);
 
+        // Repartition preserves original total_rows from input (4 rows total)
         let expected_stats = Statistics {
             num_rows: Precision::Inexact(2),
             total_byte_size: Precision::Inexact(16),

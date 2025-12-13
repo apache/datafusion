@@ -19,8 +19,8 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
@@ -115,16 +115,16 @@ fn is_constant_expression(expr: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
-    use crate::OptimizerContext;
 
     use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, TypeSignature,
+        ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+        Signature, TypeSignature, col, lit,
     };
 
     use datafusion_functions_aggregate::expr_fn::count;

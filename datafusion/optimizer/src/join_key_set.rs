@@ -157,7 +157,7 @@ impl Equivalent<(Expr, Expr)> for ExprPair<'_> {
 #[cfg(test)]
 mod test {
     use crate::join_key_set::JoinKeySet;
-    use datafusion_expr::{col, Expr};
+    use datafusion_expr::{Expr, col};
 
     #[test]
     fn test_insert() {

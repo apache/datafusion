@@ -22,11 +22,11 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
-use arrow::compute::{can_cast_types, CastOptions};
+use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -191,7 +191,7 @@ impl PhysicalExpr for CastExpr {
         // Get child's datatype:
         let cast_type = child_interval.data_type();
         Ok(Some(vec![
-            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?
+            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?,
         ]))
     }
 
@@ -262,8 +262,8 @@ mod tests {
 
     use arrow::{
         array::{
-            Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
-            Int64Array, Int8Array, StringArray, Time64NanosecondArray,
+            Array, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+            Int32Array, Int64Array, StringArray, Time64NanosecondArray,
             TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
@@ -774,9 +774,10 @@ mod tests {
         match result {
             Ok(_) => panic!("expected error"),
             Err(e) => {
-                assert!(e
-                    .to_string()
-                    .contains("Cannot cast string '9.1' to value of Int32 type"))
+                assert!(
+                    e.to_string()
+                        .contains("Cannot cast string '9.1' to value of Int32 type")
+                )
             }
         }
         Ok(())

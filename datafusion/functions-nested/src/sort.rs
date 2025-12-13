@@ -19,7 +19,7 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericListArray, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, GenericListArray, NullBufferBuilder, OffsetSizeTrait, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::SortColumn;
@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, FieldRef};
 use arrow::{compute, compute::SortOptions};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,

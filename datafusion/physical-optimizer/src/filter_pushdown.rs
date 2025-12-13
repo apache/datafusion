@@ -33,7 +33,7 @@
 
 use std::sync::Arc;
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{assert_eq_or_internal_err, config::ConfigOptions, Result};
@@ -416,20 +416,6 @@ impl Default for FilterPushdown {
 }
 
 impl PhysicalOptimizerRule for FilterPushdown {
-    fn optimize_plan(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.session_config().options();
-        Ok(
-            push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
-                .updated_node
-                .unwrap_or(plan),
-        )
-    }
-
-    #[allow(deprecated)]
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,

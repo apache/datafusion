@@ -18,18 +18,18 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
-    AggrDynFilter, AggregateMode, DynamicFilterAggregateType,
+    AccumulatorItem, AggrDynFilter, AggregateMode, DynamicFilterAggregateType,
+    aggregate_expressions, create_accumulators, finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_datafusion_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{lit, BinaryExpr};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, lit};
 use futures::stream::BoxStream;
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -94,7 +94,9 @@ impl AggregateStreamInner {
         &self,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let Some(filter_state) = self.agg_dyn_filter_state.as_ref() else {
-            return internal_err!("`build_dynamic_filter_from_accumulator_bounds()` is only called when dynamic filter is enabled");
+            return internal_err!(
+                "`build_dynamic_filter_from_accumulator_bounds()` is only called when dynamic filter is enabled"
+            );
         };
 
         let mut predicates: Vec<Arc<dyn PhysicalExpr>> =

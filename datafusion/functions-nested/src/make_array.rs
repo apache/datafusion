@@ -23,18 +23,18 @@ use std::vec;
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray,
-    MutableArrayData, NullArray, OffsetSizeTrait,
+    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
+    NullArray, OffsetSizeTrait, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType::Null, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
+use datafusion_expr::TypeSignature;
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
-use datafusion_expr::TypeSignature;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

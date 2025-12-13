@@ -19,10 +19,10 @@ use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray,
+    ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
+    cast::AsArray,
 };
-use arrow::datatypes::{i256, DataType};
+use arrow::datatypes::{DataType, i256};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;

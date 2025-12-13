@@ -23,8 +23,8 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_array, Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder,
-    UInt64Array,
+    Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder, UInt64Array,
+    downcast_array,
 };
 use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
@@ -40,9 +40,9 @@ use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
@@ -214,15 +214,14 @@ impl Accumulator for CorrelationAccumulator {
             return Ok(ScalarValue::Float64(None));
         }
 
-        if let ScalarValue::Float64(Some(c)) = covar {
-            if let ScalarValue::Float64(Some(s1)) = stddev1 {
-                if let ScalarValue::Float64(Some(s2)) = stddev2 {
-                    if s1 == 0_f64 || s2 == 0_f64 {
-                        return Ok(ScalarValue::Float64(None));
-                    } else {
-                        return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
-                    }
-                }
+        if let ScalarValue::Float64(Some(c)) = covar
+            && let ScalarValue::Float64(Some(s1)) = stddev1
+            && let ScalarValue::Float64(Some(s2)) = stddev2
+        {
+            if s1 == 0_f64 || s2 == 0_f64 {
+                return Ok(ScalarValue::Float64(None));
+            } else {
+                return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
             }
         }
 
@@ -509,7 +508,10 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let partial_sum_xx = values[4].as_primitive::<Float64Type>();
         let partial_sum_yy = values[5].as_primitive::<Float64Type>();
 
-        assert!(opt_filter.is_none(), "aggregate filter should be applied in partial stage, there should be no filter in final stage");
+        assert!(
+            opt_filter.is_none(),
+            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+        );
 
         accumulate_correlation_states(
             group_indices,

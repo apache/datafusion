@@ -1260,6 +1260,133 @@ impl<'de> serde::Deserialize<'de> for AnalyzedLogicalPlanType {
         deserializer.deserialize_struct("datafusion.AnalyzedLogicalPlanType", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for AsyncFuncExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.input.is_some() {
+            len += 1;
+        }
+        if !self.async_exprs.is_empty() {
+            len += 1;
+        }
+        if !self.async_expr_names.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.AsyncFuncExecNode", len)?;
+        if let Some(v) = self.input.as_ref() {
+            struct_ser.serialize_field("input", v)?;
+        }
+        if !self.async_exprs.is_empty() {
+            struct_ser.serialize_field("asyncExprs", &self.async_exprs)?;
+        }
+        if !self.async_expr_names.is_empty() {
+            struct_ser.serialize_field("asyncExprNames", &self.async_expr_names)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AsyncFuncExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "input",
+            "async_exprs",
+            "asyncExprs",
+            "async_expr_names",
+            "asyncExprNames",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Input,
+            AsyncExprs,
+            AsyncExprNames,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "input" => Ok(GeneratedField::Input),
+                            "asyncExprs" | "async_exprs" => Ok(GeneratedField::AsyncExprs),
+                            "asyncExprNames" | "async_expr_names" => Ok(GeneratedField::AsyncExprNames),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AsyncFuncExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.AsyncFuncExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AsyncFuncExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut input__ = None;
+                let mut async_exprs__ = None;
+                let mut async_expr_names__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Input => {
+                            if input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("input"));
+                            }
+                            input__ = map_.next_value()?;
+                        }
+                        GeneratedField::AsyncExprs => {
+                            if async_exprs__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("asyncExprs"));
+                            }
+                            async_exprs__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::AsyncExprNames => {
+                            if async_expr_names__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("asyncExprNames"));
+                            }
+                            async_expr_names__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(AsyncFuncExecNode {
+                    input: input__,
+                    async_exprs: async_exprs__.unwrap_or_default(),
+                    async_expr_names: async_expr_names__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.AsyncFuncExecNode", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AvroScanExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -17136,6 +17263,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::MemoryScan(v) => {
                     struct_ser.serialize_field("memoryScan", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::AsyncFunc(v) => {
+                    struct_ser.serialize_field("asyncFunc", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -17201,6 +17331,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "sortMergeJoin",
             "memory_scan",
             "memoryScan",
+            "async_func",
+            "asyncFunc",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17239,6 +17371,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             GenerateSeries,
             SortMergeJoin,
             MemoryScan,
+            AsyncFunc,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17294,6 +17427,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "generateSeries" | "generate_series" => Ok(GeneratedField::GenerateSeries),
                             "sortMergeJoin" | "sort_merge_join" => Ok(GeneratedField::SortMergeJoin),
                             "memoryScan" | "memory_scan" => Ok(GeneratedField::MemoryScan),
+                            "asyncFunc" | "async_func" => Ok(GeneratedField::AsyncFunc),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17552,6 +17686,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("memoryScan"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::MemoryScan)
+;
+                        }
+                        GeneratedField::AsyncFunc => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("asyncFunc"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::AsyncFunc)
 ;
                         }
                     }

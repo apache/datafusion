@@ -35,8 +35,8 @@ use datafusion_common::cast::{
 use datafusion_common::internal_err;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
-    utils::take_function_args, Result,
+    Result, exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
+    utils::take_function_args,
 };
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
@@ -1034,9 +1034,9 @@ impl ScalarUDFImpl for ArrayAnyValue {
     }
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field)
-            | LargeList(field)
-            | FixedSizeList(field, _) => Ok(field.data_type().clone()),
+            List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                Ok(field.data_type().clone())
+            }
             _ => plan_err!(
                 "array_any_value can only accept List, LargeList or FixedSizeList as the argument"
             ),
@@ -1129,8 +1129,8 @@ where
 mod tests {
     use super::{array_element_udf, general_list_view_array_slice};
     use arrow::array::{
-        cast::AsArray, Array, ArrayRef, GenericListViewArray, Int32Array, Int64Array,
-        ListViewArray,
+        Array, ArrayRef, GenericListViewArray, Int32Array, Int64Array, ListViewArray,
+        cast::AsArray,
     };
     use arrow::buffer::ScalarBuffer;
     use arrow::datatypes::{DataType, Field};

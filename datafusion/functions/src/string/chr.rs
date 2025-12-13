@@ -26,7 +26,7 @@ use arrow::datatypes::DataType::Utf8;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -47,11 +47,11 @@ fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     for integer in integer_array {
         match integer {
             Some(integer) => {
-                if let Ok(u) = u32::try_from(integer) {
-                    if let Some(c) = core::char::from_u32(u) {
-                        builder.append_value(c.encode_utf8(&mut buf));
-                        continue;
-                    }
+                if let Ok(u) = u32::try_from(integer)
+                    && let Some(c) = core::char::from_u32(u)
+                {
+                    builder.append_value(c.encode_utf8(&mut buf));
+                    continue;
                 }
 
                 return exec_err!("invalid Unicode scalar value: {integer}");

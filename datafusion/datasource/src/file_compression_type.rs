@@ -21,8 +21,8 @@ use std::str::FromStr;
 
 use datafusion_common::error::{DataFusionError, Result};
 
-use datafusion_common::parsers::CompressionTypeVariant::{self, *};
 use datafusion_common::GetExt;
+use datafusion_common::parsers::CompressionTypeVariant::{self, *};
 
 #[cfg(feature = "compression")]
 use async_compression::tokio::bufread::{
@@ -39,10 +39,10 @@ use bytes::Bytes;
 use bzip2::read::MultiBzDecoder;
 #[cfg(feature = "compression")]
 use flate2::read::MultiGzDecoder;
-use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
+use futures::stream::BoxStream;
 #[cfg(feature = "compression")]
 use liblzma::read::XzDecoder;
 use object_store::buffered::BufWriter;
@@ -148,7 +148,7 @@ impl FileCompressionType {
             GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
-                ))
+                ));
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -173,7 +173,7 @@ impl FileCompressionType {
             GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
-                ))
+                ));
             }
             UNCOMPRESSED => Box::new(w),
         })
@@ -210,7 +210,7 @@ impl FileCompressionType {
             GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
-                ))
+                ));
             }
             UNCOMPRESSED => s.boxed(),
         })
@@ -237,7 +237,7 @@ impl FileCompressionType {
             GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
-                ))
+                ));
             }
             UNCOMPRESSED => Box::new(r),
         })

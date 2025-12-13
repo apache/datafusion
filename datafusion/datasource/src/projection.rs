@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode},
     Result, ScalarValue,
+    tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_physical_expr::{
     expressions::{Column, Literal},
@@ -30,8 +30,8 @@ use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 
 use crate::{
-    file_stream::{FileOpenFuture, FileOpener},
     PartitionedFile, TableSchema,
+    file_stream::{FileOpenFuture, FileOpener},
 };
 
 /// A file opener that handles applying a projection on top of an inner opener.
@@ -250,11 +250,10 @@ impl SplitProjection {
                 let expr = Arc::clone(&proj_expr.expr)
                     .transform(|expr| {
                         let original_expr = Arc::clone(&expr);
-                        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                            if let Some(new_column) = column_mapping.get(&column.index())
-                            {
-                                return Ok(Transformed::yes(Arc::clone(new_column)));
-                            }
+                        if let Some(column) = expr.as_any().downcast_ref::<Column>()
+                            && let Some(new_column) = column_mapping.get(&column.index())
+                        {
+                            return Ok(Transformed::yes(Arc::clone(new_column)));
                         }
                         Ok(Transformed::no(original_expr))
                     })
@@ -290,8 +289,8 @@ mod test {
 
     use arrow::array::AsArray;
     use arrow::datatypes::{DataType, SchemaRef};
-    use datafusion_common::{record_batch, DFSchema, ScalarValue};
-    use datafusion_expr::{col, execution_props::ExecutionProps, Expr};
+    use datafusion_common::{DFSchema, ScalarValue, record_batch};
+    use datafusion_expr::{Expr, col, execution_props::ExecutionProps};
     use datafusion_physical_expr::{create_physical_exprs, projection::ProjectionExpr};
     use itertools::Itertools;
 

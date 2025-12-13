@@ -27,8 +27,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::file_scan_config::FileScanConfig;
 use crate::PartitionedFile;
+use crate::file_scan_config::FileScanConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::Result;
 use datafusion_execution::RecordBatchStream;
@@ -41,7 +41,7 @@ use datafusion_common::instant::Instant;
 
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
-use futures::{ready, FutureExt as _, Stream, StreamExt as _};
+use futures::{FutureExt as _, Stream, StreamExt as _, ready};
 
 /// A stream that iterates record batch by record batch, file over file.
 pub struct FileStream {
@@ -162,12 +162,11 @@ impl FileStream {
                 },
                 FileStreamState::Scan { reader, next } => {
                     // We need to poll the next `FileOpenFuture` here to drive it forward
-                    if let Some(next_open_future) = next {
-                        if let NextOpen::Pending(f) = next_open_future {
-                            if let Poll::Ready(reader) = f.as_mut().poll(cx) {
-                                *next_open_future = NextOpen::Ready(reader);
-                            }
-                        }
+                    if let Some(next_open_future) = next
+                        && let NextOpen::Pending(f) = next_open_future
+                        && let Poll::Ready(reader) = f.as_mut().poll(cx)
+                    {
+                        *next_open_future = NextOpen::Ready(reader);
                     }
                     match ready!(reader.poll_next_unpin(cx)) {
                         Some(Ok(batch)) => {
@@ -250,7 +249,7 @@ impl FileStream {
                     }
                 }
                 FileStreamState::Error | FileStreamState::Limit => {
-                    return Poll::Ready(None)
+                    return Poll::Ready(None);
                 }
             }
         }
@@ -447,15 +446,15 @@ impl FileStreamMetrics {
 
 #[cfg(test)]
 mod tests {
+    use crate::PartitionedFile;
     use crate::file_scan_config::FileScanConfigBuilder;
     use crate::tests::make_partition;
-    use crate::PartitionedFile;
     use datafusion_common::error::Result;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{FutureExt as _, StreamExt as _};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
     use crate::test_util::MockSource;

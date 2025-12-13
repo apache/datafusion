@@ -2389,6 +2389,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [datetrunc](#datetrunc)
 - [from_unixtime](#from_unixtime)
 - [make_date](#make_date)
+- [make_time](#make_time)
 - [now](#now)
 - [to_char](#to_char)
 - [to_date](#to_date)
@@ -2627,6 +2628,39 @@ make_date(year, month, day)
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
+### `make_time`
+
+Make a time from hour/minute/second component parts.
+
+```sql
+make_time(hour, minute, second)
+```
+
+#### Arguments
+
+- **hour**: Hour to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **minute**: Minute to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **second**: Second to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```sql
+> select make_time(13, 23, 1);
++-------------------------------------------+
+| make_time(Int64(13),Int64(23),Int64(1))   |
++-------------------------------------------+
+| 13:23:01                                  |
++-------------------------------------------+
+> select make_time('23', '01', '31');
++-----------------------------------------------+
+| make_time(Utf8("23"),Utf8("01"),Utf8("31"))   |
++-----------------------------------------------+
+| 23:01:31                                      |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
+
 ### `now`
 
 Returns the current timestamp in the system configured timezone (None by default).
@@ -2675,7 +2709,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ### `to_date`
 
 Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.

@@ -27,7 +27,7 @@ use datafusion_expr::logical_plan::{
     Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
-use datafusion_expr::{and, build_join_schema, ExprSchemable, Operator};
+use datafusion_expr::{ExprSchemable, Operator, and, build_join_schema};
 
 #[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
@@ -276,10 +276,9 @@ fn can_flatten_join_inputs(plan: &LogicalPlan) -> bool {
             join_type: JoinType::Inner,
             ..
         }) = child
+            && !can_flatten_join_inputs(child)
         {
-            if !can_flatten_join_inputs(child) {
-                return false;
-            }
+            return false;
         }
     }
     true
@@ -316,10 +315,10 @@ fn find_inner_join(
             )?;
 
             // Save join keys
-            if let Some((valid_l, valid_r)) = key_pair {
-                if can_hash(&valid_l.get_type(left_input.schema())?) {
-                    join_keys.push((valid_l, valid_r));
-                }
+            if let Some((valid_l, valid_r)) = key_pair
+                && can_hash(&valid_l.get_type(left_input.schema())?)
+            {
+                join_keys.push((valid_l, valid_r));
             }
         }
 
@@ -449,9 +448,9 @@ mod tests {
     use crate::test::*;
 
     use datafusion_expr::{
+        Operator::{And, Or},
         binary_expr, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
-        Operator::{And, Or},
     };
     use insta::assert_snapshot;
 

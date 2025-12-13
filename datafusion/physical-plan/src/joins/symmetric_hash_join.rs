@@ -35,26 +35,26 @@ use std::vec;
 use crate::common::SharedMemoryReservation;
 use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::stream_join_utils::{
+    PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
     calculate_filter_expr_intervals, combine_two_batches,
     convert_sort_expr_with_filter_schema, get_pruning_anti_indices,
     get_pruning_semi_indices, prepare_sorted_exprs, record_visited_indices,
-    PruningJoinHashMap, SortedFilterExpr, StreamJoinMetrics,
 };
 use crate::joins::utils::{
-    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, equal_rows_arr, symmetric_join_output_partitioning, update_hash,
     BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
-    JoinOnRef, NoopBatchTransformer, StatefulStreamResult,
+    JoinOnRef, NoopBatchTransformer, StatefulStreamResult, apply_join_filter_to_indices,
+    build_batch_from_indices, build_join_schema, check_join_is_valid, equal_rows_arr,
+    symmetric_join_output_partitioning, update_hash,
 };
 use crate::projection::{
-    join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_filter, update_join_on, ProjectionExec,
+    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, update_join_filter, update_join_on,
 };
 use crate::{
-    joins::StreamJoinPartitionMode,
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    joins::StreamJoinPartitionMode,
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
 use arrow::array::{
@@ -67,20 +67,20 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
-    assert_eq_or_internal_err, plan_err, HashSet, JoinSide, JoinType, NullEquality,
-    Result,
+    HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
+    plan_err,
 };
-use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 use parking_lot::Mutex;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
@@ -1769,7 +1769,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{binary, col, lit, Column};
+    use datafusion_physical_expr::expressions::{Column, binary, col, lit};
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
     use rstest::*;

@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, ToByteSlice};
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{
-    exec_err, utils::take_function_args, HashSet, Result, ScalarValue,
+    HashSet, Result, ScalarValue, exec_err, utils::take_function_args,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{

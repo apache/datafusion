@@ -31,11 +31,11 @@ use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, not_impl_err, plan_err, Result, ScalarValue};
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err, plan_err};
 use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TIMEZONE_WILDCARD,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TIMEZONE_WILDCARD, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -365,8 +365,8 @@ fn date_bin_impl(
         }
         ColumnarValue::Array(_) => {
             return not_impl_err!(
-            "DATE_BIN only supports literal values for the stride argument, not arrays"
-        );
+                "DATE_BIN only supports literal values for the stride argument, not arrays"
+            );
         }
     };
 
@@ -380,8 +380,8 @@ fn date_bin_impl(
         }
         ColumnarValue::Array(_) => {
             return not_impl_err!(
-            "DATE_BIN only supports literal values for the origin argument, not arrays"
-        );
+                "DATE_BIN only supports literal values for the origin argument, not arrays"
+            );
         }
     };
 
@@ -501,7 +501,7 @@ fn date_bin_impl(
 mod tests {
     use std::sync::Arc;
 
-    use crate::datetime::date_bin::{date_bin_nanos_interval, DateBinFunc};
+    use crate::datetime::date_bin::{DateBinFunc, date_bin_nanos_interval};
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;

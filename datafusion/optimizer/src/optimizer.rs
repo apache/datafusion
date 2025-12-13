@@ -22,14 +22,14 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{assert_expected_schema, InvariantLevel};
+use datafusion_expr::{InvariantLevel, assert_expected_schema};
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
+use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -288,9 +288,7 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::TopDown {
-            {
-                self.rule.rewrite(node, self.config)
-            }
+            self.rule.rewrite(node, self.config)
         } else {
             Ok(Transformed::no(node))
         }
@@ -298,9 +296,7 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::BottomUp {
-            {
-                self.rule.rewrite(node, self.config)
-            }
+            self.rule.rewrite(node, self.config)
         } else {
             Ok(Transformed::no(node))
         }
@@ -464,10 +460,10 @@ mod tests {
 
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
-        assert_contains, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result,
+        DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
+    use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, Projection, col, lit};
 
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;

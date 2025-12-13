@@ -742,9 +742,15 @@ mod tests {
             n.join(", ")
         }
 
-        assert_eq!("end_timestamp, start_timestamp, elapsed_compute, the_second_counter, the_counter, the_third_counter, the_time, output_rows", metric_names(&metrics));
+        assert_eq!(
+            "end_timestamp, start_timestamp, elapsed_compute, the_second_counter, the_counter, the_third_counter, the_time, output_rows",
+            metric_names(&metrics)
+        );
 
         let metrics = metrics.sorted_for_display();
-        assert_eq!("output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp", metric_names(&metrics));
+        assert_eq!(
+            "output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp",
+            metric_names(&metrics)
+        );
     }
 }

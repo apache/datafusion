@@ -18,8 +18,8 @@
 use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    types::{logical_binary, logical_string},
     Result,
+    types::{logical_binary, logical_string},
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,

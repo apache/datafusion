@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator};
+use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
@@ -68,10 +68,10 @@ pub fn simplify_regex_expr(
             Ok(hir) => {
                 let kind = hir.kind();
                 if let HirKind::Alternation(alts) = kind {
-                    if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPANSION {
-                        if let Some(expr) = lower_alt(&mode, &left, alts) {
-                            return Ok(expr);
-                        }
+                    if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPANSION
+                        && let Some(expr) = lower_alt(&mode, &left, alts)
+                    {
+                        return Ok(expr);
                     }
                 } else if let Some(expr) = lower_simple(&mode, &left, &hir) {
                     return Ok(expr);
@@ -287,11 +287,11 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
             let mut literals = Vec::with_capacity(alters.len());
             for hir in alters {
                 let mut is_safe = false;
-                if let HirKind::Literal(l) = hir.kind() {
-                    if let Some(safe_literal) = str_from_literal(l).map(lit) {
-                        literals.push(safe_literal);
-                        is_safe = true;
-                    }
+                if let HirKind::Literal(l) = hir.kind()
+                    && let Some(safe_literal) = str_from_literal(l).map(lit)
+                {
+                    literals.push(safe_literal);
+                    is_safe = true;
                 }
 
                 if !is_safe {

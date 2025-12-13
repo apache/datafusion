@@ -290,7 +290,11 @@ impl MultiLevelMergeBuilder {
                 // If we're only merging memory streams, we don't need to attach the memory reservation
                 // as it's empty
                 if is_only_merging_memory_streams {
-                    assert_eq!(memory_reservation.size(), 0, "when only merging memory streams, we should not have any memory reservation and let the merge sort handle the memory");
+                    assert_eq!(
+                        memory_reservation.size(),
+                        0,
+                        "when only merging memory streams, we should not have any memory reservation and let the merge sort handle the memory"
+                    );
 
                     Ok(merge_sort_stream)
                 } else {

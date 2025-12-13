@@ -22,13 +22,13 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field};
-use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_common::config::ConfigOptions;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::make_date;
-use rand::rngs::ThreadRng;
 use rand::Rng;
+use rand::rngs::ThreadRng;
 
 fn years(rng: &mut ThreadRng) -> Int32Array {
     let mut years = vec![];

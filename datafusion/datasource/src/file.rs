@@ -27,12 +27,12 @@ use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion_physical_plan::DisplayFormatType;
 
 use object_store::ObjectStore;
 

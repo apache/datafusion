@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::JoinType;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, Projection, Union};
 
@@ -140,10 +140,10 @@ impl OptimizerRule for PropagateEmptyRelation {
                 }
             }
             LogicalPlan::Aggregate(ref agg) => {
-                if !agg.group_expr.is_empty() {
-                    if let Some(empty_plan) = empty_child(&plan)? {
-                        return Ok(Transformed::yes(empty_plan));
-                    }
+                if !agg.group_expr.is_empty()
+                    && let Some(empty_plan) = empty_child(&plan)?
+                {
+                    return Ok(Transformed::yes(empty_plan));
                 }
                 Ok(Transformed::no(LogicalPlan::Aggregate(agg.clone())))
             }
@@ -239,9 +239,10 @@ mod tests {
     use datafusion_common::{Column, DFSchema, JoinType};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Operator,
+        Operator, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
 
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_filter::EliminateFilter;
     use crate::optimize_unions::OptimizeUnions;
@@ -249,7 +250,6 @@ mod tests {
         assert_optimized_plan_with_rules, test_table_scan, test_table_scan_fields,
         test_table_scan_with_name,
     };
-    use crate::OptimizerContext;
 
     use super::*;
 

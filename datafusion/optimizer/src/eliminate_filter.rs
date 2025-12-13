@@ -81,10 +81,10 @@ impl OptimizerRule for EliminateFilter {
 mod tests {
     use std::sync::Arc;
 
-    use crate::assert_optimized_plan_eq_snapshot;
     use crate::OptimizerContext;
+    use crate::assert_optimized_plan_eq_snapshot;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{col, lit, logical_plan::builder::LogicalPlanBuilder, Expr};
+    use datafusion_expr::{Expr, col, lit, logical_plan::builder::LogicalPlanBuilder};
 
     use crate::eliminate_filter::EliminateFilter;
     use crate::test::*;

@@ -26,8 +26,8 @@ use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
 use log::debug;
-use object_store::path::Path;
 use object_store::path::DELIMITER;
+use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use url::Url;
 
@@ -209,12 +209,12 @@ impl ListingTableUrl {
     /// assert_eq!(url.file_extension(), None);
     /// ```
     pub fn file_extension(&self) -> Option<&str> {
-        if let Some(mut segments) = self.url.path_segments() {
-            if let Some(last_segment) = segments.next_back() {
-                if last_segment.contains(".") && !last_segment.ends_with(".") {
-                    return last_segment.split('.').next_back();
-                }
-            }
+        if let Some(mut segments) = self.url.path_segments()
+            && let Some(last_segment) = segments.next_back()
+            && last_segment.contains(".")
+            && !last_segment.ends_with(".")
+        {
+            return last_segment.split('.').next_back();
         }
 
         None
@@ -430,11 +430,11 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use bytes::Bytes;
-    use datafusion_common::config::TableOptions;
     use datafusion_common::DFSchema;
+    use datafusion_common::config::TableOptions;
+    use datafusion_execution::TaskContext;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_execution::TaskContext;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;

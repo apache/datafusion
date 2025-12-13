@@ -85,7 +85,7 @@ use crate::{
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
-use datafusion_common::{assert_eq_or_internal_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 
 use crate::execution_plan::SchedulingType;
@@ -347,7 +347,7 @@ mod tests {
 
     use arrow_schema::SchemaRef;
 
-    use futures::{stream, StreamExt};
+    use futures::{StreamExt, stream};
 
     // This is the hardcoded value Tokio uses
     const TASK_BUDGET: usize = 128;

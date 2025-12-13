@@ -20,8 +20,8 @@ use crate::optimizer::Optimizer;
 use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{assert_contains, Result};
-use datafusion_expr::{logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{Result, assert_contains};
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, logical_plan::table_scan};
 use std::sync::Arc;
 
 pub mod user_defined;

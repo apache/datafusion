@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::aggregates::group_values::multi_group_by::{
-    nulls_equal_to, GroupColumn, Nulls,
+    GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{make_view, Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
+use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray, make_view};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;

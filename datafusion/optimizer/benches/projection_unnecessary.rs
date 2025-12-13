@@ -16,10 +16,10 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ToDFSchema;
 use datafusion_common::{Column, TableReference};
-use datafusion_expr::{logical_plan::LogicalPlan, projection_schema, Expr};
+use datafusion_expr::{Expr, logical_plan::LogicalPlan, projection_schema};
 use datafusion_optimizer::optimize_projections::is_projection_unnecessary;
 use std::hint::black_box;
 use std::sync::Arc;

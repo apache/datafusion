@@ -26,7 +26,7 @@ use std::sync::Arc;
 ///
 /// If you want to just compare pointers for equality, use [`super::ptr_eq::PtrEq`].
 #[derive(Clone)]
-#[allow(private_bounds)] // This is so that UdfEq can only be used with allowed pointer types (e.g. Arc), without allowing misuse.
+#[expect(private_bounds)] // This is so that UdfEq can only be used with allowed pointer types (e.g. Arc), without allowing misuse.
 pub struct UdfEq<Ptr: UdfPointer>(Ptr);
 
 impl<Ptr> PartialEq for UdfEq<Ptr>

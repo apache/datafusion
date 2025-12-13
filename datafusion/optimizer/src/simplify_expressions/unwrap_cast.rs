@@ -55,10 +55,10 @@
 //! ```
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, tree_node::Transformed};
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{lit, BinaryExpr};
-use datafusion_expr::{simplify::SimplifyInfo, Cast, Expr, Operator, TryCast};
+use datafusion_common::{internal_err, tree_node::Transformed};
+use datafusion_expr::{BinaryExpr, lit};
+use datafusion_expr::{Cast, Expr, Operator, TryCast, simplify::SimplifyInfo};
 use datafusion_expr_common::casts::{is_supported_type, try_cast_literal_to_type};
 
 pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(

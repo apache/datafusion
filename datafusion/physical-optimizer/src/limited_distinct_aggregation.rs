@@ -24,10 +24,11 @@ use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint into grouped aggregations which don't require all
@@ -157,12 +158,11 @@ impl Default for LimitedDistinctAggregation {
 }
 
 impl PhysicalOptimizerRule for LimitedDistinctAggregation {
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.session_config().options();
         if config.optimizer.enable_distinct_aggregation_soft_limit {
             plan.transform_down(|plan| {
                 Ok(

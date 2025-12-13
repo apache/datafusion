@@ -478,13 +478,10 @@ fn analyze_filter_example() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![age]));
 
     // Define column statistics
-    let column_stats = ColumnStatistics {
-        null_count: Precision::Exact(0),
-        max_value: Precision::Exact(ScalarValue::Int64(Some(79))),
-        min_value: Precision::Exact(ScalarValue::Int64(Some(14))),
-        distinct_count: Precision::Absent,
-        sum_value: Precision::Absent,
-    };
+    let column_stats = ColumnStatistics::default()
+        .with_min_value(Precision::Exact(ScalarValue::Int64(Some(14))))
+        .with_max_value(Precision::Exact(ScalarValue::Int64(Some(79))))
+        .with_null_count(Precision::Exact(0));
 
     // Create expression: age > 18 AND age <= 25
     let expr = col("age")
