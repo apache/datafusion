@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
+use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err, plan_err};
 use datafusion_expr::{
     ExprSchemable, JoinType, LateralBatchedTableFunction, LogicalPlan, LogicalPlanBuilder,
 };
@@ -54,27 +54,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         let is_lateral = is_lateral_join(&join)?;
 
-        if is_lateral {
-            if let Some(lateral_tf_plan) = self.try_create_lateral_table_function(
+        if is_lateral
+            && let Some(lateral_tf_plan) = self.try_create_lateral_table_function(
                 &left,
                 &join.relation,
                 planner_context,
-            )? {
-                // LateralBatchedTableFunction already combines input + function output
-                match &join.join_operator {
-                    JoinOperator::CrossJoin(_) | JoinOperator::CrossApply => {
-                        return Ok(lateral_tf_plan);
-                    }
-                    _ => {
-                        // For other join types, use lateral function as right side
-                        let right = lateral_tf_plan;
-                        return self.finish_join(
-                            left,
-                            right,
-                            join.join_operator,
-                            planner_context,
-                        );
-                    }
+            )?
+        {
+            // LateralBatchedTableFunction already combines input + function output
+            match &join.join_operator {
+                JoinOperator::CrossJoin(_) | JoinOperator::CrossApply => {
+                    return Ok(lateral_tf_plan);
+                }
+                _ => {
+                    // For other join types, use lateral function as right side
+                    let right = lateral_tf_plan;
+                    return self.finish_join(
+                        left,
+                        right,
+                        join.join_operator,
+                        planner_context,
+                    );
                 }
             }
         }

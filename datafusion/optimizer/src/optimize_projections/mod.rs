@@ -30,8 +30,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-     Aggregate, Distinct, EmptyRelation, Expr,
-    LateralBatchedTableFunction, Projection, TableScan, Unnest, Window,logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, LateralBatchedTableFunction, Projection,
+    TableScan, Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;

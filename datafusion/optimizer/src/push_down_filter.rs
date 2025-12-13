@@ -1198,7 +1198,8 @@ impl OptimizerRule for PushDownFilter {
                     return internal_err!(
                         "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
                         supported_filters.len(),
-                        non_volatile_filters.len());
+                        non_volatile_filters.len()
+                    );
                 }
 
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
@@ -1291,7 +1292,8 @@ impl OptimizerRule for PushDownFilter {
                     return internal_err!(
                         "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
                         supported_filters.len(),
-                        pushdown_candidates.len());
+                        pushdown_candidates.len()
+                    );
                 }
 
                 // Compose lateral filters from candidates of `Exact` or `Inexact` pushdown type
