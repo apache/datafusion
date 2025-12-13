@@ -216,15 +216,9 @@ impl DefaultListFilesCacheState {
         };
 
         // Build the full prefix path: table_base/prefix
-        let full_prefix = if table_base.as_ref().is_empty() {
-            prefix.clone()
-        } else if prefix.as_ref().is_empty() {
-            table_base.clone()
-        } else {
-            let mut parts: Vec<_> = table_base.parts().collect();
-            parts.extend(prefix.parts());
-            Path::from_iter(parts)
-        };
+        let mut parts: Vec<_> = table_base.parts().collect();
+        parts.extend(prefix.parts());
+        let full_prefix = Path::from_iter(parts);
         let full_prefix_str = full_prefix.as_ref();
 
         // Filter files to only those matching the prefix
