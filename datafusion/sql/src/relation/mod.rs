@@ -146,8 +146,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name, alias, args, ..
             } => {
                 if let Some(func_args) = args {
-                    let tbl_func_name =
-                        name.0.first().unwrap().as_ident().unwrap().to_string();
+                    let tbl_func_name = name
+                        .0
+                        .iter()
+                        .map(|ident| ident.as_ident().unwrap().to_string())
+                        .collect::<Vec<_>>()
+                        .join(".");
                     let args = func_args
                         .args
                         .into_iter()
@@ -278,9 +282,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         _ => plan_err!("Unsupported function argument: {arg:?}"),
                     })
                     .collect::<Result<Vec<Expr>>>()?;
+                let qualified_name = tbl_func_ref.to_string();
                 let provider = self
                     .context_provider
-                    .get_table_function_source(tbl_func_ref.table(), func_args)?;
+                    .get_table_function_source(&qualified_name, func_args)?;
                 let plan =
                     LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
                         .build()?;
