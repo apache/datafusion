@@ -24,10 +24,11 @@ use arrow::datatypes::DataType::{
     Float32, Float64, Int16, Int32, Int64, Int8, UInt16, UInt32, UInt64, UInt8,
 };
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{assert_eq_or_internal_err, exec_err, Result};
+use datafusion_common::{assert_eq_or_internal_err, exec_err, internal_err, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -64,7 +65,26 @@ impl ScalarUDFImpl for SparkRint {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Float64)
+        internal_err!(
+            "return_type should not be called, use return_field_from_args instead"
+        )
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: ReturnFieldArgs,
+    ) -> Result<arrow::datatypes::FieldRef> {
+        let nullable = args
+            .arg_fields
+            .get(0)
+            .map(|f| f.is_nullable())
+            .unwrap_or(true);
+
+        Ok(Arc::new(arrow::datatypes::Field::new(
+            self.name(),
+            Float64,
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
