@@ -139,6 +139,7 @@ impl Display for Partitioning {
         }
     }
 }
+
 /// Represents how a [`Partitioning`] satisfies a [`Distribution`] requirement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartitioningSatisfaction {
@@ -146,7 +147,7 @@ pub enum PartitioningSatisfaction {
     NotSatisfied,
     /// The partitioning exactly matches the distribution requirement
     Exact,
-    /// The partitioning satisfies via subset logic (e.g., Hash([a]) satisfies Hash([a, b]))
+    /// The partitioning satisfies the distribution requirement via subset logic
     Subset,
 }
 
