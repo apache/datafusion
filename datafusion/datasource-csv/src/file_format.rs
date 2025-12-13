@@ -437,6 +437,7 @@ impl FileFormat for CsvFormat {
 
         let mut csv_options = self.options.clone();
         csv_options.has_header = Some(has_header);
+        csv_options.newlines_in_values = Some(newlines_in_values);
 
         // Get the existing CsvSource and update its options
         // We need to preserve the table_schema from the original source (which includes partition columns)
@@ -449,7 +450,6 @@ impl FileFormat for CsvFormat {
 
         let config = FileScanConfigBuilder::from(conf)
             .with_file_compression_type(self.options.compression.into())
-            .with_newlines_in_values(newlines_in_values)
             .with_source(source)
             .build();
 
