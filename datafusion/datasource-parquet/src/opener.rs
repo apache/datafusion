@@ -173,9 +173,10 @@ impl FileOpener for ParquetOpener {
             .zip(partitioned_file.partition_values.iter())
             .map(|(field, value)| (field.name().clone(), value.clone()))
             .collect();
-
-        // Add constant columns from file statistics (partition columns and file
-        // columns are disjoint, so no overlap is possible)
+        // Add constant columns from file statistics.
+        // Note that if there are statistics for partition columns there will be overlap,
+        // but since we use a HashMap, we'll just overwrite the partition values with the
+        // constant values from statistics (which should be the same).
         literal_columns.extend(constant_columns_from_stats(
             partitioned_file.statistics.as_deref(),
             &logical_file_schema,
