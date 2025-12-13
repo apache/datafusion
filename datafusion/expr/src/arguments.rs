@@ -420,12 +420,7 @@ mod tests {
         // Call with: func(100, 200, p5 => 500, p7 => 700)
         // Positional p1, p2, skip p3, p4, named p5, skip p6, named p7
         let args = vec![lit(100), lit(200), lit(500), lit(700)];
-        let arg_names = vec![
-            None,
-            None,
-            Some("p5".to_string()),
-            Some("p7".to_string()),
-        ];
+        let arg_names = vec![None, None, Some("p5".to_string()), Some("p7".to_string())];
 
         let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
 
@@ -453,10 +448,12 @@ mod tests {
 
         let result = resolve_function_arguments(&param_names, args, arg_names);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unknown parameter name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown parameter name")
+        );
     }
 
     #[test]
@@ -501,10 +498,7 @@ mod tests {
     }
 
     fn is_null(expr: &Expr) -> bool {
-        matches!(
-            expr,
-            Expr::Literal(datafusion_common::ScalarValue::Null, _)
-        )
+        matches!(expr, Expr::Literal(datafusion_common::ScalarValue::Null, _))
     }
 
     fn assert_result_pattern(result: &[Expr], pattern: &[Option<Expr>]) {
@@ -528,7 +522,8 @@ mod tests {
                     assert!(
                         is_null(actual),
                         "Expected NULL at position {}, got {:?}",
-                        i, actual
+                        i,
+                        actual
                     );
                 }
             }

@@ -522,8 +522,8 @@ fn register_async_abs_udf(ctx: &SessionContext) {
 /// Creates a test UDF with many optional parameters to test named argument skipping
 fn create_optional_params_test_udf() -> ScalarUDF {
     use datafusion::arrow::array::Int64Array;
-    use datafusion::logical_expr::{TypeSignature, Coercion};
-    use datafusion::common::types::{NativeType, logical_int64};
+    use datafusion::common::types::{logical_int64, NativeType};
+    use datafusion::logical_expr::{Coercion, TypeSignature};
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestOptionalParamsUDF {
@@ -543,12 +543,45 @@ fn create_optional_params_test_udf() -> ScalarUDF {
                     vec![
                         // Support 1 to 7 parameters
                         TypeSignature::Coercible(vec![int64_coercion.clone()]),
-                        TypeSignature::Coercible(vec![int64_coercion.clone(), int64_coercion.clone()]),
-                        TypeSignature::Coercible(vec![int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone()]),
-                        TypeSignature::Coercible(vec![int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone()]),
-                        TypeSignature::Coercible(vec![int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone()]),
-                        TypeSignature::Coercible(vec![int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone()]),
-                        TypeSignature::Coercible(vec![int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone(), int64_coercion.clone()]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
                     ],
                     Volatility::Immutable,
                 )
@@ -585,12 +618,16 @@ fn create_optional_params_test_udf() -> ScalarUDF {
 
         fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             // Sum all non-NULL parameters
-            let arrays = args.args.iter().map(|arg| match arg {
-                ColumnarValue::Array(arr) => arr.clone(),
-                ColumnarValue::Scalar(scalar) => {
-                    scalar.to_array_of_size(1).expect("Failed to convert scalar to array")
-                }
-            }).collect::<Vec<_>>();
+            let arrays = args
+                .args
+                .iter()
+                .map(|arg| match arg {
+                    ColumnarValue::Array(arr) => Arc::clone(arr),
+                    ColumnarValue::Scalar(scalar) => scalar
+                        .to_array_of_size(1)
+                        .expect("Failed to convert scalar to array"),
+                })
+                .collect::<Vec<_>>();
 
             let len = arrays.first().map(|a| a.len()).unwrap_or(1);
             let mut result = Vec::with_capacity(len);
@@ -598,9 +635,13 @@ fn create_optional_params_test_udf() -> ScalarUDF {
             for row_idx in 0..len {
                 let mut sum: i64 = 0;
                 for array in &arrays {
-                    let int_array = array.as_any().downcast_ref::<Int64Array>()
+                    let int_array = array
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
                         .expect("Expected Int64Array");
-                    if let Some(value) = int_array.value(row_idx.min(int_array.len() - 1)).into() {
+                    if let Some(value) =
+                        int_array.value(row_idx.min(int_array.len() - 1)).into()
+                    {
                         sum += value;
                     }
                 }
