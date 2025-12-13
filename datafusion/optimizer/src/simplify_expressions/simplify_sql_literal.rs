@@ -24,13 +24,13 @@
 use crate::simplify_expressions::ExprSimplifier;
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    plan_datafusion_err, plan_err, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    DFSchemaRef, DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
+use datafusion_expr::Expr;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::planner::RelationPlannerContext;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::sqlparser::ast;
-use datafusion_expr::Expr;
 use std::sync::Arc;
 
 /// Parse and simplifies a SQL expression to a numeric literal of a given type `T`.
@@ -108,7 +108,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::DataType;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{not_impl_err, DFSchema, TableReference};
+    use datafusion_common::{DFSchema, TableReference, not_impl_err};
     use datafusion_expr::planner::ContextProvider;
     use datafusion_expr::sqlparser::parser::Parser;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};

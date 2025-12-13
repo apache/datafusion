@@ -39,7 +39,10 @@ pub struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
 }
 
 impl<'a, 'b, S: ContextProvider> SqlToRelRelationContext<'a, 'b, S> {
-    pub fn new(planner: &'a SqlToRel<'b, S>, planner_context: &'a mut PlannerContext) -> Self {
+    pub fn new(
+        planner: &'a SqlToRel<'b, S>,
+        planner_context: &'a mut PlannerContext,
+    ) -> Self {
         Self {
             planner,
             planner_context,
