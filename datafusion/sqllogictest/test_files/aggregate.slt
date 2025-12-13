@@ -1073,6 +1073,41 @@ ORDER BY tags, timestamp;
 statement ok
 DROP TABLE median_window_test;
 
+# median_non_sliding_window_unbounded_preceding_to_1_preceding
+statement ok
+CREATE TABLE median_non_sliding_test (
+    row_num INT,
+    value INT
+);
+
+statement ok
+INSERT INTO median_non_sliding_test (row_num, value) VALUES
+(1, 10),
+(2, 20),
+(3, 30),
+(4, 40),
+(5, 50);
+
+query III
+SELECT
+    row_num,
+    value,
+    median(value) OVER (
+        ORDER BY row_num
+        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+    ) AS median_so_far
+FROM median_non_sliding_test
+ORDER BY row_num;
+----
+1 10 NULL
+2 20 10
+3 30 15
+4 40 20
+5 50 25
+
+statement ok
+DROP TABLE median_non_sliding_test;
+
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
 ----
