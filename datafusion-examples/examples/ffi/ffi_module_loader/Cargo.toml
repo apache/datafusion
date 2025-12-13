@@ -24,5 +24,6 @@ publish = false
 [dependencies]
 abi_stable = "0.11.3"
 datafusion = { workspace = true }
+datafusion-ffi = { workspace = true }
 ffi_module_interface = { path = "../ffi_module_interface" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
