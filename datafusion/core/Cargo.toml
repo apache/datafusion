@@ -87,6 +87,7 @@ recursive_protection = [
     "datafusion-expr/recursive_protection",
     "datafusion-optimizer/recursive_protection",
     "datafusion-physical-optimizer/recursive_protection",
+    "datafusion-physical-expr/recursive_protection",
     "datafusion-sql/recursive_protection",
     "sqlparser/recursive-protection",
 ]
