@@ -300,8 +300,9 @@ mod tests {
             (binary_expr(t.clone(), And, f.clone()), NullableInterval::FALSE),
             (binary_expr(f.clone(), And, t.clone()), NullableInterval::FALSE),
             (binary_expr(f.clone(), And, f.clone()), NullableInterval::FALSE),
-            (binary_expr(t.clone(), And, func.clone()), NullableInterval::ANY_TRUTH_VALUE),
-            (binary_expr(func.clone(), And, t.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            // UDF with no arguments has no nullable inputs, so output is not nullable (TRUE_OR_FALSE)
+            (binary_expr(t.clone(), And, func.clone()), NullableInterval::TRUE_OR_FALSE),
+            (binary_expr(func.clone(), And, t.clone()), NullableInterval::TRUE_OR_FALSE),
             (binary_expr(f.clone(), And, func.clone()), NullableInterval::FALSE),
             (binary_expr(func.clone(), And, f.clone()), NullableInterval::FALSE),
             (binary_expr(null.clone(), And, func.clone()), NullableInterval::FALSE_OR_UNKNOWN),
@@ -344,8 +345,9 @@ mod tests {
             (binary_expr(f.clone(), Or, f.clone()), NullableInterval::FALSE),
             (binary_expr(t.clone(), Or, func.clone()), NullableInterval::TRUE),
             (binary_expr(func.clone(), Or, t.clone()), NullableInterval::TRUE),
-            (binary_expr(f.clone(), Or, func.clone()), NullableInterval::ANY_TRUTH_VALUE),
-            (binary_expr(func.clone(), Or, f.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            // UDF with no arguments has no nullable inputs, so output is not nullable (TRUE_OR_FALSE)
+            (binary_expr(f.clone(), Or, func.clone()), NullableInterval::TRUE_OR_FALSE),
+            (binary_expr(func.clone(), Or, f.clone()), NullableInterval::TRUE_OR_FALSE),
             (binary_expr(null.clone(), Or, func.clone()), NullableInterval::TRUE_OR_UNKNOWN),
             (binary_expr(func.clone(), Or, null.clone()), NullableInterval::TRUE_OR_UNKNOWN),
         ];
@@ -376,7 +378,8 @@ mod tests {
             (not(zero.clone()), NullableInterval::TRUE),
             (not(t.clone()), NullableInterval::FALSE),
             (not(f.clone()), NullableInterval::TRUE),
-            (not(func.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            // UDF with no arguments has no nullable inputs, so output is not nullable (TRUE_OR_FALSE)
+            (not(func.clone()), NullableInterval::TRUE_OR_FALSE),
         ];
 
         for case in cases {
@@ -654,11 +657,13 @@ mod tests {
     fn evaluate_bounds_udf() {
         let func = make_scalar_func_expr();
 
+        // UDF with no arguments has no nullable inputs, so output is not nullable
+        // This means the predicate can be true or false, but never null (UNKNOWN)
         #[rustfmt::skip]
         let cases = vec![
-            (func.clone(), NullableInterval::ANY_TRUTH_VALUE),
-            (not(func.clone()), NullableInterval::ANY_TRUTH_VALUE),
-            (binary_expr(func.clone(), And, func.clone()), NullableInterval::ANY_TRUTH_VALUE),
+            (func.clone(), NullableInterval::TRUE_OR_FALSE),
+            (not(func.clone()), NullableInterval::TRUE_OR_FALSE),
+            (binary_expr(func.clone(), And, func.clone()), NullableInterval::TRUE_OR_FALSE),
         ];
 
         for case in cases {
