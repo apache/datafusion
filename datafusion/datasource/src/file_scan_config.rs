@@ -159,8 +159,6 @@ pub struct FileScanConfig {
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
-    /// Are new lines in values supported for CSVOptions
-    pub new_lines_in_values: bool,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
     pub file_source: Arc<dyn FileSource>,
     /// Batch size while creating new batches
@@ -250,7 +248,6 @@ pub struct FileScanConfigBuilder {
     statistics: Option<Statistics>,
     output_ordering: Vec<LexOrdering>,
     file_compression_type: Option<FileCompressionType>,
-    new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     partitioned_by_file_group: bool,
@@ -274,7 +271,6 @@ impl FileScanConfigBuilder {
             statistics: None,
             output_ordering: vec![],
             file_compression_type: None,
-            new_lines_in_values: None,
             limit: None,
             constraints: None,
             batch_size: None,
@@ -413,16 +409,6 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether new lines in values are supported for CSVOptions
-    ///
-    /// Parsing newlines in quoted values may be affected by execution behaviour such as
-    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
-    /// parsed successfully, which may reduce performance.
-    pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
-        self.new_lines_in_values = Some(new_lines_in_values);
-        self
-    }
-
     /// Set the batch_size property
     pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
         self.batch_size = batch_size;
@@ -472,7 +458,6 @@ impl FileScanConfigBuilder {
             statistics,
             output_ordering,
             file_compression_type,
-            new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
             partitioned_by_file_group,
@@ -484,7 +469,6 @@ impl FileScanConfigBuilder {
         });
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
-        let new_lines_in_values = new_lines_in_values.unwrap_or(false);
 
         FileScanConfig {
             object_store_url,
@@ -494,7 +478,6 @@ impl FileScanConfigBuilder {
             file_groups,
             output_ordering,
             file_compression_type,
-            new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
@@ -512,7 +495,6 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             statistics: Some(config.statistics),
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
-            new_lines_in_values: Some(config.new_lines_in_values),
             limit: config.limit,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
@@ -911,17 +893,6 @@ impl FileScanConfig {
     pub fn projected_constraints(&self) -> Constraints {
         let props = self.eq_properties();
         props.constraints().clone()
-    }
-
-    /// Specifies whether newlines in (quoted) values are supported.
-    ///
-    /// Parsing newlines in quoted values may be affected by execution behaviour such as
-    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
-    /// parsed successfully, which may reduce performance.
-    ///
-    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
-    pub fn newlines_in_values(&self) -> bool {
-        self.new_lines_in_values
     }
 
     #[deprecated(
@@ -1722,7 +1693,6 @@ mod tests {
                 .into(),
             ])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .with_newlines_in_values(true)
             .build();
 
         // Verify the built config has all the expected values
@@ -1749,7 +1719,6 @@ mod tests {
             config.file_compression_type,
             FileCompressionType::UNCOMPRESSED
         );
-        assert!(config.new_lines_in_values);
         assert_eq!(config.output_ordering.len(), 1);
     }
 
@@ -1844,7 +1813,6 @@ mod tests {
             config.file_compression_type,
             FileCompressionType::UNCOMPRESSED
         );
-        assert!(!config.new_lines_in_values);
         assert!(config.output_ordering.is_empty());
         assert!(config.constraints.is_empty());
 
@@ -1892,7 +1860,6 @@ mod tests {
         .with_limit(Some(10))
         .with_file(file.clone())
         .with_constraints(Constraints::default())
-        .with_newlines_in_values(true)
         .build();
 
         // Create a new builder from the config
@@ -1922,7 +1889,6 @@ mod tests {
             "test_file.parquet"
         );
         assert_eq!(new_config.constraints, Constraints::default());
-        assert!(new_config.new_lines_in_values);
     }
 
     #[test]
