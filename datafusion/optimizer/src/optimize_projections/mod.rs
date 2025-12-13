@@ -30,8 +30,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
-    logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, LateralBatchedTableFunction, Projection,
+    TableScan, Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -252,6 +252,107 @@ fn optimize_projections(
                 }
             });
         }
+        LogicalPlan::LateralBatchedTableFunction(ref lateral) => {
+            // Schema: [input_fields..., function_output_fields...]
+            let input_len = lateral.input.schema().fields().len();
+            let original_tf_schema = lateral.source.schema();
+            let tf_len = lateral.table_function_schema.fields().len();
+
+            // Determine which input columns and function output columns are needed
+            let mut input_indices = vec![];
+            let mut tf_indices = vec![];
+
+            for &idx in indices.indices() {
+                if idx < input_len {
+                    // Input column requested
+                    input_indices.push(idx);
+                } else {
+                    // Function output column requested (idx >= input_len)
+                    tf_indices.push(idx - input_len);
+                }
+            }
+
+            let mut required_input_indices =
+                RequiredIndices::new_from_indices(input_indices);
+            required_input_indices =
+                required_input_indices.with_plan_exprs(&plan, lateral.input.schema())?;
+
+            let new_input = optimize_projections(
+                Arc::unwrap_or_clone(Arc::clone(&lateral.input)),
+                config,
+                required_input_indices.with_projection_beneficial(),
+            )?;
+
+            return new_input.transform_data(|optimized_input| {
+                // Determine table function projection
+                let tf_projection = if tf_indices.is_empty() {
+                    // No function output columns needed
+                    None
+                } else if tf_indices.len() == tf_len {
+                    // All current function output columns needed - keep existing projection
+                    lateral.projection.clone()
+                } else {
+                    // Subset of function output columns needed
+                    Some(match &lateral.projection {
+                        Some(existing_proj) => {
+                            // Chain projections: tf_indices are into current projected schema,
+                            // existing_proj maps current projected schema to original schema
+                            tf_indices.iter().map(|&idx| existing_proj[idx]).collect()
+                        }
+                        None => {
+                            // No existing projection, tf_indices are already into original schema
+                            tf_indices
+                        }
+                    })
+                };
+
+                let qualifier = if lateral.table_function_schema.fields().is_empty() {
+                    None
+                } else {
+                    lateral.table_function_schema.qualified_field(0).0.cloned()
+                };
+
+                // Update table function schema if projection changed
+                let new_tf_schema = if let Some(proj) = &tf_projection {
+                    let qualified_fields: Vec<_> = proj
+                        .iter()
+                        .map(|&i| {
+                            let field = original_tf_schema.field(i);
+                            (qualifier.clone(), Arc::new(field.clone()))
+                        })
+                        .collect();
+                    Arc::new(DFSchema::new_with_metadata(
+                        qualified_fields,
+                        lateral.table_function_schema.metadata().clone(),
+                    )?)
+                } else {
+                    Arc::clone(&lateral.table_function_schema)
+                };
+
+                // Rebuild combined schema
+                let new_schema = Arc::new(
+                    optimized_input
+                        .schema()
+                        .as_ref()
+                        .join(new_tf_schema.as_ref())?,
+                );
+
+                let new_lateral = LateralBatchedTableFunction {
+                    input: Arc::new(optimized_input),
+                    function_name: lateral.function_name.clone(),
+                    source: Arc::clone(&lateral.source),
+                    args: lateral.args.clone(),
+                    schema: new_schema,
+                    table_function_schema: new_tf_schema,
+                    projection: tf_projection,
+                    filters: lateral.filters.clone(),
+                    fetch: lateral.fetch,
+                };
+                Ok(Transformed::yes(LogicalPlan::LateralBatchedTableFunction(
+                    new_lateral,
+                )))
+            });
+        }
         LogicalPlan::TableScan(table_scan) => {
             let TableScan {
                 table_name,
@@ -358,6 +459,35 @@ fn optimize_projections(
                 })
                 .collect::<Result<Vec<_>>>()?
         }
+        LogicalPlan::StandaloneBatchedTableFunction(scan) => {
+            let new_projection = match &scan.projection {
+                Some(existing_proj) => {
+                    indices.into_mapped_indices(|idx| existing_proj[idx])
+                }
+                None => indices.into_inner(),
+            };
+
+            let new_projected_schema = {
+                let qualified_fields: Vec<_> = new_projection
+                    .iter()
+                    .map(|&i| {
+                        let (qualifier, field) = scan.schema.qualified_field(i);
+                        (qualifier.cloned(), Arc::clone(field))
+                    })
+                    .collect();
+                Arc::new(DFSchema::new_with_metadata(
+                    qualified_fields,
+                    scan.schema.metadata().clone(),
+                )?)
+            };
+
+            let mut new_scan = scan.clone();
+            new_scan.projection = Some(new_projection);
+            new_scan.projected_schema = new_projected_schema;
+            return Ok(Transformed::yes(
+                LogicalPlan::StandaloneBatchedTableFunction(new_scan),
+            ));
+        }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
@@ -407,7 +537,8 @@ fn optimize_projections(
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
         | LogicalPlan::Window(_)
-        | LogicalPlan::TableScan(_) => {
+        | LogicalPlan::TableScan(_)
+        | LogicalPlan::LateralBatchedTableFunction(_) => {
             return internal_err!(
                 "OptimizeProjection: should have handled in the match statement above"
             );

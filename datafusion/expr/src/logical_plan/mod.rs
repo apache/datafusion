@@ -40,10 +40,10 @@ pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
     Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct, DistinctOn,
     EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-    RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
-    projection_schema,
+    JoinConstraint, JoinType, LateralBatchedTableFunction, Limit, LogicalPlan,
+    Partitioning, PlanType, Projection, RecursiveQuery, Repartition, SkipType, Sort,
+    StandaloneBatchedTableFunction, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
+    ToStringifiedPlan, Union, Unnest, Values, Window, projection_schema,
 };
 pub use statement::{
     Deallocate, Execute, Prepare, ResetVariable, SetVariable, Statement,

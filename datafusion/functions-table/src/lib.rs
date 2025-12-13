@@ -28,13 +28,20 @@
 #![deny(clippy::allow_attributes)]
 
 pub mod generate_series;
+pub mod generate_series_batched;
 
-use datafusion_catalog::TableFunction;
+use datafusion_catalog::{BatchedTableFunctionImpl, TableFunction};
 use std::sync::Arc;
 
 /// Returns all default table functions
 pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
     vec![generate_series(), range()]
+}
+
+/// Returns all default batched table functions
+pub fn all_default_batched_table_functions(
+) -> Vec<(&'static str, Arc<dyn BatchedTableFunctionImpl>)> {
+    vec![("batched_generate_series", generate_series_batched())]
 }
 
 /// Creates a singleton instance of a table function
@@ -62,3 +69,28 @@ macro_rules! create_udtf_function {
 
 create_udtf_function!(generate_series::GenerateSeriesFunc, "generate_series");
 create_udtf_function!(generate_series::RangeFunc, "range");
+
+/// Creates a singleton instance of a batched table function implementation
+/// - `$module`: A struct implementing `BatchedTableFunctionImpl` to create the function from
+/// - `$name`: The name to give to the created function
+///
+/// This is used to ensure creating the list of `BatchedTableFunctionImpl` only happens once.
+#[macro_export]
+macro_rules! create_batched_udtf_function {
+    ($module:path, $name:expr) => {
+        paste::paste! {
+            pub fn [<$name:lower>]() -> Arc<dyn datafusion_catalog::BatchedTableFunctionImpl> {
+                static INSTANCE: std::sync::LazyLock<Arc<dyn datafusion_catalog::BatchedTableFunctionImpl>> =
+                    std::sync::LazyLock::new(|| {
+                        std::sync::Arc::new($module::new())
+                    });
+                std::sync::Arc::clone(&INSTANCE)
+            }
+        }
+    };
+}
+
+create_batched_udtf_function!(
+    generate_series_batched::GenerateSeriesFunction,
+    "generate_series_batched"
+);

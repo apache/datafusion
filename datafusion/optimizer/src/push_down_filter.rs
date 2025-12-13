@@ -1182,6 +1182,164 @@ impl OptimizerRule for PushDownFilter {
                     }
                 })
             }
+            LogicalPlan::StandaloneBatchedTableFunction(mut scan) => {
+                let filter_predicates = split_conjunction(&filter.predicate);
+
+                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+                    filter_predicates
+                        .into_iter()
+                        .partition(|pred| pred.is_volatile());
+
+                // Check which non-volatile filters are supported by source
+                let supported_filters = scan
+                    .source
+                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
+                if non_volatile_filters.len() != supported_filters.len() {
+                    return internal_err!(
+                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                        supported_filters.len(),
+                        non_volatile_filters.len()
+                    );
+                }
+
+                // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
+                let zip = non_volatile_filters.into_iter().zip(supported_filters);
+
+                let new_scan_filters = zip
+                    .clone()
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
+                    .map(|(pred, _)| pred);
+
+                // Add new scan filters
+                let new_scan_filters: Vec<Expr> = scan
+                    .filters
+                    .iter()
+                    .chain(new_scan_filters)
+                    .unique()
+                    .cloned()
+                    .collect();
+
+                scan.filters = new_scan_filters;
+
+                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
+                let new_predicate: Vec<Expr> = zip
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
+                    .map(|(pred, _)| pred)
+                    .chain(volatile_filters)
+                    .cloned()
+                    .collect();
+
+                let new_scan = LogicalPlan::StandaloneBatchedTableFunction(scan);
+
+                Transformed::yes(new_scan).transform_data(|new_scan| {
+                    if let Some(predicate) = conjunction(new_predicate) {
+                        make_filter(predicate, Arc::new(new_scan)).map(Transformed::yes)
+                    } else {
+                        Ok(Transformed::no(new_scan))
+                    }
+                })
+            }
+            LogicalPlan::LateralBatchedTableFunction(mut lateral) => {
+                // Schema: [input_fields..., function_output_fields...]
+                // Split filters into:
+                // 1. Filters that only reference table function output -> can push down
+                // 2. Filters that reference input columns -> must stay above
+                let input_len = lateral.input.schema().fields().len();
+                let filter_predicates = split_conjunction(&filter.predicate);
+
+                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+                    filter_predicates
+                        .into_iter()
+                        .partition(|pred| pred.is_volatile());
+
+                // Further split non-volatile filters by column references
+                let mut pushdown_candidates = vec![];
+                let mut above_filters = vec![];
+
+                for pred in non_volatile_filters {
+                    let mut references_input = false;
+                    let mut references_tf_output = false;
+
+                    // Check which columns this predicate references
+                    pred.apply(|expr| {
+                        if let Expr::Column(col) = expr {
+                            // Find the index of this column in the combined schema
+                            if let Ok(idx) = lateral.schema.index_of_column(col) {
+                                if idx < input_len {
+                                    references_input = true;
+                                } else {
+                                    references_tf_output = true;
+                                }
+                            }
+                        }
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+
+                    if references_tf_output && !references_input {
+                        // Only references table function output - candidate for pushdown
+                        pushdown_candidates.push(pred);
+                    } else {
+                        // References input columns or both - keep above
+                        above_filters.push(pred.clone());
+                    }
+                }
+
+                // Check which pushdown candidates are supported by the source
+                let supported_filters = lateral
+                    .source
+                    .supports_filters_pushdown(pushdown_candidates.as_slice())?;
+                if pushdown_candidates.len() != supported_filters.len() {
+                    return internal_err!(
+                        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+                        supported_filters.len(),
+                        pushdown_candidates.len()
+                    );
+                }
+
+                // Compose lateral filters from candidates of `Exact` or `Inexact` pushdown type
+                let zip = pushdown_candidates.into_iter().zip(supported_filters);
+
+                let new_lateral_filters = zip
+                    .clone()
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
+                    .map(|(pred, _)| pred);
+
+                // Add new lateral filters
+                let new_lateral_filters: Vec<Expr> = lateral
+                    .filters
+                    .iter()
+                    .chain(new_lateral_filters)
+                    .unique()
+                    .cloned()
+                    .collect();
+
+                lateral.filters = new_lateral_filters;
+
+                // Combine: volatile filters + above filters + unsupported/inexact pushdown filters
+                let pushdown_above: Vec<Expr> = zip
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
+                    .map(|(pred, _)| pred)
+                    .cloned()
+                    .collect();
+
+                let remaining_predicates: Vec<Expr> = volatile_filters
+                    .into_iter()
+                    .chain(above_filters.iter())
+                    .chain(pushdown_above.iter())
+                    .cloned()
+                    .collect();
+
+                let new_lateral = LogicalPlan::LateralBatchedTableFunction(lateral);
+
+                Transformed::yes(new_lateral).transform_data(|new_lateral| {
+                    if let Some(predicate) = conjunction(remaining_predicates) {
+                        make_filter(predicate, Arc::new(new_lateral))
+                            .map(Transformed::yes)
+                    } else {
+                        Ok(Transformed::no(new_lateral))
+                    }
+                })
+            }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
                 // so we return the original Filter unchanged.

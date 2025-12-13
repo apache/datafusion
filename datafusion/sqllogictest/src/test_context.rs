@@ -23,13 +23,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
-    LargeStringArray, StringArray, TimestampNanosecondArray, UnionArray,
+    Array, ArrayRef, AsArray, BinaryArray, Float64Array, Int32Array, Int64Array,
+    LargeBinaryArray, LargeStringArray, StringArray, TimestampNanosecondArray,
+    UnionArray,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
+    batched_function::helpers::materialized_batch_stream, BatchedTableFunctionImpl,
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
 };
 use datafusion::common::{not_impl_err, DataFusionError, Result};
@@ -45,6 +47,7 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_functions_table::generate_series_batched::GenerateSeriesFunction;
 
 use crate::is_spark_path;
 use async_trait::async_trait;
@@ -142,6 +145,19 @@ impl TestContext {
             "async_udf.slt" => {
                 info!("Registering dummy async udf");
                 register_async_abs_udf(test_ctx.session_ctx())
+            }
+            "lateral.slt" => {
+                info!("Registering batched table functions for LATERAL tests");
+                let state_ref = test_ctx.session_ctx().state_ref();
+                let mut state = state_ref.write();
+                state.register_batched_table_function(
+                    "batched_generate_series",
+                    Arc::new(GenerateSeriesFunction::new()),
+                );
+                drop(state);
+                register_multi_column_batched_function(test_ctx.session_ctx());
+                register_multi_column_no_projection_function(test_ctx.session_ctx());
+                register_coercion_test_functions(test_ctx.session_ctx());
             }
             _ => {
                 info!("Using default SessionContext");
@@ -512,4 +528,421 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+fn register_multi_column_batched_function(ctx: &SessionContext) {
+    /// Multi-column batched table function for testing projection optimizer
+    /// batched_multi_column(start, stop) generates rows with multiple columns:
+    /// - n: the value
+    /// - n_squared: n * n
+    /// - n_cubed: n * n * n
+    /// - n_doubled: n * 2
+    /// - n_mod_3: n % 3
+    #[derive(Debug)]
+    struct MultiColumnBatchedFn {
+        signature: Signature,
+    }
+
+    impl MultiColumnBatchedFn {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(
+                    vec![DataType::Int32, DataType::Int32],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BatchedTableFunctionImpl for MultiColumnBatchedFn {
+        fn name(&self) -> &str {
+            "batched_multi_column"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<Schema> {
+            Ok(Schema::new(vec![
+                Field::new("n", DataType::Int32, false),
+                Field::new("n_squared", DataType::Int32, false),
+                Field::new("n_cubed", DataType::Int32, false),
+                Field::new("n_doubled", DataType::Int32, false),
+                Field::new("n_mod_3", DataType::Int32, false),
+            ]))
+        }
+
+        async fn invoke_batch(
+            &self,
+            args: &[ArrayRef],
+            projection: Option<&[usize]>,
+            _filters: &[datafusion::prelude::Expr],
+            _limit: Option<usize>,
+        ) -> Result<datafusion::catalog::BatchResultStream> {
+            if args.len() != 2 {
+                return Err(DataFusionError::Internal(
+                    "Expected exactly 2 arguments (start, stop)".to_string(),
+                ));
+            }
+
+            let start_array = args[0].as_ref();
+            let stop_array = args[1].as_ref();
+
+            if start_array.len() != stop_array.len() {
+                return Err(DataFusionError::Internal(
+                    "start and stop arrays must have same length".to_string(),
+                ));
+            }
+
+            let get_i32 = |arr: &dyn Array, idx: usize| -> Result<i32> {
+                if arr.is_null(idx) {
+                    return Err(DataFusionError::Internal(
+                        "NULL values not supported".to_string(),
+                    ));
+                }
+                match arr.data_type() {
+                    DataType::Int32 => {
+                        Ok(arr.as_primitive::<arrow::datatypes::Int32Type>().value(idx))
+                    }
+                    DataType::Int64 => Ok(arr
+                        .as_primitive::<arrow::datatypes::Int64Type>()
+                        .value(idx) as i32),
+                    dt => Err(DataFusionError::Internal(format!(
+                        "Expected Int32/Int64, got {dt:?}"
+                    ))),
+                }
+            };
+
+            let mut n_values = Vec::new();
+            let mut n_squared_values = Vec::new();
+            let mut n_cubed_values = Vec::new();
+            let mut n_doubled_values = Vec::new();
+            let mut n_mod_3_values = Vec::new();
+            let mut input_row_indices = Vec::new();
+
+            for row_idx in 0..start_array.len() {
+                let start = get_i32(start_array, row_idx)?;
+                let stop = get_i32(stop_array, row_idx)?;
+
+                for n in start..=stop {
+                    n_values.push(n);
+                    n_squared_values.push(n * n);
+                    n_cubed_values.push(n * n * n);
+                    n_doubled_values.push(n * 2);
+                    n_mod_3_values.push(n % 3);
+                    input_row_indices.push(row_idx as u32);
+                }
+            }
+
+            // Build output batch with all columns or just projected columns
+            let schema = self.return_type(&[DataType::Int32, DataType::Int32])?;
+
+            let all_columns: Vec<ArrayRef> = vec![
+                Arc::new(Int32Array::from(n_values)),
+                Arc::new(Int32Array::from(n_squared_values)),
+                Arc::new(Int32Array::from(n_cubed_values)),
+                Arc::new(Int32Array::from(n_doubled_values)),
+                Arc::new(Int32Array::from(n_mod_3_values)),
+            ];
+
+            let (output_columns, output_schema) = if let Some(proj_indices) = projection {
+                // Apply projection
+                let projected_columns: Vec<ArrayRef> = proj_indices
+                    .iter()
+                    .map(|&idx| Arc::clone(&all_columns[idx]))
+                    .collect();
+                let projected_fields: Vec<Field> = proj_indices
+                    .iter()
+                    .map(|&idx| schema.field(idx).clone())
+                    .collect();
+                (projected_columns, Arc::new(Schema::new(projected_fields)))
+            } else {
+                (all_columns, Arc::new(schema))
+            };
+
+            let output_batch = RecordBatch::try_new(output_schema, output_columns)?;
+
+            Ok(materialized_batch_stream(output_batch, input_row_indices))
+        }
+    }
+
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
+    state.register_batched_table_function(
+        "batched_multi_column",
+        Arc::new(MultiColumnBatchedFn::new()),
+    );
+}
+
+fn register_multi_column_no_projection_function(ctx: &SessionContext) {
+    /// Multi-column batched table function that does NOT apply projection
+    /// This demonstrates that DataFusion applies projection automatically
+    #[derive(Debug)]
+    struct MultiColumnNoProjFn {
+        signature: Signature,
+    }
+
+    impl MultiColumnNoProjFn {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(
+                    vec![DataType::Int64, DataType::Int64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BatchedTableFunctionImpl for MultiColumnNoProjFn {
+        fn name(&self) -> &str {
+            "batched_multi_column_no_proj"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<Schema> {
+            Ok(Schema::new(vec![
+                Field::new("n", DataType::Int64, false),
+                Field::new("n_squared", DataType::Int64, false),
+                Field::new("n_cubed", DataType::Int64, false),
+            ]))
+        }
+
+        async fn invoke_batch(
+            &self,
+            args: &[ArrayRef],
+            _projection: Option<&[usize]>, // ← Ignored! DataFusion will handle it
+            _filters: &[datafusion::prelude::Expr],
+            _limit: Option<usize>,
+        ) -> Result<datafusion::catalog::BatchResultStream> {
+            if args.len() != 2 {
+                return Err(DataFusionError::Internal(
+                    "Expected exactly 2 arguments (start, stop)".to_string(),
+                ));
+            }
+
+            let start_array = args[0].as_primitive::<arrow::datatypes::Int64Type>();
+            let stop_array = args[1].as_primitive::<arrow::datatypes::Int64Type>();
+
+            let mut n_values = Vec::new();
+            let mut n_squared_values = Vec::new();
+            let mut n_cubed_values = Vec::new();
+            let mut input_row_indices = Vec::new();
+
+            for row_idx in 0..start_array.len() {
+                let start = start_array.value(row_idx);
+                let stop = stop_array.value(row_idx);
+
+                for n in start..=stop {
+                    n_values.push(n);
+                    n_squared_values.push(n * n);
+                    n_cubed_values.push(n * n * n);
+                    input_row_indices.push(row_idx as u32);
+                }
+            }
+
+            // Always return ALL columns - projection will be applied automatically by exec
+            let schema = Arc::new(self.return_type(&[DataType::Int64, DataType::Int64])?);
+            let output_batch = RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int64Array::from(n_values)),
+                    Arc::new(Int64Array::from(n_squared_values)),
+                    Arc::new(Int64Array::from(n_cubed_values)),
+                ],
+            )?;
+
+            Ok(materialized_batch_stream(output_batch, input_row_indices))
+        }
+    }
+
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
+    state.register_batched_table_function(
+        "batched_multi_column_no_proj",
+        Arc::new(MultiColumnNoProjFn::new()),
+    );
+}
+
+fn register_coercion_test_functions(ctx: &SessionContext) {
+    /// Test function with Signature::exact for Int64
+    /// Tests that NULL → Int64 coercion works with exact signature
+    #[derive(Debug)]
+    struct CoercionExactFn {
+        signature: Signature,
+    }
+
+    impl CoercionExactFn {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(
+                    vec![DataType::Int64, DataType::Int64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BatchedTableFunctionImpl for CoercionExactFn {
+        fn name(&self) -> &str {
+            "batched_coercion_exact"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<Schema> {
+            Ok(Schema::new(vec![Field::new(
+                "result",
+                DataType::Int64,
+                false,
+            )]))
+        }
+
+        async fn invoke_batch(
+            &self,
+            args: &[ArrayRef],
+            _projection: Option<&[usize]>,
+            _filters: &[datafusion::prelude::Expr],
+            _limit: Option<usize>,
+        ) -> Result<datafusion::catalog::BatchResultStream> {
+            if args.len() != 2 {
+                return Err(DataFusionError::Internal(
+                    "Expected exactly 2 arguments".to_string(),
+                ));
+            }
+
+            let a_array = args[0].as_primitive::<arrow::datatypes::Int64Type>();
+            let b_array = args[1].as_primitive::<arrow::datatypes::Int64Type>();
+
+            if a_array.len() != b_array.len() {
+                return Err(DataFusionError::Internal(
+                    "Arguments must have same length".to_string(),
+                ));
+            }
+
+            let mut results = Vec::new();
+            let mut input_row_indices = Vec::new();
+
+            for idx in 0..a_array.len() {
+                let a = a_array.value(idx);
+                let b = b_array.value(idx);
+                results.push(a + b);
+                input_row_indices.push(idx as u32);
+            }
+
+            let schema = Arc::new(self.return_type(&[DataType::Int64, DataType::Int64])?);
+            let output_batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(results))],
+            )?;
+
+            Ok(materialized_batch_stream(output_batch, input_row_indices))
+        }
+    }
+
+    /// Test function with Signature::coercible for Int32
+    /// Tests that NULL → Int32 and Int64 → Int32 coercion works
+    #[derive(Debug)]
+    struct CoercionCoercibleFn {
+        signature: Signature,
+    }
+
+    impl CoercionCoercibleFn {
+        fn new() -> Self {
+            use datafusion::common::types::{logical_int32, NativeType};
+            use datafusion::logical_expr::{Coercion, TypeSignatureClass};
+
+            let int32_coercion = Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_int32()),
+                vec![TypeSignatureClass::Integer],
+                NativeType::Int32,
+            );
+
+            Self {
+                signature: Signature::coercible(
+                    vec![int32_coercion.clone(), int32_coercion],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BatchedTableFunctionImpl for CoercionCoercibleFn {
+        fn name(&self) -> &str {
+            "batched_coercion_coercible"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<Schema> {
+            Ok(Schema::new(vec![Field::new(
+                "result",
+                DataType::Int32,
+                false,
+            )]))
+        }
+
+        async fn invoke_batch(
+            &self,
+            args: &[ArrayRef],
+            _projection: Option<&[usize]>,
+            _filters: &[datafusion::prelude::Expr],
+            _limit: Option<usize>,
+        ) -> Result<datafusion::catalog::BatchResultStream> {
+            if args.len() != 2 {
+                return Err(DataFusionError::Internal(
+                    "Expected exactly 2 arguments".to_string(),
+                ));
+            }
+
+            let a_array = args[0].as_primitive::<arrow::datatypes::Int32Type>();
+            let b_array = args[1].as_primitive::<arrow::datatypes::Int32Type>();
+
+            if a_array.len() != b_array.len() {
+                return Err(DataFusionError::Internal(
+                    "Arguments must have same length".to_string(),
+                ));
+            }
+
+            let mut results = Vec::new();
+            let mut input_row_indices = Vec::new();
+
+            for idx in 0..a_array.len() {
+                let a = a_array.value(idx);
+                let b = b_array.value(idx);
+                results.push(a + b);
+                input_row_indices.push(idx as u32);
+            }
+
+            let schema = Arc::new(self.return_type(&[DataType::Int32, DataType::Int32])?);
+            let output_batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(results))],
+            )?;
+
+            Ok(materialized_batch_stream(output_batch, input_row_indices))
+        }
+    }
+
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
+    state.register_batched_table_function(
+        "batched_coercion_exact",
+        Arc::new(CoercionExactFn::new()),
+    );
+    state.register_batched_table_function(
+        "batched_coercion_coercible",
+        Arc::new(CoercionCoercibleFn::new()),
+    );
 }

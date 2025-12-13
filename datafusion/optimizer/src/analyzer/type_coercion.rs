@@ -33,6 +33,7 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
     plan_err,
 };
+use datafusion_expr::BatchedTableFunctionSource;
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
     InSubquery, Like, ScalarFunction, Sort, WindowFunction,
@@ -170,6 +171,12 @@ impl<'a> TypeCoercionRewriter<'a> {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
             LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
+            LogicalPlan::StandaloneBatchedTableFunction(tf) => {
+                self.coerce_standalone_batched_table_function(tf)
+            }
+            LogicalPlan::LateralBatchedTableFunction(tf) => {
+                self.coerce_lateral_batched_table_function(tf)
+            }
             _ => Ok(plan),
         }
     }
@@ -271,6 +278,45 @@ impl<'a> TypeCoercionRewriter<'a> {
             fetch: new_fetch.map(Box::new),
             skip: new_skip.map(Box::new),
         }))
+    }
+
+    /// Coerce arguments for standalone batched table functions
+    ///
+    /// Standalone mode means the table function is called with constant arguments
+    /// (not referencing any input tables), so we use an empty schema for type checking.
+    fn coerce_standalone_batched_table_function(
+        &mut self,
+        mut tf: datafusion_expr::logical_plan::StandaloneBatchedTableFunction,
+    ) -> Result<LogicalPlan> {
+        // For standalone mode, args are evaluated with empty schema (no input columns)
+        let empty_schema = DFSchema::empty();
+
+        tf.args = coerce_arguments_for_batched_table_function(
+            tf.args,
+            &empty_schema,
+            &tf.source,
+        )?;
+
+        Ok(LogicalPlan::StandaloneBatchedTableFunction(tf))
+    }
+
+    /// Coerce arguments for lateral batched table functions
+    ///
+    /// Lateral mode means the table function can reference columns from preceding tables
+    /// in the FROM clause, so we use the current schema context for type checking.
+    fn coerce_lateral_batched_table_function(
+        &mut self,
+        mut tf: datafusion_expr::logical_plan::LateralBatchedTableFunction,
+    ) -> Result<LogicalPlan> {
+        // For lateral mode, args can reference input columns
+        // Use the schema from the rewriter which includes input columns
+        tf.args = coerce_arguments_for_batched_table_function(
+            tf.args,
+            self.schema,
+            &tf.source,
+        )?;
+
+        Ok(LogicalPlan::LateralBatchedTableFunction(tf))
     }
 
     fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
@@ -830,6 +876,37 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
         .into_iter()
         .map(|f| f.data_type().clone())
         .collect::<Vec<_>>();
+
+    expressions
+        .into_iter()
+        .enumerate()
+        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .collect()
+}
+
+/// Coerce arguments for batched table functions based on their signature
+///
+/// This function performs type coercion for table function arguments similar to how
+/// scalar and aggregate functions are coerced. It uses the function's signature to
+/// determine the target types and inserts CAST expressions where needed.
+fn coerce_arguments_for_batched_table_function(
+    expressions: Vec<Expr>,
+    schema: &DFSchema,
+    source: &Arc<dyn BatchedTableFunctionSource>,
+) -> Result<Vec<Expr>> {
+    if expressions.is_empty() {
+        return Ok(expressions);
+    }
+
+    let signature = source.signature();
+    let current_types = expressions
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Use the same type coercion logic as scalar functions
+    use datafusion_expr::type_coercion::functions::data_types;
+    let new_types = data_types(source.name(), &current_types, signature)?;
 
     expressions
         .into_iter()

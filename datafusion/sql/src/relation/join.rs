@@ -16,12 +16,15 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
-use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err, plan_err};
+use datafusion_expr::{
+    ExprSchemable, JoinType, LateralBatchedTableFunction, LogicalPlan, LogicalPlanBuilder,
+};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
 use std::collections::HashSet;
+use std::sync::Arc;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn plan_table_with_joins(
@@ -49,12 +52,56 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         join: Join,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let right = if is_lateral_join(&join)? {
-            self.create_relation_subquery(join.relation, planner_context)?
+        let is_lateral = is_lateral_join(&join)?;
+
+        if is_lateral
+            && let Some(lateral_tf_plan) = self.try_create_lateral_table_function(
+                &left,
+                &join.relation,
+                planner_context,
+            )?
+        {
+            // LateralBatchedTableFunction already combines input + function output
+            match &join.join_operator {
+                JoinOperator::CrossJoin(_) | JoinOperator::CrossApply => {
+                    return Ok(lateral_tf_plan);
+                }
+                _ => {
+                    // For other join types, use lateral function as right side
+                    let right = lateral_tf_plan;
+                    return self.finish_join(
+                        left,
+                        right,
+                        join.join_operator,
+                        planner_context,
+                    );
+                }
+            }
+        }
+
+        let Join {
+            relation,
+            join_operator,
+            ..
+        } = join;
+
+        let right = if is_lateral {
+            self.create_relation_subquery(relation, planner_context)?
         } else {
-            self.create_relation(join.relation, planner_context)?
+            self.create_relation(relation, planner_context)?
         };
-        match join.join_operator {
+
+        self.finish_join(left, right, join_operator, planner_context)
+    }
+
+    fn finish_join(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        join_operator: JoinOperator,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        match join_operator {
             JoinOperator::LeftOuter(constraint) | JoinOperator::Left(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left, planner_context)
             }
@@ -176,6 +223,146 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .join_on(right, join_type, [])?
                 .build(),
         }
+    }
+
+    /// Try to create a LateralBatchedTableFunction node if this is a lateral batched table function
+    pub(crate) fn try_create_lateral_table_function(
+        &self,
+        input_plan: &LogicalPlan,
+        relation: &TableFactor,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<LogicalPlan>> {
+        let TableFactor::Function {
+            name, args, alias, ..
+        } = relation
+        else {
+            return Ok(None);
+        };
+
+        let tbl_func_ref = self.object_name_to_table_reference(name.clone())?;
+        let func_name = tbl_func_ref.table();
+
+        if !self.context_provider.is_batched_table_function(func_name) {
+            return Ok(None);
+        }
+
+        let input_schema = input_plan.schema();
+
+        // Parse arguments with names preserved
+        let results: Result<Vec<(datafusion_expr::Expr, Option<String>)>> = args
+            .iter()
+            .map(|arg| match arg {
+                sqlparser::ast::FunctionArg::Named {
+                    name,
+                    arg: sqlparser::ast::FunctionArgExpr::Expr(expr),
+                    ..
+                } => {
+                    let e = self.sql_expr_to_logical_expr(
+                        expr.clone(),
+                        input_schema.as_ref(),
+                        planner_context,
+                    )?;
+                    let arg_name = crate::utils::normalize_ident(name.clone());
+                    Ok((e, Some(arg_name)))
+                }
+                sqlparser::ast::FunctionArg::Unnamed(
+                    sqlparser::ast::FunctionArgExpr::Expr(expr),
+                ) => {
+                    let e = self.sql_expr_to_logical_expr(
+                        expr.clone(),
+                        input_schema.as_ref(),
+                        planner_context,
+                    )?;
+                    Ok((e, None))
+                }
+                _ => plan_err!("Unsupported function argument: {arg:?}"),
+            })
+            .collect();
+        let pairs = results?;
+        let (func_args, arg_names): (Vec<datafusion_expr::Expr>, Vec<Option<String>>) =
+            pairs.into_iter().unzip();
+
+        // Resolve arguments if any are named
+        let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
+            // Get arg types to create a temporary source for signature access
+            let arg_types: Vec<arrow::datatypes::DataType> = func_args
+                .iter()
+                .map(|e| e.get_type(input_schema.as_ref()))
+                .collect::<Result<Vec<_>>>()?;
+
+            let temp_source = self
+                .context_provider
+                .get_batched_table_function_source(func_name, &arg_types)?
+                .ok_or_else(|| {
+                    datafusion_common::plan_datafusion_err!(
+                        "Failed to get source for batched table function '{}'",
+                        func_name
+                    )
+                })?;
+
+            if let Some(param_names) = &temp_source.signature().parameter_names {
+                datafusion_expr::arguments::resolve_function_arguments(
+                    param_names,
+                    func_args,
+                    arg_names,
+                )?
+            } else {
+                return plan_err!(
+                    "Batched table function '{}' does not support named arguments",
+                    func_name
+                );
+            }
+        } else {
+            func_args
+        };
+
+        // Now get arg types from resolved arguments
+        let arg_types: Vec<arrow::datatypes::DataType> = resolved_args
+            .iter()
+            .map(|e| e.get_type(input_schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+
+        let source = self
+            .context_provider
+            .get_batched_table_function_source(func_name, &arg_types)?
+            .ok_or_else(|| {
+                datafusion_common::plan_datafusion_err!(
+                    "Failed to get source for batched table function '{}'",
+                    func_name
+                )
+            })?;
+
+        // Get schema from source
+        let func_schema = source.schema();
+
+        // Use alias if provided, otherwise "function_name()"
+        let qualifier = alias
+            .as_ref()
+            .map(|a| self.ident_normalizer.normalize(a.name.clone()))
+            .unwrap_or_else(|| format!("{func_name}()"));
+
+        let qualified_func_schema =
+            datafusion_common::DFSchema::try_from_qualified_schema(
+                &qualifier,
+                &func_schema,
+            )?;
+
+        let combined_schema = input_schema.as_ref().join(&qualified_func_schema)?;
+
+        let lateral_plan =
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                input: Arc::new(input_plan.clone()),
+                function_name: func_name.to_string(),
+                source,
+                args: resolved_args,
+                schema: Arc::new(combined_schema),
+                table_function_schema: Arc::new(qualified_func_schema),
+                projection: None,
+                filters: vec![],
+                fetch: None,
+            });
+
+        Ok(Some(lateral_plan))
     }
 }
 

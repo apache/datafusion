@@ -39,10 +39,11 @@
 
 use crate::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
-    LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
-    Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window, dml::CopyTo,
+    DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    LateralBatchedTableFunction, Limit, LogicalPlan, Partitioning, Prepare, Projection,
+    RecursiveQuery, Repartition, Sort, StandaloneBatchedTableFunction, Statement,
+    Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode, Values,
+    Window, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -322,6 +323,29 @@ impl TreeNode for LogicalPlan {
                     options,
                 })
             }),
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                input,
+                function_name,
+                source,
+                args,
+                schema,
+                table_function_schema,
+                projection,
+                filters,
+                fetch,
+            }) => input.map_elements(f)?.update_data(|input| {
+                LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                    input,
+                    function_name,
+                    source,
+                    args,
+                    schema,
+                    table_function_schema,
+                    projection,
+                    filters,
+                    fetch,
+                })
+            }),
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name,
                 static_term,
@@ -349,7 +373,8 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::StandaloneBatchedTableFunction(_) => Transformed::no(self),
         })
     }
 }
@@ -445,6 +470,12 @@ impl LogicalPlan {
                     .map(Expr::Column)
                     .collect::<Vec<_>>();
                 exprs.apply_elements(f)
+            }
+            LogicalPlan::StandaloneBatchedTableFunction(batched_scan) => {
+                batched_scan.args.apply_elements(f)
+            }
+            LogicalPlan::LateralBatchedTableFunction(lateral) => {
+                lateral.args.apply_elements(f)
             }
             LogicalPlan::Distinct(Distinct::On(DistinctOn {
                 on_expr,
@@ -640,6 +671,54 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
+            LogicalPlan::StandaloneBatchedTableFunction(
+                StandaloneBatchedTableFunction {
+                    function_name,
+                    source,
+                    args,
+                    schema,
+                    projection,
+                    projected_schema,
+                    filters,
+                    fetch,
+                },
+            ) => args.map_elements(f)?.update_data(|args| {
+                LogicalPlan::StandaloneBatchedTableFunction(
+                    StandaloneBatchedTableFunction {
+                        function_name,
+                        source,
+                        args,
+                        schema,
+                        projection,
+                        projected_schema,
+                        filters,
+                        fetch,
+                    },
+                )
+            }),
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                input,
+                function_name,
+                source,
+                args,
+                schema,
+                table_function_schema,
+                projection,
+                filters,
+                fetch,
+            }) => args.map_elements(f)?.update_data(|args| {
+                LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                    input,
+                    function_name,
+                    source,
+                    args,
+                    schema,
+                    table_function_schema,
+                    projection,
+                    filters,
+                    fetch,
+                })
+            }),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Unnest(_)
