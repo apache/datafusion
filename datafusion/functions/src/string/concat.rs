@@ -32,6 +32,8 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
+use arrow::datatypes::Field;
+use datafusion_expr::ReturnFieldArgs;
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -79,7 +81,31 @@ impl ScalarUDFImpl for ConcatFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
+    fn return_field_from_args(
+        &self,
+        args: ReturnFieldArgs<'_>,
+    ) -> Result<Arc<Field>> {
+        // Build DataType using existing return_type logic.
+        // We derive argument DataTypes from the provided arg_fields.
+        let arg_types: Vec<_> = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
 
+        let dt = self.return_type(&arg_types)?;
+
+        // Nullability rule for concat:
+        // The result is nullable *only if all input args are nullable*.
+        // If there are no arg_fields (defensive), consider result nullable.
+        let nullable = if args.arg_fields.is_empty() {
+            true
+        } else {
+            args.arg_fields.iter().all(|f| f.is_nullable())
+        };
+
+        Ok(Arc::new(Field::new("concat", dt, nullable)))
+    }
     fn name(&self) -> &str {
         "concat"
     }
