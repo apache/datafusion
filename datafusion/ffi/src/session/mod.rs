@@ -106,6 +106,9 @@ pub struct FFI_SessionRef {
 
     task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
 
+    runtime_env: unsafe extern "C" fn(&Self) -> FFI_RuntimeEnv,
+    execution_props: unsafe extern "C" fn(&Self) -> FFI_ExecutionProps,
+
     logical_codec: FFI_LogicalExtensionCodec,
 
     /// Used to create a clone on the provider of the registry. This should
@@ -290,6 +293,8 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
         table_options: table_options_fn_wrapper,
         default_table_options: default_table_options_fn_wrapper,
         task_ctx: task_ctx_fn_wrapper,
+        runtime_env: runtime_env_fn_wrapper,
+        execution_props: execution_props_fn_wrapper,
         logical_codec: provider.logical_codec.clone(),
 
         clone: clone_fn_wrapper,
@@ -326,6 +331,8 @@ impl FFI_SessionRef {
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
+            runtime_env: runtime_env_fn_wrapper,
+            execution_props: execution_props_fn_wrapper,
             logical_codec,
 
             clone: clone_fn_wrapper,
@@ -408,6 +415,9 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                     )
                 })
                 .collect();
+            
+            let runtime_env = (session.runtime_env)(session).into_inner();
+            let props = (session.execution_props)(session).into_inner();
 
             Ok(Self {
                 session: session.clone(),
@@ -416,8 +426,8 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 scalar_functions,
                 aggregate_functions,
                 window_functions,
-                runtime_env: Default::default(),
-                props: Default::default(),
+                runtime_env,
+                props,
             })
         }
     }
@@ -602,6 +612,115 @@ mod tests {
             assert!(local_udwfs.contains(udwf));
         }
 
+        assert!(Arc::ptr_eq(
+            foreign_session.runtime_env(),
+            state.runtime_env()
+        ));
+
+        assert_eq!(
+            foreign_session.execution_props().query_execution_start_time,
+            state.execution_props().query_execution_start_time
+        );
+
         Ok(())
     }
+}
+
+#[repr(C)]
+#[derive(Debug, StableAbi)]
+pub struct FFI_ExecutionProps {
+    pub private_data: *mut c_void,
+    pub release: unsafe extern "C" fn(arg: &mut Self),
+}
+
+#[repr(C)]
+#[derive(Debug, StableAbi)]
+pub struct FFI_RuntimeEnv {
+    pub private_data: *mut c_void,
+    pub release: unsafe extern "C" fn(arg: &mut Self),
+}
+
+
+struct ExecutionPropsPrivateData {
+    pub props: ExecutionProps,
+}
+
+struct RuntimeEnvPrivateData {
+    pub env: Arc<RuntimeEnv>,
+}
+
+unsafe extern "C" fn release_execution_props(props: &mut FFI_ExecutionProps) {
+    if props.private_data.is_null() {
+        return;
+    }
+    let private_data = Box::from_raw(props.private_data as *mut ExecutionPropsPrivateData);
+    drop(private_data);
+    props.private_data = std::ptr::null_mut();
+}
+
+unsafe extern "C" fn release_runtime_env(env: &mut FFI_RuntimeEnv) {
+    if env.private_data.is_null() {
+        return;
+    }
+    let private_data = Box::from_raw(env.private_data as *mut RuntimeEnvPrivateData);
+    drop(private_data);
+    env.private_data = std::ptr::null_mut();
+}
+
+impl From<ExecutionProps> for FFI_ExecutionProps {
+    fn from(props: ExecutionProps) -> Self {
+        let private_data = Box::new(ExecutionPropsPrivateData { props });
+        Self {
+            private_data: Box::into_raw(private_data) as *mut c_void,
+            release: release_execution_props,
+        }
+    }
+}
+
+impl From<Arc<RuntimeEnv>> for FFI_RuntimeEnv {
+    fn from(env: Arc<RuntimeEnv>) -> Self {
+        let private_data = Box::new(RuntimeEnvPrivateData { env });
+        Self {
+            private_data: Box::into_raw(private_data) as *mut c_void,
+            release: release_runtime_env,
+        }
+    }
+}
+
+impl Drop for FFI_ExecutionProps {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
+    }
+}
+
+impl Drop for FFI_RuntimeEnv {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self) }
+    }
+}
+
+impl FFI_ExecutionProps {
+    pub fn into_inner(mut self) -> ExecutionProps {
+        let private_data = unsafe { Box::from_raw(self.private_data as *mut ExecutionPropsPrivateData) };
+        self.private_data = std::ptr::null_mut();
+        private_data.props
+    }
+}
+
+impl FFI_RuntimeEnv {
+    pub fn into_inner(mut self) -> Arc<RuntimeEnv> {
+        let private_data = unsafe { Box::from_raw(self.private_data as *mut RuntimeEnvPrivateData) };
+        self.private_data = std::ptr::null_mut();
+        private_data.env
+    }
+}
+
+unsafe extern "C" fn runtime_env_fn_wrapper(session: &FFI_SessionRef) -> FFI_RuntimeEnv {
+    let session = session.inner();
+    session.runtime_env().clone().into()
+}
+
+unsafe extern "C" fn execution_props_fn_wrapper(session: &FFI_SessionRef) -> FFI_ExecutionProps {
+    let session = session.inner();
+    session.execution_props().clone().into()
 }
