@@ -696,8 +696,49 @@ query error DataFusion error: Arrow error: Compute error: Signed integer overflo
 select lcm(2, 9223372036854775803);
 
 
-query error DataFusion error: Arrow error: Arithmetic overflow: Overflow happened on: 2107754225 \^ 1221660777
+## pow/power
+
+# pow() with integer base and negative float exponent (verifies type coercion)
+query R
+SELECT pow(2, -0.5)
+----
+0.707106781187
+
+# pow() with negative integer base and negative float exponent (returns NaN)
+query R
+SELECT pow(-2, -0.5)
+----
+NaN
+
+# pow() with zero base and negative exponent (returns Infinity)
+query R
+SELECT pow(0, -0.5)
+----
+Infinity
+
+# pow() with integer base of 1 and negative exponent
+query R
+SELECT pow(1, -0.5)
+----
+1
+
+# pow() with large integer base and small negative exponent
+query R
+SELECT pow(1000, -0.1)
+----
+0.501187233627
+
+# pow() with integer base and negative integer exponent returns float (like PostgreSQL)
+query R
+SELECT pow(2, -2)
+----
+0.25
+
+# power() with very large exponent returns infinity (Float64 behavior)
+query R
 select power(2107754225, 1221660777);
+----
+Infinity
 
 # factorial overflow
 query error DataFusion error: Arrow error: Compute error: Overflow happened on FACTORIAL\(350943270\)

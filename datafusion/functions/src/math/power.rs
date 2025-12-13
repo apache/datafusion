@@ -172,18 +172,6 @@ impl ScalarUDFImpl for PowerFunc {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [arg1, arg2] = take_function_args(self.name(), arg_types)?;
 
-        fn coerced_type_base(name: &str, data_type: &DataType) -> Result<DataType> {
-            match data_type {
-                DataType::Null => Ok(DataType::Int64),
-                d if d.is_floating() => Ok(DataType::Float64),
-                d if d.is_integer() => Ok(DataType::Int64),
-                d if is_decimal(d) => Ok(d.clone()),
-                other => {
-                    exec_err!("Unsupported data type {other:?} for {} function", name)
-                }
-            }
-        }
-
         fn coerced_type_exp(name: &str, data_type: &DataType) -> Result<DataType> {
             match data_type {
                 DataType::Null => Ok(DataType::Int64),
@@ -196,10 +184,27 @@ impl ScalarUDFImpl for PowerFunc {
             }
         }
 
-        Ok(vec![
-            coerced_type_base(self.name(), arg1)?,
-            coerced_type_exp(self.name(), arg2)?,
-        ])
+        // Determine the exponent type first, as it affects base coercion
+        let exp_type = coerced_type_exp(self.name(), arg2)?;
+
+        // For base coercion: always use Float64 for integer/null bases
+        // This matches PostgreSQL behavior and handles negative exponents correctly
+        fn coerced_type_base(name: &str, data_type: &DataType) -> Result<DataType> {
+            match data_type {
+                d if d.is_floating() => Ok(DataType::Float64),
+                // Integer and Null bases always coerce to Float64
+                // (integer power doesn't support negative exponents, and pow()
+                // should return float like PostgreSQL does)
+                DataType::Null => Ok(DataType::Float64),
+                d if d.is_integer() => Ok(DataType::Float64),
+                d if is_decimal(d) => Ok(d.clone()),
+                other => {
+                    exec_err!("Unsupported data type {other:?} for {} function", name)
+                }
+            }
+        }
+
+        Ok(vec![coerced_type_base(self.name(), arg1)?, exp_type])
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -646,5 +651,47 @@ mod tests {
             pow_decimal_int(25, -1, 4).unwrap_err().to_string(),
             "Not yet implemented: Negative scale is not yet supported value: -1"
         );
+    }
+
+    #[test]
+    fn test_power_coerce_types() {
+        let power_func = PowerFunc::new();
+
+        // Int64 base with Int64 exponent -> base coerced to Float64 (like PostgreSQL)
+        // This allows negative exponents to work correctly
+        let result = power_func
+            .coerce_types(&[DataType::Int64, DataType::Int64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Int64]);
+
+        // Float64 base with Float64 exponent -> both stay Float64
+        let result = power_func
+            .coerce_types(&[DataType::Float64, DataType::Float64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
+
+        // Int64 base with Float64 exponent -> base coerced to Float64
+        let result = power_func
+            .coerce_types(&[DataType::Int64, DataType::Float64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
+
+        // Int32 base with Float32 exponent -> both coerced to Float64
+        let result = power_func
+            .coerce_types(&[DataType::Int32, DataType::Float32])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
+
+        // Null base with Float64 exponent -> base coerced to Float64
+        let result = power_func
+            .coerce_types(&[DataType::Null, DataType::Float64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
+
+        // Null base with Int64 exponent -> base coerced to Float64 (like PostgreSQL)
+        let result = power_func
+            .coerce_types(&[DataType::Null, DataType::Int64])
+            .unwrap();
+        assert_eq!(result, vec![DataType::Float64, DataType::Int64]);
     }
 }
