@@ -472,6 +472,47 @@ impl EquivalenceGroup {
         self.bridge_classes() || change
     }
 
+    /// Computes the intersection of two equivalence groups.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other equivalence group to intersect with
+    ///
+    /// # Returns
+    ///
+    /// A new equivalence group containing only the expressions that are equivalent
+    /// in both input groups.
+    ///
+    /// # Example
+    ///
+    ///
+    /// Group1: [a, b, c]  // a=b=c
+    /// Group2: [b, c, d]  // b=c=d
+    ///
+    /// Result: [b, c]     // b=c in both groups
+    ///
+    pub fn intersect(&self, other: &Self) -> Self {
+        let mut new_classes = Vec::new();
+        for cls in self.classes.iter() {
+            let mut group_map = HashMap::new();
+            for expr in cls.iter() {
+                if let Some(other_cls_id) = other.map.get(expr) {
+                    group_map
+                        .entry(other_cls_id)
+                        .or_insert_with(Vec::new)
+                        .push(Arc::clone(expr));
+                }
+            }
+            for (_, exprs) in group_map {
+                if exprs.len() <= 1 {
+                    continue;
+                }
+                new_classes.push(EquivalenceClass::new(exprs));
+            }
+        }
+        Self::new(new_classes)
+    }
+
     /// This utility function unifies/bridges classes that have common expressions.
     /// For example, assume that we have [`EquivalenceClass`]es `[a, b]` and `[b, c]`.
     /// Since both classes contain `b`, columns `a`, `b` and `c` are actually all
@@ -1231,6 +1272,29 @@ mod tests {
 
         assert!(first_normalized.eq(&second_normalized));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_eq_group_intersect() -> Result<()> {
+        let eq_group1 = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![lit(1), lit(2), lit(3)]),
+            EquivalenceClass::new(vec![lit(5), lit(6), lit(7)]),
+        ]);
+        let eq_group2 = EquivalenceGroup::new(vec![
+            EquivalenceClass::new(vec![lit(2), lit(3), lit(4)]),
+            EquivalenceClass::new(vec![lit(6), lit(7), lit(8)]),
+        ]);
+        let intersect = eq_group1.intersect(&eq_group2);
+
+        assert_eq!(intersect.len(), 2);
+        for cls in intersect.classes.iter() {
+            assert_eq!(cls.exprs.len(), 2);
+            assert!(
+                (cls.exprs.contains(&lit(2)) && cls.exprs.contains(&lit(3)))
+                    || (cls.exprs.contains(&lit(6)) && cls.exprs.contains(&lit(7)))
+            );
+        }
         Ok(())
     }
 }
