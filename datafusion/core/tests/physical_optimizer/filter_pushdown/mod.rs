@@ -2545,6 +2545,7 @@ fn test_no_pushdown_grouping_sets_filter_on_missing_column() {
             vec![false, false], // (a, b) - both present
             vec![true, false],  // (b) - a is NULL, b present
         ],
+        true,
     );
 
     let aggregate = Arc::new(
@@ -2615,6 +2616,7 @@ fn test_pushdown_grouping_sets_filter_on_common_column() {
             vec![false, false], // (a, b) - both present
             vec![true, false],  // (b) - a is NULL, b present
         ],
+        true,
     );
 
     let aggregate = Arc::new(

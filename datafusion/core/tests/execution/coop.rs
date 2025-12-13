@@ -170,7 +170,7 @@ async fn agg_no_grouping_yields(
     let inf = Arc::new(make_lazy_exec("value", pretend_infinite));
     let aggr = Arc::new(AggregateExec::try_new(
         AggregateMode::Single,
-        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
         vec![Arc::new(
             AggregateExprBuilder::new(
                 sum::sum_udaf(),
@@ -204,7 +204,7 @@ async fn agg_grouping_yields(
 
     let aggr = Arc::new(AggregateExec::try_new(
         AggregateMode::Single,
-        PhysicalGroupBy::new(vec![(group, "group".to_string())], vec![], vec![]),
+        PhysicalGroupBy::new(vec![(group, "group".to_string())], vec![], vec![], false),
         vec![Arc::new(
             AggregateExprBuilder::new(sum::sum_udaf(), vec![value_col.clone()])
                 .schema(inf.schema())
@@ -240,6 +240,7 @@ async fn agg_grouped_topk_yields(
                 vec![(group, "group".to_string())],
                 vec![],
                 vec![vec![false]],
+                false,
             ),
             vec![Arc::new(
                 AggregateExprBuilder::new(min_max::max_udaf(), vec![value_col.clone()])
@@ -545,6 +546,7 @@ async fn interleave_then_aggregate_yields(
             vec![], // no GROUP BY columns
             vec![], // no GROUP BY expressions
             vec![], // no GROUP BY physical expressions
+            false,
         ),
         vec![Arc::new(aggregate_expr)],
         vec![None], // no “distinct” flags
@@ -676,7 +678,7 @@ async fn join_agg_yields(
 
     let aggr = Arc::new(AggregateExec::try_new(
         AggregateMode::Single,
-        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
         vec![Arc::new(aggregate_expr)],
         vec![None],
         projection,

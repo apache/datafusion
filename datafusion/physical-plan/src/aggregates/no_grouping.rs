@@ -251,6 +251,23 @@ fn scalar_cmp_null_short_circuit(
     }
 }
 
+/// Prepend the grouping ID column to the output columns if present.
+///
+/// For GROUPING SETS with no GROUP BY expressions, the schema includes a `__grouping_id`
+/// column that must be present in the output. This function inserts it at the beginning
+/// of the columns array to maintain schema alignment.
+fn prepend_grouping_id_column(
+    mut columns: Vec<Arc<dyn arrow::array::Array>>,
+    grouping_id: Option<&ScalarValue>,
+) -> Result<Vec<Arc<dyn arrow::array::Array>>> {
+    if let Some(id) = grouping_id {
+        let num_rows = columns.first().map(|array| array.len()).unwrap_or(1);
+        let grouping_ids = id.to_array_of_size(num_rows)?;
+        columns.insert(0, grouping_ids);
+    }
+    Ok(columns)
+}
+
 impl AggregateStream {
     /// Create a new AggregateStream
     pub fn new(
@@ -350,6 +367,9 @@ impl AggregateStream {
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)
+                                .and_then(|columns| {
+                                    prepend_grouping_id_column(columns, None)
+                                })
                                 .and_then(|columns| {
                                     RecordBatch::try_new(
                                         Arc::clone(&this.schema),
