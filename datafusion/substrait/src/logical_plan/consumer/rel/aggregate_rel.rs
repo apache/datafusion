@@ -18,7 +18,9 @@
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use datafusion::common::{not_impl_err, DFSchemaRef};
-use datafusion::logical_expr::{Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::{
+    Aggregate, Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+};
 use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::aggregate_rel::Grouping;
 use substrait::proto::AggregateRel;
@@ -116,9 +118,46 @@ pub async fn from_aggregate_rel(
             .map(|e| name_tracker.get_uniquely_named_expr(e.clone()))
             .collect::<Result<Vec<Expr>, _>>()?;
 
-        input.aggregate(group_exprs, aggr_exprs)?.build()
+        let plan = input.aggregate(group_exprs, aggr_exprs)?.build()?;
+        reorder_grouping_set_output(plan)
     } else {
         not_impl_err!("Aggregate without an input is not valid")
+    }
+}
+
+/// Reorders the output of grouping-set aggregates so the column layout matches the Substrait
+/// specification. DataFusion's [`Aggregate::output_expressions`] produces
+/// `[grouping keys..., __grouping_id, measures...]`, whereas Substrait requires
+/// `[grouping keys..., measures..., grouping_id]`. A projection is added only when the internal
+/// grouping id is not already in the final position.
+fn reorder_grouping_set_output(
+    plan: LogicalPlan,
+) -> datafusion::common::Result<LogicalPlan> {
+    match plan {
+        LogicalPlan::Aggregate(agg)
+            if matches!(agg.group_expr.first(), Some(Expr::GroupingSet(_))) =>
+        {
+            let mut columns = agg.schema.columns();
+            if let Some(idx) = columns
+                .iter()
+                .position(|col| col.name == Aggregate::INTERNAL_GROUPING_ID)
+            {
+                if idx == columns.len() - 1 {
+                    return Ok(LogicalPlan::Aggregate(agg));
+                }
+
+                let grouping_id = columns.remove(idx);
+                columns.push(grouping_id);
+
+                let exprs = columns.into_iter().map(Expr::Column).collect::<Vec<_>>();
+                return LogicalPlanBuilder::from(LogicalPlan::Aggregate(agg))
+                    .project(exprs)?
+                    .build();
+            }
+
+            Ok(LogicalPlan::Aggregate(agg))
+        }
+        _ => Ok(plan),
     }
 }
 
