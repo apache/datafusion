@@ -327,7 +327,7 @@ query error DataFusion error: Error during planning: Parameter 'start' specified
 SELECT * FROM batched_generate_series(start => 1, start => 2);
 
 # Test error: missing required parameter
-query error DataFusion error: (Error during planning: .*'stop'|Execution error: generate_series expects 2 arguments, got 1)
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Function 'batched_generate_series' expects 2 arguments but received 1
 SELECT * FROM batched_generate_series(start => 1);
 
 # Test case insensitivity of parameter names
