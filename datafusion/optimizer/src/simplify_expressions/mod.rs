@@ -23,6 +23,7 @@ mod inlist_simplifier;
 mod regex;
 pub mod simplify_exprs;
 mod simplify_predicates;
+#[cfg(feature = "sql")]
 pub mod simplify_sql_literal;
 mod unwrap_cast;
 mod utils;
