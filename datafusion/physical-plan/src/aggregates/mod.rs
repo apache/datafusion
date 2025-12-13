@@ -42,7 +42,7 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
@@ -65,6 +65,8 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+use topk::hash_table::is_supported_hash_key_type;
+use topk::heap::is_supported_heap_type;
 
 pub mod group_values;
 mod no_grouping;
@@ -72,6 +74,39 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+
+/// Returns true if TopK aggregation data structures support the provided key and value types.
+///
+/// This function checks whether both the key type (used for grouping) and value type
+/// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
+/// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
+///
+/// # Example
+/// ```
+/// use arrow::datatypes::DataType;
+/// use datafusion_physical_plan::aggregates::topk_types_supported;
+///
+/// // Supported: UTF-8 keys with numeric aggregates
+/// assert!(topk_types_supported(&DataType::Utf8, &DataType::Int64));
+/// assert!(topk_types_supported(&DataType::Utf8View, &DataType::Float64));
+///
+/// // Supported: Numeric keys with numeric aggregates
+/// assert!(topk_types_supported(&DataType::Int64, &DataType::Int64));
+///
+/// // Supported: Numeric keys with string aggregates (strings use lexicographic ordering)
+/// assert!(topk_types_supported(&DataType::Int64, &DataType::Utf8));
+/// assert!(topk_types_supported(&DataType::Float64, &DataType::Utf8View));
+///
+/// // Unsupported: Binary keys
+/// assert!(!topk_types_supported(&DataType::Binary, &DataType::Int64));
+///
+/// // Unsupported: Binary aggregate values
+/// assert!(!topk_types_supported(&DataType::Int64, &DataType::Binary));
+/// ```
+pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
+    is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
+}
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: ahash::RandomState =
@@ -533,6 +568,26 @@ impl AggregateExec {
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
             limit: self.limit,
+            input: Arc::clone(&self.input),
+            schema: Arc::clone(&self.schema),
+            input_schema: Arc::clone(&self.input_schema),
+            dynamic_filter: self.dynamic_filter.clone(),
+        }
+    }
+
+    /// Clone this exec, overriding only the limit hint.
+    pub fn with_new_limit(&self, limit: Option<usize>) -> Self {
+        Self {
+            limit,
+            // clone the rest of the fields
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode: self.input_order_mode.clone(),
+            cache: self.cache.clone(),
+            mode: self.mode,
+            group_by: self.group_by.clone(),
+            aggr_expr: self.aggr_expr.clone(),
+            filter_expr: self.filter_expr.clone(),
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
