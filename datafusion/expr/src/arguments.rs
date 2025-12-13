@@ -1,7 +1,7 @@
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
+// regarding copyrigrht ownership.  The ASF licenses this file
 // to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
@@ -104,9 +104,6 @@ fn reorder_named_arguments(
 
     let positional_count = arg_names.iter().filter(|n| n.is_none()).count();
 
-    // Capture args length before consuming the vector
-    let args_len = args.len();
-
     let expected_arg_count = param_names.len();
 
     if positional_count > expected_arg_count {
@@ -141,16 +138,21 @@ fn reorder_named_arguments(
         }
     }
 
-    // Only require parameters up to the number of arguments provided (supports optional parameters)
-    let required_count = args_len;
-    for i in 0..required_count {
-        if result[i].is_none() {
-            return plan_err!("Missing required parameter '{}'", param_names[i]);
-        }
-    }
+    // Find the highest parameter index that was provided
+    let max_provided_index = result.iter().rposition(|p| p.is_some()).unwrap_or(0);
 
-    // Return only the assigned parameters (handles optional trailing parameters)
-    Ok(result.into_iter().take(required_count).flatten().collect())
+    // Convert None values to NULL expressions for missing optional parameters
+    let result_with_nulls: Vec<Expr> = result
+        .into_iter()
+        .take(max_provided_index + 1)
+        .map(|opt_expr| {
+            opt_expr.unwrap_or_else(|| {
+                Expr::Literal(datafusion_common::ScalarValue::Null, None)
+            })
+        })
+        .collect();
+
+    Ok(result_with_nulls)
 }
 
 #[cfg(test)]
@@ -274,20 +276,262 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_required_parameter() {
+    fn test_skip_middle_optional_parameter() {
         let param_names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
 
-        // Call with: func(a => 1, c => 3.0) - missing 'b'
+        // Call with: func(a => 1, c => 3.0) - skipping 'b', should fill with NULL
         let args = vec![lit(1), lit(3.0)];
         let arg_names = vec![Some("a".to_string()), Some("c".to_string())];
 
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(&result, &[Some(lit(1)), None, Some(lit(3.0))]);
+    }
+
+    #[test]
+    fn test_skip_multiple_middle_parameters() {
+        let param_names = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+        ];
+
+        // Call with: func(a => 1, e => 5) - skipping b, c, d
+        let args = vec![lit(1), lit(5)];
+        let arg_names = vec![Some("a".to_string()), Some("e".to_string())];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(&result, &[Some(lit(1)), None, None, None, Some(lit(5))]);
+    }
+
+    #[test]
+    fn test_skip_first_parameters() {
+        let param_names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        // Call with: func(c => 3.0) - skipping a, b
+        let args = vec![lit(3.0)];
+        let arg_names = vec![Some("c".to_string())];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(&result, &[None, None, Some(lit(3.0))]);
+    }
+
+    #[test]
+    fn test_mixed_positional_and_skipped_named() {
+        let param_names = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
+
+        // Call with: func(1, 2, d => 4) - positional a, b, skip c, named d
+        let args = vec![lit(1), lit(2), lit(4)];
+        let arg_names = vec![None, None, Some("d".to_string())];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(&result, &[Some(lit(1)), Some(lit(2)), None, Some(lit(4))]);
+    }
+
+    #[test]
+    fn test_alternating_filled_and_skipped() {
+        let param_names = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+        ];
+
+        // Call with: func(a => 1, c => 3, e => 5) - alternating pattern
+        let args = vec![lit(1), lit(3), lit(5)];
+        let arg_names = vec![
+            Some("a".to_string()),
+            Some("c".to_string()),
+            Some("e".to_string()),
+        ];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(
+            &result,
+            &[Some(lit(1)), None, Some(lit(3)), None, Some(lit(5))],
+        );
+    }
+
+    #[test]
+    fn test_reverse_order_with_skips() {
+        let param_names = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
+
+        // Call with: func(d => 4, b => 2) - reverse order with skips
+        let args = vec![lit(4), lit(2)];
+        let arg_names = vec![Some("d".to_string()), Some("b".to_string())];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(&result, &[None, Some(lit(2)), None, Some(lit(4))]);
+    }
+
+    #[test]
+    fn test_positional_then_far_named() {
+        let param_names = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+            "f".to_string(),
+        ];
+
+        // Call with: func(1, 2, f => 6) - two positional, then skip to last
+        let args = vec![lit(1), lit(2), lit(6)];
+        let arg_names = vec![None, None, Some("f".to_string())];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(
+            &result,
+            &[Some(lit(1)), Some(lit(2)), None, None, None, Some(lit(6))],
+        );
+    }
+
+    #[test]
+    fn test_complex_mixed_positional_named_with_multiple_skips() {
+        let param_names = vec![
+            "p1".to_string(),
+            "p2".to_string(),
+            "p3".to_string(),
+            "p4".to_string(),
+            "p5".to_string(),
+            "p6".to_string(),
+            "p7".to_string(),
+        ];
+
+        // Call with: func(100, 200, p5 => 500, p7 => 700)
+        // Positional p1, p2, skip p3, p4, named p5, skip p6, named p7
+        let args = vec![lit(100), lit(200), lit(500), lit(700)];
+        let arg_names = vec![
+            None,
+            None,
+            Some("p5".to_string()),
+            Some("p7".to_string()),
+        ];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(
+            &result,
+            &[
+                Some(lit(100)),
+                Some(lit(200)),
+                None,
+                None,
+                Some(lit(500)),
+                None,
+                Some(lit(700)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_empty_parameter_names_with_named_args() {
+        let param_names: Vec<String> = vec![];
+
+        // Call with no parameters but named args provided - should fail
+        let args = vec![lit(1)];
+        let arg_names = vec![Some("x".to_string())];
+
         let result = resolve_function_arguments(&param_names, args, arg_names);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Missing required parameter")
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown parameter name"));
+    }
+
+    #[test]
+    fn test_sparse_parameters() {
+        let param_names = vec![
+            "p1".to_string(),
+            "p2".to_string(),
+            "p3".to_string(),
+            "p4".to_string(),
+            "p5".to_string(),
+            "p6".to_string(),
+            "p7".to_string(),
+            "p8".to_string(),
+            "p9".to_string(),
+            "p10".to_string(),
+        ];
+
+        // Call with: func(p2 => 2, p5 => 5, p9 => 9) - very sparse
+        let args = vec![lit(2), lit(5), lit(9)];
+        let arg_names = vec![
+            Some("p2".to_string()),
+            Some("p5".to_string()),
+            Some("p9".to_string()),
+        ];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+
+        assert_result_pattern(
+            &result,
+            &[
+                None,
+                Some(lit(2)),
+                None,
+                None,
+                Some(lit(5)),
+                None,
+                None,
+                None,
+                Some(lit(9)),
+            ],
         );
+    }
+
+    fn is_null(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::Literal(datafusion_common::ScalarValue::Null, _)
+        )
+    }
+
+    fn assert_result_pattern(result: &[Expr], pattern: &[Option<Expr>]) {
+        assert_eq!(
+            result.len(),
+            pattern.len(),
+            "Result length mismatch: expected {}, got {}",
+            pattern.len(),
+            result.len()
+        );
+        for (i, (actual, expected)) in result.iter().zip(pattern.iter()).enumerate() {
+            match expected {
+                Some(expected_expr) => {
+                    assert_eq!(
+                        actual, expected_expr,
+                        "Mismatch at position {}: expected {:?}, got {:?}",
+                        i, expected_expr, actual
+                    );
+                }
+                None => {
+                    assert!(
+                        is_null(actual),
+                        "Expected NULL at position {}, got {:?}",
+                        i, actual
+                    );
+                }
+            }
+        }
     }
 }
