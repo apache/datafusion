@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
+use crate::relation::is_lateral;
 use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
@@ -695,9 +696,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context.set_outer_from_schema(left_schema)
                 };
                 for input in from {
-                    // Join `input` with the current result (`left`).
-                    let right = self.plan_table_with_joins(input, planner_context)?;
-                    left = left.cross_join(right)?;
+                    // Check if this is a LATERAL relation (and not already part of a JOIN clause)
+                    if is_lateral(&input.relation) && input.joins.is_empty() {
+                        // Try to create a lateral batched table function
+                        let left_plan = left.clone().build()?;
+                        if let Some(lateral_plan) = self
+                            .try_create_lateral_table_function(
+                                &left_plan,
+                                &input.relation,
+                                planner_context,
+                            )?
+                        {
+                            // Use the lateral table function plan
+                            left = LogicalPlanBuilder::from(lateral_plan);
+                        } else {
+                            // Not a batched table function - fall back to subquery handling
+                            let right =
+                                self.plan_table_with_joins(input, planner_context)?;
+                            left = left.cross_join(right)?;
+                        }
+                    } else {
+                        // Regular cross join
+                        let right = self.plan_table_with_joins(input, planner_context)?;
+                        left = left.cross_join(right)?;
+                    }
                     // Update the outer FROM schema.
                     let left_schema = Some(Arc::clone(left.schema()));
                     planner_context.set_outer_from_schema(left_schema);

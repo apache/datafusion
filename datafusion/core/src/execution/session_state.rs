@@ -35,7 +35,9 @@ use datafusion_catalog::information_schema::{
     InformationSchemaProvider, INFORMATION_SCHEMA,
 };
 use datafusion_catalog::MemoryCatalogProviderList;
-use datafusion_catalog::{TableFunction, TableFunctionImpl};
+use datafusion_catalog::{
+    BatchedTableFunction, BatchedTableFunctionImpl, TableFunction, TableFunctionImpl,
+};
 use datafusion_common::alias::AliasGenerator;
 #[cfg(feature = "sql")]
 use datafusion_common::config::Dialect;
@@ -154,6 +156,8 @@ pub struct SessionState {
     catalog_list: Arc<dyn CatalogProviderList>,
     /// Table Functions
     table_functions: HashMap<String, Arc<TableFunction>>,
+    /// Batched Table Functions
+    batched_table_functions: HashMap<String, Arc<BatchedTableFunction>>,
     /// Scalar functions that are registered with the context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
@@ -223,6 +227,7 @@ impl Debug for SessionState {
             .field("optimizer", &self.optimizer)
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
+            .field("batched_table_functions", &self.batched_table_functions)
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
@@ -922,6 +927,38 @@ impl SessionState {
         Ok(udtf.map(|x| Arc::clone(x.function())))
     }
 
+    /// Register a batched table function
+    pub fn register_batched_table_function(
+        &mut self,
+        name: &str,
+        func: Arc<dyn BatchedTableFunctionImpl>,
+    ) {
+        self.batched_table_functions
+            .insert(name.to_owned(), Arc::new(BatchedTableFunction::new(func)));
+    }
+
+    /// Deregister a batched table function
+    pub fn deregister_batched_table_function(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn BatchedTableFunctionImpl>>> {
+        let func = self.batched_table_functions.remove(name);
+        Ok(func.map(|f| Arc::clone(f.inner())))
+    }
+
+    /// Get a batched table function by name
+    pub fn batched_table_function(
+        &self,
+        name: &str,
+    ) -> Option<Arc<BatchedTableFunction>> {
+        self.batched_table_functions.get(name).cloned()
+    }
+
+    /// Get all batched table functions
+    pub fn batched_table_functions(&self) -> &HashMap<String, Arc<BatchedTableFunction>> {
+        &self.batched_table_functions
+    }
+
     /// Store the logical plan and the parameter types of a prepared statement.
     pub(crate) fn store_prepared(
         &mut self,
@@ -974,6 +1011,7 @@ pub struct SessionStateBuilder {
     query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
     catalog_list: Option<Arc<dyn CatalogProviderList>>,
     table_functions: Option<HashMap<String, Arc<TableFunction>>>,
+    batched_table_functions: Option<HashMap<String, Arc<BatchedTableFunction>>>,
     scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
     aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
     window_functions: Option<Vec<Arc<WindowUDF>>>,
@@ -1014,6 +1052,7 @@ impl SessionStateBuilder {
             query_planner: None,
             catalog_list: None,
             table_functions: None,
+            batched_table_functions: None,
             scalar_functions: None,
             aggregate_functions: None,
             window_functions: None,
@@ -1067,6 +1106,7 @@ impl SessionStateBuilder {
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
             table_functions: Some(existing.table_functions),
+            batched_table_functions: Some(existing.batched_table_functions),
             scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
             aggregate_functions: Some(
                 existing.aggregate_functions.into_values().collect_vec(),
@@ -1123,6 +1163,16 @@ impl SessionStateBuilder {
                 SessionStateDefaults::default_table_functions()
                     .into_iter()
                     .map(|f| (f.name().to_string(), f)),
+            );
+
+        self.batched_table_functions
+            .get_or_insert_with(HashMap::new)
+            .extend(
+                SessionStateDefaults::default_batched_table_functions()
+                    .into_iter()
+                    .map(|(name, func)| {
+                        (name.to_string(), Arc::new(BatchedTableFunction::new(func)))
+                    }),
             );
 
         self
@@ -1442,6 +1492,7 @@ impl SessionStateBuilder {
             query_planner,
             catalog_list,
             table_functions,
+            batched_table_functions,
             scalar_functions,
             aggregate_functions,
             window_functions,
@@ -1478,6 +1529,7 @@ impl SessionStateBuilder {
                 Arc::new(MemoryCatalogProviderList::new()) as Arc<dyn CatalogProviderList>
             }),
             table_functions: table_functions.unwrap_or_default(),
+            batched_table_functions: batched_table_functions.unwrap_or_default(),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
@@ -1757,6 +1809,7 @@ impl Debug for SessionStateBuilder {
             .field("physical_optimizer_rules", &self.physical_optimizer_rules)
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)
+            .field("batched_table_functions", &self.batched_table_functions)
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
@@ -1836,6 +1889,30 @@ impl ContextProvider for SessionContextProvider<'_> {
         let provider = tbl_func.create_table_provider(&args)?;
 
         Ok(provider_as_source(provider))
+    }
+
+    fn is_batched_table_function(&self, name: &str) -> bool {
+        self.state.batched_table_function(name).is_some()
+    }
+
+    fn get_batched_table_function_source(
+        &self,
+        name: &str,
+        arg_types: &[DataType],
+    ) -> datafusion_common::Result<
+        Option<Arc<dyn datafusion_expr::BatchedTableFunctionSource>>,
+    > {
+        match self.state.batched_table_function(name) {
+            Some(tf) => {
+                use datafusion_catalog::default_table_source::DefaultBatchedTableFunctionSource;
+                let source = Arc::new(DefaultBatchedTableFunctionSource::new(
+                    Arc::clone(tf.inner()),
+                    arg_types.to_vec(),
+                ));
+                Ok(Some(source))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Create a new CTE work table for a recursive CTE logical plan

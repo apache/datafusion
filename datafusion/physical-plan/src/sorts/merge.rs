@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Merge that deals with an arbitrary size of streaming inputs.
+//! Merge that deals with an arbitrary size of batched inputs.
 //! This is an order-preserving merge.
 
 use std::pin::Pin;

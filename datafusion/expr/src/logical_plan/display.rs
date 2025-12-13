@@ -22,9 +22,10 @@ use std::fmt;
 
 use crate::{
     Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort,
-    Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values,
-    Window, expr_vec_fmt,
+    LateralBatchedTableFunction, Limit, LogicalPlan, Partitioning, Projection,
+    RecursiveQuery, Repartition, Sort, StandaloneBatchedTableFunction, Subquery,
+    SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values, Window,
+    expr_vec_fmt,
 };
 
 use crate::dml::CopyTo;
@@ -638,6 +639,30 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": "Unnest",
                     "ListColumn": expr_vec_fmt!(list_type_columns),
                     "StructColumn": expr_vec_fmt!(struct_type_columns),
+                })
+            }
+            LogicalPlan::LateralBatchedTableFunction(LateralBatchedTableFunction {
+                function_name,
+                args,
+                ..
+            }) => {
+                json!({
+                    "Node Type": "LateralBatchedTableFunction",
+                    "Function": function_name,
+                    "Arguments": expr_vec_fmt!(args),
+                })
+            }
+            LogicalPlan::StandaloneBatchedTableFunction(
+                StandaloneBatchedTableFunction {
+                    function_name,
+                    args,
+                    ..
+                },
+            ) => {
+                json!({
+                    "Node Type": "StandaloneBatchedTableFunction",
+                    "Function": function_name,
+                    "Arguments": expr_vec_fmt!(args),
                 })
             }
         }

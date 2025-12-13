@@ -24,8 +24,8 @@ use crate::expr::NullTreatment;
 #[cfg(feature = "sql")]
 use crate::logical_plan::LogicalPlan;
 use crate::{
-    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    AggregateUDF, BatchedTableFunctionSource, Expr, GetFieldAccess, ScalarUDF, SortExpr,
+    TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::datatype::DataTypeExt;
@@ -59,6 +59,27 @@ pub trait ContextProvider {
         _args: Vec<Expr>,
     ) -> Result<Arc<dyn TableSource>> {
         not_impl_err!("Table Functions are not supported")
+    }
+
+    /// Check if a function is a batched table function
+    ///
+    /// Batched table functions can be used with LATERAL joins
+    /// to produce rows for each input row.
+    fn is_batched_table_function(&self, _name: &str) -> bool {
+        false
+    }
+
+    /// Get a batched table function source by name with specific argument types
+    ///
+    /// Returns the source for a batched table function that can be used in logical planning.
+    /// The source is created for a specific call site with the given argument types,
+    /// allowing the source to return the correct output schema.
+    fn get_batched_table_function_source(
+        &self,
+        _name: &str,
+        _arg_types: &[DataType],
+    ) -> Result<Option<Arc<dyn BatchedTableFunctionSource>>> {
+        not_impl_err!("Batched table functions are not supported")
     }
 
     /// Provides an intermediate table that is used to store the results of a CTE during execution
