@@ -959,8 +959,11 @@ SELECT power(2, -0.5)
 # query error Unsupported data type Decimal128\(2, 1\) for power function
 # SELECT power(2.5, 4.0)
 
-query error Arrow error: .*in integer computation is out of bounds
+# power() with very large exponent returns infinity (Float64 behavior)
+query R
 SELECT power(2, 100000000000)
+----
+Infinity
 
 query error Arrow error: Arithmetic overflow: Unsupported exp value
 SELECT power(2::decimal(38, 0), -5)
@@ -1085,7 +1088,7 @@ SELECT power(2.5, 4)
 ----
 39.0625
 
-query I
+query R
 SELECT power(2, null)
 ----
 NULL

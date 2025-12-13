@@ -728,9 +728,17 @@ SELECT pow(1000, -0.1)
 ----
 0.501187233627
 
-# power() overflow
-query error DataFusion error: Arrow error: Arithmetic overflow: Overflow happened on: 2107754225 \^ 1221660777
+# pow() with integer base and negative integer exponent returns float (like PostgreSQL)
+query R
+SELECT pow(2, -2)
+----
+0.25
+
+# power() with very large exponent returns infinity (Float64 behavior)
+query R
 select power(2107754225, 1221660777);
+----
+Infinity
 
 # factorial overflow
 query error DataFusion error: Arrow error: Compute error: Overflow happened on FACTORIAL\(350943270\)

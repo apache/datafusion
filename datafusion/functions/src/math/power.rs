@@ -187,32 +187,16 @@ impl ScalarUDFImpl for PowerFunc {
         // Determine the exponent type first, as it affects base coercion
         let exp_type = coerced_type_exp(self.name(), arg2)?;
 
-        // For base coercion: if exponent is Float64, we need Float64 base too
-        // (since integer power doesn't support negative/fractional exponents)
-        fn coerced_type_base(
-            name: &str,
-            data_type: &DataType,
-            exp_type: &DataType,
-        ) -> Result<DataType> {
+        // For base coercion: always use Float64 for integer/null bases
+        // This matches PostgreSQL behavior and handles negative exponents correctly
+        fn coerced_type_base(name: &str, data_type: &DataType) -> Result<DataType> {
             match data_type {
                 d if d.is_floating() => Ok(DataType::Float64),
-                // Null base: use Float64 if exponent is Float64, otherwise Int64
-                DataType::Null => {
-                    if exp_type == &DataType::Float64 {
-                        Ok(DataType::Float64)
-                    } else {
-                        Ok(DataType::Int64)
-                    }
-                }
-                // Integer base: use Float64 if exponent is Float64
-                // (integer power doesn't support negative/fractional exponents)
-                d if d.is_integer() => {
-                    if exp_type == &DataType::Float64 {
-                        Ok(DataType::Float64)
-                    } else {
-                        Ok(DataType::Int64)
-                    }
-                }
+                // Integer and Null bases always coerce to Float64
+                // (integer power doesn't support negative exponents, and pow()
+                // should return float like PostgreSQL does)
+                DataType::Null => Ok(DataType::Float64),
+                d if d.is_integer() => Ok(DataType::Float64),
                 d if is_decimal(d) => Ok(d.clone()),
                 other => {
                     exec_err!("Unsupported data type {other:?} for {} function", name)
@@ -220,10 +204,7 @@ impl ScalarUDFImpl for PowerFunc {
             }
         }
 
-        Ok(vec![
-            coerced_type_base(self.name(), arg1, &exp_type)?,
-            exp_type,
-        ])
+        Ok(vec![coerced_type_base(self.name(), arg1)?, exp_type])
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -676,11 +657,12 @@ mod tests {
     fn test_power_coerce_types() {
         let power_func = PowerFunc::new();
 
-        // Int64 base with Int64 exponent -> both stay Int64
+        // Int64 base with Int64 exponent -> base coerced to Float64 (like PostgreSQL)
+        // This allows negative exponents to work correctly
         let result = power_func
             .coerce_types(&[DataType::Int64, DataType::Int64])
             .unwrap();
-        assert_eq!(result, vec![DataType::Int64, DataType::Int64]);
+        assert_eq!(result, vec![DataType::Float64, DataType::Int64]);
 
         // Float64 base with Float64 exponent -> both stay Float64
         let result = power_func
@@ -689,7 +671,6 @@ mod tests {
         assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
 
         // Int64 base with Float64 exponent -> base coerced to Float64
-        // This is needed because integer power doesn't support negative/fractional exponents
         let result = power_func
             .coerce_types(&[DataType::Int64, DataType::Float64])
             .unwrap();
@@ -707,10 +688,10 @@ mod tests {
             .unwrap();
         assert_eq!(result, vec![DataType::Float64, DataType::Float64]);
 
-        // Null base with Int64 exponent -> base stays Int64
+        // Null base with Int64 exponent -> base coerced to Float64 (like PostgreSQL)
         let result = power_func
             .coerce_types(&[DataType::Null, DataType::Int64])
             .unwrap();
-        assert_eq!(result, vec![DataType::Int64, DataType::Int64]);
+        assert_eq!(result, vec![DataType::Float64, DataType::Int64]);
     }
 }
