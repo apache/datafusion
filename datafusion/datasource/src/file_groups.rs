@@ -364,11 +364,27 @@ impl FileGroupPartitioner {
 
 /// Represents a group of partitioned files that'll be processed by a single thread.
 /// Maintains optional statistics across all files in the group.
+///
+/// # Statistics
+///
+/// The group-level [`FileGroup::file_statistics`] field contains merged statistics from all files
+/// in the group for the **full table schema** (file columns + partition columns).
+///
+/// Partition column statistics are derived from the individual file partition values:
+/// - `min` = minimum partition value across all files in the group
+/// - `max` = maximum partition value across all files in the group
+/// - `null_count` = 0 (partition values are never null)
+///
+/// This allows query optimizers to prune entire file groups based on partition bounds.
 #[derive(Debug, Clone)]
 pub struct FileGroup {
     /// The files in this group
     files: Vec<PartitionedFile>,
-    /// Optional statistics for the data across all files in the group
+    /// Optional statistics for the data across all files in the group.
+    ///
+    /// These statistics cover the full table schema: file columns plus partition columns.
+    /// Partition column statistics are merged from individual [`PartitionedFile::statistics`],
+    /// which compute exact values from [`PartitionedFile::partition_values`].
     statistics: Option<Arc<Statistics>>,
 }
 
