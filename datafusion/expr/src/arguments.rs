@@ -514,16 +514,13 @@ mod tests {
                 Some(expected_expr) => {
                     assert_eq!(
                         actual, expected_expr,
-                        "Mismatch at position {}: expected {:?}, got {:?}",
-                        i, expected_expr, actual
+                        "Mismatch at position {i}: expected {expected_expr:?}, got {actual:?}"
                     );
                 }
                 None => {
                     assert!(
                         is_null(actual),
-                        "Expected NULL at position {}, got {:?}",
-                        i,
-                        actual
+                        "Expected NULL at position {i}, got {actual:?}"
                     );
                 }
             }
