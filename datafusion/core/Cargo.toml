@@ -98,6 +98,7 @@ serde = [
 ]
 sql = [
     "datafusion-common/sql",
+    "datafusion-optimizer/sql",
     "datafusion-functions-nested?/sql",
     "datafusion-sql",
     "sqlparser",

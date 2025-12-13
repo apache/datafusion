@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
 
     let example: ExampleKind = std::env::args()
         .nth(1)
-        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .unwrap_or_else(|| ExampleKind::All.to_string())
         .parse()
         .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
