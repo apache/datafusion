@@ -152,7 +152,7 @@ impl FileOpener for ParquetOpener {
         // This includes:
         // 1. Partition column values from the file path (e.g., region=us-west-2)
         // 2. Constant columns detected from file statistics (where min == max)
-        // 
+        //
         // Although partition columns *are* constant columns, we don't want to rely on
         // statistics for them being populated if we can use the partition values
         // (which are guaranteed to be present).
