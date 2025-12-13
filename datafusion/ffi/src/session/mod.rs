@@ -415,7 +415,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                     )
                 })
                 .collect();
-            
+
             let runtime_env = (session.runtime_env)(session).into_inner();
             let props = (session.execution_props)(session).into_inner();
 
@@ -640,7 +640,6 @@ pub struct FFI_RuntimeEnv {
     pub release: unsafe extern "C" fn(arg: &mut Self),
 }
 
-
 struct ExecutionPropsPrivateData {
     pub props: ExecutionProps,
 }
@@ -653,7 +652,8 @@ unsafe extern "C" fn release_execution_props(props: &mut FFI_ExecutionProps) {
     if props.private_data.is_null() {
         return;
     }
-    let private_data = Box::from_raw(props.private_data as *mut ExecutionPropsPrivateData);
+    let private_data =
+        Box::from_raw(props.private_data as *mut ExecutionPropsPrivateData);
     drop(private_data);
     props.private_data = std::ptr::null_mut();
 }
@@ -701,7 +701,8 @@ impl Drop for FFI_RuntimeEnv {
 
 impl FFI_ExecutionProps {
     pub fn into_inner(mut self) -> ExecutionProps {
-        let private_data = unsafe { Box::from_raw(self.private_data as *mut ExecutionPropsPrivateData) };
+        let private_data =
+            unsafe { Box::from_raw(self.private_data as *mut ExecutionPropsPrivateData) };
         self.private_data = std::ptr::null_mut();
         private_data.props
     }
@@ -709,7 +710,8 @@ impl FFI_ExecutionProps {
 
 impl FFI_RuntimeEnv {
     pub fn into_inner(mut self) -> Arc<RuntimeEnv> {
-        let private_data = unsafe { Box::from_raw(self.private_data as *mut RuntimeEnvPrivateData) };
+        let private_data =
+            unsafe { Box::from_raw(self.private_data as *mut RuntimeEnvPrivateData) };
         self.private_data = std::ptr::null_mut();
         private_data.env
     }
@@ -720,7 +722,9 @@ unsafe extern "C" fn runtime_env_fn_wrapper(session: &FFI_SessionRef) -> FFI_Run
     session.runtime_env().clone().into()
 }
 
-unsafe extern "C" fn execution_props_fn_wrapper(session: &FFI_SessionRef) -> FFI_ExecutionProps {
+unsafe extern "C" fn execution_props_fn_wrapper(
+    session: &FFI_SessionRef,
+) -> FFI_ExecutionProps {
     let session = session.inner();
     session.execution_props().clone().into()
 }
