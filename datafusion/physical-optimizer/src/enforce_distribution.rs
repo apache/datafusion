@@ -869,15 +869,6 @@ fn add_roundrobin_on_top(
     }
 }
 
-/// Returns true if the plan is a join that requires exact hash matching between
-/// both sides (partitioned hash join or sort merge join).
-fn is_partitioned_join_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.as_any()
-        .downcast_ref::<HashJoinExec>()
-        .is_some_and(|join| matches!(join.mode, PartitionMode::Partitioned))
-        || plan.as_any().is::<SortMergeJoinExec>()
-}
-
 /// Adds a hash repartition operator:
 /// - to increase parallelism, and/or
 /// - to satisfy requirements of the subsequent operators.
@@ -1234,7 +1225,11 @@ pub fn ensure_distribution(
 
     // For joins in partitioned mode, we need exact hash matching between
     // both sides, so subset partitioning logic must be disabled.
-    let is_partitioned_join = is_partitioned_join_plan(&plan);
+    let is_partitioned_join = plan
+        .as_any()
+        .downcast_ref::<HashJoinExec>()
+        .is_some_and(|join| matches!(join.mode, PartitionMode::Partitioned))
+        || plan.as_any().is::<SortMergeJoinExec>();
 
     let repartition_status_flags =
         get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
