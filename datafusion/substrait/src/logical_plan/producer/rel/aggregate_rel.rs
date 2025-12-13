@@ -64,7 +64,7 @@ pub fn from_distinct(
                 .map(substrait_field_ref)
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
 
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
@@ -168,7 +168,7 @@ pub fn parse_flat_grouping_exprs(
         ref_group_exprs.push(rex);
         expression_references.push((ref_group_exprs.len() - 1) as u32);
     }
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Ok(Grouping {
         grouping_expressions,
         expression_references,

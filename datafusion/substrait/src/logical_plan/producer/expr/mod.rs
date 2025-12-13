@@ -62,7 +62,7 @@ use substrait::version;
 /// message.  The field names of the input schema will be serialized.
 // Silence deprecation warnings for `extension_uris` during the uri -> urn migration
 // See: https://github.com/substrait-io/substrait/issues/856
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub fn to_substrait_extended_expr(
     exprs: &[(&Expr, &Field)],
     schema: &DFSchemaRef,

@@ -54,7 +54,7 @@ pub fn from_aggregate_function(
         });
     }
     let function_anchor = producer.register_function(func.name().to_string());
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Ok(Measure {
         measure: Some(AggregateFunction {
             function_reference: function_anchor,

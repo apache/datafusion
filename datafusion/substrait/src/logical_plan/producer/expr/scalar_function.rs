@@ -37,7 +37,7 @@ pub fn from_scalar_function(
     let arguments = custom_argument_handler(fun.name(), arguments);
 
     let function_anchor = producer.register_function(fun.name().to_string());
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -155,7 +155,7 @@ fn make_substrait_like_expr(
         },
     ];
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let substrait_like = Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -169,7 +169,7 @@ fn make_substrait_like_expr(
     if negated {
         let function_anchor = producer.register_function("not".to_string());
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Ok(Expression {
             rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                 function_reference: function_anchor,
@@ -217,7 +217,7 @@ pub fn make_binary_op_scalar_func(
     op: Operator,
 ) -> Expression {
     let function_anchor = producer.register_function(operator_to_name(op).to_string());
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,

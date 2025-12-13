@@ -17,7 +17,7 @@
 
 use super::utils::{from_substrait_precision, next_struct_field_name, DEFAULT_TIMEZONE};
 use super::SubstraitConsumer;
-#[allow(deprecated)]
+#[expect(deprecated)]
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
@@ -90,7 +90,7 @@ pub fn from_substrait_type(
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
             r#type::Kind::Timestamp(ts) => {
                 // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 match ts.type_variation_reference {
                     TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
                         Ok(DataType::Timestamp(TimeUnit::Second, None))
@@ -248,7 +248,7 @@ pub fn from_substrait_type(
                 // TODO: remove the code below once the producer has been updated
                 if let Some(name) = consumer.get_extensions().types.get(&u.type_reference)
                 {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     match name.as_ref() {
                         // Kept for backwards compatibility, producers should use IntervalCompound instead
                         INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
@@ -261,7 +261,7 @@ pub fn from_substrait_type(
                             ),
                     }
                 } else {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     match u.type_reference {
                         // Kept for backwards compatibility, producers should use IntervalYear instead
                         INTERVAL_YEAR_MONTH_TYPE_REF => {

@@ -38,7 +38,6 @@ pub struct QueryBuilder {
     distinct_union: bool,
 }
 
-#[allow(dead_code)]
 impl QueryBuilder {
     pub fn with(&mut self, value: Option<ast::With>) -> &mut Self {
         self.with = value;
@@ -156,7 +155,6 @@ pub struct SelectBuilder {
     flavor: Option<SelectFlavor>,
 }
 
-#[allow(dead_code)]
 impl SelectBuilder {
     pub fn distinct(&mut self, value: Option<ast::Distinct>) -> &mut Self {
         self.distinct = value;
@@ -356,7 +354,6 @@ pub struct TableWithJoinsBuilder {
     joins: Vec<ast::Join>,
 }
 
-#[allow(dead_code)]
 impl TableWithJoinsBuilder {
     pub fn relation(&mut self, value: RelationBuilder) -> &mut Self {
         self.relation = Some(value);
@@ -402,9 +399,8 @@ pub struct RelationBuilder {
     relation: Option<TableFactorBuilder>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
@@ -412,7 +408,6 @@ enum TableFactorBuilder {
     Empty,
 }
 
-#[allow(dead_code)]
 impl RelationBuilder {
     pub fn has_relation(&self) -> bool {
         self.relation.is_some()
@@ -484,7 +479,6 @@ pub struct TableRelationBuilder {
     index_hints: Vec<ast::TableIndexHints>,
 }
 
-#[allow(dead_code)]
 impl TableRelationBuilder {
     pub fn name(&mut self, value: ast::ObjectName) -> &mut Self {
         self.name = Some(value);
@@ -558,7 +552,6 @@ pub struct DerivedRelationBuilder {
     alias: Option<ast::TableAlias>,
 }
 
-#[allow(dead_code)]
 impl DerivedRelationBuilder {
     pub fn lateral(&mut self, value: bool) -> &mut Self {
         self.lateral = Some(value);
@@ -610,7 +603,6 @@ pub struct UnnestRelationBuilder {
     with_ordinality: bool,
 }
 
-#[allow(dead_code)]
 impl UnnestRelationBuilder {
     pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
         self.alias = value;

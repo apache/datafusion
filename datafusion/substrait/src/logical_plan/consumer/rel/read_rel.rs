@@ -35,7 +35,7 @@ use substrait::proto::read_rel::ReadType;
 use substrait::proto::{Expression, ReadRel};
 use url::Url;
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
@@ -232,7 +232,7 @@ fn convert_literal_rows(
     vt: &substrait::proto::read_rel::VirtualTable,
     named_struct: &substrait::proto::NamedStruct,
 ) -> datafusion::common::Result<Vec<Vec<Expr>>> {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     vt.values
         .iter()
         .map(|row| {

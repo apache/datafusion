@@ -93,7 +93,6 @@ impl ScalarUDFImpl for SparkSha1 {
 fn spark_sha1_digest(value: &[u8]) -> String {
     let result = Sha1::digest(value);
     let mut s = String::with_capacity(result.len() * 2);
-    #[allow(deprecated)]
     for b in result.as_slice() {
         write!(&mut s, "{b:02x}").unwrap();
     }

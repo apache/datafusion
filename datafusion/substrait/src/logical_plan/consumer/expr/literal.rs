@@ -19,7 +19,7 @@ use crate::logical_plan::consumer::types::from_substrait_type;
 use crate::logical_plan::consumer::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
 use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::variation_const::FLOAT_16_TYPE_NAME;
-#[allow(deprecated)]
+#[expect(deprecated)]
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
@@ -104,7 +104,7 @@ pub(crate) fn from_substrait_literal(
         Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
         Some(LiteralType::Timestamp(t)) => {
             // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             match lit.type_variation_reference {
                 TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
                     ScalarValue::TimestampSecond(Some(*t), None)
@@ -505,7 +505,7 @@ pub(crate) fn from_substrait_literal(
                         return Ok(ScalarValue::Float16(Some(f16_val)));
                     }
                     // Kept for backwards compatibility - producers should use IntervalCompound instead
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
                         interval_month_day_nano(user_defined)?
                     }
@@ -518,7 +518,7 @@ pub(crate) fn from_substrait_literal(
                     }
                 }
             } else {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 match user_defined.type_reference {
                     // Kept for backwards compatibility, producers should useIntervalYearToMonth instead
                     INTERVAL_YEAR_MONTH_TYPE_REF => {
