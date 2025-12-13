@@ -211,7 +211,7 @@ where
 {
     values
         .into_iter()
-        .map(|value| serialize_physical_expr(value, codec))
+        .map(|value| codec.serialize_physical_expr(value))
         .collect()
 }
 
@@ -271,8 +271,8 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
         let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
-            l: Some(Box::new(serialize_physical_expr(expr.left(), codec)?)),
-            r: Some(Box::new(serialize_physical_expr(expr.right(), codec)?)),
+            l: Some(Box::new(codec.serialize_physical_expr(expr.left())?)),
+            r: Some(Box::new(codec.serialize_physical_expr(expr.right())?)),
             op: format!("{:?}", expr.op()),
         });
 
@@ -290,7 +290,7 @@ pub fn serialize_physical_expr(
                             expr: expr
                                 .expr()
                                 .map(|exp| {
-                                    serialize_physical_expr(exp, codec).map(Box::new)
+                                    codec.serialize_physical_expr(exp).map(Box::new)
                                 })
                                 .transpose()?,
                             when_then_expr: expr
@@ -305,7 +305,7 @@ pub fn serialize_physical_expr(
                                 >>()?,
                             else_expr: expr
                                 .else_expr()
-                                .map(|a| serialize_physical_expr(a, codec).map(Box::new))
+                                .map(|a| codec.serialize_physical_expr(a).map(Box::new))
                                 .transpose()?,
                         },
                     ),
@@ -316,7 +316,7 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::NotExpr(Box::new(
                 protobuf::PhysicalNot {
-                    expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
+                    expr: Some(Box::new(codec.serialize_physical_expr(expr.arg())?)),
                 },
             ))),
         })
@@ -324,7 +324,7 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::IsNullExpr(
                 Box::new(protobuf::PhysicalIsNull {
-                    expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
+                    expr: Some(Box::new(codec.serialize_physical_expr(expr.arg())?)),
                 }),
             )),
         })
@@ -332,7 +332,7 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::IsNotNullExpr(
                 Box::new(protobuf::PhysicalIsNotNull {
-                    expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
+                    expr: Some(Box::new(codec.serialize_physical_expr(expr.arg())?)),
                 }),
             )),
         })
@@ -340,7 +340,7 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
                 protobuf::PhysicalInListNode {
-                    expr: Some(Box::new(serialize_physical_expr(expr.expr(), codec)?)),
+                    expr: Some(Box::new(codec.serialize_physical_expr(expr.expr())?)),
                     list: serialize_physical_exprs(expr.list(), codec)?,
                     negated: expr.negated(),
                 },
@@ -350,7 +350,7 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::Negative(Box::new(
                 protobuf::PhysicalNegativeNode {
-                    expr: Some(Box::new(serialize_physical_expr(expr.arg(), codec)?)),
+                    expr: Some(Box::new(codec.serialize_physical_expr(expr.arg())?)),
                 },
             ))),
         })
@@ -364,7 +364,7 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
                 protobuf::PhysicalCastNode {
-                    expr: Some(Box::new(serialize_physical_expr(cast.expr(), codec)?)),
+                    expr: Some(Box::new(codec.serialize_physical_expr(cast.expr())?)),
                     arrow_type: Some(cast.cast_type().try_into()?),
                 },
             ))),
@@ -373,7 +373,7 @@ pub fn serialize_physical_expr(
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::TryCast(Box::new(
                 protobuf::PhysicalTryCastNode {
-                    expr: Some(Box::new(serialize_physical_expr(cast.expr(), codec)?)),
+                    expr: Some(Box::new(codec.serialize_physical_expr(cast.expr())?)),
                     arrow_type: Some(cast.cast_type().try_into()?),
                 },
             ))),
@@ -402,11 +402,10 @@ pub fn serialize_physical_expr(
                 protobuf::PhysicalLikeExprNode {
                     negated: expr.negated(),
                     case_insensitive: expr.case_insensitive(),
-                    expr: Some(Box::new(serialize_physical_expr(expr.expr(), codec)?)),
-                    pattern: Some(Box::new(serialize_physical_expr(
-                        expr.pattern(),
-                        codec,
-                    )?)),
+                    expr: Some(Box::new(codec.serialize_physical_expr(expr.expr())?)),
+                    pattern: Some(Box::new(
+                        codec.serialize_physical_expr(expr.pattern())?,
+                    )),
                 },
             ))),
         })
@@ -417,7 +416,7 @@ pub fn serialize_physical_expr(
                 let inputs: Vec<protobuf::PhysicalExprNode> = value
                     .children()
                     .into_iter()
-                    .map(|e| serialize_physical_expr(e, codec))
+                    .map(|e| codec.serialize_physical_expr(e))
                     .collect::<Result<_>>()?;
                 Ok(protobuf::PhysicalExprNode {
                     expr_type: Some(protobuf::physical_expr_node::ExprType::Extension(
@@ -468,8 +467,8 @@ fn serialize_when_then_expr(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<protobuf::PhysicalWhenThen> {
     Ok(protobuf::PhysicalWhenThen {
-        when_expr: Some(serialize_physical_expr(when_expr, codec)?),
-        then_expr: Some(serialize_physical_expr(then_expr, codec)?),
+        when_expr: Some(codec.serialize_physical_expr(when_expr)?),
+        then_expr: Some(codec.serialize_physical_expr(then_expr)?),
     })
 }
 

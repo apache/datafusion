@@ -193,7 +193,7 @@ where
 {
     protos
         .into_iter()
-        .map(|p| parse_physical_expr(p, ctx, input_schema, codec))
+        .map(|p| codec.deserialize_physical_expr(p, ctx, input_schema))
         .collect::<Result<Vec<_>>>()
 }
 
@@ -303,7 +303,7 @@ pub fn parse_physical_expr(
         ExprType::Case(e) => Arc::new(CaseExpr::try_new(
             e.expr
                 .as_ref()
-                .map(|e| parse_physical_expr(e.as_ref(), ctx, input_schema, codec))
+                .map(|e| codec.deserialize_physical_expr(e.as_ref(), ctx, input_schema))
                 .transpose()?,
             e.when_then_expr
                 .iter()
@@ -328,7 +328,7 @@ pub fn parse_physical_expr(
                 .collect::<Result<Vec<_>>>()?,
             e.else_expr
                 .as_ref()
-                .map(|e| parse_physical_expr(e.as_ref(), ctx, input_schema, codec))
+                .map(|e| codec.deserialize_physical_expr(e.as_ref(), ctx, input_schema))
                 .transpose()?,
         )?),
         ExprType::Cast(e) => Arc::new(CastExpr::new(
@@ -403,7 +403,7 @@ pub fn parse_physical_expr(
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
                 .inputs
                 .iter()
-                .map(|e| parse_physical_expr(e, ctx, input_schema, codec))
+                .map(|e| codec.deserialize_physical_expr(e, ctx, input_schema))
                 .collect::<Result<_>>()?;
             (codec.try_decode_expr(extension.expr.as_slice(), &inputs)?) as _
         }
@@ -419,7 +419,7 @@ fn parse_required_physical_expr(
     input_schema: &Schema,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.map(|e| parse_physical_expr(e, ctx, input_schema, codec))
+    expr.map(|e| codec.deserialize_physical_expr(e, ctx, input_schema))
         .transpose()?
         .ok_or_else(|| internal_datafusion_err!("Missing required field {field:?}"))
 }
