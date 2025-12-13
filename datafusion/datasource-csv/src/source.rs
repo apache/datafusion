@@ -77,11 +77,11 @@ use tokio::io::AsyncWriteExt;
 /// let source = Arc::new(CsvSource::new(file_schema.clone())
 ///     .with_csv_options(options)
 ///     .with_terminator(Some(b'#'))
+///     .with_newlines_in_values(true) // The file contains newlines in values
 /// );
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
 /// let config = FileScanConfigBuilder::new(object_store_url, source)
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
-///     .with_newlines_in_values(true) // The file contains newlines in values;
 ///     .build();
 /// let exec = (DataSourceExec::from_data_source(config));
 /// ```
@@ -93,6 +93,8 @@ pub struct CsvSource {
     projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Whether values may contain newline characters
+    newlines_in_values: bool,
 }
 
 impl CsvSource {
@@ -106,6 +108,7 @@ impl CsvSource {
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
             schema_adapter_factory: None,
+            newlines_in_values: false,
         }
     }
 
@@ -175,6 +178,21 @@ impl CsvSource {
         let mut conf = self.clone();
         conf.options.truncated_rows = Some(truncate_rows);
         conf
+    }
+
+    /// Whether values may contain newline characters.
+    ///
+    /// When enabled, scanning cannot be parallelized across a single file
+    /// because newlines in values prevent determining record boundaries
+    /// by byte offset alone.
+    pub fn newlines_in_values(&self) -> bool {
+        self.newlines_in_values
+    }
+
+    /// Set whether values may contain newline characters
+    pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
+        self.newlines_in_values = newlines_in_values;
+        self
     }
 }
 
@@ -297,6 +315,11 @@ impl FileSource for CsvSource {
     fn file_type(&self) -> &str {
         "csv"
     }
+
+    fn has_newlines_in_values(&self) -> bool {
+        self.newlines_in_values
+    }
+
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {

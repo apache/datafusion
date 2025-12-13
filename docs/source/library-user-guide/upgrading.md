@@ -57,6 +57,36 @@ See <https://github.com/apache/datafusion/issues/19056> for more details.
 
 Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
 
+### `newlines_in_values` moved from `FileScanConfig` to `CsvSource`
+
+The CSV-specific `newlines_in_values` configuration option has been moved from `FileScanConfig` to `CsvSource`, as it only applies to CSV file parsing.
+
+**Who is affected:**
+
+- Users who set `newlines_in_values` via `FileScanConfigBuilder::with_newlines_in_values()`
+
+**Migration guide:**
+
+Set `newlines_in_values` on `CsvSource` instead of `FileScanConfigBuilder`:
+
+**Before:**
+
+```rust,ignore
+let source = Arc::new(CsvSource::new(file_schema.clone()));
+let config = FileScanConfigBuilder::new(object_store_url, source)
+    .with_newlines_in_values(true)
+    .build();
+```
+
+**After:**
+
+```rust,ignore
+let source = Arc::new(CsvSource::new(file_schema.clone())
+    .with_newlines_in_values(true));
+let config = FileScanConfigBuilder::new(object_store_url, source)
+    .build();
+```
+
 ### Removal of `pyarrow` feature
 
 The `pyarrow` feature flag has been removed. This feature has been migrated to

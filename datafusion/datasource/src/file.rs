@@ -86,6 +86,19 @@ pub trait FileSource: Send + Sync {
         Ok(())
     }
 
+    /// Returns whether this file source has values that may contain newline characters.
+    ///
+    /// This is primarily relevant for CSV files where quoted values can contain
+    /// embedded newlines. When this returns `true`, files cannot be repartitioned
+    /// by byte ranges because record boundaries cannot be determined by simple
+    /// newline scanning.
+    ///
+    /// The default implementation returns `false`. CSV sources should override
+    /// this method to return the appropriate value based on their configuration.
+    fn has_newlines_in_values(&self) -> bool {
+        false
+    }
+
     /// If supported by the [`FileSource`], redistribute files across partitions
     /// according to their size. Allows custom file formats to implement their
     /// own repartitioning logic.
@@ -99,7 +112,7 @@ pub trait FileSource: Send + Sync {
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
-        if config.file_compression_type.is_compressed() || config.new_lines_in_values {
+        if config.file_compression_type.is_compressed() || self.has_newlines_in_values() {
             return Ok(None);
         }
 

@@ -640,13 +640,21 @@ impl protobuf::PhysicalPlanNode {
                 .with_comment(comment),
         );
 
+        let source = Arc::new(
+            source
+                .as_any()
+                .downcast_ref::<CsvSource>()
+                .expect("source must be CsvSource")
+                .clone()
+                .with_newlines_in_values(scan.newlines_in_values),
+        );
+
         let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(
             scan.base_conf.as_ref().unwrap(),
             ctx,
             extension_codec,
             source,
         )?)
-        .with_newlines_in_values(scan.newlines_in_values)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
         .build();
         Ok(DataSourceExec::from_data_source(conf))
@@ -2631,7 +2639,7 @@ impl protobuf::PhysicalPlanNode {
                             } else {
                                 None
                             },
-                            newlines_in_values: maybe_csv.newlines_in_values(),
+                            newlines_in_values: csv_config.newlines_in_values(),
                             truncate_rows: csv_config.truncate_rows(),
                         },
                     )),
