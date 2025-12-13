@@ -1099,12 +1099,10 @@ physical_plan
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
 03)--CoalescePartitionsExec
 04)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(end@1, start@0)], projection=[start@0, end@3]
-05)------CoalesceBatchesExec: target_batch_size=8182
-06)--------RepartitionExec: partitioning=Hash([end@1], 4), input_partitions=1
-07)----------WorkTableExec: name=trans
-08)------CoalesceBatchesExec: target_batch_size=8182
-09)--------RepartitionExec: partitioning=Hash([start@0], 4), input_partitions=1
-10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
+05)------RepartitionExec: partitioning=Hash([end@1], 4), input_partitions=1
+06)--------WorkTableExec: name=trans
+07)------RepartitionExec: partitioning=Hash([start@0], 4), input_partitions=1
+08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;

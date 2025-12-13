@@ -72,12 +72,10 @@ async fn join_change_in_planner() -> Result<()> {
         actual,
         @r"
     SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
     "
     );
     Ok(())
@@ -131,12 +129,10 @@ async fn join_no_order_on_filter() -> Result<()> {
         actual,
         @r"
     SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a3@0 AS Int64) > CAST(a3@1 AS Int64) + 3 AND CAST(a3@0 AS Int64) < CAST(a3@1 AS Int64) + 10
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1, maintains_sort_order=true
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2, a3], infinite_source=true, output_ordering=[a1@0 ASC NULLS LAST]
     "
     );
     Ok(())
@@ -172,12 +168,10 @@ async fn join_change_in_planner_without_sort() -> Result<()> {
         actual,
         @r"
     SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1
-          StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
+      RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1
+        StreamingTableExec: partition_sizes=1, projection=[a1, a2], infinite_source=true
     "
     );
     Ok(())

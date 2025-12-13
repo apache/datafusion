@@ -1426,11 +1426,10 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------ProjectionExec: expr=[sum(t1.v1)@1 as sum(t1.v1), v0@0 as v0]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([v0@0], 4), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
-10)----DataSourceExec: partitions=1, partition_sizes=[1]
+06)----------RepartitionExec: partitioning=Hash([v0@0], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 SELECT *
