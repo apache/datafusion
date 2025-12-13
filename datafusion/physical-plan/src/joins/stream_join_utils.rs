@@ -695,16 +695,18 @@ pub struct StreamJoinMetrics {
 impl StreamJoinMetrics {
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
         let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+            MetricBuilder::new(metrics).counter("left_input_batches", partition);
+        let input_rows =
+            MetricBuilder::new(metrics).counter("left_input_rows", partition);
         let left = StreamJoinSideMetrics {
             input_batches,
             input_rows,
         };
 
         let input_batches =
-            MetricBuilder::new(metrics).counter("input_batches", partition);
-        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+            MetricBuilder::new(metrics).counter("right_input_batches", partition);
+        let input_rows =
+            MetricBuilder::new(metrics).counter("right_input_rows", partition);
         let right = StreamJoinSideMetrics {
             input_batches,
             input_rows,
