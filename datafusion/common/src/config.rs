@@ -1001,15 +1001,15 @@ config_namespace! {
         pub repartition_sorts: bool, default = true
 
         /// Should DataFusion still repartition if the required partitioning
-        /// expresssion is a subset of the current partitonin expresssion.
+        /// expression is a subset of the current partition expresssion.
         ///
         /// How the option is used:
         ///     - repartition_subset_satisfactions=true: Always repartition on a subset satisfactioh.
         ///     - repartition_subset_satisfactions=false: Only repartition if target_partitions > current partitions (increases parallelism).
         ///
-        /// Example (repartition_subset_satisfactions = false)
+        /// Example (repartition_subset_satisfactions = false):
         /// ```text
-        ///     Hash(a) satisfies Hash(a, b) (Hash(a, b) is subset of Hash(a))
+        ///     Hash([a]) satisfies Hash([a, b]) (Hash([a, b]) is subset of Hash([a]))
         ///
         /// If target_partitions > number of partitions:
         /// AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
