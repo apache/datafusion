@@ -399,14 +399,14 @@ impl From<&FFI_SortOptions> for SortOptions {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, create_array};
+    use crate::tests::create_record_batch;
+    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+    use arrow::array::{ArrayRef, RecordBatch, create_array};
     use datafusion::functions_window::lead_lag::{WindowShift, lag_udwf};
     use datafusion::logical_expr::expr::Sort;
     use datafusion::logical_expr::{ExprFunctionExt, WindowUDF, WindowUDFImpl, col};
     use datafusion::prelude::SessionContext;
-
-    use crate::tests::create_record_batch;
-    use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
+    use datafusion_common::record_batch;
 
     fn create_test_foreign_udwf(
         original_udwf: impl WindowUDFImpl + 'static,
@@ -437,11 +437,20 @@ mod tests {
         Ok(())
     }
 
+    fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
+        let end_value = start_value + num_values as i32;
+        let a_vals: Vec<i32> = (start_value..end_value).collect();
+        let b_vals: Vec<f64> = a_vals.iter().map(|v| *v as f64).collect();
+
+        record_batch!(("a", Int32, a_vals), ("b", Float64, b_vals)).unwrap()
+    }
+
     #[tokio::test]
     async fn test_lag_udwf() -> datafusion::common::Result<()> {
         let udwf = create_test_foreign_udwf(WindowShift::lag())?;
 
         let ctx = SessionContext::default();
+
         let df = ctx.read_batch(create_record_batch(-5, 5))?;
 
         let df = df.select(vec![

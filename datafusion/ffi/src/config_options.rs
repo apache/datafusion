@@ -15,21 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, ffi::c_void, ops::Deref};
+use std::any::Any;
 use std::collections::HashMap;
-use abi_stable::{
-    std_types::{RHashMap, ROption, RResult, RStr, RString, RVec, Tuple3},
-    RTuple, StableAbi,
-};
-use arrow::{array::ArrayRef, error::ArrowError};
-use datafusion::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+use std::ffi::c_void;
+
+use abi_stable::StableAbi;
+use abi_stable::std_types::{RResult, RStr, RString, RVec, Tuple2};
+use datafusion::error::Result;
 use datafusion_common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
-use prost::Message;
 use datafusion_common::exec_err;
-use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
+
+use crate::df_result;
 
 /// A stable struct for sharing [`ExtensionOptions`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -43,11 +39,7 @@ pub struct FFI_ExtensionOptions {
     pub set:
         unsafe extern "C" fn(&mut Self, key: RStr, value: RStr) -> RResult<(), RString>,
 
-    pub entries: unsafe extern "C" fn(
-        &Self,
-    ) -> RVec<
-        Tuple3<RString, ROption<RString>, RStr<'static>>,
-    >,
+    pub entries: unsafe extern "C" fn(&Self) -> RVec<Tuple2<RString, RString>>,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(&mut Self),
@@ -81,7 +73,12 @@ impl FFI_ExtensionOptions {
 unsafe extern "C" fn cloned_fn_wrapper(
     options: &FFI_ExtensionOptions,
 ) -> FFI_ExtensionOptions {
-    options.inner().cloned().into()
+    options
+        .inner()
+        .iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect::<HashMap<String, String>>()
+        .into()
 }
 
 unsafe extern "C" fn set_fn_wrapper(
@@ -89,24 +86,17 @@ unsafe extern "C" fn set_fn_wrapper(
     key: RStr,
     value: RStr,
 ) -> RResult<(), RString> {
-    rresult!(options.inner_mut().set(key.into(), value.into()))
+    let _ = options.inner_mut().insert(key.into(), value.into());
+    RResult::ROk(())
 }
 
 unsafe extern "C" fn entries_fn_wrapper(
     options: &FFI_ExtensionOptions,
-) -> RVec<Tuple3<RString, ROption<RString>, RStr<'static>>> {
+) -> RVec<Tuple2<RString, RString>> {
     options
         .inner()
-        .entries()
-        .into_iter()
-        .map(|entry| {
-            (
-                entry.key.into(),
-                entry.value.map(Into::into).into(),
-                entry.description.into(),
-            )
-                .into()
-        })
+        .iter()
+        .map(|(key, value)| (key.to_owned().into(), value.to_owned().into()).into())
         .collect()
 }
 
@@ -117,8 +107,14 @@ unsafe extern "C" fn release_fn_wrapper(options: &mut FFI_ExtensionOptions) {
 }
 
 impl Default for FFI_ExtensionOptions {
-     fn default() -> Self {
-        let private_data = ExtensionOptionsPrivateData { options: HashMap::new() };
+    fn default() -> Self {
+        HashMap::new().into()
+    }
+}
+
+impl From<HashMap<String, String>> for FFI_ExtensionOptions {
+    fn from(options: HashMap<String, String>) -> Self {
+        let private_data = ExtensionOptionsPrivateData { options };
 
         Self {
             cloned: cloned_fn_wrapper,
@@ -148,27 +144,41 @@ pub struct ForeignExtensionOptions(FFI_ExtensionOptions);
 unsafe impl Send for ForeignExtensionOptions {}
 unsafe impl Sync for ForeignExtensionOptions {}
 
-impl<T: ConfigExtension + Default> TryFrom<FFI_ExtensionOptions> for T {
-    type Error = DataFusionError;
+// impl<T : ConfigExtension + Default> TryFrom<FFI_ExtensionOptions> for T {
+//     type Error = DataFusionError;
+//
+//     fn try_from(options: &FFI_ExtensionOptions) -> Result<Self, Self::Error> {
+//         let mut config = T::default();
+//
+//         let mut found = false;
+//         unsafe {
+//             for entry_tuple in (options.entries)(&options).into_iter() {
+//                 if let ROption::RSome(value) = entry_tuple.1 {
+//                     if let Some((namespace, key)) = entry_tuple.0.as_str().split_once('.')
+//                     {
+//                         if namespace == T::PREFIX {
+//                             found = true;
+//                             config.set(key, value.as_str())?;
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//
+//         Ok(config)
+//     }
+// }
 
-    fn try_from(options: &FFI_ExtensionOptions) -> Result<Self, Self::Error> {
-        let mut config = T::default();
-
-        let mut found = false;
-        unsafe {
-            for entry_tuple in (options.entries)(&options)
-                .into_iter() {
-                if let ROption::RSome(value) = entry_tuple.1
-                && let Some((namespace, key)) = entry_tuple.0.as_str().split_once('.') {
-                    if namespace == T::PREFIX {
-                        found = true;
-                        config.set(key, value.as_str())?;
-                    }
-                }
+impl ForeignExtensionOptions {
+    pub fn add_config<C: ConfigExtension>(&mut self, config: &C) -> Result<()> {
+        for entry in config.entries() {
+            if let Some(value) = entry.value {
+                let key = format!("{}.{}", C::PREFIX, entry.key);
+                self.set(key.as_str(), value.as_str())?;
             }
         }
 
-        Ok(config)
+        Ok(())
     }
 }
 
@@ -186,17 +196,20 @@ impl ExtensionOptions for ForeignExtensionOptions {
     }
 
     fn cloned(&self) -> Box<dyn ExtensionOptions> {
-        unsafe { (self.0.cloned)(&self.0).into() }
+        let ffi_options = unsafe { (self.0.cloned)(&self.0) };
+        let foreign_options = ForeignExtensionOptions(ffi_options);
+        Box::new(foreign_options)
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        println!("Setting {key} = {value}");
         let Some((namespace, key)) = key.split_once('.') else {
             return exec_err!("Unable to set FFI config value without namespace set");
         };
 
-        if namespace != ForeignExtensionOptions::PREFIX {
-            return exec_err!("Unexpected namespace {namespace} set for FFI config");
-        }
+        // if namespace != ForeignExtensionOptions::PREFIX {
+        //     return exec_err!("Unexpected namespace {namespace} set for FFI config");
+        // }
 
         df_result!(unsafe { (self.0.set)(&mut self.0, key.into(), value.into()) })
     }
@@ -207,8 +220,8 @@ impl ExtensionOptions for ForeignExtensionOptions {
                 .into_iter()
                 .map(|entry_tuple| ConfigEntry {
                     key: entry_tuple.0.into(),
-                    value: entry_tuple.1.map(Into::into).into(),
-                    description: entry_tuple.2.into(),
+                    value: Some(entry_tuple.1.into()),
+                    description: "ffi_config_options",
                 })
                 .collect()
         }
@@ -217,12 +230,10 @@ impl ExtensionOptions for ForeignExtensionOptions {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::{
-        config::{ConfigExtension, ConfigOptions, ExtensionOptions},
-        extensions_options,
-    };
+    use datafusion_common::config::{ConfigExtension, ConfigOptions};
+    use datafusion_common::extensions_options;
 
-    use crate::config_options::FFI_ExtensionOptions;
+    use crate::config_options::{FFI_ExtensionOptions, ForeignExtensionOptions};
 
     // Define a new configuration struct using the `extensions_options` macro
     extensions_options! {
@@ -244,7 +255,11 @@ mod tests {
     fn round_trip_ffi_extension_options() {
         // set up config struct and register extension
         let mut config = ConfigOptions::default();
-        config.extensions.insert(FFI_ExtensionOptions::default());
+        let mut foreign_options =
+            ForeignExtensionOptions(FFI_ExtensionOptions::default());
+        foreign_options.add_config(&MyConfig::default()).unwrap();
+
+        config.extensions.insert(foreign_options);
         // config.extensions.insert(MyConfig::default());
 
         // overwrite config default
