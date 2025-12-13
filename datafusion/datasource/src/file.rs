@@ -86,17 +86,19 @@ pub trait FileSource: Send + Sync {
         Ok(())
     }
 
-    /// Returns whether this file source has values that may contain newline characters.
+    /// Returns whether this file source supports repartitioning files by byte ranges.
     ///
-    /// This is primarily relevant for CSV files where quoted values can contain
-    /// embedded newlines. When this returns `true`, files cannot be repartitioned
-    /// by byte ranges because record boundaries cannot be determined by simple
-    /// newline scanning.
+    /// When this returns `true`, files can be split into multiple partitions
+    /// based on byte offsets for parallel reading.
     ///
-    /// The default implementation returns `false`. CSV sources should override
-    /// this method to return the appropriate value based on their configuration.
-    fn has_newlines_in_values(&self) -> bool {
-        false
+    /// When this returns `false`, files cannot be repartitioned (e.g., CSV files
+    /// with `newlines_in_values` enabled cannot be split because record boundaries
+    /// cannot be determined by byte offset alone).
+    ///
+    /// The default implementation returns `true`. File sources that cannot support
+    /// repartitioning should override this method.
+    fn supports_repartitioning(&self) -> bool {
+        true
     }
 
     /// If supported by the [`FileSource`], redistribute files across partitions
@@ -112,7 +114,7 @@ pub trait FileSource: Send + Sync {
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
-        if config.file_compression_type.is_compressed() || self.has_newlines_in_values() {
+        if config.file_compression_type.is_compressed() || !self.supports_repartitioning() {
             return Ok(None);
         }
 

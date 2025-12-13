@@ -631,6 +631,7 @@ impl protobuf::PhysicalPlanNode {
             has_header: Some(scan.has_header),
             delimiter: str_to_byte(&scan.delimiter, "delimiter")?,
             quote: str_to_byte(&scan.quote, "quote")?,
+            newlines_in_values: Some(scan.newlines_in_values),
             ..Default::default()
         };
         let source = Arc::new(
@@ -638,15 +639,6 @@ impl protobuf::PhysicalPlanNode {
                 .with_csv_options(csv_options)
                 .with_escape(escape)
                 .with_comment(comment),
-        );
-
-        let source = Arc::new(
-            source
-                .as_any()
-                .downcast_ref::<CsvSource>()
-                .expect("source must be CsvSource")
-                .clone()
-                .with_newlines_in_values(scan.newlines_in_values),
         );
 
         let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(

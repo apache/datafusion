@@ -72,12 +72,12 @@ use tokio::io::AsyncWriteExt;
 ///     has_header: Some(true),
 ///     delimiter: b',',
 ///     quote: b'"',
+///     newlines_in_values: Some(true), // The file contains newlines in values
 ///     ..Default::default()
 /// };
 /// let source = Arc::new(CsvSource::new(file_schema.clone())
 ///     .with_csv_options(options)
 ///     .with_terminator(Some(b'#'))
-///     .with_newlines_in_values(true) // The file contains newlines in values
 /// );
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
 /// let config = FileScanConfigBuilder::new(object_store_url, source)
@@ -93,8 +93,6 @@ pub struct CsvSource {
     projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
-    /// Whether values may contain newline characters
-    newlines_in_values: bool,
 }
 
 impl CsvSource {
@@ -108,7 +106,6 @@ impl CsvSource {
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
             schema_adapter_factory: None,
-            newlines_in_values: false,
         }
     }
 
@@ -180,19 +177,9 @@ impl CsvSource {
         conf
     }
 
-    /// Whether values may contain newline characters.
-    ///
-    /// When enabled, scanning cannot be parallelized across a single file
-    /// because newlines in values prevent determining record boundaries
-    /// by byte offset alone.
+    /// Whether values may contain newline characters
     pub fn newlines_in_values(&self) -> bool {
-        self.newlines_in_values
-    }
-
-    /// Set whether values may contain newline characters
-    pub fn with_newlines_in_values(mut self, newlines_in_values: bool) -> Self {
-        self.newlines_in_values = newlines_in_values;
-        self
+        self.options.newlines_in_values.unwrap_or(false)
     }
 }
 
@@ -316,8 +303,10 @@ impl FileSource for CsvSource {
         "csv"
     }
 
-    fn has_newlines_in_values(&self) -> bool {
-        self.newlines_in_values
+    fn supports_repartitioning(&self) -> bool {
+        // Cannot repartition if values may contain newlines, as record
+        // boundaries cannot be determined by byte offset alone
+        !self.options.newlines_in_values.unwrap_or(false)
     }
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
