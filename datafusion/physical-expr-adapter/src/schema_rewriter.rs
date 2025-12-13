@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, ScalarValue, exec_err,
     nested_struct::validate_struct_compatibility,
@@ -65,7 +66,16 @@ where
     K: Borrow<str> + Eq + Hash,
     V: Borrow<ScalarValue>,
 {
-    expr.transform(|expr| {
+    expr.transform_down(|expr| {
+        // TODO: if we find ourselves doing this check a lot, we should consider adding a method to PhysicalExpr directly
+        // to avoid sprinkling this somewhat magic check with an arbitrary integer all over the place.
+        if expr.snapshot_generation() != 0 {
+            // This is a dynamic filter expression, don't rewrite it.
+            // Dynamic filters have shared state, rewriting it would lead to incorrect results.
+            let mut transformed = Transformed::no(expr);
+            transformed.tnr = TreeNodeRecursion::Stop;
+            return Ok(transformed);
+        }
         if let Some(column) = expr.as_any().downcast_ref::<Column>()
             && let Some(replacement_value) = replacements.get(column.name())
         {
