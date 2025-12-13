@@ -121,7 +121,7 @@ impl ExprSchemable for Expr {
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
-            Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
+            Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
                 for (_, then_expr) in &case.when_then_expr {
@@ -365,12 +365,8 @@ impl ExprSchemable for Expr {
                     window_function,
                 )
                 .map(|(_, nullable)| nullable),
-            Expr::Placeholder(Placeholder { id: _, field }) => {
-                Ok(field.as_ref().map(|f| f.is_nullable()).unwrap_or(true))
-            }
-            Expr::ScalarVariable(_, _) | Expr::TryCast { .. } | Expr::Unnest(_) => {
-                Ok(true)
-            }
+            Expr::ScalarVariable(field, _) => Ok(field.is_nullable()),
+            Expr::TryCast { .. } | Expr::Unnest(_) | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -503,9 +499,7 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => {
                 Ok(Arc::clone(field).renamed(&schema_name))
             }
-            Expr::ScalarVariable(ty, _) => {
-                Ok(Arc::new(Field::new(&schema_name, ty.clone(), true)))
-            }
+            Expr::ScalarVariable(field, _) => Ok(Arc::clone(field).renamed(&schema_name)),
             Expr::Literal(l, metadata) => Ok(Arc::new(
                 Field::new(&schema_name, l.data_type(), l.is_null())
                     .with_field_metadata_opt(metadata.as_ref()),
@@ -1205,5 +1199,22 @@ mod tests {
         fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
             Ok(&self.field)
         }
+    }
+
+    #[test]
+    fn test_scalar_variable() {
+        let mut meta = HashMap::new();
+        meta.insert("bar".to_string(), "buzz".to_string());
+        let meta = FieldMetadata::from(meta);
+
+        let field = Field::new("foo", DataType::Int32, true);
+        let field = meta.add_to_field(field);
+        let field = Arc::new(field);
+
+        let expr = Expr::ScalarVariable(field, vec!["foo".to_string()]);
+
+        let schema = MockExprSchema::new();
+
+        assert_eq!(meta, expr.metadata(&schema).unwrap());
     }
 }

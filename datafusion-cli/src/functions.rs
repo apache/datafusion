@@ -581,3 +581,119 @@ impl TableFunctionImpl for MetadataCacheFunc {
         Ok(Arc::new(metadata_cache))
     }
 }
+
+/// STATISTICS_CACHE table function
+#[derive(Debug)]
+struct StatisticsCacheTable {
+    schema: SchemaRef,
+    batch: RecordBatch,
+}
+
+#[async_trait]
+impl TableProvider for StatisticsCacheTable {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.schema.clone()
+    }
+
+    fn table_type(&self) -> datafusion::logical_expr::TableType {
+        datafusion::logical_expr::TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(MemorySourceConfig::try_new_exec(
+            &[vec![self.batch.clone()]],
+            TableProvider::schema(self),
+            projection.cloned(),
+        )?)
+    }
+}
+
+#[derive(Debug)]
+pub struct StatisticsCacheFunc {
+    cache_manager: Arc<CacheManager>,
+}
+
+impl StatisticsCacheFunc {
+    pub fn new(cache_manager: Arc<CacheManager>) -> Self {
+        Self { cache_manager }
+    }
+}
+
+impl TableFunctionImpl for StatisticsCacheFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        if !exprs.is_empty() {
+            return plan_err!("statistics_cache should have no arguments");
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("path", DataType::Utf8, false),
+            Field::new(
+                "file_modified",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+            Field::new("file_size_bytes", DataType::UInt64, false),
+            Field::new("e_tag", DataType::Utf8, true),
+            Field::new("version", DataType::Utf8, true),
+            Field::new("num_rows", DataType::Utf8, false),
+            Field::new("num_columns", DataType::UInt64, false),
+            Field::new("table_size_bytes", DataType::Utf8, false),
+            Field::new("statistics_size_bytes", DataType::UInt64, false),
+        ]));
+
+        // construct record batch from metadata
+        let mut path_arr = vec![];
+        let mut file_modified_arr = vec![];
+        let mut file_size_bytes_arr = vec![];
+        let mut e_tag_arr = vec![];
+        let mut version_arr = vec![];
+        let mut num_rows_arr = vec![];
+        let mut num_columns_arr = vec![];
+        let mut table_size_bytes_arr = vec![];
+        let mut statistics_size_bytes_arr = vec![];
+
+        if let Some(file_statistics_cache) = self.cache_manager.get_file_statistic_cache()
+        {
+            for (path, entry) in file_statistics_cache.list_entries() {
+                path_arr.push(path.to_string());
+                file_modified_arr
+                    .push(Some(entry.object_meta.last_modified.timestamp_millis()));
+                file_size_bytes_arr.push(entry.object_meta.size);
+                e_tag_arr.push(entry.object_meta.e_tag);
+                version_arr.push(entry.object_meta.version);
+                num_rows_arr.push(entry.num_rows.to_string());
+                num_columns_arr.push(entry.num_columns as u64);
+                table_size_bytes_arr.push(entry.table_size_bytes.to_string());
+                statistics_size_bytes_arr.push(entry.statistics_size_bytes as u64);
+            }
+        }
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(path_arr)),
+                Arc::new(TimestampMillisecondArray::from(file_modified_arr)),
+                Arc::new(UInt64Array::from(file_size_bytes_arr)),
+                Arc::new(StringArray::from(e_tag_arr)),
+                Arc::new(StringArray::from(version_arr)),
+                Arc::new(StringArray::from(num_rows_arr)),
+                Arc::new(UInt64Array::from(num_columns_arr)),
+                Arc::new(StringArray::from(table_size_bytes_arr)),
+                Arc::new(UInt64Array::from(statistics_size_bytes_arr)),
+            ],
+        )?;
+
+        let statistics_cache = StatisticsCacheTable { schema, batch };
+        Ok(Arc::new(statistics_cache))
+    }
+}

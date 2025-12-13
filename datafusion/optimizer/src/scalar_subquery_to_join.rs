@@ -30,11 +30,11 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{assert_or_internal_err, plan_err, Column, Result, ScalarValue};
+use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, expr};
 
 /// Optimizer rule for rewriting subquery filters to joins
 /// and places additional projection on top of the filter, to preserve
@@ -166,29 +166,25 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         build_join(&subquery, &cur_input, &alias)?
                     {
                         cur_input = optimized_subquery;
-                        if !expr_check_map.is_empty() {
-                            if let Some(expr) = subquery_to_expr_map.get(&subquery) {
-                                if let Some(rewrite_expr) =
-                                    expr_to_rewrite_expr_map.get(expr)
-                                {
-                                    let new_expr = rewrite_expr
-                                        .clone()
-                                        .transform_up(|expr| {
-                                            // replace column references with entry in map, if it exists
-                                            if let Some(map_expr) =
-                                                expr.try_as_col().and_then(|col| {
-                                                    expr_check_map.get(&col.name)
-                                                })
-                                            {
-                                                Ok(Transformed::yes(map_expr.clone()))
-                                            } else {
-                                                Ok(Transformed::no(expr))
-                                            }
-                                        })
-                                        .data()?;
-                                    expr_to_rewrite_expr_map.insert(expr, new_expr);
-                                }
-                            }
+                        if !expr_check_map.is_empty()
+                            && let Some(expr) = subquery_to_expr_map.get(&subquery)
+                            && let Some(rewrite_expr) = expr_to_rewrite_expr_map.get(expr)
+                        {
+                            let new_expr = rewrite_expr
+                                .clone()
+                                .transform_up(|expr| {
+                                    // replace column references with entry in map, if it exists
+                                    if let Some(map_expr) = expr
+                                        .try_as_col()
+                                        .and_then(|col| expr_check_map.get(&col.name))
+                                    {
+                                        Ok(Transformed::yes(map_expr.clone()))
+                                    } else {
+                                        Ok(Transformed::no(expr))
+                                    }
+                                })
+                                .data()?;
+                            expr_to_rewrite_expr_map.insert(expr, new_expr);
                         }
                     } else {
                         // if we can't handle all of the subqueries then bail for now
@@ -417,7 +413,7 @@ mod tests {
     use datafusion_expr::test::function_stub::sum;
 
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
-    use datafusion_expr::{col, lit, out_ref_col, scalar_subquery, Between};
+    use datafusion_expr::{Between, col, lit, out_ref_col, scalar_subquery};
     use datafusion_functions_aggregate::min_max::{max, min};
 
     macro_rules! assert_optimized_plan_equal {
