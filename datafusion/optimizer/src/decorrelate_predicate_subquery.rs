@@ -44,7 +44,7 @@ use log::debug;
 pub struct DecorrelatePredicateSubquery {}
 
 impl DecorrelatePredicateSubquery {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }

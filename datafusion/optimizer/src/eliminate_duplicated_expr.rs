@@ -32,7 +32,7 @@ use indexmap::IndexSet;
 pub struct EliminateDuplicatedExpr;
 
 impl EliminateDuplicatedExpr {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

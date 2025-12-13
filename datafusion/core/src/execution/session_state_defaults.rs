@@ -103,7 +103,7 @@ impl SessionStateDefaults {
 
     /// returns the list of default [`ScalarUDF`]s
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
-        #[cfg_attr(not(feature = "nested_expressions"), allow(unused_mut))]
+        #[cfg_attr(not(feature = "nested_expressions"), expect(unused_mut))]
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
 
         #[cfg(feature = "nested_expressions")]
@@ -155,7 +155,7 @@ impl SessionStateDefaults {
     }
 
     /// registers all the builtin array functions
-    #[cfg_attr(not(feature = "nested_expressions"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "nested_expressions"), expect(unused_variables))]
     pub fn register_array_functions(state: &mut SessionState) {
         // register crate of array expressions (if enabled)
         #[cfg(feature = "nested_expressions")]

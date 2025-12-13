@@ -32,7 +32,7 @@ use std::sync::Arc;
 pub struct OptimizeUnions;
 
 impl OptimizeUnions {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

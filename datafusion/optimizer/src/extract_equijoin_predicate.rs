@@ -42,7 +42,7 @@ type EquijoinPredicate = (Expr, Expr);
 pub struct ExtractEquijoinPredicate;
 
 impl ExtractEquijoinPredicate {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

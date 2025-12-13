@@ -33,7 +33,7 @@ use datafusion_expr::{ExprSchemable, Operator, and, build_join_schema};
 pub struct EliminateCrossJoin;
 
 impl EliminateCrossJoin {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
