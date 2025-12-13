@@ -289,8 +289,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = self.all_values.clone();
-        let median = calculate_median::<T>(d);
+        let median = calculate_median::<T>(&mut self.all_values);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
@@ -461,8 +460,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         // Calculate median for each group
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
-        for values in emit_group_values {
-            let median = calculate_median::<T>(values);
+        for mut values in emit_group_values {
+            let median = calculate_median::<T>(&mut values);
             evaluate_result_builder.append_option(median);
         }
 
@@ -546,11 +545,11 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values.values)
+        let mut d = std::mem::take(&mut self.distinct_values.values)
             .into_iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
-        let median = calculate_median::<T>(d);
+        let median = calculate_median::<T>(&mut d);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
@@ -575,7 +574,7 @@ where
 }
 
 fn calculate_median<T: ArrowNumericType>(
-    mut values: Vec<T::Native>,
+    values: &mut [T::Native],
 ) -> Option<T::Native> {
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
