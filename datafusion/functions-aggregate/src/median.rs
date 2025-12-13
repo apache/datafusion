@@ -573,9 +573,7 @@ where
         .unwrap()
 }
 
-fn calculate_median<T: ArrowNumericType>(
-    values: &mut [T::Native],
-) -> Option<T::Native> {
+fn calculate_median<T: ArrowNumericType>(values: &mut [T::Native]) -> Option<T::Native> {
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
     let len = values.len();
