@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_expr::ReturnFieldArgs;
+use datafusion_common::arrow::datatypes::FieldRef;
 use arrow::array::Array;
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -71,10 +73,6 @@ impl ScalarUDFImpl for SparkConcat {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
-    }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_concat(args)
     }
@@ -83,6 +81,26 @@ impl ScalarUDFImpl for SparkConcat {
         // Accept any string types, including zero arguments
         Ok(arg_types.to_vec())
     }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+    fn return_field_from_args(
+        &self,
+        args: ReturnFieldArgs<'_>,
+    ) -> Result<FieldRef> {
+        // Spark semantics: concat returns NULL if ANY input is NULL
+        let nullable = args
+            .arg_fields
+            .iter()
+            .any(|f| f.is_nullable());
+
+        Ok(Arc::new(Field::new(
+            "concat",
+            DataType::Utf8,
+            nullable,
+        )))
+    }
+
 }
 
 /// Represents the null state for Spark concat
