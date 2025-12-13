@@ -86,7 +86,7 @@ impl RecursiveQueryExec {
         is_distinct: bool,
     ) -> Result<Self> {
         // Each recursive query needs its own work table
-        let work_table = Arc::new(WorkTable::new());
+        let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
         let cache = Self::compute_properties(static_term.schema());
@@ -380,8 +380,6 @@ fn assign_work_table(
                 work_table_refs += 1;
                 Ok(Transformed::yes(new_plan))
             }
-        } else if plan.as_any().is::<RecursiveQueryExec>() {
-            not_impl_err!("Recursive queries cannot be nested")
         } else {
             Ok(Transformed::no(plan))
         }
