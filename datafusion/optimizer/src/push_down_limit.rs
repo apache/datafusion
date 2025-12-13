@@ -35,7 +35,7 @@ use datafusion_expr::{FetchType, SkipType, lit};
 pub struct PushDownLimit {}
 
 impl PushDownLimit {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -81,7 +81,7 @@ impl OptimizerRule for PushDownLimit {
             });
 
             // recursively reapply the rule on the new plan
-            #[allow(clippy::used_underscore_binding)]
+            #[expect(clippy::used_underscore_binding)]
             return self.rewrite(plan, _config);
         }
 

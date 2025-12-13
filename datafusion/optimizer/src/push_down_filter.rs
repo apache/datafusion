@@ -811,7 +811,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input,
                 )?);
-                #[allow(clippy::used_underscore_binding)]
+                #[expect(clippy::used_underscore_binding)]
                 self.rewrite(new_filter, _config)
             }
             LogicalPlan::Repartition(repartition) => {
@@ -1378,7 +1378,7 @@ fn insert_below(
 }
 
 impl PushDownFilter {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
