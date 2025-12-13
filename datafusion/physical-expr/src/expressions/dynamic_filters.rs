@@ -655,8 +655,8 @@ mod test {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),       // a
-                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),    // b
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])), // a
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])), // b
                 Arc::new(arrow::array::Int32Array::from(vec![100, 200, 300])), // c
                 Arc::new(arrow::array::Int32Array::from(vec![1000, 2000, 3000])), // d
             ],
