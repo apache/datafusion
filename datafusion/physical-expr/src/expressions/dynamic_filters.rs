@@ -680,8 +680,7 @@ mod test {
             Arc::new(arrow::array::Int32Array::from(vec![110, 220, 330]));
         assert!(
             arr_1.eq(&expected_1),
-            "Expected b + c = [110, 220, 330], got {:?}",
-            arr_1
+            "Expected b + c = [110, 220, 330], got {arr_1:?}",
         );
 
         // Verify result_2 = b + d = [1010, 2020, 3030]
@@ -689,8 +688,7 @@ mod test {
             Arc::new(arrow::array::Int32Array::from(vec![1010, 2020, 3030]));
         assert!(
             arr_2.eq(&expected_2),
-            "Expected b + d = [1010, 2020, 3030], got {:?}",
-            arr_2
+            "Expected b + d = [1010, 2020, 3030], got {arr_2:?}",
         );
     }
 }
