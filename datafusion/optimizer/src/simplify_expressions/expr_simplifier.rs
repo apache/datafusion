@@ -496,7 +496,6 @@ impl TreeNodeRewriter for Canonicalizer {
     }
 }
 
-#[expect(rustdoc::private_intra_doc_links)]
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`
