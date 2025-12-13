@@ -26,7 +26,6 @@ use std::sync::Arc;
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Result, ScalarValue, exec_err,
     nested_struct::validate_struct_compatibility,
