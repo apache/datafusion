@@ -33,9 +33,18 @@ use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
 
-struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
+pub struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
     planner: &'a SqlToRel<'b, S>,
     planner_context: &'a mut PlannerContext,
+}
+
+impl<'a, 'b, S: ContextProvider> SqlToRelRelationContext<'a, 'b, S> {
+    pub fn new(planner: &'a SqlToRel<'b, S>, planner_context: &'a mut PlannerContext) -> Self {
+        Self {
+            planner,
+            planner_context,
+        }
+    }
 }
 
 // Implement RelationPlannerContext
@@ -117,11 +126,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let mut current_relation = relation;
         for planner in planners.iter() {
-            let mut context = SqlToRelRelationContext {
-                planner: self,
-                planner_context,
-            };
-
+            let mut context = SqlToRelRelationContext::new(self, planner_context);
             match planner.plan_relation(current_relation, &mut context)? {
                 RelationPlanning::Planned(planned) => {
                     return Ok(RelationPlanning::Planned(planned));
