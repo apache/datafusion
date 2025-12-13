@@ -289,13 +289,30 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.all_values);
-        let median = calculate_median::<T>(d);
+        let median = calculate_median::<T>(&mut self.all_values);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
     fn size(&self) -> usize {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = values[0].as_primitive::<T>();
+        for v in values.iter().flatten() {
+            if let Some(idx) = self.all_values.iter().position(|x| *x == v) {
+                self.all_values.swap_remove(idx);
+            } else {
+                return Err(internal_datafusion_err!(
+                    "attempted to retract value {v:?} that was not present"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -443,8 +460,8 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         // Calculate median for each group
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
-        for values in emit_group_values {
-            let median = calculate_median::<T>(values);
+        for mut values in emit_group_values {
+            let median = calculate_median::<T>(&mut values);
             evaluate_result_builder.append_option(median);
         }
 
@@ -528,11 +545,11 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values.values)
+        let mut d = std::mem::take(&mut self.distinct_values.values)
             .into_iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
-        let median = calculate_median::<T>(d);
+        let median = calculate_median::<T>(&mut d);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
@@ -556,9 +573,7 @@ where
         .unwrap()
 }
 
-fn calculate_median<T: ArrowNumericType>(
-    mut values: Vec<T::Native>,
-) -> Option<T::Native> {
+fn calculate_median<T: ArrowNumericType>(values: &mut [T::Native]) -> Option<T::Native> {
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
     let len = values.len();
