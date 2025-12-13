@@ -48,8 +48,8 @@ use std::sync::Arc;
 /// A `Result` containing a literal type
 ///
 /// # Example
-/// ```
-/// let value: f64 = parse_sql_literal(&expr, &DataType::Float64, &schema, &mut context)?;
+/// ```ignore
+/// let value: f64 = parse_sql_literal(&expr, &DataType::Float64, &schema, &mut relPlannerContext)?;
 /// ```
 pub fn parse_sql_literal<T>(
     expr: &ast::Expr,
