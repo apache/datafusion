@@ -22,6 +22,7 @@ use crate::filter_pushdown::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
 pub use datafusion_common::hash_utils;
@@ -54,7 +55,9 @@ use datafusion_common::{
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
+};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -681,6 +684,29 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         _state: Arc<dyn Any + Send + Sync>,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
+    }
+
+    /// Try to push down sort ordering requirements to this node.
+    ///
+    /// This method is called during sort pushdown optimization to determine if this
+    /// node can optimize for a requested sort ordering. Implementations should:
+    ///
+    /// - Return [`SortOrderPushdownResult::Exact`] if the node can guarantee the exact
+    ///   ordering (allowing the Sort operator to be removed)
+    /// - Return [`SortOrderPushdownResult::Inexact`] if the node can optimize for the
+    ///   ordering but cannot guarantee perfect sorting (Sort operator is kept)
+    /// - Return [`SortOrderPushdownResult::Unsupported`] if the node cannot optimize
+    ///   for the ordering
+    ///
+    /// For transparent nodes (that preserve ordering), implement this to delegate to
+    /// children and wrap the result with a new instance of this node.
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
     }
 }
 

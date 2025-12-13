@@ -30,6 +30,7 @@ mod page_filter;
 mod reader;
 mod row_filter;
 mod row_group_filter;
+mod sort;
 pub mod source;
 mod writer;
 

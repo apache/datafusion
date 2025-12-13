@@ -31,9 +31,11 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use object_store::ObjectStore;
 
 /// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
@@ -127,6 +129,21 @@ pub trait FileSource: Send + Sync {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to create a new FileSource that can produce data in the specified sort order.
+    ///
+    /// # Returns
+    /// * `Exact` - Created a source that guarantees perfect ordering
+    /// * `Inexact` - Created a source optimized for ordering (e.g., reordered files) but not perfectly sorted
+    /// * `Unsupported` - Cannot optimize for this ordering
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
     }
 
     /// Try to push down a projection into a this FileSource.
