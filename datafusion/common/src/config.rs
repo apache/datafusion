@@ -1001,7 +1001,7 @@ config_namespace! {
         pub repartition_sorts: bool, default = true
 
         /// Should DataFusion still repartition if the required partitioning
-        /// expression is a subset of the current partition expresssion.
+        /// expression is a subset of the current partition expression.
         ///
         /// How the option is used:
         ///     - repartition_subset_satisfactions=true: Always repartition on a subset satisfactioh.
