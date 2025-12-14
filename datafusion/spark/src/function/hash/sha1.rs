@@ -25,9 +25,9 @@ use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_fixed_size_binary_array,
     as_large_binary_array,
 };
-use datafusion_common::types::{logical_string, NativeType};
+use datafusion_common::types::{NativeType, logical_string};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
@@ -93,7 +93,6 @@ impl ScalarUDFImpl for SparkSha1 {
 fn spark_sha1_digest(value: &[u8]) -> String {
     let result = Sha1::digest(value);
     let mut s = String::with_capacity(result.len() * 2);
-    #[allow(deprecated)]
     for b in result.as_slice() {
         write!(&mut s, "{b:02x}").unwrap();
     }

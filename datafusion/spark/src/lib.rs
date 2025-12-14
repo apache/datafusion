@@ -22,6 +22,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![deny(clippy::allow_attributes)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Spark Expression packages for [DataFusion].
@@ -103,7 +104,7 @@ use log::debug;
 use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
-#[allow(unused)]
+#[expect(unused_imports)]
 pub mod expr_fn {
     pub use super::function::aggregate::expr_fn::*;
     pub use super::function::array::expr_fn::*;
@@ -122,8 +123,8 @@ pub mod expr_fn {
     pub use super::function::math::expr_fn::*;
     pub use super::function::misc::expr_fn::*;
     pub use super::function::predicate::expr_fn::*;
-    pub use super::function::r#struct::expr_fn::*;
     pub use super::function::string::expr_fn::*;
+    pub use super::function::r#struct::expr_fn::*;
     pub use super::function::table::expr_fn::*;
     pub use super::function::url::expr_fn::*;
     pub use super::function::window::expr_fn::*;

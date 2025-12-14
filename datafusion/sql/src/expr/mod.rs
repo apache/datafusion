@@ -835,7 +835,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn sql_like_to_expr(
         &self,
         negated: bool,
