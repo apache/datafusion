@@ -97,7 +97,7 @@ impl<T> SortOrderPushdownResult<T> {
     /// # Examples
     ///
     /// ```
-    /// # use datafusion_physical_plan::sorts::sort_pushdown::SortOrderPushdownResult;
+    /// # use datafusion_physical_plan::SortOrderPushdownResult;
     /// let exact = SortOrderPushdownResult::Exact { inner: 42 };
     /// let inexact = exact.into_inexact();
     /// assert!(matches!(inexact, SortOrderPushdownResult::Inexact { inner: 42 }));
