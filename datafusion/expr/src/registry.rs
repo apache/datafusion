@@ -22,7 +22,7 @@ use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use arrow_schema::Field;
 use datafusion_common::types::{LogicalTypeRef, NativeType};
-use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
+use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, HashMap, Result};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
@@ -231,11 +231,16 @@ pub trait ExtensionTypeRegistration: Debug + Send + Sync {
     /// type is encountered.
     fn type_name(&self) -> &str;
 
-    /// Creates a logical type instance from the provided `field`.
+    /// Creates a logical type instance from the provided `extension_type_name` and an optional
+    /// metadata.
     ///
     /// The resulting [LogicalTypeRef] should only capture the *type information*, not any other
     /// metadata or nullability information that is part of the field.
-    fn create_logical_type(&self, field: &Field) -> Result<LogicalTypeRef>;
+    fn create_logical_type(
+        &self,
+        extension_type_name: &str,
+        metadata: Option<&str>,
+    ) -> Result<LogicalTypeRef>;
 }
 
 /// A cheaply cloneable pointer to an [ExtensionTypeRegistration].
@@ -254,7 +259,7 @@ pub trait ExtensionTypeRegistry: Debug + Send + Sync {
             None => Ok(Arc::new(NativeType::from(field.data_type()))),
             Some(name) => {
                 let extension_type = self.extension_type(name)?;
-                extension_type.create_logical_type(field)
+                extension_type.create_logical_type(name, field.extension_type_metadata())
             }
         }
     }
@@ -324,7 +329,19 @@ impl ExtensionTypeRegistration for SimpleExtensionTypeRegistration {
         &self.name
     }
 
-    fn create_logical_type(&self, _field: &Field) -> Result<LogicalTypeRef> {
+    fn create_logical_type(
+        &self,
+        extension_type_name: &str,
+        _metadata: Option<&str>,
+    ) -> Result<LogicalTypeRef> {
+        if self.name != extension_type_name {
+            return plan_err!(
+                "Extension type name mismatch: expected {}, got {}",
+                self.name,
+                extension_type_name
+            );
+        }
+
         Ok(Arc::clone(&self.logical_type))
     }
 }

@@ -74,6 +74,7 @@ use datafusion_functions_aggregate::expr_fn::{
 use crate::dataframe::array_formatter_factory::DFArrayFormatterFactory;
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::registry::ExtensionTypeRegistry;
 
 /// Contains options that control how data is
@@ -560,6 +561,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn filter(self, predicate: Expr) -> Result<DataFrame> {
+        let predicate = self.resolve_types_expr(predicate)?.data;
         let plan = LogicalPlanBuilder::from(self.plan)
             .filter(predicate)?
             .build()?;
@@ -2510,6 +2512,34 @@ impl DataFrame {
         let ctx = SessionContext::new();
         let df = ctx.read_batch(batch)?;
         Ok(df)
+    }
+
+    /// Resolves the extension types in an expression, returning the same expression but with
+    /// resolved extension types. This is done by consulting the [`SessionState`].
+    ///
+    /// Only *unresolved* expressions will be resolved. If users already set the logical type
+    /// reference of an expression, this method does not check whether this is the "right" extension
+    /// type registered in the session.
+    fn resolve_types_expr(&self, expr: Expr) -> Result<Transformed<Expr>> {
+        match expr {
+            Expr::Literal(value, Some(metadata)) => {
+                let Some(extension_type_name) = metadata.extension_type_name() else {
+                    return Ok(Transformed::no(Expr::Literal(value, Some(metadata))));
+                };
+
+                let registration =
+                    self.session_state.extension_type(extension_type_name)?;
+                let logical_type = registration.create_logical_type(
+                    extension_type_name,
+                    metadata.extension_type_metadata(),
+                )?;
+                Ok(Transformed::yes(Expr::Literal(
+                    value,
+                    Some(metadata.with_logical_type(Some(logical_type))),
+                )))
+            }
+            expr => expr.map_children(|e| self.resolve_types_expr(e)),
+        }
     }
 }
 

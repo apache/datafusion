@@ -18,7 +18,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 
 use crate::types::{LogicalTypeRef, NativeType};
 use crate::{error::_plan_err, DataFusionError, ScalarValue};
@@ -320,6 +320,18 @@ impl FieldMetadata {
         self.logical_type.as_ref()
     }
 
+    /// Returns the extension type name associated.
+    pub fn extension_type_name(&self) -> Option<&str> {
+        self.inner.get(EXTENSION_TYPE_NAME_KEY).map(|e| e.as_str())
+    }
+
+    /// Returns the extension type metadata associated.
+    pub fn extension_type_metadata(&self) -> Option<&str> {
+        self.inner
+            .get(EXTENSION_TYPE_METADATA_KEY)
+            .map(|e| e.as_str())
+    }
+
     /// Convert this `FieldMetadata` into a `HashMap<String, String>`
     pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
         self.inner
@@ -345,6 +357,14 @@ impl FieldMetadata {
 
         Arc::make_mut(&mut field_ref).set_metadata(self.to_hashmap());
         field_ref
+    }
+
+    /// Updates the logical type for this instance.
+    pub fn with_logical_type(self, logical_type: Option<LogicalTypeRef>) -> Self {
+        Self {
+            logical_type,
+            ..self
+        }
     }
 }
 

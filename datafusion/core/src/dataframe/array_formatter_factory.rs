@@ -41,7 +41,8 @@ impl ArrayFormatterFactory for DFArrayFormatterFactory {
             // If the extension type is not registered, we fall back to the default formatter
             return Ok(None);
         };
-        let extension_type = registration.create_logical_type(field)?;
+        let extension_type = registration
+            .create_logical_type(extension_type_name, field.extension_type_metadata())?;
 
         extension_type
             .create_array_formatter(array, options)

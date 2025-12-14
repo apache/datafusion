@@ -71,10 +71,10 @@ async fn test_pretty_print_extension_types() -> Result<()> {
 
     assert_snapshot!(
         df.logical_plan(),
-        @r#"
-    Filter: test.my_uuids = FixedSizeBinary(16, "0,1,2,3,4,5,6,7,8,9,0,1,2,3,5,6") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} }
+        @r"
+    Filter: test.my_uuids = arrow.uuid(00010203-0405-0607-0809-000102030506)
       TableScan: test
-    "#
+    "
     );
 
     Ok(())
