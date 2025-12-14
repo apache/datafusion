@@ -34,7 +34,7 @@ use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
 };
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::BinaryExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
@@ -176,6 +176,14 @@ pub struct FileScanConfig {
     /// would be incorrect if there are filters being applied, thus this should be accessed
     /// via [`FileScanConfig::statistics`].
     pub(crate) statistics: Statistics,
+    /// When true, file_groups are organized by partition column values
+    /// and output_partitioning will return Hash partitioning on partition columns.
+    /// This allows the optimizer to skip hash repartitioning for aggregates and joins
+    /// on partition columns.
+    ///
+    /// If the number of file partitions > target_partitions, the file partitions will be grouped
+    /// in a round-robin fashion such that number of file partitions = target_partitions.
+    pub partitioned_by_file_group: bool,
 }
 
 /// A builder for [`FileScanConfig`]'s.
@@ -245,6 +253,7 @@ pub struct FileScanConfigBuilder {
     new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
+    partitioned_by_file_group: bool,
 }
 
 impl FileScanConfigBuilder {
@@ -270,6 +279,7 @@ impl FileScanConfigBuilder {
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
+            partitioned_by_file_group: false,
         }
     }
 
@@ -433,6 +443,18 @@ impl FileScanConfigBuilder {
         self
     }
 
+    /// Set whether file groups are organized by partition column values.
+    ///
+    /// When set to true, the output partitioning will be declared as Hash partitioning
+    /// on the partition columns.
+    pub fn with_partitioned_by_file_group(
+        mut self,
+        partitioned_by_file_group: bool,
+    ) -> Self {
+        self.partitioned_by_file_group = partitioned_by_file_group;
+        self
+    }
+
     /// Build the final [`FileScanConfig`] with all the configured settings.
     ///
     /// This method takes ownership of the builder and returns the constructed `FileScanConfig`.
@@ -453,6 +475,7 @@ impl FileScanConfigBuilder {
             new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
+            partitioned_by_file_group,
         } = self;
 
         let constraints = constraints.unwrap_or_default();
@@ -475,6 +498,7 @@ impl FileScanConfigBuilder {
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
+            partitioned_by_file_group,
         }
     }
 }
@@ -493,6 +517,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
+            partitioned_by_file_group: config.partitioned_by_file_group,
         }
     }
 }
@@ -537,11 +562,16 @@ impl DataSource for FileScanConfig {
                             .as_ref()
                             .iter()
                             .map(|proj_expr| {
-                                if let Some(column) = proj_expr.expr.as_any().downcast_ref::<datafusion_physical_expr::expressions::Column>() {
+                                if let Some(column) =
+                                    proj_expr.expr.as_any().downcast_ref::<Column>()
+                                {
                                     if column.name() == proj_expr.alias {
                                         column.name().to_string()
                                     } else {
-                                        format!("{} as {}", proj_expr.expr, proj_expr.alias)
+                                        format!(
+                                            "{} as {}",
+                                            proj_expr.expr, proj_expr.alias
+                                        )
                                     }
                                 } else {
                                     format!("{} as {}", proj_expr.expr, proj_expr.alias)
@@ -583,6 +613,13 @@ impl DataSource for FileScanConfig {
         repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
     ) -> Result<Option<Arc<dyn DataSource>>> {
+        // When files are grouped by partition values, we cannot allow byte-range
+        // splitting. It would mix rows from different partition values across
+        // file groups, breaking the Hash partitioning.
+        if self.partitioned_by_file_group {
+            return Ok(None);
+        }
+
         let source = self.file_source.repartitioned(
             target_partitions,
             repartition_file_min_size,
@@ -593,7 +630,55 @@ impl DataSource for FileScanConfig {
         Ok(source.map(|s| Arc::new(s) as _))
     }
 
+    /// Returns the output partitioning for this file scan.
+    ///
+    /// When `partitioned_by_file_group` is true, this returns `Partitioning::Hash` on
+    /// the Hive partition columns, allowing the optimizer to skip hash repartitioning
+    /// for aggregates and joins on those columns.
+    ///
+    /// Tradeoffs
+    /// - Benefit: Eliminates `RepartitionExec` and `SortExec` for queries with
+    ///   `GROUP BY` or `ORDER BY` on partition columns.
+    /// - Cost: Files are grouped by partition values rather than split by byte
+    ///   ranges, which may reduce I/O parallelism when partition sizes are uneven.
+    ///   For simple aggregations without `ORDER BY`, this cost may outweigh the benefit.
+    ///
+    /// Follow-up Work
+    /// - Idea: Could allow byte-range splitting within partition-aware groups,
+    ///   preserving I/O parallelism while maintaining partition semantics.
     fn output_partitioning(&self) -> Partitioning {
+        if self.partitioned_by_file_group {
+            let partition_cols = self.table_partition_cols();
+            if !partition_cols.is_empty() {
+                let projected_schema = match self.projected_schema() {
+                    Ok(schema) => schema,
+                    Err(_) => {
+                        debug!(
+                            "Could not get projected schema, falling back to UnknownPartitioning."
+                        );
+                        return Partitioning::UnknownPartitioning(self.file_groups.len());
+                    }
+                };
+
+                // Build Column expressions for partition columns based on their
+                // position in the projected schema
+                let mut exprs: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
+                for partition_col in partition_cols {
+                    if let Some((idx, _)) = projected_schema
+                        .fields()
+                        .iter()
+                        .enumerate()
+                        .find(|(_, f)| f.name() == partition_col.name())
+                    {
+                        exprs.push(Arc::new(Column::new(partition_col.name(), idx)));
+                    }
+                }
+
+                if exprs.len() == partition_cols.len() {
+                    return Partitioning::Hash(exprs, self.file_groups.len());
+                }
+            }
+        }
         Partitioning::UnknownPartitioning(self.file_groups.len())
     }
 
@@ -1070,10 +1155,7 @@ fn ordered_column_indices_from_projection(
     projection
         .expr_iter()
         .map(|e| {
-            let index = e
-                .as_any()
-                .downcast_ref::<datafusion_physical_expr::expressions::Column>()?
-                .index();
+            let index = e.as_any().downcast_ref::<Column>()?.index();
             Some(index)
         })
         .collect::<Option<Vec<usize>>>()
@@ -2084,5 +2166,108 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_output_partitioning_not_partitioned_by_file_group() {
+        let file_schema = aggr_test_schema();
+        let partition_col =
+            Field::new("date", wrap_partition_type_in_dict(DataType::Utf8), false);
+
+        let config = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            vec![partition_col],
+        );
+
+        // partitioned_by_file_group defaults to false
+        let partitioning = config.output_partitioning();
+        assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
+    }
+
+    #[test]
+    fn test_output_partitioning_no_partition_columns() {
+        let file_schema = aggr_test_schema();
+        let mut config = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            vec![], // No partition columns
+        );
+        config.partitioned_by_file_group = true;
+
+        let partitioning = config.output_partitioning();
+        assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
+    }
+
+    #[test]
+    fn test_output_partitioning_with_partition_columns() {
+        let file_schema = aggr_test_schema();
+
+        // Test single partition column
+        let single_partition_col = vec![Field::new(
+            "date",
+            wrap_partition_type_in_dict(DataType::Utf8),
+            false,
+        )];
+
+        let mut config = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            single_partition_col,
+        );
+        config.partitioned_by_file_group = true;
+        config.file_groups = vec![
+            FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
+            FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
+            FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
+        ];
+
+        let partitioning = config.output_partitioning();
+        match partitioning {
+            Partitioning::Hash(exprs, num_partitions) => {
+                assert_eq!(num_partitions, 3);
+                assert_eq!(exprs.len(), 1);
+                assert_eq!(
+                    exprs[0].as_any().downcast_ref::<Column>().unwrap().name(),
+                    "date"
+                );
+            }
+            _ => panic!("Expected Hash partitioning"),
+        }
+
+        // Test multiple partition columns
+        let multiple_partition_cols = vec![
+            Field::new("year", wrap_partition_type_in_dict(DataType::Utf8), false),
+            Field::new("month", wrap_partition_type_in_dict(DataType::Utf8), false),
+        ];
+
+        config = config_for_projection(
+            Arc::clone(&file_schema),
+            None,
+            Statistics::new_unknown(&file_schema),
+            multiple_partition_cols,
+        );
+        config.partitioned_by_file_group = true;
+        config.file_groups = vec![
+            FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
+            FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
+        ];
+
+        let partitioning = config.output_partitioning();
+        match partitioning {
+            Partitioning::Hash(exprs, num_partitions) => {
+                assert_eq!(num_partitions, 2);
+                assert_eq!(exprs.len(), 2);
+                let col_names: Vec<_> = exprs
+                    .iter()
+                    .map(|e| e.as_any().downcast_ref::<Column>().unwrap().name())
+                    .collect();
+                assert_eq!(col_names, vec!["year", "month"]);
+            }
+            _ => panic!("Expected Hash partitioning"),
+        }
     }
 }
