@@ -349,9 +349,8 @@ mod tests {
     use crate::{
         collect,
         test::{
-            assert_is_pending,
-            exec::{assert_strong_count_converges_to_zero, BlockingExec},
-            TestMemoryExec,
+            TestMemoryExec, assert_is_pending,
+            exec::{BlockingExec, assert_strong_count_converges_to_zero},
         },
     };
 

@@ -1120,7 +1120,7 @@ config_namespace! {
 
         /// Whether to enable the `auto_explain` mode. In this mode, the execution plan is
         /// automatically written to the location set by `auto_explain_output`, if the plan's total
-        /// duration is greater ot equal to `auto_explain_min_duration`, in milliseconds.
+        /// duration is greater or equal to `auto_explain_min_duration`, in milliseconds.
         pub auto_explain: bool, default = false
 
         /// Output location used in the `auto_explain` mode. Supports `stdout`, `stderr`, or a file
