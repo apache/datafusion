@@ -19,8 +19,9 @@
 
 use std::sync::Arc;
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 use arrow::datatypes::DataType;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
@@ -144,12 +145,11 @@ impl Default for TopKAggregation {
 }
 
 impl PhysicalOptimizerRule for TopKAggregation {
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.session_config().options();
         if config.optimizer.enable_topk_aggregation {
             plan.transform_down(|plan| {
                 Ok(if let Some(plan) = TopKAggregation::transform_sort(&plan) {

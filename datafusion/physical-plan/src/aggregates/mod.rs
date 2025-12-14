@@ -41,23 +41,23 @@ use datafusion_physical_expr::utils::collect_columns;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 
-use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
+use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints, Result, ScalarValue,
+    Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{lit, Column, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_expr::{
-    physical_exprs_contains, ConstExpr, EquivalenceProperties,
+    ConstExpr, EquivalenceProperties, physical_exprs_contains,
 };
-use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
@@ -731,12 +731,12 @@ impl AggregateExec {
         }
 
         // grouping by an expression that has a sort/limit upstream
-        if let Some(limit) = self.limit {
-            if !self.is_unordered_unfiltered_group_by_distinct() {
-                return Ok(StreamType::GroupedPriorityQueue(
-                    GroupedTopKAggregateStream::new(self, context, partition, limit)?,
-                ));
-            }
+        if let Some(limit) = self.limit
+            && !self.is_unordered_unfiltered_group_by_distinct()
+        {
+            return Ok(StreamType::GroupedPriorityQueue(
+                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+            ));
         }
 
         // grouping by something else and we need to just materialize all results
@@ -971,15 +971,15 @@ impl AggregateExec {
             };
 
             // 2. arg should be only 1 column reference
-            if let [arg] = aggr_expr.expressions().as_slice() {
-                if arg.as_any().is::<Column>() {
-                    all_cols.push(Arc::clone(arg));
-                    aggr_dyn_filters.push(PerAccumulatorDynFilter {
-                        aggr_type,
-                        aggr_index: i,
-                        shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
-                    });
-                }
+            if let [arg] = aggr_expr.expressions().as_slice()
+                && arg.as_any().is::<Column>()
+            {
+                all_cols.push(Arc::clone(arg));
+                aggr_dyn_filters.push(PerAccumulatorDynFilter {
+                    aggr_type,
+                    aggr_index: i,
+                    shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
+                });
             }
         }
 
@@ -1315,11 +1315,10 @@ impl ExecutionPlan for AggregateExec {
         // Include self dynamic filter when it's possible
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_aggregate_dynamic_filter_pushdown
+            && let Some(self_dyn_filter) = &self.dynamic_filter
         {
-            if let Some(self_dyn_filter) = &self.dynamic_filter {
-                let dyn_filter = Arc::clone(&self_dyn_filter.filter);
-                child_desc = child_desc.with_self_filter(dyn_filter);
-            }
+            let dyn_filter = Arc::clone(&self_dyn_filter.filter);
+            child_desc = child_desc.with_self_filter(dyn_filter);
         }
 
         Ok(FilterDescription::new().with_child(child_desc))
@@ -1790,6 +1789,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::*;
+    use crate::RecordBatchStream;
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
@@ -1797,19 +1797,18 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
-    use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
-    use crate::RecordBatchStream;
+    use crate::test::assert_is_pending;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
     use arrow::array::{
         DictionaryArray, Float32Array, Float64Array, Int32Array, StructArray,
         UInt32Array, UInt64Array,
     };
-    use arrow::compute::{concat_batches, SortOptions};
+    use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::{DataType, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{internal_err, DataFusionError, ScalarValue};
+    use datafusion_common::{DataFusionError, ScalarValue, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1819,11 +1818,11 @@ mod tests {
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::lit;
-    use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr::expressions::lit;
 
     use futures::{FutureExt, Stream};
     use insta::{allow_duplicates, assert_snapshot};
@@ -2895,12 +2894,13 @@ mod tests {
             ],
         );
 
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> =
-            vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
                 .schema(Arc::clone(&schema))
                 .alias("1")
                 .build()
-                .map(Arc::new)?];
+                .map(Arc::new)?,
+        ];
 
         let input_batches = (0..4)
             .map(|_| {
@@ -3016,14 +3016,13 @@ mod tests {
             "labels".to_string(),
         )]);
 
-        let aggr_expr = vec![AggregateExprBuilder::new(
-            sum_udaf(),
-            vec![col("value", &batch.schema())?],
-        )
-        .schema(Arc::clone(&batch.schema()))
-        .alias(String::from("SUM(value)"))
-        .build()
-        .map(Arc::new)?];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &batch.schema())?])
+                .schema(Arc::clone(&batch.schema()))
+                .alias(String::from("SUM(value)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input = TestMemoryExec::try_new_exec(
             &[vec![batch.clone()]],
@@ -3067,14 +3066,13 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias(String::from("COUNT(val)"))
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input_data = vec![
             RecordBatch::try_new(
@@ -3147,14 +3145,13 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias(String::from("COUNT(val)"))
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input_data = vec![
             RecordBatch::try_new(
@@ -3233,14 +3230,13 @@ mod tests {
             Field::new("b", DataType::Float32, false),
         ]));
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
-                    .alias("COUNT(a)")
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
+                .schema(Arc::clone(&input_schema))
+                .alias("COUNT(a)")
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let grouping_set = PhysicalGroupBy::new(
             vec![
@@ -3387,7 +3383,9 @@ mod tests {
                     "Expected spill but SpillCount metric not found or SpillCount was 0."
                 );
             } else if !expect_spill && spill_count > 0 {
-                panic!("Expected no spill but found SpillCount metric with value greater than 0.");
+                panic!(
+                    "Expected no spill but found SpillCount metric with value greater than 0."
+                );
             }
         } else {
             panic!("No metrics returned from the operator; cannot verify spilling.");

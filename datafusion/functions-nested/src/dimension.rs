@@ -28,7 +28,7 @@ use std::any::Any;
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_common::utils::list_ndims;

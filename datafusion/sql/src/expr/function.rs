@@ -19,14 +19,13 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchema, Dependency, Diagnostic, Result, Span,
+    DFSchema, Dependency, Diagnostic, Result, Span, internal_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
-    expr,
+    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition, expr,
     expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
     planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
-    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
@@ -152,42 +151,46 @@ impl FunctionArgs {
                 FunctionArgumentClause::OrderBy(oby) => {
                     if order_by.is_some() {
                         if !within_group.is_empty() {
-                            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used");
+                            return plan_err!(
+                                "ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used"
+                            );
                         }
-                        return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
+                        return not_impl_err!(
+                            "Calling {name}: Duplicated ORDER BY clause in function arguments"
+                        );
                     }
                     order_by = Some(oby);
                 }
                 FunctionArgumentClause::Limit(limit) => {
                     return not_impl_err!(
                         "Calling {name}: LIMIT not supported in function arguments: {limit}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::OnOverflow(overflow) => {
                     return not_impl_err!(
                         "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Having(having) => {
                     return not_impl_err!(
                         "Calling {name}: HAVING not supported in function arguments: {having}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Separator(sep) => {
                     return not_impl_err!(
                         "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonNullClause(jn) => {
                     return not_impl_err!(
                         "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonReturningClause(jr) => {
                     return not_impl_err!(
                         "Calling {name}: JSON RETURNING clause not supported in function arguments: {jr}"
-                    )
-                },
+                    );
+                }
             }
         }
 
@@ -237,12 +240,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
-            return plan_err!("OVER and WITHIN GROUP clause cannot be used together. \
-                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions");
+            return plan_err!(
+                "OVER and WITHIN GROUP clause cannot be used together. \
+                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions"
+            );
         }
 
         if !order_by.is_empty() && !within_group.is_empty() {
-            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function");
+            return plan_err!(
+                "ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function"
+            );
         }
 
         // If function is a window function (it has an OVER clause),
@@ -261,7 +268,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return plan_err!(
                         "Expected an identifier in function name, but found {:?}",
                         object_name.0[0]
-                    )
+                    );
                 }
             }
         };

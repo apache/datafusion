@@ -18,7 +18,7 @@
 //! Expression simplification API
 
 use arrow::{
-    array::{new_null_array, AsArray},
+    array::{AsArray, new_null_array},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -28,36 +28,36 @@ use std::ops::Not;
 use std::sync::Arc;
 
 use datafusion_common::{
+    DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
+};
+use datafusion_common::{
+    HashMap,
     cast::{as_large_list_array, as_list_array},
     metadata::FieldMetadata,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
-    HashMap,
-};
-use datafusion_common::{
-    exec_datafusion_err, internal_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    and, binary::BinaryTypeCoercer, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like,
-    Operator, Volatility,
+    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
+    binary::BinaryTypeCoercer, lit, or,
 };
+use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery},
     utils::{iter_conjunction, iter_conjunction_owned},
 };
-use datafusion_expr::{simplify::ExprSimplifyResult, Cast, TryCast};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::SimplifyInfo;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
     unwrap_cast_in_comparison_for_binary,
 };
-use crate::simplify_expressions::SimplifyInfo;
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use indexmap::IndexSet;
@@ -580,10 +580,9 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
                     // This provides clearer error messages and fails fast.
                     if let Expr::Cast(Cast { ref expr, .. })
                     | Expr::TryCast(TryCast { ref expr, .. }) = expr
+                        && matches!(expr.as_ref(), Expr::Literal(_, _))
                     {
-                        if matches!(expr.as_ref(), Expr::Literal(_, _)) {
-                            return Err(err);
-                        }
+                        return Err(err);
                     }
                     // For other expressions (like CASE, COALESCE), preserve the original
                     // to allow short-circuit evaluation at execution time
@@ -710,7 +709,10 @@ impl<'a> ConstEvaluator<'a> {
             ColumnarValue::Array(a) => {
                 if a.len() != 1 {
                     ConstSimplifyResult::SimplifyRuntimeError(
-                        exec_datafusion_err!("Could not evaluate the expression, found a result of length {}", a.len()),
+                        exec_datafusion_err!(
+                            "Could not evaluate the expression, found a result of length {}",
+                            a.len()
+                        ),
                         expr,
                     )
                 } else if as_list_array(&a).is_ok() {
@@ -1050,7 +1052,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                         right: left_right,
                     }))
                 } else {
-                    return internal_err!("can_reduce_to_equal_statement should only be called with a BinaryExpr");
+                    return internal_err!(
+                        "can_reduce_to_equal_statement should only be called with a BinaryExpr"
+                    );
                 }
             }
 
@@ -2159,7 +2163,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
     use arrow::datatypes::FieldRef;
-    use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
+    use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
     use datafusion_expr::{
         expr::WindowFunction,
         function::{

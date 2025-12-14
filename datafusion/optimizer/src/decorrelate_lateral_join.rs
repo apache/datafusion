@@ -22,12 +22,12 @@ use std::collections::BTreeSet;
 use crate::decorrelate::PullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_expr::{lit, Join};
+use datafusion_expr::{Join, lit};
 
+use datafusion_common::Result;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::Result;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
