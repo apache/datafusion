@@ -2721,4 +2721,24 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_parse_duration() {
+        // Valid durations
+        for (duration, want) in [
+            ("1s", Duration::from_secs(1)),
+            ("1m", Duration::from_secs(60)),
+            ("1m0s", Duration::from_secs(60)),
+            ("1m1s", Duration::from_secs(61)),
+        ] {
+            let have = SessionContext::parse_duration(duration).unwrap();
+            assert_eq!(want, have);
+        }
+
+        // Invalid durations
+        for duration in ["0s", "0m", "1s0m", "1s1m"] {
+            let have = SessionContext::parse_duration(duration);
+            assert!(have.is_err());
+        }
+    }
 }
