@@ -53,6 +53,7 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumu
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_macros::user_doc;
+use std::collections::HashMap;
 
 make_udaf_expr_and_func!(
     Median,
@@ -298,15 +299,35 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<T>();
-        for v in values.iter().flatten() {
-            if let Some(idx) = self.all_values.iter().position(|x| *x == v) {
-                self.all_values.swap_remove(idx);
-            } else {
-                return Err(internal_datafusion_err!(
-                    "attempted to retract value {v:?} that was not present"
-                ));
+        let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
+
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            let v = ScalarValue::try_from_array(arr, i)?;
+            if !v.is_null() {
+                *to_remove.entry(v).or_default() += 1;
             }
+        }
+
+        let mut i = 0;
+        while i < self.all_values.len() {
+            let k = ScalarValue::new_primitive::<T>(
+                Some(self.all_values[i]),
+                &self.data_type,
+            )?;
+            if let Some(count) = to_remove.get_mut(&k)
+                && *count > 0
+            {
+                self.all_values.swap_remove(i);
+                *count -= 1;
+                if *count == 0 {
+                    to_remove.remove(&k);
+                    if to_remove.is_empty() {
+                        break;
+                    }
+                }
+            }
+            i += 1;
         }
         Ok(())
     }
