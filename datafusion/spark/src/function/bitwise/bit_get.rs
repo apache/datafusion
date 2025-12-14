@@ -20,14 +20,14 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_integer_array, Array, ArrayRef, ArrowPrimitiveType, AsArray, Int32Array,
-    Int8Array, PrimitiveArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, Int8Array, Int32Array, PrimitiveArray,
+    downcast_integer_array,
 };
 use arrow::compute::try_binary;
-use arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int8Type};
-use datafusion_common::types::{logical_int32, NativeType};
+use arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef, Int8Type, Int32Type};
+use datafusion_common::types::{NativeType, logical_int32};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignatureClass, Volatility,

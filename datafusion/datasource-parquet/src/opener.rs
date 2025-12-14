@@ -20,8 +20,8 @@
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
-    apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
@@ -36,23 +36,23 @@ use std::task::{Context, Poll};
 use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
-    is_dynamic_physical_expr, PhysicalExpr,
+    PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics,
 };
-use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
+use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, ready};
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
@@ -252,12 +252,12 @@ impl FileOpener for ParquetOpener {
                     )
                 });
 
-            if let Some(file_pruner) = &mut file_pruner {
-                if file_pruner.should_prune()? {
-                    // Return an empty stream immediately to skip the work of setting up the actual stream
-                    file_metrics.files_ranges_pruned_statistics.add_pruned(1);
-                    return Ok(futures::stream::empty().boxed());
-                }
+            if let Some(file_pruner) = &mut file_pruner
+                && file_pruner.should_prune()?
+            {
+                // Return an empty stream immediately to skip the work of setting up the actual stream
+                file_metrics.files_ranges_pruned_statistics.add_pruned(1);
+                return Ok(futures::stream::empty().boxed());
             }
 
             file_metrics.files_ranges_pruned_statistics.add_matched(1);
@@ -306,19 +306,19 @@ impl FileOpener for ParquetOpener {
                 )?;
             }
 
-            if let Some(ref coerce) = coerce_int96 {
-                if let Some(merged) = coerce_int96_to_resolution(
+            if let Some(ref coerce) = coerce_int96
+                && let Some(merged) = coerce_int96_to_resolution(
                     reader_metadata.parquet_schema(),
                     &physical_file_schema,
                     coerce,
-                ) {
-                    physical_file_schema = Arc::new(merged);
-                    options = options.with_schema(Arc::clone(&physical_file_schema));
-                    reader_metadata = ArrowReaderMetadata::try_new(
-                        Arc::clone(reader_metadata.metadata()),
-                        options.clone(),
-                    )?;
-                }
+                )
+            {
+                physical_file_schema = Arc::new(merged);
+                options = options.with_schema(Arc::clone(&physical_file_schema));
+                reader_metadata = ArrowReaderMetadata::try_new(
+                    Arc::clone(reader_metadata.metadata()),
+                    options.clone(),
+                )?;
             }
 
             // Adapt the projection & filter predicate to the physical file schema.
@@ -462,16 +462,17 @@ impl FileOpener for ParquetOpener {
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
-            if enable_page_index && !access_plan.is_empty() {
-                if let Some(p) = page_pruning_predicate {
-                    access_plan = p.prune_plan_with_page_index(
-                        access_plan,
-                        &physical_file_schema,
-                        builder.parquet_schema(),
-                        file_metadata.as_ref(),
-                        &file_metrics,
-                    );
-                }
+            if enable_page_index
+                && !access_plan.is_empty()
+                && let Some(p) = page_pruning_predicate
+            {
+                access_plan = p.prune_plan_with_page_index(
+                    access_plan,
+                    &physical_file_schema,
+                    builder.parquet_schema(),
+                    file_metadata.as_ref(),
+                    &file_metrics,
+                );
             }
 
             let row_group_indexes = access_plan.row_group_indexes();
@@ -843,22 +844,22 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        record_batch, stats::Precision, ColumnStatistics, DataFusionError, ScalarValue,
-        Statistics,
+        ColumnStatistics, DataFusionError, ScalarValue, Statistics, record_batch,
+        stats::Precision,
     };
-    use datafusion_datasource::{file_stream::FileOpener, PartitionedFile, TableSchema};
+    use datafusion_datasource::{PartitionedFile, TableSchema, file_stream::FileOpener};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
-        projection::ProjectionExprs, PhysicalExpr,
+        PhysicalExpr, expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
+        projection::ProjectionExprs,
     };
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
-    use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
 
-    use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
+    use crate::{DefaultParquetFileReaderFactory, opener::ParquetOpener};
 
     async fn count_batches_and_rows(
         mut stream: std::pin::Pin<
