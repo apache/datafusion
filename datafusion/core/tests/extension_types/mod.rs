@@ -1,1 +1,1 @@
-mod pretty_print_data_frames;
+mod pretty_printing;

@@ -101,64 +101,6 @@ impl LogicalType for Opaque {
 
 // TODO Other canonical extension types.
 
-/// Represents an unresolved extension type with a given native type and name.
-///
-/// This does not necessarily indicate that DataFusion does not understand the extension type. For
-/// this purpose, see [OpaqueType]. However, it does indicate that the extension type was not yet
-/// checked against the extension type registry.
-///
-/// This extension type exists because it is often challenging to gain access to an extension type
-/// registry. Especially because extension type support is relatively new, and therefore this
-/// consideration was not taken into account by users. This provides a workaround such that
-/// unresolved extension types can be resolved at a later point in time where access to the registry
-/// is available.
-pub struct UnresolvedExtensionType {
-    /// The name of the underlying extension type.
-    name: String,
-    /// The metadata of the underlying extension type.
-    metadata: Option<String>,
-    /// The underlying native type.
-    native_type: NativeType,
-}
-
-impl UnresolvedExtensionType {
-    /// Creates a new [UnresolvedExtensionType].
-    pub fn new(name: String, metadata: Option<String>, native_type: NativeType) -> Self {
-        Self {
-            name,
-            metadata,
-            native_type,
-        }
-    }
-
-    /// The name of the unresolved extension type.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The metadata of the unresolved extension type.
-    pub fn metadata(&self) -> Option<&str> {
-        self.metadata.as_deref()
-    }
-}
-
-impl LogicalType for UnresolvedExtensionType {
-    fn native(&self) -> &NativeType {
-        &self.native_type
-    }
-
-    fn signature(&self) -> TypeSignature<'_> {
-        let inner_type = TypeParameter::Type(TypeSignature::Extension {
-            name: &self.name,
-            parameters: vec![],
-        });
-        TypeSignature::Extension {
-            name: "datafusion.unresolved",
-            parameters: vec![inner_type],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -694,13 +694,7 @@ impl<'a> ConstEvaluator<'a> {
         let metadata = phys_expr
             .return_field(self.input_batch.schema_ref())
             .ok()
-            .and_then(|f| {
-                let m = f.metadata();
-                match m.is_empty() {
-                    true => None,
-                    false => Some(FieldMetadata::from(m)),
-                }
-            });
+            .map(|f| FieldMetadata::from(f.as_ref()));
         let col_val = match phys_expr.evaluate(&self.input_batch) {
             Ok(v) => v,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
