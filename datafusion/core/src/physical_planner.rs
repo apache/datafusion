@@ -197,7 +197,13 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
             .create_initial_plan(logical_plan, session_state)
             .await?;
 
-        self.optimize_physical_plan(plan, session_state, |_, _| {})
+        let mut plan = self.optimize_physical_plan(plan, session_state, |_, _| {})?;
+
+        if session_state.config().options().explain.auto_explain {
+            plan = self.add_auto_explain(plan, session_state);
+        }
+
+        Ok(plan)
     }
 
     /// Create a physical expression from a logical expression
@@ -1596,6 +1602,33 @@ impl DefaultPhysicalPlanner {
                     .collect::<Result<Vec<_>>>()?,
             ))
         }
+    }
+
+    /// Returns a new plan wrapped in an `AnalyzeExec` auto_explain operator.
+    fn add_auto_explain(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        session_state: &SessionState,
+    ) -> Arc<dyn ExecutionPlan> {
+        let options = session_state.config().options();
+        let show_statistics = options.explain.show_statistics;
+        let analyze_level = options.explain.analyze_level;
+        let metric_types = match analyze_level {
+            ExplainAnalyzeLevel::Summary => vec![MetricType::SUMMARY],
+            ExplainAnalyzeLevel::Dev => vec![MetricType::SUMMARY, MetricType::DEV],
+        };
+
+        let mut plan = AnalyzeExec::new(
+            false,
+            show_statistics,
+            metric_types,
+            plan,
+            LogicalPlan::explain_schema(),
+        );
+        plan.enable_auto_explain();
+        plan.set_auto_explain_output(options.explain.auto_explain_output.clone());
+        plan.set_auto_explain_min_duration(options.explain.auto_explain_min_duration);
+        Arc::new(plan)
     }
 }
 

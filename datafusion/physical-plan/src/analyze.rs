@@ -18,6 +18,8 @@
 //! Defines the ANALYZE operator
 
 use std::any::Any;
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
@@ -29,6 +31,8 @@ use crate::display::DisplayableExecutionPlan;
 use crate::metrics::MetricType;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
+use arrow::compute::concat_batches;
+use arrow::util::pretty::pretty_format_batches;
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::instant::Instant;
 use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
@@ -52,6 +56,19 @@ pub struct AnalyzeExec {
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
     cache: PlanProperties,
+    /// Whether the operator is executing in the `auto_explain` mode.
+    /// In this mode, the underlying records are returned as they would without the `AnalyzeExec`,
+    /// while the "explain analyze" output is sent to `auto_explain_output`. (default=false)
+    auto_explain: bool,
+    /// Where to store the output of `auto_explain`, if enabled.
+    /// Possible values:
+    ///   - stdout (default)
+    ///   - stderr
+    ///   - *path to file* (creates if it does not exist; appends to it if it does)
+    auto_explain_output: String,
+    /// In the `auto_explain` mode, only output if the execution is greater or equal to this value,
+    /// in milliseconds. (default=0)
+    auto_explain_min_duration: usize,
 }
 
 impl AnalyzeExec {
@@ -71,6 +88,9 @@ impl AnalyzeExec {
             input,
             schema,
             cache,
+            auto_explain: false,
+            auto_explain_output: "stdout".to_owned(),
+            auto_explain_min_duration: 0,
         }
     }
 
@@ -100,6 +120,20 @@ impl AnalyzeExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+    }
+
+    pub fn enable_auto_explain(&mut self) {
+        self.auto_explain = true;
+        self.cache =
+            Self::compute_properties(&self.input, Arc::clone(&self.input.schema()));
+    }
+
+    pub fn set_auto_explain_output(&mut self, value: String) {
+        self.auto_explain_output = value
+    }
+
+    pub fn set_auto_explain_min_duration(&mut self, value: usize) {
+        self.auto_explain_min_duration = value
     }
 }
 
@@ -194,14 +228,22 @@ impl ExecutionPlan for AnalyzeExec {
         // JoinSet that computes the overall row count and final
         // record batch
         let mut input_stream = builder.build();
+
+        let inner_schema = Arc::clone(&self.input.schema());
+        let auto_explain = self.auto_explain;
+        let auto_explain_output = self.auto_explain_output.clone();
+        let auto_explain_min_duration = self.auto_explain_min_duration;
+
         let output = async move {
+            let mut batches = vec![];
             let mut total_rows = 0;
             while let Some(batch) = input_stream.next().await.transpose()? {
                 total_rows += batch.num_rows();
+                batches.push(batch);
             }
 
             let duration = Instant::now() - start;
-            create_output_batch(
+            let out = create_output_batch(
                 verbose,
                 show_statistics,
                 total_rows,
@@ -209,11 +251,26 @@ impl ExecutionPlan for AnalyzeExec {
                 &captured_input,
                 &captured_schema,
                 &metric_types,
-            )
+            )?;
+
+            if auto_explain {
+                if duration.as_millis() >= auto_explain_min_duration as u128 {
+                    export_auto_explain(out, &auto_explain_output)?;
+                }
+                concat_batches(&inner_schema, &batches).map_err(DataFusionError::from)
+            } else {
+                Ok(out)
+            }
+        };
+
+        let output_schema = if self.auto_explain {
+            &self.input.schema()
+        } else {
+            &self.schema
         };
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&self.schema),
+            Arc::clone(output_schema),
             futures::stream::once(output),
         )))
     }
@@ -271,19 +328,42 @@ fn create_output_batch(
     .map_err(DataFusionError::from)
 }
 
+fn export_auto_explain(batch: RecordBatch, output: &str) -> Result<()> {
+    let fd: &mut dyn Write = match output {
+        "stdout" => &mut io::stdout(),
+        "stderr" => &mut io::stderr(),
+        _ => &mut OpenOptions::new().create(true).append(true).open(output)?,
+    };
+
+    let formatted = pretty_format_batches(&[batch])?;
+    writeln!(fd, "{formatted}")?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::{
         collect,
         test::{
             assert_is_pending,
             exec::{assert_strong_count_converges_to_zero, BlockingExec},
+            TestMemoryExec,
         },
     };
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::{
+        array::StringArray,
+        datatypes::{DataType, Field, Schema},
+    };
+    use datafusion_common::test_util::batches_to_string;
+    use datafusion_expr::LogicalPlan;
     use futures::FutureExt;
+    use insta::assert_snapshot;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
@@ -307,6 +387,137 @@ mod tests {
         assert_is_pending(&mut fut);
         drop(fut);
         assert_strong_count_converges_to_zero(refs).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_auto_explain() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![
+                Some("k1"),
+                Some("k2"),
+                Some("k3"),
+            ]))],
+        )?;
+        let exec_plan: Arc<dyn ExecutionPlan> = Arc::new(TestMemoryExec::try_new(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?);
+
+        let mut analyze_exec = AnalyzeExec::new(
+            false,
+            true,
+            vec![MetricType::SUMMARY, MetricType::DEV],
+            exec_plan,
+            LogicalPlan::explain_schema(),
+        );
+        let tmp_dir = TempDir::new()?;
+        let output_path = tmp_dir.path().join("auto_explain_output.txt");
+        analyze_exec.enable_auto_explain();
+        analyze_exec.set_auto_explain_output(
+            output_path.as_os_str().to_str().unwrap().to_owned(),
+        );
+
+        // check that the original output remains the same
+        let result =
+            collect(Arc::new(analyze_exec.clone()), Arc::clone(&task_ctx)).await?;
+        assert_snapshot!(
+            batches_to_string(&result),
+            @r"
+        +----+
+        | k  |
+        +----+
+        | k1 |
+        | k2 |
+        | k3 |
+        +----+
+        "
+        );
+        assert_snapshot!(fs::read_to_string(&output_path)?,
+        @r"
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | plan_type         | plan                                                                                                                                    |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | Plan with Metrics | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[], statistics=[Rows=Exact(3), Bytes=Exact(1160), [(Col[0]: Null=Exact(0))]] |
+        |                   |                                                                                                                                         |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        ");
+
+        // check that with a longer runtime a new plan is not printed
+        analyze_exec.set_auto_explain_min_duration(1000000);
+        collect(Arc::new(analyze_exec.clone()), Arc::clone(&task_ctx)).await?;
+        assert_snapshot!(fs::read_to_string(&output_path)?,
+        @r"
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | plan_type         | plan                                                                                                                                    |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | Plan with Metrics | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[], statistics=[Rows=Exact(3), Bytes=Exact(1160), [(Col[0]: Null=Exact(0))]] |
+        |                   |                                                                                                                                         |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        ");
+
+        // test again with the default min duration
+        analyze_exec.set_auto_explain_min_duration(0);
+        collect(Arc::new(analyze_exec.clone()), Arc::clone(&task_ctx)).await?;
+        assert_snapshot!(fs::read_to_string(&output_path)?,
+        @r"
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | plan_type         | plan                                                                                                                                    |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | Plan with Metrics | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[], statistics=[Rows=Exact(3), Bytes=Exact(1160), [(Col[0]: Null=Exact(0))]] |
+        |                   |                                                                                                                                         |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | plan_type         | plan                                                                                                                                    |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | Plan with Metrics | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[], statistics=[Rows=Exact(3), Bytes=Exact(1160), [(Col[0]: Null=Exact(0))]] |
+        |                   |                                                                                                                                         |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        ");
+
+        // check that auto_explain uses the pre-defined analyze parameters
+        analyze_exec.show_statistics = false;
+        collect(Arc::new(analyze_exec.clone()), Arc::clone(&task_ctx)).await?;
+        analyze_exec.verbose = true;
+        collect(Arc::new(analyze_exec.clone()), Arc::clone(&task_ctx)).await?;
+        let complete_output = fs::read_to_string(&output_path)?;
+        // remove the duration since it's not deterministic
+        let output_without_duration =
+            complete_output.rsplitn(4, '\n').nth(3).unwrap().to_string();
+        assert_snapshot!(output_without_duration,
+        @r"
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | plan_type         | plan                                                                                                                                    |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | Plan with Metrics | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[], statistics=[Rows=Exact(3), Bytes=Exact(1160), [(Col[0]: Null=Exact(0))]] |
+        |                   |                                                                                                                                         |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | plan_type         | plan                                                                                                                                    |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        | Plan with Metrics | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[], statistics=[Rows=Exact(3), Bytes=Exact(1160), [(Col[0]: Null=Exact(0))]] |
+        |                   |                                                                                                                                         |
+        +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------+
+        +-------------------+---------------------------------------------------------------+
+        | plan_type         | plan                                                          |
+        +-------------------+---------------------------------------------------------------+
+        | Plan with Metrics | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[] |
+        |                   |                                                               |
+        +-------------------+---------------------------------------------------------------+
+        +------------------------+---------------------------------------------------------------+
+        | plan_type              | plan                                                          |
+        +------------------------+---------------------------------------------------------------+
+        | Plan with Metrics      | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[] |
+        |                        |                                                               |
+        | Plan with Full Metrics | DataSourceExec: partitions=1, partition_sizes=[1], metrics=[] |
+        |                        |                                                               |
+        | Output Rows            | 3                                                             |
+        ");
 
         Ok(())
     }
