@@ -219,18 +219,6 @@ impl ScalarUDFImpl for PowerFunc {
                     |b, e| Ok(f64::powf(b, e)),
                 )?
             }
-            (DataType::Int64, _) => {
-                calculate_binary_math::<Int64Type, Int64Type, Int64Type, _>(
-                    &base,
-                    exponent,
-                    |b, e| match e.try_into() {
-                        Ok(exp_u32) => b.pow_checked(exp_u32),
-                        Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
-                            "Exponent {e} in integer computation is out of bounds."
-                        ))),
-                    },
-                )?
-            }
             (DataType::Decimal32(precision, scale), DataType::Int64) => {
                 calculate_binary_decimal_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
                     &base,
@@ -397,10 +385,7 @@ mod tests {
     use super::*;
     use arrow::array::{Array, Decimal128Array, Float64Array, Int64Array};
     use arrow::datatypes::{DECIMAL128_MAX_SCALE, Field};
-    use arrow_buffer::NullBuffer;
-    use datafusion_common::cast::{
-        as_decimal128_array, as_float64_array, as_int64_array,
-    };
+    use datafusion_common::cast::{as_decimal128_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
@@ -444,43 +429,6 @@ mod tests {
                 assert_eq!(floats.value(1), 4.0);
                 assert_eq!(floats.value(2), 81.0);
                 assert_eq!(floats.value(3), 625.0);
-            }
-            ColumnarValue::Scalar(_) => {
-                panic!("Expected an array value")
-            }
-        }
-    }
-
-    #[test]
-    fn test_power_i64() {
-        let arg_fields = vec![
-            Field::new("a", DataType::Int64, true).into(),
-            Field::new("a", DataType::Int64, true).into(),
-        ];
-        let args = ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
-                ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
-            ],
-            arg_fields,
-            number_rows: 4,
-            return_field: Field::new("f", DataType::Int64, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-        let result = PowerFunc::new()
-            .invoke_with_args(args)
-            .expect("failed to initialize function power");
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let ints = as_int64_array(&arr)
-                    .expect("failed to convert result to a Int64Array");
-
-                assert_eq!(ints.len(), 4);
-                assert_eq!(ints.value(0), 8);
-                assert_eq!(ints.value(1), 4);
-                assert_eq!(ints.value(2), 81);
-                assert_eq!(ints.value(3), 625);
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
@@ -544,20 +492,21 @@ mod tests {
     #[test]
     fn test_power_array_null() {
         let arg_fields = vec![
-            Field::new("a", DataType::Int64, true).into(),
-            Field::new("a", DataType::Int64, true).into(),
+            Field::new("a", DataType::Float64, true).into(),
+            Field::new("a", DataType::Float64, true).into(),
         ];
         let args = ScalarFunctionArgs {
             args: vec![
-                ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 2]))), // base
-                ColumnarValue::Array(Arc::new(Int64Array::from_iter_values_with_nulls(
-                    vec![1, 2, 3],
-                    Some(NullBuffer::from(vec![true, false, true])),
-                ))), // exponent
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![2.0, 2.0, 2.0]))), // base
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    Some(1.0),
+                    None,
+                    Some(3.0),
+                ]))), // exponent
             ],
             arg_fields,
-            number_rows: 1,
-            return_field: Field::new("f", DataType::Int64, true).into(),
+            number_rows: 3,
+            return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
         let result = PowerFunc::new()
@@ -566,15 +515,15 @@ mod tests {
 
         match result {
             ColumnarValue::Array(arr) => {
-                let ints =
-                    as_int64_array(&arr).expect("failed to convert result to an array");
+                let floats =
+                    as_float64_array(&arr).expect("failed to convert result to an array");
 
-                assert_eq!(ints.len(), 3);
-                assert!(!ints.is_null(0));
-                assert_eq!(ints.value(0), i64::from(2));
-                assert!(ints.is_null(1));
-                assert!(!ints.is_null(2));
-                assert_eq!(ints.value(2), i64::from(8));
+                assert_eq!(floats.len(), 3);
+                assert!(!floats.is_null(0));
+                assert_eq!(floats.value(0), 2.0);
+                assert!(floats.is_null(1));
+                assert!(!floats.is_null(2));
+                assert_eq!(floats.value(2), 8.0);
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
