@@ -315,4 +315,93 @@ mod tests {
         assert_eq!(original_selected, reversed_selected);
         assert_eq!(original_selected, 210); // 30 + 80 + 100
     }
+
+    #[test]
+    fn test_reverse_with_skipped_row_group() {
+        // This test covers the "no specific selection" code path (lines 90-95)
+        let metadata = create_test_metadata(vec![100, 100, 100]);
+
+        // Select only from first and third row groups, skip middle one entirely
+        let selection = RowSelection::from(vec![
+            RowSelector::select(50), // First 50 of RG0
+            RowSelector::skip(150),  // Rest of RG0 + all of RG1 + half of RG2
+            RowSelector::select(50), // Last 50 of RG2
+        ]);
+
+        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+
+        // Verify total selected rows remain the same
+        let original_selected: usize = selection
+            .iter()
+            .filter(|s| !s.skip)
+            .map(|s| s.row_count)
+            .sum();
+        let reversed_selected: usize = reversed
+            .iter()
+            .filter(|s| !s.skip)
+            .map(|s| s.row_count)
+            .sum();
+
+        assert_eq!(original_selected, reversed_selected);
+        assert_eq!(original_selected, 100); // 50 + 50
+    }
+
+    #[test]
+    fn test_reverse_middle_row_group_only() {
+        // Another test to ensure skipped row groups are handled correctly
+        let metadata = create_test_metadata(vec![100, 100, 100]);
+
+        // Select only middle row group
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(100),   // Skip RG0
+            RowSelector::select(100), // Select all of RG1
+            RowSelector::skip(100),   // Skip RG2
+        ]);
+
+        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+
+        let original_selected: usize = selection
+            .iter()
+            .filter(|s| !s.skip)
+            .map(|s| s.row_count)
+            .sum();
+        let reversed_selected: usize = reversed
+            .iter()
+            .filter(|s| !s.skip)
+            .map(|s| s.row_count)
+            .sum();
+
+        assert_eq!(original_selected, reversed_selected);
+        assert_eq!(original_selected, 100);
+    }
+
+    #[test]
+    fn test_reverse_alternating_row_groups() {
+        // Test with more complex skipping pattern
+        let metadata = create_test_metadata(vec![100, 100, 100, 100]);
+
+        // Select first and third row groups, skip second and fourth
+        let selection = RowSelection::from(vec![
+            RowSelector::select(100), // RG0
+            RowSelector::skip(100),   // RG1
+            RowSelector::select(100), // RG2
+            RowSelector::skip(100),   // RG3
+        ]);
+
+        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+
+        let original_selected: usize = selection
+            .iter()
+            .filter(|s| !s.skip)
+            .map(|s| s.row_count)
+            .sum();
+        let reversed_selected: usize = reversed
+            .iter()
+            .filter(|s| !s.skip)
+            .map(|s| s.row_count)
+            .sum();
+
+        assert_eq!(original_selected, reversed_selected);
+        assert_eq!(original_selected, 200);
+    }
 }

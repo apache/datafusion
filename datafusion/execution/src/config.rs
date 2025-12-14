@@ -390,8 +390,11 @@ impl SessionConfig {
     }
 
     /// Enables or disables sort pushdown optimization for Parquet files
-    pub fn with_parquet_enable_sort_pushdown(mut self, enabled: bool) -> Self {
-        self.options_mut().execution.parquet.enable_sort_pushdown = enabled;
+    pub fn with_parquet_enable_reverse_row_groups(mut self, enabled: bool) -> Self {
+        self.options_mut()
+            .execution
+            .parquet
+            .enable_reverse_row_groups = enabled;
         self
     }
 

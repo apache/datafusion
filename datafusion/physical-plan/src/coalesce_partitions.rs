@@ -316,12 +316,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
             .map(|r| {
                 if has_multiple_partitions {
                     // Downgrade Exact to Inexact when merging multiple partitions
-                    match r {
-                        SortOrderPushdownResult::Exact { inner } => {
-                            SortOrderPushdownResult::Inexact { inner }
-                        }
-                        other => other,
-                    }
+                    r.into_inexact()
                 } else {
                     r
                 }

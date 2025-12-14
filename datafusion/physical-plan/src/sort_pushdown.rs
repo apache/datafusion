@@ -88,4 +88,33 @@ impl<T> SortOrderPushdownResult<T> {
             Self::Unsupported => Ok(SortOrderPushdownResult::Unsupported),
         }
     }
+
+    /// Convert this result to `Inexact`, downgrading `Exact` if present.
+    ///
+    /// This is useful when an operation (like merging multiple partitions)
+    /// cannot guarantee exact ordering even if the input provides it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use datafusion_physical_plan::sorts::sort_pushdown::SortOrderPushdownResult;
+    /// let exact = SortOrderPushdownResult::Exact { inner: 42 };
+    /// let inexact = exact.into_inexact();
+    /// assert!(matches!(inexact, SortOrderPushdownResult::Inexact { inner: 42 }));
+    ///
+    /// let already_inexact = SortOrderPushdownResult::Inexact { inner: 42 };
+    /// let still_inexact = already_inexact.into_inexact();
+    /// assert!(matches!(still_inexact, SortOrderPushdownResult::Inexact { inner: 42 }));
+    ///
+    /// let unsupported = SortOrderPushdownResult::<i32>::Unsupported;
+    /// let still_unsupported = unsupported.into_inexact();
+    /// assert!(matches!(still_unsupported, SortOrderPushdownResult::Unsupported));
+    /// ```
+    pub fn into_inexact(self) -> Self {
+        match self {
+            Self::Exact { inner } => Self::Inexact { inner },
+            Self::Inexact { inner } => Self::Inexact { inner },
+            Self::Unsupported => Self::Unsupported,
+        }
+    }
 }

@@ -457,7 +457,7 @@ LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet'
 WITH ORDER (id ASC);
 
 # Test 6.1: Sort pushdown with DESC (opposite of ASC)
-# Should show reverse_scan_inexact=true
+# Should show reverse_row_groups=true
 query TT
 EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
 ----
@@ -466,7 +466,7 @@ logical_plan
 02)--TableScan: sorted_parquet projection=[id, value, name]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_scan_inexact=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
 
 # Test 6.2: Verify results are correct
 query IIT
@@ -487,7 +487,7 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 
 # Test 6.4: Disable sort pushdown
 statement ok
-SET datafusion.execution.parquet.enable_sort_pushdown = false;
+SET datafusion.execution.parquet.enable_reverse_row_groups = false;
 
 query TT
 EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
@@ -501,7 +501,7 @@ physical_plan
 
 # Re-enable
 statement ok
-SET datafusion.execution.parquet.enable_sort_pushdown = true;
+SET datafusion.execution.parquet.enable_reverse_row_groups = true;
 
 # Test 6.5: With OFFSET
 query TT
@@ -514,7 +514,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=2, fetch=3
 02)--SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_scan_inexact=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
 
 query IIT
 SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
@@ -524,7 +524,7 @@ SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
 6 600 f
 
 # Test 6.6: Reverse scan with row selection (page index pruning)
-# This tests that when reverse_scan_inexact=true, the RowSelection is also properly reversed
+# This tests that when reverse_row_groups=true, the RowSelection is also properly reversed
 
 # Create a dataset with multiple row groups and enable page index
 statement ok
@@ -578,7 +578,7 @@ logical_plan
 03)----TableScan: multi_rg_sorted projection=[id, category, value], partial_filters=[multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")]
 physical_plan
 01)SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/multi_rg_sorted.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], reverse_scan_inexact=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1, required_guarantees=[category in (alpha, gamma)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/multi_rg_sorted.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], reverse_row_groups=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1, required_guarantees=[category in (alpha, gamma)]
 
 # Verify the results are correct despite reverse scanning with row selection
 # Expected: gamma values (6, 5) then alpha values (2, 1), in DESC order by id
@@ -616,7 +616,7 @@ ORDER BY id ASC;
 
 # Disable reverse scan and verify it still works
 statement ok
-SET datafusion.execution.parquet.enable_sort_pushdown = false;
+SET datafusion.execution.parquet.enable_reverse_row_groups = false;
 
 query ITI
 SELECT * FROM multi_rg_sorted
@@ -630,7 +630,7 @@ ORDER BY id DESC LIMIT 5;
 
 # Re-enable
 statement ok
-SET datafusion.execution.parquet.enable_sort_pushdown = true;
+SET datafusion.execution.parquet.enable_reverse_row_groups = true;
 
 # Test 6.7: Sort pushdown with more than one partition
 # Create multiple parquet files to trigger it
@@ -695,7 +695,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [id@0 DESC], fetch=3
 02)--SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[true]
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part3.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_scan_inexact=true
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part3.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
 
 # Verify correctness with repartitioning and multiple files
 query IIT
@@ -751,4 +751,4 @@ statement ok
 DROP TABLE sorted_parquet;
 
 statement ok
-SET datafusion.execution.parquet.enable_sort_pushdown = true;
+SET datafusion.execution.parquet.enable_reverse_row_groups = true;

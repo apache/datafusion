@@ -113,7 +113,8 @@ pub(super) struct ParquetOpener {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
-    pub reverse_scan_inexact: bool,
+    /// Whether to read row groups in reverse order
+    pub reverse_row_groups: bool,
 }
 
 impl FileOpener for ParquetOpener {
@@ -210,7 +211,7 @@ impl FileOpener for ParquetOpener {
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
 
-        let reverse_scan_inexact = self.reverse_scan_inexact;
+        let reverse_row_groups = self.reverse_row_groups;
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
@@ -483,7 +484,7 @@ impl FileOpener for ParquetOpener {
             let row_selection_opt =
                 access_plan.into_overall_row_selection(rg_metadata)?;
 
-            if reverse_scan_inexact {
+            if reverse_row_groups {
                 // Reverse the row groups
                 let reversed_indexes: Vec<_> =
                     row_group_indexes.clone().into_iter().rev().collect();
@@ -1005,7 +1006,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
-                reverse_scan_inexact: false,
+                reverse_row_groups: false,
             }
         };
 
@@ -1077,7 +1078,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
-                reverse_scan_inexact: false,
+                reverse_row_groups: false,
             }
         };
 
@@ -1165,7 +1166,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
-                reverse_scan_inexact: false,
+                reverse_row_groups: false,
             }
         };
 
@@ -1256,7 +1257,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
-                reverse_scan_inexact: false,
+                reverse_row_groups: false,
             }
         };
 
@@ -1355,7 +1356,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
-                reverse_scan_inexact: false,
+                reverse_row_groups: false,
             }
         };
 
@@ -1465,7 +1466,7 @@ mod test {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             max_predicate_cache_size: None,
-            reverse_scan_inexact: reverse_scan,
+            reverse_row_groups: reverse_scan,
         };
 
         // Test normal scan (forward)
@@ -1526,7 +1527,7 @@ mod test {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             max_predicate_cache_size: None,
-            reverse_scan_inexact: reverse_scan,
+            reverse_row_groups: reverse_scan,
         };
 
         // With a single row group, forward and reverse should be the same
@@ -1629,7 +1630,7 @@ mod test {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             max_predicate_cache_size: None,
-            reverse_scan_inexact: reverse_scan,
+            reverse_row_groups: reverse_scan,
         };
 
         // Forward scan: RG0(3,4), RG1(5,6,7,8), RG2(9,10)

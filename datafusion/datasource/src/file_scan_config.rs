@@ -850,109 +850,39 @@ impl DataSource for FileScanConfig {
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        let current_ordering = match self.output_ordering.first() {
-            Some(ordering) => ordering.as_ref(),
-            None => return Ok(SortOrderPushdownResult::Unsupported),
-        };
+        let file_ordering = self.output_ordering.first().cloned();
 
-        // Only support reverse ordering pushdown until now
-        if !is_reverse_ordering(order, current_ordering) {
+        if file_ordering.is_none() {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
 
-        // Ask the file source if it can handle the sort pushdown
-        let pushdown_result = self.file_source.try_pushdown_sort(order)?;
+        // Use the trait method instead of downcasting
+        // Try to provide file ordering info to the source
+        // If not supported (e.g., CsvSource), fall back to original source
+        let file_source_with_ordering = self
+            .file_source
+            .with_file_ordering_info(file_ordering)
+            .unwrap_or_else(|_| Arc::clone(&self.file_source));
 
-        // Extract the new file source and determine result type
-        let (new_file_source, is_exact) = match pushdown_result {
-            SortOrderPushdownResult::Exact { inner } => (inner, true),
-            SortOrderPushdownResult::Inexact { inner } => (inner, false),
-            SortOrderPushdownResult::Unsupported => {
-                return Ok(SortOrderPushdownResult::Unsupported);
+        // Rest of the implementation stays the same...
+        let pushdown_result = file_source_with_ordering.try_pushdown_sort(order)?;
+
+        match pushdown_result {
+            SortOrderPushdownResult::Exact { inner } => {
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: self.rebuild_with_source(inner, true)?,
+                })
             }
-        };
-
-        let mut new_config = self.clone();
-
-        // Reverse file groups: when scanning in reverse, we need to read files
-        // in reverse order to maintain the correct global ordering
-        new_config.file_groups = new_config
-            .file_groups
-            .into_iter()
-            .map(|group| {
-                let mut files = group.into_inner();
-                files.reverse();
-                files.into()
-            })
-            .collect();
-
-        // Phase 1: Make output_ordering unknown since we're only reversing row groups,
-        // not guaranteeing perfect ordering. The rows within row groups are not reversed.
-        // This is correct because:
-        // 1. We're only reversing row group read order
-        // 2. Rows within each row group maintain their original order
-        // 3. This provides approximate ordering, not guaranteed ordering
-        new_config.output_ordering = vec![];
-
-        new_config.file_source = new_file_source;
-
-        let new_config: Arc<dyn DataSource> = Arc::new(new_config);
-        if is_exact {
-            Ok(SortOrderPushdownResult::Exact { inner: new_config })
-        } else {
-            Ok(SortOrderPushdownResult::Inexact { inner: new_config })
+            SortOrderPushdownResult::Inexact { inner } => {
+                Ok(SortOrderPushdownResult::Inexact {
+                    inner: self.rebuild_with_source(inner, false)?,
+                })
+            }
+            SortOrderPushdownResult::Unsupported => {
+                Ok(SortOrderPushdownResult::Unsupported)
+            }
         }
     }
-}
-
-/// Check if the requested ordering can be satisfied by reversing the current ordering.
-///
-/// This function supports **prefix matching**: if the file has ordering [A DESC, B ASC]
-/// and we need [A ASC], reversing the scan gives us [A ASC, B DESC], which satisfies
-/// the requirement since [A ASC] is a prefix.
-///
-/// # Arguments
-/// * `requested` - The ordering required by the query
-/// * `current` - The natural ordering of the data source (e.g., from file metadata)
-///
-/// # Returns
-/// `true` if reversing the current ordering would satisfy the requested ordering
-///
-/// # Example
-/// ```text
-/// Current:   [number DESC, letter ASC]
-/// Requested: [number ASC]
-/// Reversed:  [number ASC, letter DESC]  ✓ Prefix match!
-/// ```
-fn is_reverse_ordering(
-    requested: &[PhysicalSortExpr],
-    current: &[PhysicalSortExpr],
-) -> bool {
-    // Allow prefix matching - we can satisfy a prefix of the current ordering
-    // by reversing the scan
-    if requested.len() > current.len() {
-        return false;
-    }
-
-    requested.iter().zip(current.iter()).all(|(req, cur)| {
-        // Check if the expressions are semantically equivalent using PhysicalExpr::eq
-        // This is more robust than string comparison as it handles:
-        // - Expression equivalence (not just string representation)
-        // - Complex expressions that might have different string forms but same semantics
-        let exprs_match = req.expr.eq(&cur.expr);
-
-        // Now check if the sort options are exactly reversed
-        // For a valid reverse scan:
-        //   - descending must be opposite: ASC ↔ DESC
-        //   - nulls_first must be opposite: NULLS FIRST ↔ NULLS LAST
-        let options_reversed = req.options.descending != cur.options.descending
-            && req.options.nulls_first != cur.options.nulls_first;
-
-        // Both conditions must be true:
-        //   1. Expressions are semantically equivalent
-        //   2. Completely reversed sort options
-        exprs_match && options_reversed
-    })
 }
 
 impl FileScanConfig {
@@ -1214,6 +1144,36 @@ impl FileScanConfig {
     /// Returns the file_source
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.file_source
+    }
+
+    /// Helper: Rebuild FileScanConfig with new file source
+    fn rebuild_with_source(
+        &self,
+        new_file_source: Arc<dyn FileSource>,
+        is_exact: bool,
+    ) -> Result<Arc<dyn DataSource>> {
+        let mut new_config = self.clone();
+
+        // Reverse file groups (FileScanConfig's responsibility)
+        new_config.file_groups = new_config
+            .file_groups
+            .into_iter()
+            .map(|group| {
+                let mut files = group.into_inner();
+                files.reverse();
+                files.into()
+            })
+            .collect();
+
+        new_config.file_source = new_file_source;
+
+        // Phase 1: Clear output_ordering for Inexact
+        // (we're only reversing row groups, not guaranteeing perfect ordering)
+        if !is_exact {
+            new_config.output_ordering = vec![];
+        }
+
+        Ok(Arc::new(new_config))
     }
 }
 
