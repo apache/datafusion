@@ -23,7 +23,7 @@ use abi_stable::StableAbi;
 use abi_stable::std_types::{RResult, RStr, RString, RVec, Tuple2};
 use datafusion::error::Result;
 use datafusion_common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
-use datafusion_common::exec_err;
+use datafusion_common::{exec_err, DataFusionError};
 
 use crate::df_result;
 
@@ -48,6 +48,19 @@ pub struct FFI_ExtensionOptions {
     /// A [`ForeignExtensionOptions`] should never attempt to access this data.
     pub private_data: *mut c_void,
 }
+
+// TODO(tsaucer) We have a problem in datafusion_common::config::Extension::get
+// which relies on knowing the concrete types of the extensions so that we can
+// use their PREFIX for insertion of configs. We cannot work around this using
+// things like `fn namespace() -> &'static str` because we must be able to do
+// this without having an instance. Instead we will go to an approach of having
+// a concrete FFI_ForeignConfigExtension and add a check into all of the methods
+// in the above `get` (and similar) methods to check to see if we have an FFI
+// configs. If so we get the concrete FFI config and then have a method that will
+// convert from FFI_ForeignExtensionConfig into the concrete type. Somehow our
+// FFI library will need to make this as easy an experience as they are used to
+// so maybe we need to implement something at the `Extensions` level in addition
+// to the ConfigExtension.
 
 unsafe impl Send for FFI_ExtensionOptions {}
 unsafe impl Sync for FFI_ExtensionOptions {}
@@ -203,13 +216,9 @@ impl ExtensionOptions for ForeignExtensionOptions {
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
         println!("Setting {key} = {value}");
-        let Some((namespace, key)) = key.split_once('.') else {
+        if key.split_once('.').is_none() {
             return exec_err!("Unable to set FFI config value without namespace set");
         };
-
-        // if namespace != ForeignExtensionOptions::PREFIX {
-        //     return exec_err!("Unexpected namespace {namespace} set for FFI config");
-        // }
 
         df_result!(unsafe { (self.0.set)(&mut self.0, key.into(), value.into()) })
     }
@@ -228,12 +237,27 @@ impl ExtensionOptions for ForeignExtensionOptions {
     }
 }
 
+// TODO: Maybe get rid of ForeignExtensionOptions?
+impl<C: ConfigExtension + Default> TryFrom<&ForeignExtensionOptions> for C {
+    type Error = DataFusionError;
+    fn try_from(options: &ForeignExtensionOptions) -> Result<Self> {
+        let mut result = C::default();
+        for entry in options.entries() {
+            if let Some(value) = entry.value {
+                result.set(entry.key.as_str(), value.as_str())?;
+            }
+        }
+
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion_common::config::{ConfigExtension, ConfigOptions};
     use datafusion_common::extensions_options;
 
-    use crate::config_options::{FFI_ExtensionOptions, ForeignExtensionOptions};
+    use crate::config::extension_options::{FFI_ExtensionOptions, ForeignExtensionOptions};
 
     // Define a new configuration struct using the `extensions_options` macro
     extensions_options! {
