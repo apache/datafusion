@@ -18,6 +18,7 @@
 //! See `main.rs` for how to run it.
 
 use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow_flight::{PollInfo, SchemaAsIpc};
@@ -85,12 +86,15 @@ impl FlightService for FlightServiceImpl {
                 // create local execution context
                 let ctx = SessionContext::new();
 
-                let testdata = datafusion::test_util::parquet_test_data();
+                let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("data")
+                    .join("parquet")
+                    .join("alltypes_plain.parquet");
 
                 // register parquet file with the execution context
                 ctx.register_parquet(
                     "alltypes_plain",
-                    &format!("{testdata}/alltypes_plain.parquet"),
+                    path.to_str().unwrap(),
                     ParquetReadOptions::default(),
                 )
                 .await

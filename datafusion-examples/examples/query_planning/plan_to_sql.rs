@@ -36,6 +36,7 @@ use datafusion::sql::unparser::extension_unparser::{
 };
 use datafusion::sql::unparser::{plan_to_sql, Unparser};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// This example demonstrates the programmatic construction of SQL strings using
@@ -114,12 +115,13 @@ fn simple_expr_to_sql_demo_escape_mysql_style() -> Result<()> {
 async fn simple_plan_to_sql_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
+
     let df = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?
         .select_columns(&["id", "int_col", "double_col", "date_string_col"])?;
 
@@ -139,12 +141,15 @@ async fn simple_plan_to_sql_demo() -> Result<()> {
 async fn round_trip_plan_to_sql_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
 
     // register parquet file with the execution context
     ctx.register_parquet(
         "alltypes_plain",
-        &format!("{testdata}/alltypes_plain.parquet"),
+        path.to_str().unwrap(),
         ParquetReadOptions::default(),
     )
     .await?;
@@ -231,12 +236,12 @@ impl UserDefinedLogicalNodeUnparser for PlanToStatement {
 /// It can be unparse as a statement that reads from the same parquet file.
 async fn unparse_my_logical_plan_as_statement() -> Result<()> {
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
     let inner_plan = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?
         .select_columns(&["id", "int_col", "double_col", "date_string_col"])?
         .into_unoptimized_plan();
@@ -284,12 +289,12 @@ impl UserDefinedLogicalNodeUnparser for PlanToSubquery {
 /// It can be unparse as a subquery that reads from the same parquet file, with some columns projected.
 async fn unparse_my_logical_plan_as_subquery() -> Result<()> {
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
     let inner_plan = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?
         .select_columns(&["id", "int_col", "double_col", "date_string_col"])?
         .into_unoptimized_plan();

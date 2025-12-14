@@ -17,6 +17,7 @@
 
 //! See `main.rs` for how to run it.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -35,7 +36,10 @@ use futures::StreamExt;
 pub async fn parquet_exec_visitor() -> datafusion::common::Result<()> {
     let ctx = SessionContext::new();
 
-    let test_data = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
@@ -45,7 +49,7 @@ pub async fn parquet_exec_visitor() -> datafusion::common::Result<()> {
     let _ = ctx
         .register_listing_table(
             "my_table",
-            &format!("file://{test_data}/alltypes_plain.parquet"),
+            path.to_str().unwrap(),
             listing_options.clone(),
             None,
             None,

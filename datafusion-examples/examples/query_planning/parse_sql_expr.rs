@@ -17,6 +17,8 @@
 
 //! See `main.rs` for how to run it.
 
+use std::path::PathBuf;
+
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::DFSchema;
 use datafusion::logical_expr::{col, lit};
@@ -76,12 +78,12 @@ async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
         .or(col("double_col").eq(lit(8.0_f64)));
 
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
     let df = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     let parsed_expr = df.parse_sql_expr(sql)?;
@@ -93,12 +95,12 @@ async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
 
 async fn query_parquet_demo() -> Result<()> {
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
     let df = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     let df = df
@@ -138,12 +140,12 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
     let sql = "((int_col < 5) OR (double_col = 8))";
 
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
     let df = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     let parsed_expr = df.parse_sql_expr(sql)?;

@@ -18,6 +18,7 @@
 //! See `main.rs` for how to run it.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tonic::transport::Endpoint;
 
@@ -33,7 +34,10 @@ use datafusion::arrow::util::pretty;
 /// Parquet files and executing SQL queries against them on a remote server.
 /// This example is run along-side the example `flight_server`.
 pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
 
     // Create Flight client
     let endpoint = Endpoint::new("http://localhost:50051")?;
@@ -44,7 +48,7 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let request = tonic::Request::new(FlightDescriptor {
         r#type: flight_descriptor::DescriptorType::Path as i32,
         cmd: Default::default(),
-        path: vec![format!("{testdata}/alltypes_plain.parquet")],
+        path: vec![format!("{}", path.to_str().unwrap())],
     });
 
     let schema_result = client.get_schema(request).await?.into_inner();

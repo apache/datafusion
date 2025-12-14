@@ -18,12 +18,11 @@
 
 //! See `main.rs` for how to run it.
 
-use std::{fs::File, io::Write};
+use std::path::PathBuf;
 
 use datafusion::common::{assert_batches_eq, assert_contains};
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use tempfile::tempdir;
 
 /// This example demonstrates how to use the regexp_* functions
 ///
@@ -35,29 +34,12 @@ use tempfile::tempdir;
 /// https://docs.rs/regex/latest/regex/#grouping-and-flags
 pub async fn regexp() -> Result<()> {
     let ctx = SessionContext::new();
-    // content from file 'datafusion/physical-expr/tests/data/regex.csv'
-    let csv_data = r#"values,patterns,replacement,flags
-abc,^(a),bb\1bb,i
-ABC,^(A).*,B,i
-aBc,(b|d),e,i
-AbC,(B|D),e,
-aBC,^(b|c),d,
-4000,\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b,xyz,
-4010,\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b,xyz,
-Düsseldorf,[\p{Letter}-]+,München,
-Москва,[\p{L}-]+,Moscow,
-Köln,[a-zA-Z]ö[a-zA-Z]{2},Koln,
-اليوم,^\p{Arabic}+$,Today,"#;
-    let dir = tempdir()?;
-    let file_path = dir.path().join("regex.csv");
-    {
-        let mut file = File::create(&file_path)?;
-        // write CSV data
-        file.write_all(csv_data.as_bytes())?;
-    } // scope closes the file
-    let file_path = file_path.to_str().unwrap();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("csv")
+        .join("regex.csv");
 
-    ctx.register_csv("examples", file_path, CsvReadOptions::new())
+    ctx.register_csv("examples", path.to_str().unwrap(), CsvReadOptions::new())
         .await?;
 
     //

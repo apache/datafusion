@@ -17,7 +17,8 @@
 
 //! See `main.rs` for how to run it.
 
-use datafusion::common::test_util::datafusion_test_data;
+use std::path::PathBuf;
+
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
@@ -27,7 +28,10 @@ pub async fn csv_sql_streaming() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    let testdata = datafusion_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("csv")
+        .join("window_1.csv");
 
     // Register a table source and tell DataFusion the file is ordered by `ts ASC`.
     // Note it is the responsibility of the user to make sure
@@ -38,7 +42,7 @@ pub async fn csv_sql_streaming() -> Result<()> {
     // register csv file with the execution context
     ctx.register_csv(
         "ordered_table",
-        &format!("{testdata}/window_1.csv"),
+        path.to_str().unwrap(),
         CsvReadOptions::new().file_sort_order(vec![sort_expr]),
     )
     .await?;

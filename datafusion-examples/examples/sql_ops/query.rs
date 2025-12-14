@@ -27,7 +27,7 @@ use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::*;
 use object_store::local::LocalFileSystem;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Examples of various ways to execute queries using SQL
@@ -113,20 +113,20 @@ async fn query_parquet() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    let test_data = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
-    let listing_options = ListingOptions::new(Arc::new(file_format))
-        // This is a workaround for this example since `test_data` contains
-        // many different parquet different files,
-        // in practice use FileType::PARQUET.get_ext().
-        .with_file_extension("alltypes_plain.parquet");
+    let listing_options =
+        ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
 
     // First example were we use an absolute path, which requires no additional setup.
     ctx.register_listing_table(
         "my_table",
-        &format!("file://{test_data}/"),
+        path.to_str().unwrap(),
         listing_options.clone(),
         None,
         None,
@@ -159,8 +159,7 @@ async fn query_parquet() -> Result<()> {
     // simulate a relative path, this requires registering an ObjectStore.
     let cur_dir = std::env::current_dir()?;
 
-    let test_data_path = Path::new(&test_data);
-    let test_data_path_parent = test_data_path
+    let test_data_path_parent = path
         .parent()
         .ok_or(exec_datafusion_err!("test_data path needs a parent"))?;
 
@@ -176,7 +175,7 @@ async fn query_parquet() -> Result<()> {
     // for the query
     ctx.register_listing_table(
         "relative_table",
-        "./data",
+        path.to_str().unwrap(),
         listing_options.clone(),
         None,
         None,

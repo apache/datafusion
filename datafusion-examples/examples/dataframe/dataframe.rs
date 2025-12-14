@@ -30,6 +30,7 @@ use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 
@@ -77,13 +78,14 @@ pub async fn dataframe_example() -> Result<()> {
 /// 2. Show the schema
 /// 3. Select columns and rows
 async fn read_parquet(ctx: &SessionContext) -> Result<()> {
-    // Find the local path of "alltypes_plain.parquet"
-    let testdata = datafusion::test_util::parquet_test_data();
-    let filename = &format!("{testdata}/alltypes_plain.parquet");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
-        .read_parquet(filename, ParquetReadOptions::default())
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     // show its schema using 'describe'
@@ -331,12 +333,12 @@ async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
 }
 
 async fn register_aggregate_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
-    let testdata = datafusion::test_util::arrow_test_data();
-    ctx.register_csv(
-        name,
-        &format!("{testdata}/csv/aggregate_test_100.csv"),
-        CsvReadOptions::default(),
-    )
-    .await?;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("csv")
+        .join("aggregate_test_100.csv");
+
+    ctx.register_csv(name, path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
     Ok(())
 }

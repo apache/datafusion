@@ -17,6 +17,8 @@
 
 //! See `main.rs` for how to run it.
 
+use std::path::PathBuf;
+
 use arrow::array::{AsArray, PrimitiveArray};
 use arrow::datatypes::{Float64Type, Int32Type};
 use datafusion::common::assert_batches_eq;
@@ -34,13 +36,18 @@ use futures::StreamExt;
 pub async fn deserialize_to_struct() -> Result<()> {
     // Run a query that returns two columns of data
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
+
     ctx.register_parquet(
         "alltypes_plain",
-        &format!("{testdata}/alltypes_plain.parquet"),
+        path.to_str().unwrap(),
         ParquetReadOptions::default(),
     )
     .await?;
+
     let df = ctx
         .sql("SELECT int_col, double_col FROM alltypes_plain")
         .await?;

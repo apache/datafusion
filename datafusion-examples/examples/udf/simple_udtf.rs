@@ -37,6 +37,7 @@ use datafusion::prelude::*;
 use std::fs::File;
 use std::io::Seek;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 // To define your own table function, you only need to do the following 3 things:
 // 1. Implement your own [`TableProvider`]
@@ -51,18 +52,26 @@ pub async fn simple_udtf() -> Result<()> {
     // register the table function that will be called in SQL statements by `read_csv`
     ctx.register_udtf("read_csv", Arc::new(LocalCsvTableFunc {}));
 
-    let testdata = datafusion::test_util::arrow_test_data();
-    let csv_file = format!("{testdata}/csv/aggregate_test_100.csv");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("csv")
+        .join("aggregate_test_100.csv");
 
     // Pass 2 arguments, read csv with at most 2 rows (simplify logic makes 1+1 --> 2)
     let df = ctx
-        .sql(format!("SELECT * FROM read_csv('{csv_file}', 1 + 1);").as_str())
+        .sql(
+            format!(
+                "SELECT * FROM read_csv('{}', 1 + 1);",
+                path.to_str().unwrap()
+            )
+            .as_str(),
+        )
         .await?;
     df.show().await?;
 
     // just run, return all rows
     let df = ctx
-        .sql(format!("SELECT * FROM read_csv('{csv_file}');").as_str())
+        .sql(format!("SELECT * FROM read_csv('{}');", path.to_str().unwrap()).as_str())
         .await?;
     df.show().await?;
 

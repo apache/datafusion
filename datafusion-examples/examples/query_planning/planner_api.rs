@@ -17,6 +17,8 @@
 
 //! See `main.rs` for how to run it.
 
+use std::path::PathBuf;
+
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::displayable;
@@ -37,12 +39,13 @@ use datafusion::prelude::*;
 pub async fn planner_api() -> Result<()> {
     // Set up a DataFusion context and load a Parquet file
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
+
     let df = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     // Construct the input logical plan using DataFrame API

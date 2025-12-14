@@ -56,10 +56,10 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion::test_util::parquet_test_data;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use std::any::Any;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, instrument, Instrument, Level, Span};
 
@@ -122,16 +122,28 @@ async fn run_instrumented_query() -> Result<()> {
     info!("Starting query execution");
 
     let ctx = SessionContext::new();
-    let test_data = parquet_test_data();
-    let file_format = ParquetFormat::default().with_enable_pruning(true);
-    let listing_options = ListingOptions::new(Arc::new(file_format))
-        .with_file_extension("alltypes_tiny_pages_plain.parquet");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
 
-    let table_path = format!("file://{test_data}/");
-    info!("Registering table 'alltypes' from {}", table_path);
-    ctx.register_listing_table("alltypes", &table_path, listing_options, None, None)
-        .await
-        .expect("Failed to register table");
+    let file_format = ParquetFormat::default().with_enable_pruning(true);
+    let listing_options =
+        ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
+
+    info!(
+        "Registering table 'alltypes' from {}",
+        path.to_str().unwrap()
+    );
+    ctx.register_listing_table(
+        "alltypes",
+        path.to_str().unwrap(),
+        listing_options,
+        None,
+        None,
+    )
+    .await
+    .expect("Failed to register table");
 
     let sql = "SELECT COUNT(*), string_col FROM alltypes GROUP BY string_col";
     info!(sql, "Executing SQL query");

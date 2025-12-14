@@ -24,6 +24,7 @@ use datafusion::logical_expr::{col, lit};
 use datafusion::parquet::encryption::decrypt::FileDecryptionProperties;
 use datafusion::parquet::encryption::encrypt::FileEncryptionProperties;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -32,13 +33,14 @@ pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
     // The SessionContext is the main high level API for interacting with DataFusion
     let ctx = SessionContext::new();
 
-    // Find the local path of "alltypes_plain.parquet"
-    let testdata = datafusion::test_util::parquet_test_data();
-    let filename = &format!("{testdata}/alltypes_plain.parquet");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("parquet")
+        .join("alltypes_plain.parquet");
 
     // Read the sample parquet file
     let parquet_df = ctx
-        .read_parquet(filename, ParquetReadOptions::default())
+        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     // Show information from the dataframe

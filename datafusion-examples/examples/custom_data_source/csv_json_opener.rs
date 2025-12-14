@@ -17,6 +17,7 @@
 
 //! See `main.rs` for how to run it.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
@@ -52,10 +53,10 @@ async fn csv_opener() -> Result<()> {
     let object_store = Arc::new(LocalFileSystem::new());
     let schema = aggr_test_schema();
 
-    let testdata = datafusion::test_util::arrow_test_data();
-    let path = format!("{testdata}/csv/aggregate_test_100.csv");
-
-    let path = std::path::Path::new(&path).canonicalize()?;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("csv")
+        .join("aggregate_test_100.csv");
 
     let options = CsvOptions {
         has_header: Some(true),
