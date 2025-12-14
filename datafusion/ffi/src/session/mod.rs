@@ -417,7 +417,13 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 .collect();
 
             let runtime_env = (session.runtime_env)(session).into_inner();
-            let props = (session.execution_props)(session).into_inner();
+            let ffi_props = (session.execution_props)(session);
+            let start_time_secs = (ffi_props.query_execution_start_time)(&ffi_props);
+            let mut props = ExecutionProps::new();
+            if let Some(dt) = chrono::DateTime::from_timestamp(start_time_secs as i64, 0)
+            {
+                props.query_execution_start_time = dt;
+            }
 
             Ok(Self {
                 session: session.clone(),
@@ -618,8 +624,14 @@ mod tests {
         ));
 
         assert_eq!(
-            foreign_session.execution_props().query_execution_start_time,
-            state.execution_props().query_execution_start_time
+            foreign_session
+                .execution_props()
+                .query_execution_start_time
+                .timestamp(),
+            state
+                .execution_props()
+                .query_execution_start_time
+                .timestamp()
         );
 
         Ok(())
@@ -630,7 +642,25 @@ mod tests {
 #[derive(Debug, StableAbi)]
 pub struct FFI_ExecutionProps {
     pub private_data: *mut c_void,
+    pub query_execution_start_time: unsafe extern "C" fn(&Self) -> u64,
     pub release: unsafe extern "C" fn(arg: &mut Self),
+}
+
+unsafe extern "C" fn get_execution_start_time(props: &FFI_ExecutionProps) -> u64 {
+    let private_data = props.private_data as *const ExecutionPropsPrivateData;
+    let props = &(*private_data).props;
+    props.query_execution_start_time.timestamp() as u64
+}
+
+impl From<ExecutionProps> for FFI_ExecutionProps {
+    fn from(props: ExecutionProps) -> Self {
+        let private_data = Box::new(ExecutionPropsPrivateData { props });
+        Self {
+            private_data: Box::into_raw(private_data) as *mut c_void,
+            query_execution_start_time: get_execution_start_time,
+            release: release_execution_props,
+        }
+    }
 }
 
 #[repr(C)]
@@ -665,16 +695,6 @@ unsafe extern "C" fn release_runtime_env(env: &mut FFI_RuntimeEnv) {
     let private_data = Box::from_raw(env.private_data as *mut RuntimeEnvPrivateData);
     drop(private_data);
     env.private_data = std::ptr::null_mut();
-}
-
-impl From<ExecutionProps> for FFI_ExecutionProps {
-    fn from(props: ExecutionProps) -> Self {
-        let private_data = Box::new(ExecutionPropsPrivateData { props });
-        Self {
-            private_data: Box::into_raw(private_data) as *mut c_void,
-            release: release_execution_props,
-        }
-    }
 }
 
 impl From<Arc<RuntimeEnv>> for FFI_RuntimeEnv {
