@@ -23,9 +23,9 @@ use arrow::array::{
 };
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{DataType, Field, FieldRef, Float64Type, Int32Type};
-use datafusion_common::types::{logical_float64, logical_int32, NativeType};
+use datafusion_common::types::{NativeType, logical_float64, logical_int32};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, internal_err, plan_datafusion_err,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
@@ -249,7 +249,7 @@ mod tests {
     use arrow::array::{DurationMicrosecondArray, Float64Array, Int32Array};
     use arrow::datatypes::DataType::Duration;
     use arrow::datatypes::{DataType, Field, TimeUnit::Microsecond};
-    use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+    use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
     use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 
     use super::*;

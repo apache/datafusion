@@ -850,8 +850,8 @@ mod test {
     use datafusion_datasource::{PartitionedFile, TableSchema, file_stream::FileOpener};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
-        projection::ProjectionExprs, PhysicalExpr,
+        PhysicalExpr, expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
+        projection::ProjectionExprs,
     };
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;

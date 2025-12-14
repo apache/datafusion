@@ -26,7 +26,7 @@ use arrow::{
 };
 use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
-use datafusion_common::types::{logical_int64, logical_string, NativeType};
+use datafusion_common::types::{NativeType, logical_int64, logical_string};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     DataFusionError,
