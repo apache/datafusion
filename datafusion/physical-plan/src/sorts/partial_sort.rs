@@ -67,12 +67,12 @@ use crate::{
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::Result;
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_execution::{RecordBatchStream, TaskContext};
 use datafusion_physical_expr::LexOrdering;
 
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 use log::trace;
 
 /// Partial Sort execution plan.
@@ -220,9 +220,17 @@ impl DisplayAs for PartialSortExec {
                 let common_prefix_length = self.common_prefix_length;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "PartialSortExec: TopK(fetch={fetch}), expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr)
+                        write!(
+                            f,
+                            "PartialSortExec: TopK(fetch={fetch}), expr=[{}], common_prefix_length=[{common_prefix_length}]",
+                            self.expr
+                        )
                     }
-                    None => write!(f, "PartialSortExec: expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr),
+                    None => write!(
+                        f,
+                        "PartialSortExec: expr=[{}], common_prefix_length=[{common_prefix_length}]",
+                        self.expr
+                    ),
                 }
             }
             DisplayFormatType::TreeRender => match self.fetch {
@@ -291,7 +299,12 @@ impl ExecutionPlan for PartialSortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start PartialSortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start PartialSortExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
         let input = self.input.execute(partition, Arc::clone(&context))?;
 
@@ -484,13 +497,13 @@ mod tests {
     use itertools::Itertools;
 
     use crate::collect;
-    use crate::expressions::col;
     use crate::expressions::PhysicalSortExpr;
+    use crate::expressions::col;
     use crate::sorts::sort::SortExec;
     use crate::test;
-    use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::assert_is_pending;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
     use super::*;
 

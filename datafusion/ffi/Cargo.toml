@@ -58,6 +58,7 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-proto-common = { workspace = true }
+datafusion-session = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }

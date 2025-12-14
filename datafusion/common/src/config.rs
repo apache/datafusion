@@ -965,6 +965,19 @@ config_namespace! {
         /// record tables provided to the MemTable on creation.
         pub repartition_file_scans: bool, default = true
 
+        /// Minimum number of distinct partition values required to group files by their
+        /// Hive partition column values (enabling Hash partitioning declaration).
+        ///
+        /// How the option is used:
+        ///     - preserve_file_partitions=0: Disable it.
+        ///     - preserve_file_partitions=1: Always enable it.
+        ///     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.
+        ///     This threshold preserves I/O parallelism when file partitioning is below it.
+        ///
+        /// Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct
+        /// partitions is less than the target_partitions.
+        pub preserve_file_partitions: usize, default = 0
+
         /// Should DataFusion repartition data using the partitions keys to execute window
         /// functions in parallel using the provided `target_partitions` level
         pub repartition_windows: bool, default = true
@@ -1023,6 +1036,36 @@ config_namespace! {
         /// The maximum estimated size in rows for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
+
+        /// Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
+        /// Build sides larger than this will use hash table lookups instead.
+        /// Set to 0 to always use hash table lookups.
+        ///
+        /// InList pushdown can be more efficient for small build sides because it can result in better
+        /// statistics pruning as well as use any bloom filters present on the scan side.
+        /// InList expressions are also more transparent and easier to serialize over the network in distributed uses of DataFusion.
+        /// On the other hand InList pushdown requires making a copy of the data and thus adds some overhead to the build side and uses more memory.
+        ///
+        /// This setting is per-partition, so we may end up using `hash_join_inlist_pushdown_max_size` * `target_partitions` memory.
+        ///
+        /// The default is 128kB per partition.
+        /// This should allow point lookup joins (e.g. joining on a unique primary key) to use InList pushdown in most cases
+        /// but avoids excessive memory usage or overhead for larger joins.
+        pub hash_join_inlist_pushdown_max_size: usize, default = 128 * 1024
+
+        /// Maximum number of distinct values (rows) in the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
+        /// Build sides with more rows than this will use hash table lookups instead.
+        /// Set to 0 to always use hash table lookups.
+        ///
+        /// This provides an additional limit beyond `hash_join_inlist_pushdown_max_size` to prevent
+        /// very large IN lists that might not provide much benefit over hash table lookups.
+        ///
+        /// This uses the deduplicated row count once the build side has been evaluated.
+        ///
+        /// The default is 150 values per partition.
+        /// This is inspired by Trino's `max-filter-keys-per-column` setting.
+        /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
+        pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
 
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
