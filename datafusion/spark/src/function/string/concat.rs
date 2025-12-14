@@ -82,7 +82,9 @@ impl ScalarUDFImpl for SparkConcat {
         Ok(arg_types.to_vec())
     }
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        datafusion_common::internal_err!(
+            "return_type should not be called for Spark concat"
+        )
     }
     fn return_field_from_args(
         &self,
