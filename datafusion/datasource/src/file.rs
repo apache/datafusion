@@ -114,7 +114,8 @@ pub trait FileSource: Send + Sync {
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
-        if config.file_compression_type.is_compressed() || !self.supports_repartitioning() {
+        if config.file_compression_type.is_compressed() || !self.supports_repartitioning()
+        {
             return Ok(None);
         }
 
