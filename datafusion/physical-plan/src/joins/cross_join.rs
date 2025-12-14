@@ -449,6 +449,7 @@ fn stats_cartesian_product(
                 })
                 .map(|row_count| s.sum_value.multiply(&row_count))
                 .unwrap_or(Precision::Absent),
+            byte_size: Precision::Absent,
         })
         .chain(right_col_stats.into_iter().map(|s| {
             ColumnStatistics {
@@ -467,6 +468,7 @@ fn stats_cartesian_product(
                     })
                     .map(|row_count| s.sum_value.multiply(&row_count))
                     .unwrap_or(Precision::Absent),
+                byte_size: Precision::Absent,
             }
         }))
         .collect();
@@ -704,6 +706,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -711,6 +714,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -724,6 +728,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
+                byte_size: Precision::Absent,
             }],
         };
 
@@ -741,6 +746,7 @@ mod tests {
                         42 * right_row_count as i64,
                     ))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -748,6 +754,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3 * right_row_count),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
@@ -757,6 +764,7 @@ mod tests {
                         20 * left_row_count as i64,
                     ))),
                     null_count: Precision::Exact(2 * left_row_count),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -778,6 +786,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -785,6 +794,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -798,6 +808,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
+                byte_size: Precision::Absent,
             }],
         };
 
@@ -813,6 +824,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Absent, // we don't know the row count on the right
                     null_count: Precision::Absent, // we don't know the row count on the right
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -820,6 +832,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent, // we don't know the row count on the right
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
@@ -829,6 +842,7 @@ mod tests {
                         20 * left_row_count as i64,
                     ))),
                     null_count: Precision::Exact(2 * left_row_count),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
