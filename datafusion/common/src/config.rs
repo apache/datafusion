@@ -1004,7 +1004,7 @@ config_namespace! {
         /// expression is a subset of the current partition expression.
         ///
         /// How the option is used:
-        ///     - repartition_subset_satisfactions=true: Always repartition on a subset satisfactioh.
+        ///     - repartition_subset_satisfactions=true: Always repartition on a subset satisfaction.
         ///     - repartition_subset_satisfactions=false: Only repartition if target_partitions > current partitions (increases parallelism).
         ///
         /// Example (repartition_subset_satisfactions = false):
