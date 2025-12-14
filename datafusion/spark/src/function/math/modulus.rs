@@ -89,11 +89,7 @@ impl ScalarUDFImpl for SparkMod {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // The mod function output is nullable only in the case that the input is nullable
-        // (notably, a mod 0 returns an error, not null). Thus this check is sufficient.
-        let any_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-        let data_type = args.arg_fields[0].data_type().clone();
-        Ok(Arc::new(Field::new(self.name(), data_type, any_nullable)))
+        return_field_for_binary_op(self.name(), args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -139,16 +135,20 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // The mod function output is nullable only in the case that the input is nullable
-        // (notably, a mod 0 returns an error, not null). Thus this check is sufficient.
-        let any_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-        let data_type = args.arg_fields[0].data_type().clone();
-        Ok(Arc::new(Field::new(self.name(), data_type, any_nullable)))
+        return_field_for_binary_op(self.name(), args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_pmod(&args.args)
     }
+}
+
+fn return_field_for_binary_op(name: &str, args: ReturnFieldArgs) -> Result<FieldRef> {
+    // The mod function output is nullable only in the case that the input is nullable
+    // (notably, a mod 0 returns an error, not null). Thus this check is sufficient.
+    let any_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+    let data_type = args.arg_fields[0].data_type().clone();
+    Ok(Arc::new(Field::new(name, data_type, any_nullable)))
 }
 
 #[cfg(test)]
