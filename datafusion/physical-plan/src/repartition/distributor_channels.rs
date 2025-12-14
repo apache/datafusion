@@ -43,8 +43,8 @@ use std::{
     ops::DerefMut,
     pin::Pin,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
 };
@@ -476,7 +476,7 @@ type SharedGate = Arc<Gate>;
 mod tests {
     use std::sync::atomic::AtomicBool;
 
-    use futures::{task::ArcWake, FutureExt};
+    use futures::{FutureExt, task::ArcWake};
 
     use super::*;
 

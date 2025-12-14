@@ -25,13 +25,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
-    assert_eq_or_internal_err, get_required_group_by_exprs_indices,
-    internal_datafusion_err, internal_err, Column, DFSchema, HashMap, JoinType, Result,
+    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Distinct, EmptyRelation, Expr, Projection,
-    TableScan, Unnest, Window,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
+    logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -138,7 +138,7 @@ fn optimize_projections(
         LogicalPlan::Projection(proj) => {
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
                 rewrite_projection_given_requirements(proj, config, &indices)
-            })
+            });
         }
         LogicalPlan::Aggregate(aggregate) => {
             // Split parent requirements to GROUP BY and aggregate sections:
@@ -882,12 +882,11 @@ pub fn is_projection_unnecessary(
 /// subqueries like scalar, EXISTS, or IN. These cases prevent projection
 /// pushdown for now because we cannot safely reason about their column usage.
 fn plan_contains_other_subqueries(plan: &LogicalPlan, cte_name: &str) -> bool {
-    if let LogicalPlan::SubqueryAlias(alias) = plan {
-        if alias.alias.table() != cte_name
-            && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
-        {
-            return true;
-        }
+    if let LogicalPlan::SubqueryAlias(alias) = plan
+        && alias.alias.table() != cte_name
+        && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
+    {
+        return true;
     }
 
     let mut found = false;
@@ -957,14 +956,15 @@ mod tests {
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        binary_expr, build_join_schema,
+        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator, Projection,
+        UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
+        build_join_schema,
         builder::table_scan_with_filters,
         col,
         expr::{self, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
-        not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
-        Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
+        not, try_cast, when,
     };
     use insta::assert_snapshot;
 

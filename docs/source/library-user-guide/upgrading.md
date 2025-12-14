@@ -229,6 +229,52 @@ let expr_with_literals = replace_columns_with_literals(expr, &partition_values)?
 let adapted_expr = adapter.rewrite(expr_with_literals)?;
 ```
 
+### `build_row_filter` signature simplified
+
+The `build_row_filter` function in `datafusion-datasource-parquet` has been simplified to take a single schema parameter instead of two.
+The expectation is now that the filter has been adapted to the physical file schema (the arrow representation of the parquet file's schema) before being passed to this function
+using a `PhysicalExprAdapter` for example.
+
+**Who is affected:**
+
+- Users who call `build_row_filter` directly
+
+**Breaking changes:**
+
+The function signature changed from:
+
+```rust,ignore
+pub fn build_row_filter(
+    expr: &Arc<dyn PhysicalExpr>,
+    physical_file_schema: &SchemaRef,
+    predicate_file_schema: &SchemaRef,  // removed
+    metadata: &ParquetMetaData,
+    reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
+) -> Result<Option<RowFilter>>
+```
+
+To:
+
+```rust,ignore
+pub fn build_row_filter(
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    metadata: &ParquetMetaData,
+    reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
+) -> Result<Option<RowFilter>>
+```
+
+**Migration guide:**
+
+Remove the duplicate schema parameter from your call:
+
+```diff
+- build_row_filter(&predicate, &file_schema, &file_schema, metadata, reorder, metrics)
++ build_row_filter(&predicate, &file_schema, metadata, reorder, metrics)
+```
+
 ### Planner now requires explicit opt-in for WITHIN GROUP syntax
 
 The SQL planner now enforces the aggregate UDF contract more strictly: the
