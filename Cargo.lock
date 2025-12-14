@@ -2307,6 +2307,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-proto",
  "datafusion-proto-common",
+ "datafusion-session",
  "doc-comment",
  "futures",
  "log",
@@ -2591,6 +2592,7 @@ name = "datafusion-proto"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "chrono",
  "datafusion",
  "datafusion-catalog",

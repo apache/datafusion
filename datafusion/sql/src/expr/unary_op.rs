@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err, DFSchema, Diagnostic, Result};
+use datafusion_common::{DFSchema, Diagnostic, Result, not_impl_err, plan_err};
 use datafusion_expr::{
-    type_coercion::{is_interval, is_timestamp},
     Expr, ExprSchemable,
+    type_coercion::{is_interval, is_timestamp},
 };
 use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value, ValueWithSpan};
 

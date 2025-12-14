@@ -86,7 +86,7 @@ fn make_substrait_window_function(
     bounds: (Bound, Bound),
     bounds_type: BoundsType,
 ) -> Expression {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Expression {
         rex_type: Some(RexType::WindowFunction(SubstraitWindowFunction {
             function_reference,
