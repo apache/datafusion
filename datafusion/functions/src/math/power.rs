@@ -81,10 +81,9 @@ impl PowerFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![integer.clone(), integer.clone()]),
-                    TypeSignature::Coercible(vec![decimal.clone(), integer.clone()]),
+                    TypeSignature::Coercible(vec![decimal.clone(), integer]),
                     TypeSignature::Coercible(vec![decimal.clone(), float.clone()]),
-                    TypeSignature::Coercible(vec![float.clone(), float.clone()]),
+                    TypeSignature::Coercible(vec![float; 2]),
                 ],
                 Volatility::Immutable,
             ),
@@ -183,7 +182,7 @@ impl ScalarUDFImpl for PowerFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types[0].is_null() {
-            Ok(DataType::Int64)
+            Ok(DataType::Float64)
         } else {
             Ok(arg_types[0].clone())
         }
@@ -198,23 +197,11 @@ impl ScalarUDFImpl for PowerFunc {
         let base = base.to_array(args.number_rows)?;
 
         let arr: ArrayRef = match (base.data_type(), exponent.data_type()) {
-            (DataType::Float64, _) => {
+            (DataType::Float64, DataType::Float64) => {
                 calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
                     &base,
                     exponent,
                     |b, e| Ok(f64::powf(b, e)),
-                )?
-            }
-            (DataType::Int64, _) => {
-                calculate_binary_math::<Int64Type, Int64Type, Int64Type, _>(
-                    &base,
-                    exponent,
-                    |b, e| match e.try_into() {
-                        Ok(exp_u32) => b.pow_checked(exp_u32),
-                        Err(_) => Err(ArrowError::ArithmeticOverflow(format!(
-                            "Exponent {e} in integer computation is out of bounds."
-                        ))),
-                    },
                 )?
             }
             (DataType::Decimal32(precision, scale), DataType::Int64) => {
