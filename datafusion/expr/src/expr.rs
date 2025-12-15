@@ -2024,6 +2024,90 @@ impl Expr {
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                     rewrite_placeholder(pattern.as_mut(), expr.as_ref(), schema)?;
                 }
+                Expr::Case(Case {
+                    expr,
+                    when_then_expr,
+                    else_expr,
+                }) => {
+                    // If `expr` is present, then it must match the types of each WHEN expression.
+                    // If `expr` is not present, then the type of each WHEN expression must evaluate to a boolean.
+                    // The types of the THEN and ELSE expressions must match the result type of the CASE expression.
+
+                    // Find the source expression for WHEN type inference
+                    // For simple CASE (with expr), use the base expr or first non-null WHEN
+                    // For searched CASE (no expr), WHEN must be Boolean
+                    let when_source: Option<Expr> = match expr {
+                        Some(e) => {
+                            let expr_type = e.get_type(schema)?;
+                            if expr_type != DataType::Null {
+                                Some(e.as_ref().clone())
+                            } else {
+                                // Find first non-null WHEN expression
+                                when_then_expr.iter().find_map(|(when_expr, _)| {
+                                    when_expr
+                                        .get_type(schema)
+                                        .ok()
+                                        .filter(|t| *t != DataType::Null)
+                                        .map(|_| when_expr.as_ref().clone())
+                                })
+                            }
+                        }
+                        None => None, // Searched CASE: WHEN must be Boolean
+                    };
+
+                    // Find the source expression for THEN/ELSE type inference
+                    // Use the first non-null THEN expression, or else the ELSE expression
+                    let result_source: Option<Expr> = when_then_expr
+                        .iter()
+                        .find_map(|(_, then_expr)| {
+                            then_expr
+                                .get_type(schema)
+                                .ok()
+                                .filter(|t| !t.is_null())
+                                .map(|_| then_expr.as_ref().clone())
+                        })
+                        .or_else(|| {
+                            else_expr.as_ref().and_then(|e| {
+                                e.get_type(schema)
+                                    .ok()
+                                    .filter(|t| !t.is_null())
+                                    .map(|_| e.as_ref().clone())
+                            })
+                        });
+
+                    // Rewrite base expression placeholder if present
+                    if let Some(e) = expr
+                        && let Some(ref source) = when_source
+                    {
+                        rewrite_placeholder(e.as_mut(), source, schema)?;
+                    }
+
+                    // Rewrite WHEN and THEN placeholders
+                    for (when_expr, then_expr) in when_then_expr.iter_mut() {
+                        match &when_source {
+                            Some(source) => {
+                                rewrite_placeholder(when_expr.as_mut(), source, schema)?;
+                            }
+                            None => {
+                                // Searched CASE: WHEN must be Boolean
+                                rewrite_placeholder_type(
+                                    when_expr.as_mut(),
+                                    &DataType::Boolean,
+                                )?;
+                            }
+                        }
+                        if let Some(ref source) = result_source {
+                            rewrite_placeholder(then_expr.as_mut(), source, schema)?;
+                        }
+                    }
+
+                    // Rewrite ELSE placeholder
+                    if let Some(else_expr) = else_expr
+                        && let Some(ref source) = result_source
+                    {
+                        rewrite_placeholder(else_expr.as_mut(), source, schema)?;
+                    }
+                }
                 Expr::Placeholder(_) => {
                     has_placeholder = true;
                 }
@@ -2698,6 +2782,20 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
             }
         }
     };
+    Ok(())
+}
+
+/// Sets the [`DataType`] of a [`Placeholder`] expression if it is currently `None`.
+///
+/// This is used during placeholder type inference to assign a specific data type
+/// to untyped placeholders based on context (e.g., the expected type from a function signature).
+fn rewrite_placeholder_type(expr: &mut Expr, dt: &DataType) -> Result<()> {
+    if let Expr::Placeholder(Placeholder { id: _, field }) = expr
+        && field.is_none()
+        && !dt.is_null()
+    {
+        *field = Some(Arc::new(Field::new("", dt.clone(), true)));
+    }
     Ok(())
 }
 
@@ -3511,7 +3609,7 @@ mod test {
     use crate::expr_fn::col;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
-        lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
+        lit, placeholder, qualified_wildcard, when, wildcard, wildcard_with_options,
     };
     use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;
@@ -3927,6 +4025,279 @@ mod test {
             replace: opt_replace,
             rename: opt_rename,
         }
+    }
+
+    #[test]
+    fn infer_placeholder_simple_case() {
+        // CASE department_id WHEN $1 THEN $2 WHEN $3 THEN 'Engineering' ELSE $4 END
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("department_id", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let case_expr = case(col("department_id"))
+            .when(placeholder("$1"), placeholder("$2"))
+            .when(placeholder("$3"), lit("Engineering"))
+            .otherwise(placeholder("$4"))
+            .unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            case_expr.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
+                // Base expression should remain unchanged
+                assert!(matches!(**expr.as_ref().unwrap(), Expr::Column(_)));
+
+                // WHEN expressions should infer Int32 (to match department_id column)
+                for (when_expr, then_expr) in &when_then_expr {
+                    if let Expr::Placeholder(placeholder) = when_expr.as_ref() {
+                        assert_eq!(
+                            placeholder.field.as_ref().unwrap().data_type(),
+                            &DataType::Int32,
+                            "WHEN placeholder {} should infer Int32",
+                            placeholder.id
+                        );
+                    }
+
+                    // THEN expressions should infer Utf8 (to match the known literal)
+                    if let Expr::Placeholder(placeholder) = then_expr.as_ref() {
+                        assert_eq!(
+                            placeholder.field.as_ref().unwrap().data_type(),
+                            &DataType::Utf8,
+                            "THEN placeholder {} should infer Utf8",
+                            placeholder.id
+                        );
+                    }
+                }
+
+                // ELSE expression should infer Utf8 (to match THEN expressions)
+                if let Some(Expr::Placeholder(placeholder)) =
+                    else_expr.as_ref().map(|e| e.as_ref())
+                {
+                    assert_eq!(
+                        placeholder.field.as_ref().unwrap().data_type(),
+                        &DataType::Utf8,
+                        "ELSE placeholder {} should infer Utf8",
+                        placeholder.id
+                    );
+                }
+            }
+            _ => panic!("Expected Case expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_searched_case() {
+        // CASE WHEN $1 > 100 THEN $2 WHEN name = $3 THEN 'High earner' ELSE $4 END
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("salary", DataType::Int32, true),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let case_expr = when(
+            binary_expr(placeholder("$1"), Operator::Gt, lit(100i32)),
+            placeholder("$2"),
+        )
+        .when(
+            binary_expr(col("name"), Operator::Eq, placeholder("$3")),
+            lit("High earner"),
+        )
+        .otherwise(placeholder("$4"))
+        .unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            case_expr.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
+                assert!(expr.is_none()); // Should remain None for searched CASE
+
+                // Check first WHEN condition: $1 > 100
+                match when_then_expr[0].0.as_ref() {
+                    Expr::BinaryExpr(BinaryExpr { left, .. }) => match left.as_ref() {
+                        Expr::Placeholder(placeholder) => {
+                            assert_eq!(
+                                placeholder.field.as_ref().unwrap().data_type(),
+                                &DataType::Int32,
+                                "Placeholder {} should infer Int32",
+                                placeholder.id
+                            );
+                        }
+                        _ => panic!("Expected Placeholder"),
+                    },
+                    _ => panic!("Expected BinaryExpr"),
+                }
+
+                // Check second WHEN condition: name = $3
+                match when_then_expr[1].0.as_ref() {
+                    Expr::BinaryExpr(BinaryExpr { right, .. }) => match right.as_ref() {
+                        Expr::Placeholder(placeholder) => {
+                            assert_eq!(
+                                placeholder.field.as_ref().unwrap().data_type(),
+                                &DataType::Utf8,
+                                "Placeholder {} should infer Utf8",
+                                placeholder.id
+                            );
+                        }
+                        _ => panic!("Expected Placeholder"),
+                    },
+                    _ => panic!("Expected BinaryExpr"),
+                }
+
+                // Check THEN expressions - should all infer Utf8
+                for (_, then_expr) in &when_then_expr {
+                    if let Expr::Placeholder(placeholder) = then_expr.as_ref() {
+                        assert_eq!(
+                            placeholder.field.as_ref().unwrap().data_type(),
+                            &DataType::Utf8,
+                            "THEN placeholder {} should infer Utf8",
+                            placeholder.id
+                        );
+                    }
+                }
+
+                // Check ELSE expression - should infer Utf8
+                match else_expr.as_ref().map(|e| e.as_ref()) {
+                    Some(Expr::Placeholder(placeholder)) => {
+                        assert_eq!(
+                            placeholder.field.as_ref().unwrap().data_type(),
+                            &DataType::Utf8,
+                            "ELSE placeholder {} should infer Utf8",
+                            placeholder.id
+                        );
+                    }
+                    _ => panic!("Expected Placeholder for ELSE"),
+                }
+            }
+            _ => panic!("Expected Case expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_case_with_base_expression_placeholder() {
+        // CASE $1 WHEN 'Engineering' THEN $2 ELSE $3 END
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("department", DataType::Utf8, true),
+            Field::new("bonus", DataType::Float64, true),
+        ]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let case_expr = case(placeholder("$1"))
+            .when(lit("Engineering"), placeholder("$2"))
+            .otherwise(placeholder("$3"))
+            .unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            case_expr.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
+                // Base expression placeholder should infer Utf8 (from WHEN value)
+                match expr.as_ref().map(|e| e.as_ref()) {
+                    Some(Expr::Placeholder(placeholder)) => {
+                        assert_eq!(
+                            placeholder.field.as_ref().unwrap().data_type(),
+                            &DataType::Utf8,
+                            "Base expression placeholder {} should infer Utf8",
+                            placeholder.id
+                        );
+                    }
+                    _ => panic!("Expected Placeholder for base expression"),
+                }
+
+                // THEN and ELSE expressions don't have a concrete type to infer from
+                // (all are placeholders), so they remain with field = None
+                for (_, then_expr) in &when_then_expr {
+                    if let Expr::Placeholder(placeholder) = then_expr.as_ref() {
+                        // No concrete type hint available, so field remains None
+                        assert!(placeholder.field.is_none());
+                    }
+                }
+
+                if let Some(else_expr) = else_expr
+                    && let Expr::Placeholder(placeholder) = else_expr.as_ref()
+                {
+                    assert!(placeholder.field.is_none());
+                }
+            }
+            _ => panic!("Expected Case expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_case_all_nulls_initially() {
+        // CASE WHEN $1 IS NULL THEN $2 ELSE $3 END
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let case_expr =
+            when(Expr::IsNull(Box::new(placeholder("$1"))), placeholder("$2"))
+                .otherwise(placeholder("$3"))
+                .unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            case_expr.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        // Verify the expression was processed (even if some types remain unresolved)
+        assert!(matches!(inferred_expr, Expr::Case(_)));
+    }
+
+    #[test]
+    fn infer_placeholder_nested_case() {
+        // Nested CASE expressions:
+        // CASE WHEN $1 > 0 THEN
+        //   CASE WHEN $2 = 'admin' THEN $3 ELSE $4 END
+        // ELSE $5 END
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, true),
+            Field::new("role", DataType::Utf8, true),
+        ]));
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        let inner_case = when(
+            binary_expr(placeholder("$2"), Operator::Eq, lit("admin")),
+            placeholder("$3"),
+        )
+        .otherwise(placeholder("$4"))
+        .unwrap();
+
+        let outer_case = when(
+            binary_expr(placeholder("$1"), Operator::Gt, lit(0i32)),
+            inner_case,
+        )
+        .otherwise(placeholder("$5"))
+        .unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            outer_case.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        // The inference should handle nested CASE expressions
+        assert!(matches!(inferred_expr, Expr::Case(_)));
     }
 
     #[test]
