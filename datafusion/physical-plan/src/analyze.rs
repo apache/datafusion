@@ -239,7 +239,10 @@ impl ExecutionPlan for AnalyzeExec {
             let mut total_rows = 0;
             while let Some(batch) = input_stream.next().await.transpose()? {
                 total_rows += batch.num_rows();
-                batches.push(batch);
+                // in the auto_explain mode, store the input batches to later return them
+                if auto_explain {
+                    batches.push(batch);
+                }
             }
 
             let duration = Instant::now() - start;
