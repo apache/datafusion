@@ -269,7 +269,7 @@ mod private {
                             .metadata
                             .get(SCHEMA_METADATA_KEY)
                         {
-                            Some(_) => Arc::clone(&config.table_schema.file_schema()),
+                            Some(_) => Arc::clone(config.table_schema.file_schema()),
                             None => {
                                 Arc::new(read_avro_schema_from_reader(&mut file).unwrap())
                             } // if not inferred, read schema from file
@@ -293,7 +293,7 @@ mod private {
                             .metadata
                             .get(SCHEMA_METADATA_KEY)
                         {
-                            Some(_) => Arc::clone(&config.table_schema.file_schema()),
+                            Some(_) => Arc::clone(config.table_schema.file_schema()),
                             None => Arc::new(
                                 read_avro_schema_from_reader(&mut bytes.reader())
                                     .unwrap(),
