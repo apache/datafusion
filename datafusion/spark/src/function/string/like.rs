@@ -71,8 +71,8 @@ impl ScalarUDFImpl for SparkLike {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        match (arg_types.first(), arg_types.get(1)) {
-            (Some(lhs), Some(rhs)) => {
+        match arg_types {
+            [lhs, rhs] => {
                 let common_type = like_coercion(lhs, rhs).ok_or_else(|| {
                     plan_datafusion_err!(
                         "LIKE does not support argument types {:?} and {:?}",
