@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, Int64Array, PrimitiveArray,
+    ArrayRef, Int64Array, PrimitiveArray,
     cast::AsArray,
     types::{Float64Type, Int64Type},
 };
@@ -24,7 +24,7 @@ use arrow::array::{BooleanArray, Decimal128Array, Float64Array};
 use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DataType, Decimal128Type, Field, FieldRef,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, downcast_value, exec_err};
+use datafusion_common::{Result, ScalarValue, downcast_value, exec_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
@@ -351,8 +351,8 @@ impl AggregateUDFImpl for SparkTrySum {
 #[cfg(test)]
 mod tests {
     use arrow::array::BooleanArray;
-    use datafusion_common::ScalarValue;
     use datafusion_common::arrow::array::Float64Array;
+    use datafusion_common::{DataFusionError, ScalarValue};
     use std::sync::Arc;
 
     use super::*;
