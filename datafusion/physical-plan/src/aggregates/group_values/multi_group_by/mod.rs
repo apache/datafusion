@@ -433,7 +433,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         let mut batch_hashes = mem::take(&mut self.hashes_buffer);
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, &mut batch_hashes)?;
+        create_hashes(&cols[0..1], &self.random_state, &mut batch_hashes)?;
 
         // General steps for one round `vectorized equal_to & append`:
         //   1. Collect vectorized context by checking hash values of `cols` in `map`,
