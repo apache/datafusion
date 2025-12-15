@@ -1127,7 +1127,7 @@ config_namespace! {
         /// path (file is created if it does not exist; plans are appended to the file).
         pub auto_explain_output: String, default = "stdout".to_owned()
 
-        /// In the `auto_explain` mode, only output plans if their duration is bigger than this
+        /// In the `auto_explain` mode, only output plans if their duration is bigger than or equal to this
         /// value, in milliseconds.
         pub auto_explain_min_duration: usize, default = 0
     }
