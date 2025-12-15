@@ -42,7 +42,7 @@
 //! - Supports prefix matching: if data has ordering [A DESC, B ASC] and query needs
 //!   [A ASC], reversing gives [A ASC, B DESC] which satisfies the requirement
 //!
-//! TODO Issue: https://github.com/apache/datafusion/issues/19329
+//! TODO Issue: <https://github.com/apache/datafusion/issues/19329>
 //! ## Future enhancements (Phase 2),
 //!
 //! - File reordering based on statistics
