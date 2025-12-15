@@ -18,6 +18,9 @@
 //! Tests for the DataFusion SQL query planner that require functions from the
 //! datafusion-functions crate.
 
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyContext;
+use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use insta::assert_snapshot;
 use std::any::Any;
 use std::collections::HashMap;
@@ -26,13 +29,16 @@ use std::sync::Arc;
 use arrow::datatypes::{
     DataType, Field, Fields, Schema, SchemaBuilder, SchemaRef, TimeUnit,
 };
+use datafusion::functions::datetime::expr_fn;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TransformedResult;
-use datafusion_common::{plan_err, DFSchema, Result, ScalarValue, TableReference};
+use datafusion_common::{
+    plan_err, DFSchema, DFSchemaRef, Result, ScalarValue, TableReference,
+};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarUDF, TableSource, WindowUDF,
+    and, col, lit, or, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan,
+    Operator, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;
@@ -377,4 +383,140 @@ fn validate_unchanged_cases(guarantees: &[(Expr, NullableInterval)], cases: &[Ex
             "{expr} was simplified to {output}, but expected it to be unchanged"
         );
     }
+}
+
+// DatePart preimage tests
+#[test]
+fn test_preimage_date_part_date32_eq() {
+    let schema = expr_test_schema();
+    // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
+    let expr_lt = expr_fn::date_part(lit("year"), col("date32")).eq(lit(2024i32));
+    let expected = and(
+        col("date32").gt_eq(lit(ScalarValue::Date32(Some(19723)))),
+        col("date32").lt(lit(ScalarValue::Date32(Some(20089)))),
+    );
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+fn test_preimage_date_part_date64_not_eq() {
+    let schema = expr_test_schema();
+    // date_part(c1, DatePart::Year) <> 2024 -> c1 < 2024-01-01 AND c1 >= 2025-01-01
+    let expr_lt = expr_fn::date_part(lit("year"), col("date64")).not_eq(lit(2024i32));
+    let expected = or(
+        col("date64").lt(lit(ScalarValue::Date64(Some(19723 * 86_400_000)))),
+        col("date64").gt_eq(lit(ScalarValue::Date64(Some(20089 * 86_400_000)))),
+    );
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+fn test_preimage_date_part_timestamp_nano_lt() {
+    let schema = expr_test_schema();
+    let expr_lt = expr_fn::date_part(lit("year"), col("ts_nano_none")).lt(lit(2024i32));
+    let expected = col("ts_nano_none").lt(lit(ScalarValue::TimestampNanosecond(
+        Some(19723 * 86_400_000_000_000),
+        None,
+    )));
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+fn test_preimage_date_part_timestamp_nano_utc_gt() {
+    let schema = expr_test_schema();
+    let expr_lt = expr_fn::date_part(lit("year"), col("ts_nano_utc")).gt(lit(2024i32));
+    let expected = col("ts_nano_utc").gt_eq(lit(ScalarValue::TimestampNanosecond(
+        Some(20089 * 86_400_000_000_000),
+        None,
+    )));
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+fn test_preimage_date_part_timestamp_sec_est_gt_eq() {
+    let schema = expr_test_schema();
+    let expr_lt = expr_fn::date_part(lit("year"), col("ts_sec_est")).gt_eq(lit(2024i32));
+    let expected = col("ts_sec_est").gt_eq(lit(ScalarValue::TimestampSecond(
+        Some(19723 * 86_400),
+        None,
+    )));
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+fn test_preimage_date_part_timestamp_sec_est_lt_eq() {
+    let schema = expr_test_schema();
+    let expr_lt = expr_fn::date_part(lit("year"), col("ts_mic_pt")).lt_eq(lit(2024i32));
+    let expected = col("ts_mic_pt").lt(lit(ScalarValue::TimestampMicrosecond(
+        Some(20089 * 86_400_000_000),
+        None,
+    )));
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+fn test_preimage_date_part_timestamp_nano_lt_swap() {
+    let schema = expr_test_schema();
+    let expr_lt = lit(2024i32).gt(expr_fn::date_part(lit("year"), col("ts_nano_none")));
+    let expected = col("ts_nano_none").lt(lit(ScalarValue::TimestampNanosecond(
+        Some(19723 * 86_400_000_000_000),
+        None,
+    )));
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+// Should not simplify
+fn test_preimage_date_part_not_year_date32_eq() {
+    let schema = expr_test_schema();
+    // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
+    let expr_lt = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
+    let expected = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
+    let props = ExecutionProps::new();
+    let simplifier =
+        ExprSimplifier::new(SimplifyContext::new(&props).with_schema(Arc::clone(schema)));
+
+    simplifier.simplify(expr).unwrap()
+}
+
+fn expr_test_schema() -> DFSchemaRef {
+    Arc::new(
+        DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("date32", DataType::Date32, false),
+                Field::new("date64", DataType::Date64, false),
+                Field::new("ts_nano_none", timestamp_nano_none_type(), false),
+                Field::new("ts_nano_utc", timestamp_nano_utc_type(), false),
+                Field::new("ts_sec_est", timestamp_sec_est_type(), false),
+                Field::new("ts_mic_pt", timestamp_mic_pt_type(), false),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap(),
+    )
+}
+
+fn timestamp_nano_none_type() -> DataType {
+    DataType::Timestamp(TimeUnit::Nanosecond, None)
+}
+
+// this is the type that now() returns
+fn timestamp_nano_utc_type() -> DataType {
+    let utc = Some("+0:00".into());
+    DataType::Timestamp(TimeUnit::Nanosecond, utc)
+}
+
+fn timestamp_sec_est_type() -> DataType {
+    let est = Some("-5:00".into());
+    DataType::Timestamp(TimeUnit::Second, est)
+}
+
+fn timestamp_mic_pt_type() -> DataType {
+    let pt = Some("-8::00".into());
+    DataType::Timestamp(TimeUnit::Microsecond, pt)
 }
