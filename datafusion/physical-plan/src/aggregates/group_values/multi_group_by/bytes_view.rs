@@ -230,10 +230,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
 
         // Otherwise, we need to check their values
-        let exist_view = self.views[lhs_row];
+        let exist_view = unsafe {
+            *self.views.get_unchecked(lhs_row)
+        };
         let exist_view_len = exist_view as u32;
 
-        let input_view = array.views()[rhs_row];
+        let input_view = unsafe {
+            *array.views().get_unchecked(rhs_row)
+        };
         let input_view_len = input_view as u32;
 
         // The check logic
