@@ -22,14 +22,14 @@ use std::sync::Arc;
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, GenericStringBuilder};
 use arrow::datatypes::DataType::{
-    Int16, Int32, Int64, Int8, UInt16, UInt32, UInt64, UInt8, Utf8,
+    Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Utf8,
 };
 use arrow::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, DataType, Int16Type, Int32Type, Int64Type,
-    Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowPrimitiveType, DataType, Int8Type, Int16Type, Int32Type,
+    Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
+use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{exec_err, plan_err};
 
 use datafusion_expr::{ColumnarValue, Documentation};
@@ -162,8 +162,8 @@ impl ScalarUDFImpl for ToHexFunc {
 #[cfg(test)]
 mod tests {
     use arrow::array::{
-        Int16Array, Int32Array, Int64Array, Int8Array, StringArray, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        Int8Array, Int16Array, Int32Array, Int64Array, StringArray, UInt8Array,
+        UInt16Array, UInt32Array, UInt64Array,
     };
     use datafusion_common::cast::as_string_array;
 

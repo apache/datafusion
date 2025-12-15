@@ -1091,6 +1091,9 @@ impl serde::Serialize for ColumnStats {
         if self.distinct_count.is_some() {
             len += 1;
         }
+        if self.byte_size.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ColumnStats", len)?;
         if let Some(v) = self.min_value.as_ref() {
             struct_ser.serialize_field("minValue", v)?;
@@ -1106,6 +1109,9 @@ impl serde::Serialize for ColumnStats {
         }
         if let Some(v) = self.distinct_count.as_ref() {
             struct_ser.serialize_field("distinctCount", v)?;
+        }
+        if let Some(v) = self.byte_size.as_ref() {
+            struct_ser.serialize_field("ByteSize", v)?;
         }
         struct_ser.end()
     }
@@ -1127,6 +1133,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             "nullCount",
             "distinct_count",
             "distinctCount",
+            "byte_size",
+            "ByteSize",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1136,6 +1144,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             SumValue,
             NullCount,
             DistinctCount,
+            
+            ByteSize,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1162,6 +1172,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             "sumValue" | "sum_value" => Ok(GeneratedField::SumValue),
                             "nullCount" | "null_count" => Ok(GeneratedField::NullCount),
                             "distinctCount" | "distinct_count" => Ok(GeneratedField::DistinctCount),
+                            "ByteSize" | "byte_size" => Ok(GeneratedField::ByteSize),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1186,6 +1197,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                 let mut sum_value__ = None;
                 let mut null_count__ = None;
                 let mut distinct_count__ = None;
+                let mut byte_size__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::MinValue => {
@@ -1218,6 +1230,12 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             }
                             distinct_count__ = map_.next_value()?;
                         }
+                        GeneratedField::ByteSize => {
+                            if byte_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ByteSize"));
+                            }
+                            byte_size__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ColumnStats {
@@ -1226,6 +1244,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                     sum_value: sum_value__,
                     null_count: null_count__,
                     distinct_count: distinct_count__,
+                    byte_size: byte_size__,
                 })
             }
         }
@@ -5557,6 +5576,9 @@ impl serde::Serialize for ParquetOptions {
         if self.reorder_filters {
             len += 1;
         }
+        if self.force_filter_selections {
+            len += 1;
+        }
         if self.data_pagesize_limit != 0 {
             len += 1;
         }
@@ -5650,6 +5672,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.reorder_filters {
             struct_ser.serialize_field("reorderFilters", &self.reorder_filters)?;
+        }
+        if self.force_filter_selections {
+            struct_ser.serialize_field("forceFilterSelections", &self.force_filter_selections)?;
         }
         if self.data_pagesize_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5816,6 +5841,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "pushdownFilters",
             "reorder_filters",
             "reorderFilters",
+            "force_filter_selections",
+            "forceFilterSelections",
             "data_pagesize_limit",
             "dataPagesizeLimit",
             "write_batch_size",
@@ -5875,6 +5902,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             SkipMetadata,
             PushdownFilters,
             ReorderFilters,
+            ForceFilterSelections,
             DataPagesizeLimit,
             WriteBatchSize,
             WriterVersion,
@@ -5927,6 +5955,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "skipMetadata" | "skip_metadata" => Ok(GeneratedField::SkipMetadata),
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
                             "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
+                            "forceFilterSelections" | "force_filter_selections" => Ok(GeneratedField::ForceFilterSelections),
                             "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
                             "writeBatchSize" | "write_batch_size" => Ok(GeneratedField::WriteBatchSize),
                             "writerVersion" | "writer_version" => Ok(GeneratedField::WriterVersion),
@@ -5977,6 +6006,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut skip_metadata__ = None;
                 let mut pushdown_filters__ = None;
                 let mut reorder_filters__ = None;
+                let mut force_filter_selections__ = None;
                 let mut data_pagesize_limit__ = None;
                 let mut write_batch_size__ = None;
                 let mut writer_version__ = None;
@@ -6034,6 +6064,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("reorderFilters"));
                             }
                             reorder_filters__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ForceFilterSelections => {
+                            if force_filter_selections__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("forceFilterSelections"));
+                            }
+                            force_filter_selections__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DataPagesizeLimit => {
                             if data_pagesize_limit__.is_some() {
@@ -6213,6 +6249,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     skip_metadata: skip_metadata__.unwrap_or_default(),
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),
                     reorder_filters: reorder_filters__.unwrap_or_default(),
+                    force_filter_selections: force_filter_selections__.unwrap_or_default(),
                     data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),
                     write_batch_size: write_batch_size__.unwrap_or_default(),
                     writer_version: writer_version__.unwrap_or_default(),

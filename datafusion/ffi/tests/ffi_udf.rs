@@ -43,7 +43,7 @@ mod tests {
                     "External table provider failed to implement create_scalar_udf"
                         .to_string(),
                 ))?();
-        let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).try_into()?;
+        let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).into();
 
         let udf = ScalarUDF::new_from_shared_impl(foreign_abs_func);
 
@@ -81,7 +81,7 @@ mod tests {
                     "External table provider failed to implement create_scalar_udf"
                         .to_string(),
                 ))?();
-        let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).try_into()?;
+        let foreign_abs_func: Arc<dyn ScalarUDFImpl> = (&ffi_abs_func).into();
 
         let udf = ScalarUDF::new_from_shared_impl(foreign_abs_func);
 

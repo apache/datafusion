@@ -28,10 +28,12 @@ use datafusion_common::DataFusionError;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
+use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::TableSchema;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::projection::ProjectionExprs;
 
 use crate::read_avro_schema_from_reader;
 use object_store::ObjectStore;
@@ -42,7 +44,7 @@ use serde_json::Value;
 pub struct AvroSource {
     table_schema: TableSchema,
     batch_size: Option<usize>,
-    projection: Option<Vec<usize>>,
+    projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
@@ -50,16 +52,25 @@ pub struct AvroSource {
 impl AvroSource {
     /// Initialize an AvroSource with the provided schema
     pub fn new(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
-            table_schema: table_schema.into(),
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
             batch_size: None,
-            projection: None,
             metrics: ExecutionPlanMetricsSet::new(),
             schema_adapter_factory: None,
         }
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
+        let file_schema = self.table_schema.file_schema();
+        let projection = Some(
+            self.projection
+                .file_indices
+                .iter()
+                .map(|&idx| file_schema.field(idx).name().clone())
+                .collect::<Vec<_>>(),
+        );
         // TODO: Once `ReaderBuilder::with_projection` is available, we should use it instead.
         //  This should be an easy change. We'd simply need to:
         //      1. Use the full file schema to generate the reader `AvroSchema`.
@@ -160,11 +171,17 @@ impl FileSource for AvroSource {
         object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        Arc::new(private::AvroOpener {
+    ) -> Result<Arc<dyn FileOpener>> {
+        let mut opener = Arc::new(private::AvroOpener {
             config: Arc::new(self.clone()),
             object_store,
-        })
+        }) as Arc<dyn FileOpener>;
+        opener = ProjectionOpener::try_new(
+            self.projection.clone(),
+            Arc::clone(&opener),
+            self.table_schema.file_schema(),
+        )?;
+        Ok(opener)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -181,10 +198,20 @@ impl FileSource for AvroSource {
         Arc::new(conf)
     }
 
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        let mut conf = self.clone();
-        conf.projection = config.file_column_projection_indices();
-        Arc::new(conf)
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        let new_projection = self.projection.source.try_merge(projection)?;
+        let split_projection =
+            SplitProjection::new(self.table_schema.file_schema(), &new_projection);
+        source.projection = split_projection;
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection.source)
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {

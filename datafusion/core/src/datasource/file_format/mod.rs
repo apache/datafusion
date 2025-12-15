@@ -92,7 +92,7 @@ pub(crate) mod test_util {
                 )
                 .with_file_groups(file_groups)
                 .with_statistics(statistics)
-                .with_projection_indices(projection)
+                .with_projection_indices(projection)?
                 .with_limit(limit)
                 .build(),
             )

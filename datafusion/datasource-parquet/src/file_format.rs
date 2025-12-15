@@ -27,12 +27,12 @@ use std::{fmt, vec};
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::write::{
-    get_writer_schema, ObjectWriterBuilder, SharedBuffer,
+    ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
-use datafusion_datasource::TableSchema;
 
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
@@ -42,8 +42,8 @@ use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
-    HashSet, Result, DEFAULT_PARQUET_EXTENSION,
+    DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, HashSet, Result,
+    internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_common::{HashMap, Statistics};
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
@@ -60,7 +60,7 @@ use datafusion_session::Session;
 
 use crate::metadata::DFParquetMetadata;
 use crate::reader::CachedParquetFileReaderFactory;
-use crate::source::{parse_coerce_int96_string, ParquetSource};
+use crate::source::{ParquetSource, parse_coerce_int96_string};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
@@ -72,8 +72,8 @@ use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_writer::{
-    compute_leaves, ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn,
-    ArrowRowGroupWriterFactory, ArrowWriterOptions,
+    ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
+    ArrowWriterOptions, compute_leaves,
 };
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
@@ -460,12 +460,13 @@ impl FileFormat for ParquetFormat {
             metadata_size_hint = Some(metadata);
         }
 
-        let table_schema = TableSchema::new(
-            Arc::clone(conf.file_schema()),
-            conf.table_partition_cols().clone(),
-        );
-        let mut source = ParquetSource::new(table_schema)
-            .with_table_parquet_options(self.options.clone());
+        let mut source = conf
+            .file_source()
+            .as_any()
+            .downcast_ref::<ParquetSource>()
+            .cloned()
+            .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
+        source = source.with_table_parquet_options(self.options.clone());
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -482,11 +483,8 @@ impl FileFormat for ParquetFormat {
 
         source = self.set_source_encryption_factory(source, state)?;
 
-        // Apply schema adapter factory before building the new config
-        let file_source = source.apply_schema_adapter(&conf)?;
-
         let conf = FileScanConfigBuilder::from(conf)
-            .with_source(file_source)
+            .with_source(Arc::new(source))
             .build();
         Ok(DataSourceExec::from_data_source(conf))
     }
@@ -542,8 +540,9 @@ impl ParquetFormat {
         _state: &dyn Session,
     ) -> Result<ParquetSource> {
         if let Some(encryption_factory_id) = &self.options.crypto.factory_id {
-            Err(DataFusionError::Configuration(
-                format!("Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled")))
+            Err(DataFusionError::Configuration(format!(
+                "Parquet encryption factory id is set to '{encryption_factory_id}' but the parquet_encryption feature is disabled"
+            )))
         } else {
             Ok(source)
         }

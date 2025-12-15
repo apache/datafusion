@@ -23,15 +23,15 @@ use arrow::array::{
     PrimitiveArray,
 };
 use arrow::datatypes::{Field, Int64Type};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::buffer::OffsetBuffer;
-use rand::distr::{Distribution, StandardUniform};
-use rand::prelude::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::prelude::StdRng;
 
 /// Returns fixed seedable RNG
 pub fn seedable_rng() -> StdRng {

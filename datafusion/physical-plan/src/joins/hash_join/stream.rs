@@ -23,38 +23,38 @@
 use std::sync::Arc;
 use std::task::Poll;
 
+use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::shared_bounds::{
-    PartitionBuildDataReport, SharedBuildAccumulator,
+    PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
-    equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
+    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
 };
-use crate::joins::PartitionMode;
 use crate::{
-    handle_state,
+    RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
     joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
-        adjust_indices_by_join_type, apply_join_filter_to_indices,
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
+        StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
-        need_produce_result_in_final, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-        JoinHashMapType, StatefulStreamResult,
+        need_produce_result_in_final,
     },
-    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
+use arrow::compute::BatchCoalescer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, JoinSide, JoinType, NullEquality, Result,
+    JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -206,6 +206,10 @@ pub(super) struct HashJoinStream {
     batch_size: usize,
     /// Scratch space for computing hashes
     hashes_buffer: Vec<u64>,
+    /// Scratch space for probe indices during hash lookup
+    probe_indices_buffer: Vec<u32>,
+    /// Scratch space for build indices during hash lookup
+    build_indices_buffer: Vec<u64>,
     /// Specifies whether the right side has an ordering to potentially preserve
     right_side_ordered: bool,
     /// Shared build accumulator for coordinating dynamic filter updates (collects hash maps and/or bounds, optional)
@@ -213,9 +217,12 @@ pub(super) struct HashJoinStream {
     /// Optional future to signal when build information has been reported by all partitions
     /// and the dynamic filter has been updated
     build_waiter: Option<OnceFut<()>>,
-
     /// Partitioning mode to use
     mode: PartitionMode,
+    /// Output buffer for coalescing small batches into larger ones.
+    /// Uses `BatchCoalescer` from arrow to efficiently combine batches.
+    /// When batches are already close to target size, they bypass coalescing.
+    output_buffer: Box<BatchCoalescer>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -272,7 +279,7 @@ impl RecordBatchStream for HashJoinStream {
 /// Build indices: 4, 5, 6, 6
 /// Probe indices: 3, 3, 4, 5
 /// ```
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(super) fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
     build_side_values: &[ArrayRef],
@@ -281,20 +288,35 @@ pub(super) fn lookup_join_hashmap(
     hashes_buffer: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
+    probe_indices_buffer: &mut Vec<u32>,
+    build_indices_buffer: &mut Vec<u64>,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
-    let (probe_indices, build_indices, next_offset) =
-        build_hashmap.get_matched_indices_with_limit_offset(hashes_buffer, limit, offset);
+    let next_offset = build_hashmap.get_matched_indices_with_limit_offset(
+        hashes_buffer,
+        limit,
+        offset,
+        probe_indices_buffer,
+        build_indices_buffer,
+    );
 
-    let build_indices: UInt64Array = build_indices.into();
-    let probe_indices: UInt32Array = probe_indices.into();
+    let build_indices_unfiltered: UInt64Array =
+        std::mem::take(build_indices_buffer).into();
+    let probe_indices_unfiltered: UInt32Array =
+        std::mem::take(probe_indices_buffer).into();
 
+    // TODO: optimize equal_rows_arr to avoid allocation of intermediate arrays
+    // https://github.com/apache/datafusion/issues/12131
     let (build_indices, probe_indices) = equal_rows_arr(
-        &build_indices,
-        &probe_indices,
+        &build_indices_unfiltered,
+        &probe_indices_unfiltered,
         build_side_values,
         probe_side_values,
         null_equality,
     )?;
+
+    // Reclaim buffers
+    *build_indices_buffer = build_indices_unfiltered.into_parts().1.into();
+    *probe_indices_buffer = probe_indices_unfiltered.into_parts().1.into();
 
     Ok((build_indices, probe_indices, next_offset))
 }
@@ -329,7 +351,7 @@ fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
 }
 
 impl HashJoinStream {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn new(
         partition: usize,
         schema: Arc<Schema>,
@@ -349,6 +371,14 @@ impl HashJoinStream {
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
     ) -> Self {
+        // Create output buffer with coalescing.
+        // Use biggest_coalesce_batch_size to bypass coalescing for batches
+        // that are already close to target size (within 50%).
+        let output_buffer = Box::new(
+            BatchCoalescer::new(Arc::clone(&schema), batch_size)
+                .with_biggest_coalesce_batch_size(Some(batch_size / 2)),
+        );
+
         Self {
             partition,
             schema,
@@ -364,10 +394,13 @@ impl HashJoinStream {
             build_side,
             batch_size,
             hashes_buffer,
+            probe_indices_buffer: Vec::with_capacity(batch_size),
+            build_indices_buffer: Vec::with_capacity(batch_size),
             right_side_ordered,
             build_accumulator,
             build_waiter: None,
             mode,
+            output_buffer,
         }
     }
 
@@ -378,6 +411,14 @@ impl HashJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
+            // First, check if we have any completed batches ready to emit
+            if let Some(batch) = self.output_buffer.next_completed_batch() {
+                return self
+                    .join_metrics
+                    .baseline
+                    .record_poll(Poll::Ready(Some(Ok(batch))));
+            }
+
             return match self.state {
                 HashJoinStreamState::WaitBuildSide => {
                     handle_state!(ready!(self.collect_build_side(cx)))
@@ -389,12 +430,16 @@ impl HashJoinStream {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 HashJoinStreamState::ProcessProbeBatch(_) => {
-                    let poll = handle_state!(self.process_probe_batch());
-                    self.join_metrics.baseline.record_poll(poll)
+                    handle_state!(self.process_probe_batch())
                 }
                 HashJoinStreamState::ExhaustedProbeSide => {
-                    let poll = handle_state!(self.process_unmatched_build_batch());
-                    self.join_metrics.baseline.record_poll(poll)
+                    handle_state!(self.process_unmatched_build_batch())
+                }
+                HashJoinStreamState::Completed if !self.output_buffer.is_empty() => {
+                    // Flush any remaining buffered data
+                    self.output_buffer.finish_buffered_batch()?;
+                    // Continue loop to emit the flushed batch
+                    continue;
                 }
                 HashJoinStreamState::Completed => Poll::Ready(None),
             };
@@ -430,11 +475,12 @@ impl HashJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
         // build hash table from left (build) side, if not yet done
-        let left_data = ready!(self
-            .build_side
-            .try_as_initial_mut()?
-            .left_fut
-            .get_shared(cx))?;
+        let left_data = ready!(
+            self.build_side
+                .try_as_initial_mut()?
+                .left_fut
+                .get_shared(cx)
+        )?;
         build_timer.done();
 
         // Handle dynamic filter build-side information accumulation
@@ -448,21 +494,36 @@ impl HashJoinStream {
             let left_side_partition_id = match self.mode {
                 PartitionMode::Partitioned => self.partition,
                 PartitionMode::CollectLeft => 0,
-                PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
+                PartitionMode::Auto => unreachable!(
+                    "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
+                ),
             };
 
+            // Determine pushdown strategy based on availability of InList values
+            let pushdown = left_data.membership().clone();
+
+            // Construct the appropriate build data enum variant based on partition mode
             let build_data = match self.mode {
-                PartitionMode::Partitioned => PartitionBuildDataReport::Partitioned {
+                PartitionMode::Partitioned => PartitionBuildData::Partitioned {
                     partition_id: left_side_partition_id,
-                    bounds: left_data.bounds.clone(),
+                    pushdown,
+                    bounds: left_data
+                        .bounds
+                        .clone()
+                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
                 },
-                PartitionMode::CollectLeft => PartitionBuildDataReport::CollectLeft {
-                    bounds: left_data.bounds.clone(),
+                PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
+                    pushdown,
+                    bounds: left_data
+                        .bounds
+                        .clone()
+                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
                 },
                 PartitionMode::Auto => unreachable!(
                     "PartitionMode::Auto should not be present at execution time"
                 ),
             };
+
             self.build_waiter = Some(OnceFut::new(async move {
                 build_accumulator.report_build_data(build_data).await
             }));
@@ -552,6 +613,8 @@ impl HashJoinStream {
             &self.hashes_buffer,
             self.batch_size,
             state.offset,
+            &mut self.probe_indices_buffer,
+            &mut self.build_indices_buffer,
         )?;
 
         let distinct_right_indices_count = count_distinct_sorted_indices(&right_indices);
@@ -628,27 +691,25 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
-        let result = if self.join_type == JoinType::RightMark {
-            build_batch_from_indices(
-                &self.schema,
-                &state.batch,
-                build_side.left_data.batch(),
-                &left_indices,
-                &right_indices,
-                &self.column_indices,
-                JoinSide::Right,
-            )?
-        } else {
-            build_batch_from_indices(
-                &self.schema,
-                build_side.left_data.batch(),
-                &state.batch,
-                &left_indices,
-                &right_indices,
-                &self.column_indices,
-                JoinSide::Left,
-            )?
-        };
+        // Build output batch and push to coalescer
+        let (build_batch, probe_batch, join_side) =
+            if self.join_type == JoinType::RightMark {
+                (&state.batch, build_side.left_data.batch(), JoinSide::Right)
+            } else {
+                (build_side.left_data.batch(), &state.batch, JoinSide::Left)
+            };
+
+        let batch = build_batch_from_indices(
+            &self.schema,
+            build_batch,
+            probe_batch,
+            &left_indices,
+            &right_indices,
+            &self.column_indices,
+            join_side,
+        )?;
+
+        self.output_buffer.push_batch(batch)?;
 
         timer.done();
 
@@ -662,7 +723,7 @@ impl HashJoinStream {
             )
         };
 
-        Ok(StatefulStreamResult::Ready(Some(result)))
+        Ok(StatefulStreamResult::Continue)
     }
 
     /// Processes unmatched build-side rows for certain join types and produces output batch
@@ -690,27 +751,30 @@ impl HashJoinStream {
             self.join_type,
             true,
         );
-        let empty_right_batch = RecordBatch::new_empty(self.right.schema());
-        // use the left and right indices to produce the batch result
-        let result = build_batch_from_indices(
-            &self.schema,
-            build_side.left_data.batch(),
-            &empty_right_batch,
-            &left_side,
-            &right_side,
-            &self.column_indices,
-            JoinSide::Left,
-        );
 
-        if let Ok(ref batch) = result {
-            self.join_metrics.input_batches.add(1);
-            self.join_metrics.input_rows.add(batch.num_rows());
-        }
+        self.join_metrics.input_batches.add(1);
+        self.join_metrics.input_rows.add(left_side.len());
+
         timer.done();
 
         self.state = HashJoinStreamState::Completed;
 
-        Ok(StatefulStreamResult::Ready(Some(result?)))
+        // Push final unmatched indices to output buffer
+        if !left_side.is_empty() {
+            let empty_right_batch = RecordBatch::new_empty(self.right.schema());
+            let batch = build_batch_from_indices(
+                &self.schema,
+                build_side.left_data.batch(),
+                &empty_right_batch,
+                &left_side,
+                &right_side,
+                &self.column_indices,
+                JoinSide::Left,
+            )?;
+            self.output_buffer.push_batch(batch)?;
+        }
+
+        Ok(StatefulStreamResult::Continue)
     }
 }
 

@@ -21,12 +21,12 @@ use std::sync::Arc;
 use crate::utils::make_scalar_function;
 
 use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
-use arrow::compute::{cast_with_options, CastOptions};
+use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::DataType::{Float32, Float64, Int32};
 use arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -234,8 +234,8 @@ mod test {
     use crate::math::round::round;
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
-    use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DataFusionError;
+    use datafusion_common::cast::{as_float32_array, as_float64_array};
 
     #[test]
     fn test_round_f32() {

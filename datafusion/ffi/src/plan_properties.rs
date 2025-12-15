@@ -18,10 +18,7 @@
 use std::{ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{
-        RResult::{self, ROk},
-        RString, RVec,
-    },
+    std_types::{RResult::ROk, RVec},
     StableAbi,
 };
 use arrow::datatypes::SchemaRef;
@@ -44,6 +41,7 @@ use datafusion_proto::{
 };
 use prost::Message;
 
+use crate::util::FFIResult;
 use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
@@ -53,8 +51,7 @@ use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
 pub struct FFI_PlanProperties {
     /// The output partitioning is a [`Partitioning`] protobuf message serialized
     /// into bytes to pass across the FFI boundary.
-    pub output_partitioning:
-        unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RString>,
+    pub output_partitioning: unsafe extern "C" fn(plan: &Self) -> FFIResult<RVec<u8>>,
 
     /// Return the emission type of the plan.
     pub emission_type: unsafe extern "C" fn(plan: &Self) -> FFI_EmissionType,
@@ -64,7 +61,7 @@ pub struct FFI_PlanProperties {
 
     /// The output ordering is a [`PhysicalSortExprNodeCollection`] protobuf message
     /// serialized into bytes to pass across the FFI boundary.
-    pub output_ordering: unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RString>,
+    pub output_ordering: unsafe extern "C" fn(plan: &Self) -> FFIResult<RVec<u8>>,
 
     /// Return the schema of the plan.
     pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
@@ -95,7 +92,7 @@ impl FFI_PlanProperties {
 
 unsafe extern "C" fn output_partitioning_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> RResult<RVec<u8>, RString> {
+) -> FFIResult<RVec<u8>> {
     let codec = DefaultPhysicalExtensionCodec {};
     let partitioning_data = rresult_return!(serialize_partitioning(
         properties.inner().output_partitioning(),
@@ -120,7 +117,7 @@ unsafe extern "C" fn boundedness_fn_wrapper(
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> RResult<RVec<u8>, RString> {
+) -> FFIResult<RVec<u8>> {
     let codec = DefaultPhysicalExtensionCodec {};
     let output_ordering = match properties.inner().output_ordering() {
         Some(ordering) => {
@@ -144,9 +141,11 @@ unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> Wrapp
 }
 
 unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
+    debug_assert!(!props.private_data.is_null());
     let private_data =
         Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
     drop(private_data);
+    props.private_data = std::ptr::null_mut();
 }
 
 impl Drop for FFI_PlanProperties {
