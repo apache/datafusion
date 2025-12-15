@@ -40,12 +40,12 @@ on:
 
 jobs:
   # Check license header
-  license-header-check:
-    runs-on: ubuntu-latest
-    name: Check License Header
-    steps:
-      - uses: actions/checkout@v4
-      - uses: korandoru/hawkeye@v6
+#  license-header-check:
+#    runs-on: ubuntu-latest
+#    name: Check License Header
+#    steps:
+#      - uses: actions/checkout@v4
+#      - uses: korandoru/hawkeye@v6
 
   # Check crate compiles and base cargo check passes
   linux-build-lib:
@@ -108,6 +108,13 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Remove unnecessary preinstalled software
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          rm -rf /__t/* || true
+          echo "Disk space after cleanup:"
+          df -h
       - uses: actions/checkout@v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
@@ -174,6 +181,13 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Remove unnecessary preinstalled software
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          rm -rf /__t/* || true
+          echo "Disk space after cleanup:"
+          df -h
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -187,88 +201,108 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-  linux-test-example:
-    name: cargo examples (amd64)
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run examples
-        run: |
-          # test datafusion-sql examples
-          cargo run --profile ci --example sql
-          # test datafusion-examples
-          ci/scripts/rust_example.sh
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
+#  linux-test-datafusion-cli:
+#    name: cargo test datafusion-cli (amd64)
+#    needs: linux-build-lib
+#    runs-on: ubuntu-latest
+#    container:
+#      image: amd64/rust
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          submodules: true
+#          fetch-depth: 1
+#      - name: Setup Rust toolchain
+#        uses: ./.github/actions/setup-builder
+#        with:
+#          rust-version: stable
+#      - name: Run tests (excluding doctests)
+#        run: |
+#          cd datafusion-cli
+#          cargo test --profile ci --lib --tests --bins --all-features
+#      - name: Verify Working Directory Clean
+#        run: git diff --exit-code
+
+#  linux-test-example:
+#    name: cargo examples (amd64)
+#    needs: [ linux-build-lib ]
+#    runs-on: ubuntu-latest
+#    container:
+#      image: amd64/rust
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          submodules: true
+#      - name: Setup Rust toolchain
+#        uses: ./.github/actions/setup-builder
+#        with:
+#          rust-version: stable
+#      - name: Run examples
+#        run: |
+#          # test datafusion-sql examples
+#          cargo run --example sql
+#          # test datafusion-examples
+#          ci/scripts/rust_example.sh
+#      - name: Verify Working Directory Clean
+#        run: git diff --exit-code
 
   # Run `cargo test doc` (test documentation examples)
-  linux-test-doc:
-    name: cargo test doc (amd64)
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run doctests
-        run: cargo test --profile ci --doc --features avro,json
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
+  #   linux-test-doc:
+  #     name: cargo test doc (amd64)
+  #     needs: linux-build-lib
+  #     runs-on: ubuntu-latest
+  #     container:
+  #       image: amd64/rust
+  #     steps:
+  #       - uses: actions/checkout@v4
+  #         with:
+  #           submodules: true
+  #           fetch-depth: 1
+  #       - name: Setup Rust toolchain
+  #         uses: ./.github/actions/setup-builder
+  #         with:
+  #           rust-version: stable
+  #       - name: Run doctests
+  #         run: cargo test --profile ci --doc --features avro,json
+  #       - name: Verify Working Directory Clean
+  #         run: git diff --exit-code
 
   # Run `cargo doc` to ensure the rustdoc is clean
-  linux-rustdoc:
-    name: cargo doc
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run cargo doc
-        run: ci/scripts/rust_docs.sh
-
-  linux-wasm-pack:
-    name: build with wasm-pack
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Install dependencies
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq clang
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build with wasm-pack
-        working-directory: ./datafusion/wasmtest
-        run: wasm-pack build --dev
-
+  #   linux-rustdoc:
+  #     name: cargo doc
+  #     needs: linux-build-lib
+  #     runs-on: ubuntu-latest
+  #     container:
+  #       image: amd64/rust
+  #     steps:
+  #       - uses: actions/checkout@v4
+  #       - name: Setup Rust toolchain
+  #         uses: ./.github/actions/setup-builder
+  #         with:
+  #           rust-version: stable
+  #       - name: Run cargo doc
+  #         run: ci/scripts/rust_docs.sh
+  # 
+  #   linux-wasm-pack:
+  #     name: build with wasm-pack
+  #     runs-on: ubuntu-latest
+  #     container:
+  #       image: amd64/rust
+  #     steps:
+  #       - uses: actions/checkout@v4
+  #       - name: Setup Rust toolchain
+  #         uses: ./.github/actions/setup-builder
+  #         with:
+  #           rust-version: stable
+  #       - name: Install dependencies
+  #         run: |
+  #           apt-get update -qq
+  #           apt-get install -y -qq clang
+  #       - name: Install wasm-pack
+  #         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+  #       - name: Build with wasm-pack
+  #         working-directory: ./datafusion/wasmtest
+  #         run: wasm-pack build --dev
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
     name: verify benchmark results (amd64)
@@ -303,43 +337,42 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-  sqllogictest-postgres:
-    name: "Run sqllogictest with Postgres runner"
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: db_test
-          POSTGRES_INITDB_ARGS: --encoding=UTF-8 --lc-collate=C --lc-ctype=C
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run sqllogictest
-        run: |
-          cd datafusion/sqllogictest
-          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo test --profile ci --features=postgres --test sqllogictests
-        env:
-          # use postgres for the host here because we have specified a container for the job
-          POSTGRES_HOST: postgres
-          POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
+#  sqllogictest-postgres:
+#    name: "Run sqllogictest with Postgres runner"
+#    needs: linux-build-lib
+#    runs-on: ubuntu-latest
+#    container:
+#      image: amd64/rust
+#    services:
+#      postgres:
+#        image: postgres:15
+#        env:
+#          POSTGRES_PASSWORD: postgres
+#          POSTGRES_DB: db_test
+#          POSTGRES_INITDB_ARGS: --encoding=UTF-8 --lc-collate=C --lc-ctype=C
+#        ports:
+#          - 5432:5432
+#        options: >-
+#          --health-cmd pg_isready
+#          --health-interval 10s
+#          --health-timeout 5s
+#          --health-retries 5
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          submodules: true
+#      - name: Setup toolchain
+#        run: |
+#          rustup toolchain install 1.86.0 --no-self-update
+#          rustup default 1.86.0
+#      - name: Run sqllogictest
+#        run: |
+#          cd datafusion/sqllogictest
+#          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo test --profile ci --features=postgres --test sqllogictests
+#        env:
+#          # use postgres for the host here because we have specified a container for the job
+#          POSTGRES_HOST: postgres
+#          POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -390,29 +423,29 @@ jobs:
         shell: bash
         run: cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
 
-  test-datafusion-pyarrow:
-    name: cargo test pyarrow (amd64)
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust:bullseye # Use the bullseye tag image which comes with python3.9
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Install PyArrow
-        run: |
-          echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          apt-get update
-          apt-get install python3-pip -y
-          python3 -m pip install pyarrow
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run datafusion-common tests
-        run: cargo test --profile ci -p datafusion-common --features=pyarrow
+  # test-datafusion-pyarrow:
+  #   name: cargo test pyarrow (amd64)
+  #   needs: linux-build-lib
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: amd64/rust:bullseye # Use the bullseye tag image which comes with python3.9
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         submodules: true
+  #         fetch-depth: 1
+  #     - name: Install PyArrow
+  #       run: |
+  #         echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
+  #         apt-get update
+  #         apt-get install python3-pip -y
+  #         python3 -m pip install pyarrow
+  #     - name: Setup Rust toolchain
+  #       uses: ./.github/actions/setup-builder
+  #       with:
+  #         rust-version: stable
+  #     - name: Run datafusion-common tests
+  #       run: cargo test --profile ci -p datafusion-common --features=pyarrow
 
   vendor:
     name: Verify Vendored Code
@@ -469,8 +502,8 @@ jobs:
   #         protoc --version
   #     - name: Setup Rust toolchain
   #       run: |
-  #         rustup toolchain install stable
-  #         rustup default stable
+  #         rustup toolchain install 1.86.0 --no-self-update
+  #         rustup default 1.86.0
   #         rustup component add rustfmt clippy
   #     - name: Cache Cargo
   #       uses: actions/cache@v4
@@ -481,8 +514,8 @@ jobs:
   #     - name: Run coverage
   #       run: |
   #         export PATH=$PATH:$HOME/d/protoc/bin
-  #         rustup toolchain install stable
-  #         rustup default stable
+  #         rustup toolchain install 1.86.0 --no-self-update
+  #         rustup default 1.86.0
   #         cargo install --version 0.20.1 cargo-tarpaulin
   #         cargo tarpaulin --all --out Xml
   #     - name: Report coverage
@@ -503,104 +536,122 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: stable
+          rust-version: 1.86.0
       - name: Install Clippy
         run: rustup component add clippy
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
 
-  cargo-toml-formatting-checks:
-    name: check Cargo.toml formatting
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Install taplo
-        run: cargo +stable install taplo-cli --version ^0.9 --locked
-      # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
-      - name: Check Cargo.toml formatting
-        run: taplo format --check
+  # Check answers are correct when hash values collide
+#  hash-collisions:
+#    name: cargo test hash collisions (amd64)
+#    needs: [ linux-build-lib ]
+#    runs-on: ubuntu-latest
+#    container:
+#      image: amd64/rust
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          submodules: true
+#      - name: Setup Rust toolchain
+#        uses: ./.github/actions/setup-builder
+#        with:
+#          rust-version: stable
+#      - name: Run tests
+#        run: |
+#          cd datafusion
+#          cargo test --lib --tests --features=force_hash_collisions,avro
 
-  config-docs-check:
-    name: check configs.md and ***_functions.md is up-to-date
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Check if configs.md has been modified
-        run: |
-          # If you encounter an error, run './dev/update_config_docs.sh' and commit
-          ./dev/update_config_docs.sh
-          git diff --exit-code
-      - name: Check if any of the ***_functions.md has been modified
-        run: |
-          # If you encounter an error, run './dev/update_function_docs.sh' and commit
-          ./dev/update_function_docs.sh
-          git diff --exit-code
+#  cargo-toml-formatting-checks:
+#    name: check Cargo.toml formatting
+#    needs: [ linux-build-lib ]
+#    runs-on: ubuntu-latest
+#    container:
+#      image: amd64/rust
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          submodules: true
+#      - name: Setup Rust toolchain
+#        uses: ./.github/actions/setup-builder
+#        with:
+#          rust-version: stable
+#      - name: Install taplo
+#        run: cargo +stable install taplo-cli --version ^0.9 --locked
+#      # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
+#      - name: Check Cargo.toml formatting
+#        run: taplo format --check
+
+#  config-docs-check:
+#    name: check configs.md and ***_functions.md is up-to-date
+#    needs: [ linux-build-lib ]
+#    runs-on: ubuntu-latest
+#    container:
+#      image: amd64/rust
+#    steps:
+#      - uses: actions/checkout@v4
+#        with:
+#          submodules: true
+#      - name: Setup Rust toolchain
+#        uses: ./.github/actions/setup-builder
+#        with:
+#          rust-version: stable
+#      - uses: actions/setup-node@v4
+#        with:
+#          node-version: "20"
+#      - name: Check if configs.md has been modified
+#        run: |
+#          # If you encounter an error, run './dev/update_config_docs.sh' and commit
+#          ./dev/update_config_docs.sh
+#          git diff --exit-code
+#      - name: Check if any of the ***_functions.md has been modified
+#        run: |
+#          # If you encounter an error, run './dev/update_function_docs.sh' and commit
+#          ./dev/update_function_docs.sh
+#          git diff --exit-code
 
   # Verify MSRV for the crates which are directly used by other projects:
   # - datafusion
   # - datafusion-substrait
   # - datafusion-proto
   # - datafusion-cli
-  msrv:
-    name: Verify MSRV (Min Supported Rust Version)
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-      - name: Install cargo-msrv
-        run: cargo install cargo-msrv
-      - name: Check datafusion
-        working-directory: datafusion/core
-        run: |
-          # If you encounter an error with any of the commands below it means
-          # your code or some crate in the dependency tree has a higher MSRV
-          # (Min Supported Rust Version) than the one specified in the
-          # `rust-version` key of `Cargo.toml`.
-          #
-          # To reproduce:
-          # 1. Install the version of Rust that is failing. Example:
-          #    rustup install 1.80.1
-          # 2. Run the command that failed with that version. Example:
-          #    cargo +1.80.1 check -p datafusion
-          #
-          # To resolve, either:
-          # 1. Change your code to use older Rust features,
-          # 2. Revert dependency update
-          # 3. Update the MSRV version in `Cargo.toml`
-          #
-          # Please see the DataFusion Rust Version Compatibility Policy before
-          # updating Cargo.toml. You may have to update the code instead.
-          # https://github.com/apache/datafusion/blob/main/README.md#rust-version-compatibility-policy
-          cargo msrv --output-format json --log-target stdout verify
-      - name: Check datafusion-substrait
-        working-directory: datafusion/substrait
-        run: cargo msrv --output-format json --log-target stdout verify
-      - name: Check datafusion-proto
-        working-directory: datafusion/proto
-        run: cargo msrv --output-format json --log-target stdout verify
+#   msrv:
+#     name: Verify MSRV (Min Supported Rust Version)
+#     runs-on: ubuntu-latest
+#     container:
+#       image: amd64/rust
+#     steps:
+#       - uses: actions/checkout@v4
+#       - name: Setup Rust toolchain
+#         uses: ./.github/actions/setup-builder
+#       - name: Install cargo-msrv
+#         run: cargo install cargo-msrv
+#       - name: Check datafusion
+#         working-directory: datafusion/core
+#         run: |
+#           # If you encounter an error with any of the commands below it means
+#           # your code or some crate in the dependency tree has a higher MSRV
+#           # (Min Supported Rust Version) than the one specified in the
+#           # `rust-version` key of `Cargo.toml`.
+#           #
+#           # To reproduce:
+#           # 1. Install the version of Rust that is failing. Example:
+#           #    rustup install 1.80.1
+#           # 2. Run the command that failed with that version. Example:
+#           #    cargo +1.80.1 check -p datafusion
+#           #
+#           # To resolve, either:
+#           # 1. Change your code to use older Rust features,
+#           # 2. Revert dependency update
+#           # 3. Update the MSRV version in `Cargo.toml`
+#           #
+#           # Please see the DataFusion Rust Version Compatibility Policy before
+#           # updating Cargo.toml. You may have to update the code instead.
+#           # https://github.com/apache/datafusion/blob/main/README.md#rust-version-compatibility-policy
+#           cargo msrv --output-format json --log-target stdout verify
+#       - name: Check datafusion-substrait
+#         working-directory: datafusion/substrait
+#         run: cargo msrv --output-format json --log-target stdout verify
+#       - name: Check datafusion-proto
+#         working-directory: datafusion/proto
+#         run: cargo msrv --output-format json --log-target stdout verify

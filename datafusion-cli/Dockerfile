@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:bookworm AS builder
+FROM rust:1.86-bookworm as builder
 
 COPY . /usr/src/datafusion
 

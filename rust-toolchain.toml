@@ -19,5 +19,5 @@
 # to compile this workspace and run CI jobs.
 
 [toolchain]
-channel = "1.85.0"
-components = ["rustfmt", "clippy"]
+channel = "1.86.0"
+components = ["rustfmt", "clippy", "rust-analyzer"]

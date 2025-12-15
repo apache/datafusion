@@ -72,7 +72,7 @@ prost = { workspace = true }
 tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
-tonic = "0.12.1"
+tonic = "0.13"
 url = { workspace = true }
 uuid = "1.15"
 

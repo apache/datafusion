@@ -50,7 +50,7 @@ use datafusion_physical_expr::{
 
 use itertools::Itertools;
 
-pub(crate) mod group_values;
+pub mod group_values;
 mod no_grouping;
 pub mod order;
 mod row_hash;

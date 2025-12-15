@@ -66,9 +66,7 @@ homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
-# Define Minimum Supported Rust Version (MSRV)
-rust-version = "1.82.0"
-# Define DataFusion version
+rust-version = "1.86"
 version = "46.0.1"
 
 [workspace.dependencies]
@@ -80,24 +78,28 @@ version = "46.0.1"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "54.2.1", features = [
+arrow = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v54.3.1-cx.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "54.1.0", default-features = false }
-arrow-flight = { version = "54.2.1", features = [
+arrow-array = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v54.3.1-cx.0", default-features = false, features = [
+    "chrono-tz",
+] }
+arrow-buffer = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v54.3.1-cx.0", default-features = false }
+arrow-flight = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v54.3.1-cx.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "54.2.0", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v54.3.1-cx.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "54.1.0", default-features = false }
-arrow-schema = { version = "54.1.0", default-features = false }
+arrow-ord = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v54.3.1-cx.0", default-features = false }
+arrow-schema = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v54.3.1-cx.0", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.7"
-bytes = "1.10"
-chrono = { version = "0.4.38", default-features = false }
+bytes = "1.4"
+chrono = { version = ">=0.4.42, <=0.4.42", default-features = false }
 criterion = "0.5.1"
+
 ctor = "0.2.9"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "46.0.1", default-features = false }
@@ -130,14 +132,14 @@ datafusion-sql = { path = "datafusion/sql", version = "46.0.1" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
-half = { version = "2.2.1", default-features = false }
+half = { version = ">=2.1.0, <=2.7.1", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
-indexmap = "2.7.1"
+indexmap = ">=2.5.0, <=2.12.0"
 itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "54.2.1", default-features = false, features = [
+parquet = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v54.3.1-cx.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
