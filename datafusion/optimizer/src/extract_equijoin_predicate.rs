@@ -19,7 +19,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{assert_or_internal_err, DFSchema};
+use datafusion_common::{DFSchema, assert_or_internal_err};
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
@@ -273,7 +273,7 @@ mod tests {
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
-        col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
+        JoinType, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
     use std::sync::Arc;
 

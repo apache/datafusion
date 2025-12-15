@@ -34,20 +34,20 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{layout, BufferSpec};
+use arrow::array::{BufferSpec, layout};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{
+    MetadataVersion,
     reader::StreamReader,
     writer::{IpcWriteOptions, StreamWriter},
-    MetadataVersion,
 };
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{exec_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::RecordBatchStream;
+use datafusion_execution::disk_manager::RefCountedTempFile;
 use futures::{FutureExt as _, Stream};
 use log::warn;
 
@@ -155,11 +155,11 @@ impl SpillReaderStream {
                                             + SPILL_BATCH_MEMORY_MARGIN
                                     {
                                         warn!(
-                                                "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
+                                            "Record batch memory usage ({actual_size} bytes) exceeds the expected limit ({max_record_batch_memory} bytes) \n\
                                                 by more than the allowed tolerance ({SPILL_BATCH_MEMORY_MARGIN} bytes).\n\
                                                 This likely indicates a bug in memory accounting during spilling.\n\
                                                 Please report this issue in https://github.com/apache/datafusion/issues/17340."
-                                            );
+                                        );
                                     }
                                 }
                                 self.state = SpillReaderStreamState::Waiting(reader);

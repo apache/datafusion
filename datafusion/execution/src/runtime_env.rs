@@ -18,7 +18,7 @@
 //! Execution [`RuntimeEnv`] environment that manages access to object
 //! store, memory manager, disk manager.
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 use crate::disk_manager::DiskManagerConfig;
 use crate::{
     disk_manager::{DiskManager, DiskManagerBuilder, DiskManagerMode},
@@ -279,7 +279,7 @@ impl Default for RuntimeEnv {
 /// See example on [`RuntimeEnv`]
 #[derive(Clone)]
 pub struct RuntimeEnvBuilder {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
     /// DiskManager builder to manager temporary disk file usage
@@ -317,7 +317,7 @@ impl RuntimeEnvBuilder {
         }
     }
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[deprecated(since = "48.0.0", note = "Use with_disk_manager_builder instead")]
     /// Customize disk manager
     pub fn with_disk_manager(mut self, disk_manager: DiskManagerConfig) -> Self {
@@ -418,7 +418,7 @@ impl RuntimeEnvBuilder {
             disk_manager: if let Some(builder) = disk_manager_builder {
                 Arc::new(builder.build()?)
             } else {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 DiskManager::try_new(disk_manager)?
             },
             cache_manager: CacheManager::try_new(&cache_manager)?,
@@ -451,7 +451,7 @@ impl RuntimeEnvBuilder {
         };
 
         Self {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             disk_manager: DiskManagerConfig::Existing(Arc::clone(
                 &runtime_env.disk_manager,
             )),

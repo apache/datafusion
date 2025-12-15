@@ -1075,6 +1075,7 @@ mod tests {
     fn new_custom_counter(name: &'static str, value: usize) -> MetricValue {
         let custom_counter = CustomCounter::default();
         custom_counter.count.fetch_add(value, Ordering::Relaxed);
+
         MetricValue::Custom {
             name: Cow::Borrowed(name),
             value: Arc::new(custom_counter),

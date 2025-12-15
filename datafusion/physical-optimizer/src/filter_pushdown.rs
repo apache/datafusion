@@ -33,19 +33,19 @@
 
 use std::sync::Arc;
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{assert_eq_or_internal_err, config::ConfigOptions, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
 };
-use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, with_new_children_if_necessary};
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 
 /// Attempts to recursively push given filters from the top of the tree into leaves.
 ///
@@ -416,20 +416,6 @@ impl Default for FilterPushdown {
 }
 
 impl PhysicalOptimizerRule for FilterPushdown {
-    fn optimize_plan(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.session_config().options();
-        Ok(
-            push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
-                .updated_node
-                .unwrap_or(plan),
-        )
-    }
-
-    #[allow(deprecated)]
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,

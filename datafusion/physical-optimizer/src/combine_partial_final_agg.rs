@@ -21,15 +21,16 @@
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::ExecutionPlan;
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, physical_exprs_equal};
 
 /// CombinePartialFinalAggregate optimizer rule combines the adjacent Partial and Final AggregateExecs
 /// into a Single AggregateExec if their grouping exprs and aggregate exprs equal.
@@ -39,17 +40,17 @@ use datafusion_physical_expr::{physical_exprs_equal, PhysicalExpr};
 pub struct CombinePartialFinalAggregate {}
 
 impl CombinePartialFinalAggregate {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
 impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _context: &OptimizerContext,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(|plan| {
             // Check if the plan is AggregateExec

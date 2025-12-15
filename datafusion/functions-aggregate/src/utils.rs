@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -58,7 +58,7 @@ pub(crate) fn validate_percentile_expr(
             return plan_err!(
                 "Percentile value for '{fn_name}' must be Float32 or Float64 literal (got data type {})",
                 sv.data_type()
-            )
+            );
         }
     };
 

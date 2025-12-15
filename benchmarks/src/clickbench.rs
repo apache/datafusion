@@ -78,6 +78,27 @@ pub struct RunOpt {
     /// If present, write results json here
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
+
+    /// Column name that the data is sorted by (e.g., "EventTime")
+    /// If specified, DataFusion will be informed that the data has this sort order
+    /// using CREATE EXTERNAL TABLE with WITH ORDER clause.
+    ///
+    /// Recommended to use with: -c datafusion.optimizer.prefer_existing_sort=true
+    /// This allows DataFusion to optimize away redundant sorts while maintaining
+    /// multi-core parallelism for other operations.
+    #[structopt(long = "sorted-by")]
+    sorted_by: Option<String>,
+
+    /// Sort order: ASC or DESC (default: ASC)
+    #[structopt(long = "sort-order", default_value = "ASC")]
+    sort_order: String,
+
+    /// Configuration options in the format key=value
+    /// Can be specified multiple times.
+    ///
+    /// Example: -c datafusion.optimizer.prefer_existing_sort=true
+    #[structopt(short = "c", long = "config")]
+    config_options: Vec<String>,
 }
 
 /// Get the SQL file path
@@ -125,6 +146,37 @@ impl RunOpt {
 
         // configure parquet options
         let mut config = self.common.config()?;
+
+        if self.sorted_by.is_some() {
+            println!("ℹ️  Data is registered with sort order");
+
+            let has_prefer_sort = self
+                .config_options
+                .iter()
+                .any(|opt| opt.contains("prefer_existing_sort=true"));
+
+            if !has_prefer_sort {
+                println!("ℹ️  Consider using -c datafusion.optimizer.prefer_existing_sort=true");
+                println!("ℹ️  to optimize queries while maintaining parallelism");
+            }
+        }
+
+        // Apply user-provided configuration options
+        for config_opt in &self.config_options {
+            let parts: Vec<&str> = config_opt.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                return Err(exec_datafusion_err!(
+                    "Invalid config option format: '{}'. Expected 'key=value'",
+                    config_opt
+                ));
+            }
+            let key = parts[0];
+            let value = parts[1];
+
+            println!("Setting config: {key} = {value}");
+            config = config.set_str(key, value);
+        }
+
         {
             let parquet_options = &mut config.options_mut().execution.parquet;
             // The hits_partitioned dataset specifies string columns
@@ -136,10 +188,18 @@ impl RunOpt {
                 parquet_options.pushdown_filters = true;
                 parquet_options.reorder_filters = true;
             }
+
+            if self.sorted_by.is_some() {
+                // We should compare the dynamic topk optimization when data is sorted, so we make the
+                // assumption that filter pushdown is also enabled in this case.
+                parquet_options.pushdown_filters = true;
+                parquet_options.reorder_filters = true;
+            }
         }
 
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
+
         self.register_hits(&ctx).await?;
 
         let mut benchmark_run = BenchmarkRun::new();
@@ -214,17 +274,54 @@ impl RunOpt {
     }
 
     /// Registers the `hits.parquet` as a table named `hits`
+    /// If sorted_by is specified, uses CREATE EXTERNAL TABLE with WITH ORDER
     async fn register_hits(&self, ctx: &SessionContext) -> Result<()> {
-        let options = Default::default();
         let path = self.path.as_os_str().to_str().unwrap();
-        ctx.register_parquet("hits", path, options)
-            .await
-            .map_err(|e| {
-                DataFusionError::Context(
-                    format!("Registering 'hits' as {path}"),
-                    Box::new(e),
-                )
-            })
+
+        // If sorted_by is specified, use CREATE EXTERNAL TABLE with WITH ORDER
+        if let Some(ref sort_column) = self.sorted_by {
+            println!(
+                "Registering table with sort order: {} {}",
+                sort_column, self.sort_order
+            );
+
+            // Escape column name with double quotes
+            let escaped_column = if sort_column.contains('"') {
+                sort_column.clone()
+            } else {
+                format!("\"{sort_column}\"")
+            };
+
+            // Build CREATE EXTERNAL TABLE DDL with WITH ORDER clause
+            // Schema will be automatically inferred from the Parquet file
+            let create_table_sql = format!(
+                "CREATE EXTERNAL TABLE hits \
+                 STORED AS PARQUET \
+                 LOCATION '{}' \
+                 WITH ORDER ({} {})",
+                path,
+                escaped_column,
+                self.sort_order.to_uppercase()
+            );
+
+            println!("Executing: {create_table_sql}");
+
+            // Execute the CREATE EXTERNAL TABLE statement
+            ctx.sql(&create_table_sql).await?.collect().await?;
+
+            Ok(())
+        } else {
+            // Original registration without sort order
+            let options = Default::default();
+            ctx.register_parquet("hits", path, options)
+                .await
+                .map_err(|e| {
+                    DataFusionError::Context(
+                        format!("Registering 'hits' as {path}"),
+                        Box::new(e),
+                    )
+                })
+        }
     }
 
     fn iterations(&self) -> usize {

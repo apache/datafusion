@@ -16,24 +16,25 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
+use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
-use datafusion_physical_plan::{expressions, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default, Debug)]
 pub struct AggregateStatistics {}
 
 impl AggregateStatistics {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -41,11 +42,12 @@ impl AggregateStatistics {
 
 impl PhysicalOptimizerRule for AggregateStatistics {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    #[expect(clippy::allow_attributes)] // See https://github.com/apache/datafusion/issues/18881#issuecomment-3621545670
     #[allow(clippy::only_used_in_recursion)] // See https://github.com/rust-lang/rust-clippy/issues/14566
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
@@ -85,15 +87,13 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 )?))
             } else {
                 plan.map_children(|child| {
-                    self.optimize_plan(child, context).map(Transformed::yes)
+                    self.optimize(child, config).map(Transformed::yes)
                 })
                 .data()
             }
         } else {
-            plan.map_children(|child| {
-                self.optimize_plan(child, context).map(Transformed::yes)
-            })
-            .data()
+            plan.map_children(|child| self.optimize(child, config).map(Transformed::yes))
+                .data()
         }
     }
 
@@ -115,27 +115,23 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 /// We would have preferred to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
 fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
-    if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>() {
-        if !final_agg_exec.mode().is_first_stage()
-            && final_agg_exec.group_expr().is_empty()
-        {
-            let mut child = Arc::clone(final_agg_exec.input());
-            loop {
-                if let Some(partial_agg_exec) =
-                    child.as_any().downcast_ref::<AggregateExec>()
-                {
-                    if partial_agg_exec.mode().is_first_stage()
-                        && partial_agg_exec.group_expr().is_empty()
-                        && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
-                    {
-                        return Some(child);
-                    }
-                }
-                if let [childrens_child] = child.children().as_slice() {
-                    child = Arc::clone(childrens_child);
-                } else {
-                    break;
-                }
+    if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>()
+        && !final_agg_exec.mode().is_first_stage()
+        && final_agg_exec.group_expr().is_empty()
+    {
+        let mut child = Arc::clone(final_agg_exec.input());
+        loop {
+            if let Some(partial_agg_exec) = child.as_any().downcast_ref::<AggregateExec>()
+                && partial_agg_exec.mode().is_first_stage()
+                && partial_agg_exec.group_expr().is_empty()
+                && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
+            {
+                return Some(child);
+            }
+            if let [childrens_child] = child.children().as_slice() {
+                child = Arc::clone(childrens_child);
+            } else {
+                break;
             }
         }
     }
