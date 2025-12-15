@@ -22,10 +22,14 @@ use crate::function::error_utils::{
 };
 use crate::function::math::hex::spark_sha2_hex;
 use arrow::array::{ArrayRef, AsArray, StringArray};
-use arrow::datatypes::{DataType, Int32Type};
-use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
-use datafusion_expr::Signature;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use arrow::datatypes::{DataType, Field, FieldRef, Int32Type};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, internal_err, Result, ScalarValue,
+};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
+};
 pub use datafusion_functions::crypto::basic::{sha224, sha256, sha384, sha512};
 use std::any::Any;
 use std::sync::Arc;
@@ -65,25 +69,44 @@ impl ScalarUDFImpl for SparkSha2 {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[1].is_null() {
-            return Ok(DataType::Null);
-        }
-        Ok(match arg_types[0] {
-            DataType::Utf8View
-            | DataType::LargeUtf8
-            | DataType::Utf8
-            | DataType::Binary
-            | DataType::BinaryView
-            | DataType::LargeBinary => DataType::Utf8,
-            DataType::Null => DataType::Null,
-            _ => {
-                return exec_err!(
-                    "{} function can only accept strings or binary arrays.",
-                    self.name()
-                );
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types: Vec<_> = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect();
+
+        let data_type = if arg_types[1].is_null() {
+            DataType::Null
+        } else {
+            match arg_types[0] {
+                DataType::Utf8View
+                | DataType::LargeUtf8
+                | DataType::Utf8
+                | DataType::Binary
+                | DataType::BinaryView
+                | DataType::LargeBinary => DataType::Utf8,
+                DataType::Null => DataType::Null,
+                _ => {
+                    return exec_err!(
+                        "{} function can only accept strings or binary arrays.",
+                        self.name()
+                    )
+                }
             }
-        })
+        };
+
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
+            || args
+                .scalar_arguments
+                .iter()
+                .any(|scalar| scalar.is_some_and(|s| s.is_null()));
+
+        Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -224,4 +247,76 @@ fn compute_sha2(
         }
     }
     .map(|hashed| spark_sha2_hex(&[hashed]).unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Field;
+
+    #[test]
+    fn test_sha2_nullability() -> Result<()> {
+        let func = SparkSha2::new();
+
+        let non_nullable_expr: FieldRef =
+            Arc::new(Field::new("expr", DataType::Binary, false));
+        let non_nullable_bit_length: FieldRef =
+            Arc::new(Field::new("bit_length", DataType::Int32, false));
+
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[
+                Arc::clone(&non_nullable_expr),
+                Arc::clone(&non_nullable_bit_length),
+            ],
+            scalar_arguments: &[None, None],
+        })?;
+        assert!(!out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Utf8);
+
+        let nullable_expr: FieldRef =
+            Arc::new(Field::new("expr", DataType::Binary, true));
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[
+                Arc::clone(&nullable_expr),
+                Arc::clone(&non_nullable_bit_length),
+            ],
+            scalar_arguments: &[None, None],
+        })?;
+        assert!(out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Utf8);
+
+        let nullable_bit_length: FieldRef =
+            Arc::new(Field::new("bit_length", DataType::Int32, true));
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[
+                Arc::clone(&non_nullable_expr),
+                Arc::clone(&nullable_bit_length),
+            ],
+            scalar_arguments: &[None, None],
+        })?;
+        assert!(out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Utf8);
+
+        let null_bit_length: FieldRef =
+            Arc::new(Field::new("bit_length", DataType::Null, true));
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[non_nullable_expr, null_bit_length],
+            scalar_arguments: &[None, None],
+        })?;
+        assert!(out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Null);
+
+        let null_scalar = ScalarValue::Int32(None);
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[
+                nullable_expr,
+                Arc::new(Field::new("bit_length", DataType::Int32, false)),
+            ],
+            scalar_arguments: &[None, Some(&null_scalar)],
+        })?;
+        assert!(out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Utf8);
+
+        Ok(())
+    }
 }
