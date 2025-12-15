@@ -137,6 +137,18 @@ impl AggregateUDFImpl for FirstValue {
         Ok(arg_types[0].clone())
     }
 
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        // Preserve metadata from the first argument field
+        Ok(Arc::new(
+            Field::new(
+                self.name(),
+                arg_fields[0].data_type().clone(),
+                true, // always nullable, there may be no rows
+            )
+            .with_metadata(arg_fields[0].metadata().clone()),
+        ))
+    }
+
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
             return TrivialFirstValueAccumulator::try_new(
@@ -1073,6 +1085,18 @@ impl AggregateUDFImpl for LastValue {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        // Preserve metadata from the first argument field
+        Ok(Arc::new(
+            Field::new(
+                self.name(),
+                arg_fields[0].data_type().clone(),
+                true, // always nullable, there may be no rows
+            )
+            .with_metadata(arg_fields[0].metadata().clone()),
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
