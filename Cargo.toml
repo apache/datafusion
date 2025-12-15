@@ -94,7 +94,7 @@ arrow = { version = "57.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-avro = { version = "57.0.0", default-features = false, features = [
+arrow-avro = { version = "57.1.0", default-features = false, features = [
     "deflate",
     "snappy",
     "zstd",

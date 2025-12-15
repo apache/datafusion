@@ -23,14 +23,14 @@ use std::sync::Arc;
 
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use arrow_avro::schema::{AvroSchema, SCHEMA_METADATA_KEY};
-use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
+use datafusion_common::error::Result;
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::TableSchema;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
@@ -63,14 +63,6 @@ impl AvroSource {
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
-        let file_schema = self.table_schema.file_schema();
-        let projection = Some(
-            self.projection
-                .file_indices
-                .iter()
-                .map(|&idx| file_schema.field(idx).name().clone())
-                .collect::<Vec<_>>(),
-        );
         // TODO: Once `ReaderBuilder::with_projection` is available, we should use it instead.
         //  This should be an easy change. We'd simply need to:
         //      1. Use the full file schema to generate the reader `AvroSchema`.
@@ -87,7 +79,7 @@ impl AvroSource {
         let file_schema = self.table_schema.file_schema().as_ref();
         // Fast path: no projection. If we have the original writer schema JSON
         // in metadata, just reuse it as-is without parsing.
-        if self.projection.is_none() {
+        if self.projection.file_indices.is_empty() {
             return if let Some(avro_json) =
                 file_schema.metadata().get(SCHEMA_METADATA_KEY)
             {
@@ -134,9 +126,7 @@ impl AvroSource {
                     }
                 }
                 // Rebuild `fields` in the same order as the projected Arrow schema.
-                let projection = self.projection.as_ref().ok_or_else(|| {
-                    DataFusionError::Internal("checked projection is Some above".to_string())
-                })?;
+                let projection = self.projection.file_indices.as_ref();
                 let projected_schema = file_schema.project(projection)?;
                 let mut projected_fields =
                     Vec::with_capacity(projected_schema.fields().len());
@@ -252,7 +242,7 @@ mod private {
     use std::io::BufReader;
 
     use bytes::Buf;
-    use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
+    use datafusion_datasource::{PartitionedFile, file_stream::FileOpenFuture};
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
 
@@ -264,7 +254,7 @@ mod private {
     impl FileOpener for AvroOpener {
         fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
             let object_store = Arc::clone(&self.object_store);
-            let config = self.config.clone();
+            let config = Arc::clone(&self.config);
 
             Ok(Box::pin(async move {
                 // check if schema should be inferred
@@ -273,12 +263,22 @@ mod private {
                     .await?;
                 let config = Arc::new(match r.payload {
                     GetResultPayload::File(mut file, _) => {
-                        let schema = match config.table_schema.file_schema().metadata.get(SCHEMA_METADATA_KEY) {
-                            Some(_) => config.table_schema.file_schema().clone(),
-                            None => Arc::new(read_avro_schema_from_reader(&mut file).unwrap()), // if not inferred, read schema from file
+                        let schema = match config
+                            .table_schema
+                            .file_schema()
+                            .metadata
+                            .get(SCHEMA_METADATA_KEY)
+                        {
+                            Some(_) => Arc::clone(&config.table_schema.file_schema()),
+                            None => {
+                                Arc::new(read_avro_schema_from_reader(&mut file).unwrap())
+                            } // if not inferred, read schema from file
                         };
                         AvroSource {
-                            table_schema: TableSchema::new(schema, config.table_schema.table_partition_cols().clone()),
+                            table_schema: TableSchema::new(
+                                schema,
+                                config.table_schema.table_partition_cols().clone(),
+                            ),
                             batch_size: config.batch_size,
                             projection: config.projection.clone(),
                             metrics: config.metrics.clone(),
@@ -287,12 +287,23 @@ mod private {
                     }
                     GetResultPayload::Stream(_) => {
                         let bytes = r.bytes().await?;
-                        let schema = match config.table_schema.file_schema().metadata.get(SCHEMA_METADATA_KEY) {
-                            Some(_) => config.table_schema.file_schema().clone(),
-                            None => Arc::new(read_avro_schema_from_reader(&mut bytes.reader()).unwrap()), // if not inferred, read schema from file
+                        let schema = match config
+                            .table_schema
+                            .file_schema()
+                            .metadata
+                            .get(SCHEMA_METADATA_KEY)
+                        {
+                            Some(_) => Arc::clone(&config.table_schema.file_schema()),
+                            None => Arc::new(
+                                read_avro_schema_from_reader(&mut bytes.reader())
+                                    .unwrap(),
+                            ), // if not inferred, read schema from file
                         };
                         AvroSource {
-                            table_schema: TableSchema::new(schema, config.table_schema.table_partition_cols().clone()),
+                            table_schema: TableSchema::new(
+                                schema,
+                                config.table_schema.table_partition_cols().clone(),
+                            ),
                             batch_size: config.batch_size,
                             projection: config.projection.clone(),
                             metrics: config.metrics.clone(),
