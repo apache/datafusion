@@ -28,8 +28,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Spark-compatible LIKE for case-sensitive pattern matching. Uses the
-/// same coercion rules as DataFusion's built-in LIKE operator and
-/// preserves nullability based on the input arguments.
+/// same coercion rules as DataFusion's built-in LIKE operator.
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#like>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkLike {
