@@ -51,7 +51,7 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
+use datafusion_functions_aggregate_common::utils::{DistinctKey, GenericDistinctBuffer};
 use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
@@ -509,12 +509,14 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 }
 
 #[derive(Debug)]
-struct DistinctMedianAccumulator<T: ArrowNumericType> {
+struct DistinctMedianAccumulator<T: ArrowNumericType + DistinctKey> {
     distinct_values: GenericDistinctBuffer<T>,
     data_type: DataType,
 }
 
-impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
+impl<T: ArrowNumericType + DistinctKey + Debug> Accumulator
+    for DistinctMedianAccumulator<T>
+{
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.distinct_values.state()
     }
@@ -528,9 +530,9 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values.values)
-            .into_iter()
-            .map(|v| v.0)
+        let d = self
+            .distinct_values
+            .drain_native_values()
             .collect::<Vec<_>>();
         let median = calculate_median::<T>(d);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
