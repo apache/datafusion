@@ -19,7 +19,7 @@
 
 use super::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::Transformed;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result};
 
 use crate::utils::NamePreserver;
@@ -64,16 +64,15 @@ impl ApplyFunctionRewrites {
             let original_name = name_preserver.save(&expr);
 
             // recursively transform the expression, applying the rewrites at each step
-            let transformed_expr =
-                expr.transform_up_with_schema(&schema, |expr, schema| {
-                    let mut result = Transformed::no(expr);
-                    for rewriter in self.function_rewrites.iter() {
-                        result = result.transform_data(|expr| {
-                            rewriter.rewrite(expr, schema, options)
-                        })?;
-                    }
-                    Ok(result)
-                })?;
+            let transformed_expr = expr.transform_up(|expr| {
+                let mut result = Transformed::no(expr);
+                for rewriter in self.function_rewrites.iter() {
+                    result = result.transform_data(|expr| {
+                        rewriter.rewrite(expr, &schema, options)
+                    })?;
+                }
+                Ok(result)
+            })?;
 
             Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
         })

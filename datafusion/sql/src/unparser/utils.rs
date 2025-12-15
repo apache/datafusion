@@ -161,11 +161,11 @@ pub(crate) fn find_window_nodes_within_select<'a>(
 /// For example, if expr contains the column expr "__unnest_placeholder(make_array(Int64(1),Int64(2),Int64(2),Int64(5),NULL),depth=1)"
 /// it will be transformed into an actual unnest expression UNNEST([1, 2, 2, 5, NULL])
 pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr> {
-    expr.transform_up_with_lambdas_params(|sub_expr, lambdas_params| {
+    expr.transform(|sub_expr| {
             if let Expr::Column(col_ref) = &sub_expr {
                 // Check if the column is among the columns to run unnest on. 
                 // Currently, only List/Array columns (defined in `list_type_columns`) are supported for unnesting. 
-                if !col_ref.is_lambda_parameter(lambdas_params) && unnest.list_type_columns.iter().any(|e| e.1.output_column.name == col_ref.name) {
+                if unnest.list_type_columns.iter().any(|e| e.1.output_column.name == col_ref.name) {
                     if let Ok(idx) = unnest.schema.index_of_column(col_ref) {
                         if let LogicalPlan::Projection(Projection { expr, .. }) = unnest.input.as_ref() {
                             if let Some(unprojected_expr) = expr.get(idx) {
@@ -195,21 +195,22 @@ pub(crate) fn unproject_agg_exprs(
     agg: &Aggregate,
     windows: Option<&[&Window]>,
 ) -> Result<Expr> {
-    expr.transform_up_with_lambdas_params(|sub_expr, lambdas_params| {
-            match sub_expr {
-                Expr::Column(c) if !c.is_lambda_parameter(lambdas_params) => if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
-                                        Ok(Transformed::yes(unprojected_expr.clone()))
-                                    } else if let Some(unprojected_expr) =
-                                        windows.and_then(|w| find_window_expr(w, &c.name).cloned())
-                                    {
-                                        // Window function can contain an aggregation columns, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
-                                        Ok(Transformed::yes(unproject_agg_exprs(unprojected_expr, agg, None)?))
-                                    } else {
-                                        internal_err!(
-                                            "Tried to unproject agg expr for column '{}' that was not found in the provided Aggregate!", &c.name
-                                        )
-                                    },
-                _ => Ok(Transformed::no(sub_expr)),
+    expr.transform(|sub_expr| {
+            if let Expr::Column(c) = sub_expr {
+                if let Some(unprojected_expr) = find_agg_expr(agg, &c)? {
+                    Ok(Transformed::yes(unprojected_expr.clone()))
+                } else if let Some(unprojected_expr) =
+                    windows.and_then(|w| find_window_expr(w, &c.name).cloned())
+                {
+                    // Window function can contain an aggregation columns, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
+                    Ok(Transformed::yes(unproject_agg_exprs(unprojected_expr, agg, None)?))
+                } else {
+                    internal_err!(
+                        "Tried to unproject agg expr for column '{}' that was not found in the provided Aggregate!", &c.name
+                    )
+                }
+            } else {
+                Ok(Transformed::no(sub_expr))
             }
         })
         .map(|e| e.data)
@@ -221,15 +222,16 @@ pub(crate) fn unproject_agg_exprs(
 /// For example, if expr contains the column expr "COUNT(*) PARTITION BY id" it will be transformed
 /// into an actual window expression as identified in the window node.
 pub(crate) fn unproject_window_exprs(expr: Expr, windows: &[&Window]) -> Result<Expr> {
-    expr.transform_up_with_lambdas_params(|sub_expr, lambdas_params| match sub_expr {
-        Expr::Column(c) if !c.is_lambda_parameter(lambdas_params) => {
+    expr.transform(|sub_expr| {
+        if let Expr::Column(c) = sub_expr {
             if let Some(unproj) = find_window_expr(windows, &c.name) {
                 Ok(Transformed::yes(unproj.clone()))
             } else {
                 Ok(Transformed::no(Expr::Column(c)))
             }
+        } else {
+            Ok(Transformed::no(sub_expr))
         }
-        _ => Ok(Transformed::no(sub_expr)),
     })
     .map(|e| e.data)
 }
@@ -374,7 +376,7 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     .cloned()
                     .map(|expr| {
                         if let Some(ref mut rewriter) = filter_alias_rewriter {
-                            expr.rewrite_with_lambdas_params(rewriter).data()
+                            expr.rewrite(rewriter).data()
                         } else {
                             Ok(expr)
                         }

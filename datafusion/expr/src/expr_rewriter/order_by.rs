@@ -77,10 +77,6 @@ fn rewrite_in_terms_of_projection(
     // assumption is that each item in exprs, such as "b + c" is
     // available as an output column named "b + c"
     expr.transform(|expr| {
-        if matches!(expr, Expr::Lambda(_)) {
-            return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
-        }
-
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
             let (qualifier, field_name) = found.qualified_name();

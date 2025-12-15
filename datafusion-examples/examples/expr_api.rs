@@ -23,7 +23,7 @@ use arrow::record_batch::RecordBatch;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::stats::Precision;
-use datafusion::common::tree_node::Transformed;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ColumnStatistics, DFSchema};
 use datafusion::common::{ScalarValue, ToDFSchema};
 use datafusion::error::Result;
@@ -556,7 +556,7 @@ fn type_coercion_demo() -> Result<()> {
     // 3. Type coercion with `TypeCoercionRewriter`.
     let coerced_expr = expr
         .clone()
-        .rewrite_with_schema(&df_schema, &mut TypeCoercionRewriter::new(&df_schema))?
+        .rewrite(&mut TypeCoercionRewriter::new(&df_schema))?
         .data;
     let physical_expr = datafusion::physical_expr::create_physical_expr(
         &coerced_expr,
@@ -567,7 +567,7 @@ fn type_coercion_demo() -> Result<()> {
 
     // 4. Apply explicit type coercion by manually rewriting the expression
     let coerced_expr = expr
-        .transform_with_schema(&df_schema, |e, df_schema| {
+        .transform(|e| {
             // Only type coerces binary expressions.
             let Expr::BinaryExpr(e) = e else {
                 return Ok(Transformed::no(e));
@@ -575,7 +575,7 @@ fn type_coercion_demo() -> Result<()> {
             if let Expr::Column(ref col_expr) = *e.left {
                 let field = df_schema.field_with_name(None, col_expr.name())?;
                 let cast_to_type = field.data_type();
-                let coerced_right = e.right.cast_to(cast_to_type, df_schema)?;
+                let coerced_right = e.right.cast_to(cast_to_type, &df_schema)?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     e.left,
                     e.op,

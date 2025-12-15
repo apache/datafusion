@@ -266,12 +266,10 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
 /// Recursively walk an expression tree, collecting the unique set of columns
 /// referenced in the expression
 pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
-    expr.apply_with_lambdas_params(|expr, lambdas_params| {
+    expr.apply(|expr| {
         match expr {
             Expr::Column(qc) => {
-                if qc.relation.is_some() || !lambdas_params.contains(qc.name()) {
-                    accum.insert(qc.clone());
-                }
+                accum.insert(qc.clone());
             }
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
@@ -310,7 +308,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. }
-            | Expr::Lambda { .. } => {}
+            | Expr::Lambda(_)
+            | Expr::LambdaColumn(_) => {}
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -653,7 +652,6 @@ where
 /// Search an `Expr`, and all of its nested `Expr`'s, for any that pass the
 /// provided test. The returned `Expr`'s are deduplicated and returned in order
 /// of appearance (depth first).
-/// todo: document about that columns may refer to a lambda parameter?
 fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
@@ -676,7 +674,6 @@ where
 }
 
 /// Recursively inspect an [`Expr`] and all its children.
-/// todo: document about that columns may refer to a lambda parameter?
 pub fn inspect_expr_pre<F, E>(expr: &Expr, mut f: F) -> Result<(), E>
 where
     F: FnMut(&Expr) -> Result<(), E>,
@@ -748,19 +745,13 @@ pub fn columnize_expr(e: Expr, input: &LogicalPlan) -> Result<Expr> {
         _ => return Ok(e),
     };
     let exprs_map: HashMap<&Expr, Column> = output_exprs.into_iter().collect();
-    e.transform_down_with_lambdas_params(|node: Expr, lambdas_params| {
-        if matches!(&node, Expr::Column(c) if c.is_lambda_parameter(lambdas_params)) {
-            return Ok(Transformed::no(node));
-        }
-
-        match exprs_map.get(&node) {
-            Some(column) => Ok(Transformed::new(
-                Expr::Column(column.clone()),
-                true,
-                TreeNodeRecursion::Jump,
-            )),
-            None => Ok(Transformed::no(node)),
-        }
+    e.transform_down(|node: Expr| match exprs_map.get(&node) {
+        Some(column) => Ok(Transformed::new(
+            Expr::Column(column.clone()),
+            true,
+            TreeNodeRecursion::Jump,
+        )),
+        None => Ok(Transformed::no(node)),
     })
     .data()
 }
@@ -777,11 +768,9 @@ pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
 
 pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     let mut exprs = vec![];
-    e.apply_with_lambdas_params(|expr, lambdas_params| {
+    e.apply(|expr| {
         if let Expr::Column(c) = expr {
-            if !c.is_lambda_parameter(lambdas_params) {
-                exprs.push(c.clone())
-            }
+            exprs.push(c.clone())
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -810,9 +799,9 @@ pub(crate) fn find_column_indexes_referenced_by_expr(
     schema: &DFSchemaRef,
 ) -> Vec<usize> {
     let mut indexes = vec![];
-    e.apply_with_lambdas_params(|expr, lambdas_params| {
+    e.apply(|expr| {
         match expr {
-            Expr::Column(qc) if !qc.is_lambda_parameter(lambdas_params) => {
+            Expr::Column(qc) => {
                 if let Ok(idx) = schema.index_of_column(qc) {
                     indexes.push(idx);
                 }

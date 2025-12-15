@@ -22,13 +22,13 @@ use crate::{
 };
 use arrow::array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
-use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{PhysicalExprExt, ScalarFunctionExpr};
+use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::stream::StreamExt;
 use log::trace;
@@ -249,7 +249,7 @@ impl AsyncMapper {
         schema: &Schema,
     ) -> Result<()> {
         // recursively look for references to async functions
-        physical_expr.apply_with_schema(schema, |expr, schema| {
+        physical_expr.apply(|expr| {
             if let Some(scalar_func_expr) =
                 expr.as_any().downcast_ref::<ScalarFunctionExpr>()
             {

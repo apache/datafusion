@@ -23,7 +23,7 @@ use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use arrow::array::{new_null_array, Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::TransformedResult;
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -148,7 +148,7 @@ fn evaluate_expr_with_null_column<'a>(
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let mut expr_rewrite = TypeCoercionRewriter { schema };
-    expr.rewrite_with_schema(schema, &mut expr_rewrite).data()
+    expr.rewrite(&mut expr_rewrite).data()
 }
 
 #[cfg(test)]

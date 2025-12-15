@@ -29,7 +29,7 @@ use datafusion_common::alias::AliasGenerator;
 
 use datafusion_common::cse::{CSEController, FoundCommonNodes, CSE};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{qualified_name, Column, DFSchema, DFSchemaRef, HashSet, Result};
+use datafusion_common::{qualified_name, Column, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::{Alias, ScalarFunction};
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
@@ -632,7 +632,6 @@ struct ExprCSEController<'a> {
 
     // how many aliases have we seen so far
     alias_counter: usize,
-    lambdas_params: HashSet<String>,
 }
 
 impl<'a> ExprCSEController<'a> {
@@ -641,7 +640,6 @@ impl<'a> ExprCSEController<'a> {
             alias_generator,
             mask,
             alias_counter: 0,
-            lambdas_params: HashSet::new(),
         }
     }
 }
@@ -695,30 +693,11 @@ impl CSEController for ExprCSEController<'_> {
         }
     }
 
-    fn visit_f_down(&mut self, node: &Expr) {
-        if let Expr::Lambda(lambda) = node {
-            self.lambdas_params
-                .extend(lambda.params.iter().cloned());
-        }
-    }
-
-    fn visit_f_up(&mut self, node: &Expr) {
-        if let Expr::Lambda(lambda) = node {
-            for param in &lambda.params {
-                self.lambdas_params.remove(param);
-            }
-        }
-    }
-
     fn is_valid(node: &Expr) -> bool {
-        !node.is_volatile_node()
+        !node.is_volatile_node() && !matches!(node, Expr::LambdaColumn(_))
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
-        if matches!(node, Expr::Column(c) if c.is_lambda_parameter(&self.lambdas_params)) {
-            return true
-        }
-
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         let is_normal_minus_aggregates = matches!(
@@ -728,6 +707,7 @@ impl CSEController for ExprCSEController<'_> {
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
                 | Expr::Wildcard { .. }
+                | Expr::LambdaColumn(_)
         );
 
         let is_aggr = matches!(node, Expr::AggregateFunction(..));

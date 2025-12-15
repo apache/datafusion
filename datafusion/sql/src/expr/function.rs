@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
@@ -26,7 +28,10 @@ use datafusion_expr::expr::{Lambda, ScalarFunction, Unnest};
 use datafusion_expr::expr::{NullTreatment, WildcardOptions, WindowFunction};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::planner::{RawAggregateExpr, RawWindowExpr};
-use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
+use datafusion_expr::{
+    expr, Expr, ExprSchemable, ValueOrLambdaParameter, WindowFrame,
+    WindowFunctionDefinition,
+};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
@@ -274,8 +279,94 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
         // User-defined function (UDF) should have precedence
         if let Some(fm) = self.context_provider.get_function_meta(&name) {
-            let (args, arg_names) =
-                self.function_args_to_expr_with_names(args, schema, planner_context)?;
+            enum ExprOrLambda {
+                ExprWithName((Expr, Option<String>)),
+                Lambda(sqlparser::ast::LambdaFunction),
+            }
+
+            let pairs = args
+                .into_iter()
+                .map(|a| match a {
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
+                        lambda,
+                    ))) => Ok(ExprOrLambda::Lambda(lambda)),
+                    _ => Ok(ExprOrLambda::ExprWithName(
+                        self.sql_fn_arg_to_logical_expr_with_name(
+                            a,
+                            schema,
+                            planner_context,
+                        )?,
+                    )),
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let metadata = pairs
+                .iter()
+                .map(|e| match e {
+                    ExprOrLambda::ExprWithName((expr, _name)) => {
+                        Ok(ValueOrLambdaParameter::Value(expr.to_field(schema)?.1))
+                    }
+                    ExprOrLambda::Lambda(_lambda_function) => {
+                        Ok(ValueOrLambdaParameter::Lambda)
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let lambdas_parameters = fm.inner().lambdas_parameters(&metadata)?;
+
+            let pairs = pairs
+                .into_iter()
+                .zip(lambdas_parameters)
+                .map(|(e, lambda_parameters)| match (e, lambda_parameters) {
+                    (ExprOrLambda::ExprWithName(expr_with_name), None) => {
+                        Ok(expr_with_name)
+                    }
+                    (ExprOrLambda::Lambda(lambda), Some(lambda_params)) => {
+                        if lambda.params.len() > lambda_params.len() {
+                            return plan_err!(
+                                "lambda defined {} params but UDF support only {}",
+                                lambda.params.len(),
+                                lambda_params.len()
+                            );
+                        }
+
+                        let params =
+                            lambda.params.iter().map(|p| p.value.clone()).collect();
+
+                        let lambda_parameters = lambda_params
+                            .into_iter()
+                            .zip(&params)
+                            .map(|(f, n)| Arc::new(f.with_name(n)));
+
+                        let mut planner_context = planner_context
+                            .clone()
+                            .with_lambda_parameters(lambda_parameters);
+
+                        Ok((
+                            Expr::Lambda(Lambda {
+                                params,
+                                body: Box::new(self.sql_expr_to_logical_expr(
+                                    *lambda.body,
+                                    schema,
+                                    &mut planner_context,
+                                )?),
+                            }),
+                            None,
+                        ))
+                    }
+                    (ExprOrLambda::ExprWithName(_), Some(_)) => plan_err!(
+                        "{} reported parameters for an argument that is not a lambda",
+                        fm.name()
+                    ),
+                    (ExprOrLambda::Lambda(_), None) => plan_err!(
+                        "{} don't reported the parameters of one of it's lambdas",
+                        fm.name()
+                    ),
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let (args, arg_names): (Vec<Expr>, Vec<Option<String>>) =
+                pairs.into_iter().unzip();
 
             let resolved_args = if arg_names.iter().any(|name| name.is_some()) {
                 if let Some(param_names) = &fm.signature().parameter_names {
@@ -723,26 +814,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 let arg_name = crate::utils::normalize_ident(name);
                 Ok((expr, Some(arg_name)))
-            }
-            FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
-                sqlparser::ast::LambdaFunction { params, body },
-            ))) => {
-                let params = params
-                    .into_iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<_>>();
-
-                Ok((
-                    Expr::Lambda(Lambda {
-                        params: params.clone(),
-                        body: Box::new(self.sql_expr_to_logical_expr(
-                            *body,
-                            schema,
-                            &mut planner_context.clone().with_lambda_parameters(params),
-                        )?),
-                    }),
-                    None,
-                ))
             }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;

@@ -34,22 +34,22 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{tree_node::Transformed, Result, ScalarValue};
+use datafusion_common::{
+    tree_node::{Transformed, TreeNode},
+    Result, ScalarValue,
+};
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 
+use crate::expressions::{lit, BinaryExpr, CastExpr, Literal, TryCastExpr};
 use crate::PhysicalExpr;
-use crate::{
-    expressions::{lit, BinaryExpr, CastExpr, Literal, TryCastExpr},
-    PhysicalExprExt,
-};
 
 /// Attempts to unwrap casts in comparison expressions.
 pub(crate) fn unwrap_cast_in_comparison(
     expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    expr.transform_down_with_schema(schema, |e, schema| {
+    expr.transform_down(|e| {
         if let Some(binary) = e.as_any().downcast_ref::<BinaryExpr>() {
             if let Some(unwrapped) = try_unwrap_cast_binary(binary, schema)? {
                 return Ok(Transformed::yes(unwrapped));

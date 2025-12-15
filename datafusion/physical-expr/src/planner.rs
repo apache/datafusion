@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::expressions::LambdaExpr;
+use crate::expressions::{lambda_col, LambdaExpr};
 use crate::ScalarFunctionExpr;
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
@@ -28,10 +28,13 @@ use arrow::datatypes::Schema;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
+    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue,
+    ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{Alias, Cast, InList, Lambda, Placeholder, ScalarFunction};
+use datafusion_expr::expr::{
+    Alias, Cast, InList, Lambda, LambdaColumn, Placeholder, ScalarFunction,
+};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
@@ -105,8 +108,7 @@ use datafusion_expr::{
 ///
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
-///   to qualified or unqualified fields by name. Note that for creating a lambda, this must be
-///   scoped lambda schema, and not the outer schema
+///   to qualified or unqualified fields by name.
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
@@ -316,27 +318,13 @@ pub fn create_physical_expr(
             input_dfschema,
             execution_props,
         )?),
-        Expr::Lambda { .. } => {
-            exec_err!("Expr::Lambda should be handled by Expr::ScalarFunction, as it can only exist within it")
-        }
+        Expr::Lambda(Lambda { params, body }) => Ok(Arc::new(LambdaExpr::new(
+            params.clone(),
+            create_physical_expr(body, input_dfschema, execution_props)?,
+        ))),
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
-            let lambdas_schemas =
-                func.arguments_schema_from_logical_args(args, input_dfschema)?;
-
-            let physical_args = std::iter::zip(args, lambdas_schemas)
-                .map(|(expr, schema)| match expr {
-                    Expr::Lambda(Lambda { params, body }) => {
-                        Ok(Arc::new(LambdaExpr::new(
-                            params.clone(),
-                            create_physical_expr(body, &schema, execution_props)?,
-                        )) as Arc<dyn PhysicalExpr>)
-                    }
-                    expr => create_physical_expr(expr, &schema, execution_props),
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            //let physical_args =
-            //    create_physical_exprs(args, input_dfschema, execution_props)?;
+            let physical_args =
+                create_physical_exprs(args, input_dfschema, execution_props)?;
 
             let config_options = match execution_props.config_options.as_ref() {
                 Some(config_options) => Arc::clone(config_options),
@@ -404,6 +392,14 @@ pub fn create_physical_expr(
         Expr::Placeholder(Placeholder { id, .. }) => {
             exec_err!("Placeholder '{id}' was not provided a value for execution.")
         }
+        Expr::LambdaColumn(LambdaColumn {
+            name,
+            field,
+            spans: _,
+        }) => lambda_col(
+            name,
+            Arc::clone(field),
+        ),
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }

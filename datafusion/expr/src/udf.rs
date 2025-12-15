@@ -18,30 +18,23 @@
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
 use crate::async_udf::AsyncScalarUDF;
-use crate::expr::{schema_name_from_exprs_comma_separated_without_space, Lambda};
+use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
-use crate::{ColumnarValue, Documentation, Expr, ExprSchemable, Signature};
-use arrow::array::{ArrayRef, RecordBatch};
-use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema};
-use datafusion_common::alias::AliasGenerator;
+use crate::{ColumnarValue, Documentation, Expr, Signature};
+use arrow::array::RecordBatch;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{
-    exec_err, not_impl_err, DFSchema, ExprSchema, Result, ScalarValue,
-};
+use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use indexmap::IndexMap;
 use std::any::Any;
-use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 /// Logical representation of a Scalar User Defined Function.
 ///
@@ -352,272 +345,14 @@ impl ScalarUDF {
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
         self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
     }
-
-    /// Variation of arguments_from_logical_args that works with arrow Schema's and ScalarFunctionArgMetadata instead
-    pub(crate) fn arguments_expr_schema<'a>(
-        &self,
-        args: &[Expr],
-        schema: &'a dyn ExprSchema,
-    ) -> Result<Vec<impl ExprSchema + 'a>> {
-        self.arguments_scope_with(
-            &lambda_parameters(args, schema)?,
-            ExtendableExprSchema::new(schema),
-        )
-    }
-
-    /// Variation of arguments_from_logical_args that works with arrow Schema's and ScalarFunctionArgMetadata instead,
-    pub fn arguments_arrow_schema<'a>(
-        &self,
-        args: &[ValueOrLambdaParameter],
-        schema: &'a Schema,
-    ) -> Result<Vec<Cow<'a, Schema>>> {
-        self.arguments_scope_with(args, Cow::Borrowed(schema))
-    }
-
-    pub fn arguments_schema_from_logical_args<'a>(
-        &self,
-        args: &[Expr],
-        schema: &'a DFSchema,
-    ) -> Result<Vec<Cow<'a, DFSchema>>> {
-        self.arguments_scope_with(
-            &lambda_parameters(args, schema)?,
-            Cow::Borrowed(schema),
-        )
-    }
-
-    /// Scalar function supports lambdas as arguments, which will be evaluated with
-    /// a different schema that of the function itself. This functions returns a vec
-    /// with the correspoding schema that each argument will run
-    ///
-    /// Return a vec with a value for each argument in args that, if it's a value, it's a clone of base_scope,
-    /// if it's a lambda, it's the return of merge called with the index and the fields from lambdas_parameters
-    /// updated with names from metadata
-    fn arguments_scope_with<T: ExtendSchema + Clone>(
-        &self,
-        args: &[ValueOrLambdaParameter],
-        schema: T,
-    ) -> Result<Vec<T>> {
-        let parameters = self.inner().lambdas_parameters(args)?;
-
-        if parameters.len() != args.len() {
-            return exec_err!(
-                "lambdas_schemas: {} lambdas_parameters returned {} values instead of {}",
-                self.name(),
-                args.len(),
-                parameters.len()
-            );
-        }
-
-        std::iter::zip(args, parameters)
-            .enumerate()
-            .map(|(i, (arg, parameters))| match (arg, parameters) {
-                (ValueOrLambdaParameter::Value(_), None) => Ok(schema.clone()),
-                (ValueOrLambdaParameter::Value(_), Some(_)) => exec_err!("lambdas_schemas: {} argument {} (0-indexed) is a value but lambdas_parameters result treat it as a lambda", self.name(), i),
-                (ValueOrLambdaParameter::Lambda(_, _), None) => exec_err!("lambdas_schemas: {} argument {} (0-indexed) is a lambda but lambdas_parameters result treat it as a value", self.name(), i),
-                (ValueOrLambdaParameter::Lambda(names, captures), Some(args)) => {
-                    if names.len() > args.len() {
-                        return exec_err!("lambdas_schemas: {} argument {} (0-indexed), a lambda, supports up to {} arguments, but got {}", self.name(), i, args.len(), names.len())
-                    }
-
-                    let fields = std::iter::zip(*names, args)
-                        .map(|(name, arg)| arg.with_name(name))
-                        .collect::<Fields>();
-
-                    if *captures {
-                        schema.extend(fields)
-                    } else {
-                        T::from_fields(fields)
-                    }
-                }
-            })
-            .collect()
-    }
-}
-
-pub trait ExtendSchema: Sized {
-    fn from_fields(params: Fields) -> Result<Self>;
-    fn extend(&self, params: Fields) -> Result<Self>;
-}
-
-impl ExtendSchema for DFSchema {
-    fn from_fields(params: Fields) -> Result<Self> {
-        DFSchema::from_unqualified_fields(params, Default::default())
-    }
-
-    fn extend(&self, params: Fields) -> Result<Self> {
-        let qualified_fields = self
-            .iter()
-            .map(|(qualifier, field)| {
-                if params.find(field.name().as_str()).is_none() {
-                    return (qualifier.cloned(), Arc::clone(field));
-                }
-
-                let alias_gen = AliasGenerator::new();
-
-                loop {
-                    let alias = alias_gen.next(field.name().as_str());
-
-                    if params.find(&alias).is_none()
-                        && !self.has_column_with_unqualified_name(&alias)
-                    {
-                        return (
-                            qualifier.cloned(),
-                            Arc::new(Field::new(
-                                alias,
-                                field.data_type().clone(),
-                                field.is_nullable(),
-                            )),
-                        );
-                    }
-                }
-            })
-            .collect();
-
-        let mut schema = DFSchema::new_with_metadata(qualified_fields, HashMap::new())?;
-        let fields_schema = DFSchema::from_unqualified_fields(params, HashMap::new())?;
-
-        schema.merge(&fields_schema);
-
-        assert_eq!(
-            schema.fields().len(),
-            self.fields().len() + fields_schema.fields().len()
-        );
-
-        Ok(schema)
-    }
-}
-
-impl ExtendSchema for Schema {
-    fn from_fields(params: Fields) -> Result<Self> {
-        Ok(Schema::new(params))
-    }
-
-    fn extend(&self, params: Fields) -> Result<Self> {
-        let mut params2 = params.iter()
-            .map(|f| (f.name().as_str(), Some(Arc::clone(f))))
-            .collect::<IndexMap<_, _>>();
-
-        let mut fields = self.fields()
-            .iter()
-            .map(|field| {
-                match params2.get_mut(field.name().as_str()).and_then(|p| p.take()) {
-                    Some(param) => param,
-                    None => Arc::clone(field),
-                }
-            })
-            .collect::<Vec<_>>();
-
-        fields.extend(params2.into_values().flatten());
-
-        let fields = self
-            .fields()
-            .iter()
-            .map(|field| {
-                if params.find(field.name().as_str()).is_none() {
-                    return Arc::clone(field);
-                }
-
-                let alias_gen = AliasGenerator::new();
-
-                loop {
-                    let alias = alias_gen.next(field.name().as_str());
-
-                    if params.find(&alias).is_none()
-                        && self.column_with_name(&alias).is_none()
-                    {
-                        return Arc::new(Field::new(
-                            alias,
-                            field.data_type().clone(),
-                            field.is_nullable(),
-                        ));
-                    }
-                }
-            })
-            .chain(params.iter().cloned())
-            .collect::<Fields>();
-
-        assert_eq!(fields.len(), self.fields().len() + params.len());
-
-        Ok(Schema::new_with_metadata(fields, self.metadata.clone()))
-    }
-}
-
-impl<T: ExtendSchema + Clone> ExtendSchema for Cow<'_, T> {
-    fn from_fields(params: Fields) -> Result<Self> {
-        Ok(Cow::Owned(T::from_fields(params)?))
-    }
-
-    fn extend(&self, params: Fields) -> Result<Self> {
-        Ok(Cow::Owned(self.as_ref().extend(params)?))
-    }
-}
-
-impl<T: ExtendSchema> ExtendSchema for Arc<T> {
-    fn from_fields(params: Fields) -> Result<Self> {
-        Ok(Arc::new(T::from_fields(params)?))
-    }
-
-    fn extend(&self, params: Fields) -> Result<Self> {
-        Ok(Arc::new(self.as_ref().extend(params)?))
-    }
-}
-
-impl ExtendSchema for ExtendableExprSchema<'_> {
-    fn from_fields(params: Fields) -> Result<Self> {
-        static EMPTY_DFSCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
-
-        Ok(ExtendableExprSchema {
-            fields_chain: vec![params],
-            outer_schema: &*EMPTY_DFSCHEMA,
-        })
-    }
-
-    fn extend(&self, params: Fields) -> Result<Self> {
-        Ok(ExtendableExprSchema {
-            fields_chain: std::iter::once(params)
-                .chain(self.fields_chain.iter().cloned())
-                .collect(),
-            outer_schema: self.outer_schema,
-        })
-    }
-}
-
-/// A `&dyn ExprSchema` wrapper that supports adding the parameters of a lambda
-#[derive(Clone, Debug)]
-struct ExtendableExprSchema<'a> {
-    fields_chain: Vec<Fields>,
-    outer_schema: &'a dyn ExprSchema,
-}
-
-impl<'a> ExtendableExprSchema<'a> {
-    fn new(schema: &'a dyn ExprSchema) -> Self {
-        Self {
-            fields_chain: vec![],
-            outer_schema: schema,
-        }
-    }
-}
-
-impl ExprSchema for ExtendableExprSchema<'_> {
-    fn field_from_column(&self, col: &datafusion_common::Column) -> Result<&Field> {
-        if col.relation.is_none() {
-            for fields in &self.fields_chain {
-                if let Some((_index, lambda_param)) = fields.find(&col.name) {
-                    return Ok(lambda_param);
-                }
-            }
-        }
-
-        self.outer_schema.field_from_column(col)
-    }
 }
 
 #[derive(Clone, Debug)]
-pub enum ValueOrLambdaParameter<'a> {
+pub enum ValueOrLambdaParameter {
     /// A columnar value with the given field
     Value(FieldRef),
-    /// A lambda with the given parameters names and a flag indicating wheter it captures any columns
-    Lambda(&'a [String], bool),
+    /// A lambda
+    Lambda,
 }
 
 impl<F> From<F> for ScalarUDF
@@ -1331,111 +1066,6 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 }
 
-fn lambda_parameters<'a>(
-    args: &'a [Expr],
-    schema: &dyn ExprSchema,
-) -> Result<Vec<ValueOrLambdaParameter<'a>>> {
-    args.iter()
-        .map(|e| match e {
-            Expr::Lambda(Lambda { params, body: _ }) => {
-                let mut captures = false;
-
-                e.apply_with_lambdas_params(|expr, lambdas_params| match expr {
-                    Expr::Column(c) if !c.is_lambda_parameter(lambdas_params) => {
-                        captures = true;
-
-                        Ok(TreeNodeRecursion::Stop)
-                    }
-                    _ => Ok(TreeNodeRecursion::Continue),
-                })
-                .unwrap();
-
-                Ok(ValueOrLambdaParameter::Lambda(params.as_slice(), captures))
-            }
-            _ => Ok(ValueOrLambdaParameter::Value(e.to_field(schema)?.1)),
-        })
-        .collect()
-}
-
-/// Merge the lambda body captured columns with it's arguments
-/// Datafusion relies on an unspecified field ordering implemented in this function
-/// As such, this is the only correct way to merge the captured values with the arguments
-/// The number of args should not be lower than the number of params
-///
-/// See also merge_captures_with_lazy_args and merge_captures_with_boxed_lazy_args that lazily
-/// computes only the necessary arguments to match the number of params
-pub fn merge_captures_with_args(
-    captures: Option<&RecordBatch>,
-    params: &[FieldRef],
-    args: &[ArrayRef],
-) -> Result<RecordBatch> {
-    if args.len() < params.len() {
-        return exec_err!(
-            "merge_captures_with_args called with {} params but with {} args",
-            params.len(),
-            args.len()
-        );
-    }
-
-    // the order of the merged batch must be kept in sync with ScalarFunction::lambdas_schemas variants
-    let (fields, columns) = match captures {
-        Some(captures) => {
-            let fields = captures
-                .schema()
-                .fields()
-                .iter()
-                .chain(params)
-                .cloned()
-                .collect::<Vec<_>>();
-
-            let columns = [captures.columns(), args].concat();
-
-            (fields, columns)
-        }
-        None => (params.to_vec(), args.to_vec()),
-    };
-
-    Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
-        columns,
-    )?)
-}
-
-/// Lazy version of merge_captures_with_args that receives closures to compute the arguments,
-/// and calls only the necessary to match the number of params
-pub fn merge_captures_with_lazy_args(
-    captures: Option<&RecordBatch>,
-    params: &[FieldRef],
-    args: &[&dyn Fn() -> Result<ArrayRef>],
-) -> Result<RecordBatch> {
-    merge_captures_with_args(
-        captures,
-        params,
-        &args
-            .iter()
-            .take(params.len())
-            .map(|arg| arg())
-            .collect::<Result<Vec<_>>>()?,
-    )
-}
-
-/// Variation of merge_captures_with_lazy_args that take boxed closures
-pub fn merge_captures_with_boxed_lazy_args(
-    captures: Option<&RecordBatch>,
-    params: &[FieldRef],
-    args: &[Box<dyn Fn() -> Result<ArrayRef>>],
-) -> Result<RecordBatch> {
-    merge_captures_with_args(
-        captures,
-        params,
-        &args
-            .iter()
-            .take(params.len())
-            .map(|arg| arg())
-            .collect::<Result<Vec<_>>>()?,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1513,84 +1143,5 @@ mod tests {
         let hasher = &mut DefaultHasher::new();
         value.hash(hasher);
         hasher.finish()
-    }
-
-    use std::borrow::Cow;
-
-    use arrow::datatypes::Fields;
-
-    use crate::{
-        tree_node::tests::{args, list_int, list_list_int, array_transform_udf},
-        udf::{lambda_parameters, ExtendableExprSchema},
-    };
-
-    #[test]
-    fn test_arguments_expr_schema() {
-        let args = args();
-        let schema = list_list_int();
-
-        let schemas = array_transform_udf()
-            .arguments_expr_schema(&args, &schema)
-            .unwrap()
-            .into_iter()
-            .map(|s| format!("{s:?}"))
-            .collect::<Vec<_>>();
-
-        let mut lambdas_parameters = array_transform_udf()
-            .inner()
-            .lambdas_parameters(&lambda_parameters(&args, &schema).unwrap())
-            .unwrap();
-
-        assert_eq!(
-            schemas,
-            &[
-                format!("{}", &list_list_int()),
-                format!(
-                    "{:?}",
-                    ExtendableExprSchema {
-                        fields_chain: vec![Fields::from(
-                            lambdas_parameters[0].take().unwrap()
-                        )],
-                        outer_schema: &list_list_int()
-                    }
-                ),
-            ]
-        )
-    }
-
-    #[test]
-    fn test_arguments_arrow_schema() {
-        let list_int = list_int();
-        let list_list_int = list_list_int();
-
-        let schemas = array_transform_udf()
-            .arguments_arrow_schema(
-                &lambda_parameters(&args(), &list_list_int).unwrap(),
-                //&[HashSet::new(), HashSet::from([0])],
-                list_list_int.as_arrow(),
-            )
-            .unwrap();
-
-        assert_eq!(
-            schemas,
-            &[
-                Cow::Borrowed(list_list_int.as_arrow()),
-                Cow::Owned(list_int.as_arrow().clone())
-            ]
-        )
-    }
-
-    #[test]
-    fn test_arguments_schema_from_logical_args() {
-        let list_list_int = list_list_int();
-
-        let schemas = array_transform_udf()
-            .arguments_schema_from_logical_args(&args(), &list_list_int)
-            .unwrap();
-
-        assert_eq!(
-            schemas,
-            &[Cow::Borrowed(&list_list_int), Cow::Owned(list_int())]
-        )
     }
 }

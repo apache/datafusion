@@ -29,7 +29,7 @@ use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    add_offset_to_physical_sort_exprs, EquivalenceProperties, PhysicalExprExt,
+    add_offset_to_physical_sort_exprs, EquivalenceProperties,
 };
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
@@ -661,21 +661,20 @@ fn handle_custom_pushdown(
             .into_iter()
             .map(|req| {
                 let child_schema = plan.children()[maintained_child_idx].schema();
-                let updated_columns =
-                    req.expr
-                        .transform_up_with_lambdas_params(|expr, lambdas_params| {
-                            match expr.as_any().downcast_ref::<Column>() {
-                                Some(col) if !lambdas_params.contains(col.name()) => {
-                                    let new_index = col.index() - sub_offset;
-                                    Ok(Transformed::yes(Arc::new(Column::new(
-                                        child_schema.field(new_index).name(),
-                                        new_index,
-                                    ))))
-                                }
-                                _ => Ok(Transformed::no(expr)),
-                            }
-                        })?
-                        .data;
+                let updated_columns = req
+                    .expr
+                    .transform_up(|expr| {
+                        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                            let new_index = col.index() - sub_offset;
+                            Ok(Transformed::yes(Arc::new(Column::new(
+                                child_schema.field(new_index).name(),
+                                new_index,
+                            ))))
+                        } else {
+                            Ok(Transformed::no(expr))
+                        }
+                    })?
+                    .data;
                 Ok(PhysicalSortRequirement::new(updated_columns, req.options))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -743,21 +742,20 @@ fn handle_hash_join(
             .into_iter()
             .map(|req| {
                 let child_schema = plan.children()[1].schema();
-                let updated_columns =
-                    req.expr
-                        .transform_up_with_lambdas_params(|expr, lambdas_params| {
-                            match expr.as_any().downcast_ref::<Column>() {
-                                Some(col) if !lambdas_params.contains(col.name()) => {
-                                    let index = projected_indices[col.index()].index;
-                                    Ok(Transformed::yes(Arc::new(Column::new(
-                                        child_schema.field(index).name(),
-                                        index,
-                                    ))))
-                                }
-                                _ => Ok(Transformed::no(expr)),
-                            }
-                        })?
-                        .data;
+                let updated_columns = req
+                    .expr
+                    .transform_up(|expr| {
+                        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                            let index = projected_indices[col.index()].index;
+                            Ok(Transformed::yes(Arc::new(Column::new(
+                                child_schema.field(index).name(),
+                                index,
+                            ))))
+                        } else {
+                            Ok(Transformed::no(expr))
+                        }
+                    })?
+                    .data;
                 Ok(PhysicalSortRequirement::new(updated_columns, req.options))
             })
             .collect::<Result<Vec<_>>>()?;

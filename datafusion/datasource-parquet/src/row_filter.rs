@@ -77,7 +77,7 @@ use datafusion_common::Result;
 use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{split_conjunction, PhysicalExpr, PhysicalExprExt};
+use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 
 use datafusion_physical_plan::metrics;
 
@@ -335,20 +335,6 @@ impl<'schema> PushdownChecker<'schema> {
     #[inline]
     fn prevents_pushdown(&self) -> bool {
         self.non_primitive_columns || self.projected_columns
-    }
-
-    fn check(&mut self, node: Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion> {
-        node.apply_with_lambdas_params(|node, lamdas_params| {
-            if let Some(column) = node.as_any().downcast_ref::<Column>() {
-                if !lamdas_params.contains(column.name()) {
-                    if let Some(recursion) = self.check_single_column(column.name()) {
-                        return Ok(recursion);
-                    }
-                }
-            }
-
-            Ok(TreeNodeRecursion::Continue)
-        })
     }
 }
 

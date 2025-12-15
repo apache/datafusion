@@ -118,10 +118,8 @@ pub use udaf::{
     ReversedUDAF, SetMonotonicity, StatisticsArgs,
 };
 pub use udf::{
-    merge_captures_with_args, merge_captures_with_boxed_lazy_args,
-    merge_captures_with_lazy_args, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarFunctionLambdaArg, ScalarUDF, ScalarUDFImpl, ValueOrLambda, ValueOrLambdaField,
-    ValueOrLambdaParameter,
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarFunctionLambdaArg, ScalarUDF,
+    ScalarUDFImpl, ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter,
 };
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

@@ -42,9 +42,9 @@ SELECT array_transform([1], e1 -> (select n from t));
 [1]
 
 query ?
-SELECT array_transform(v, (v1, i) -> array_transform(v1, (v2, j) -> array_transform(v2, v3 -> j)) ) from t;
+SELECT array_transform(t.v, (v1, i) -> array_transform(v1, (v2, j) -> array_transform(v2, v3 -> j)) ) from t;
 ----
-[[[0, 0], [1]], [[0]], [[]]]
+[[[0, 1], [0]], [[0]], [[]]]
 
 query I?
 SELECT t.n, array_transform([1, 2], (e) -> n) from t;
@@ -75,7 +75,7 @@ logical_plan
 01)Projection: array_transform(List([1, 2]), (e, i) -> e + CAST(i AS Int64)) AS array_transform(make_array(Int64(1),Int64(2)),(e, i) -> e + i)
 02)--EmptyRelation: rows=1
 physical_plan
-01)ProjectionExec: expr=[array_transform([1, 2], (e, i) -> e@0 + CAST(i@1 AS Int64)) as array_transform(make_array(Int64(1),Int64(2)),(e, i) -> e + i)]
+01)ProjectionExec: expr=[array_transform([1, 2], (e, i) -> e@-1 + CAST(i@-1 AS Int64)) as array_transform(make_array(Int64(1),Int64(2)),(e, i) -> e + i)]
 02)--PlaceholderRowExec
 
 #cse
@@ -86,7 +86,7 @@ logical_plan
 01)Projection: t.n + Int64(1), array_transform(List([1]), (v) -> v + t.n + Int64(1)) AS array_transform(make_array(Int64(1)),(v) -> v + t.n + Int64(1))
 02)--TableScan: t projection=[n]
 physical_plan
-01)ProjectionExec: expr=[n@0 + 1 as t.n + Int64(1), array_transform([1], (v) -> v@1 + n@0 + 1) as array_transform(make_array(Int64(1)),(v) -> v + t.n + Int64(1))]
+01)ProjectionExec: expr=[n@0 + 1 as t.n + Int64(1), array_transform([1], (v) -> v@-1 + n@0 + 1) as array_transform(make_array(Int64(1)),(v) -> v + t.n + Int64(1))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ?
@@ -121,9 +121,19 @@ logical_plan
 01)Projection: array_transform(List([1, 2, 3, 4, 5]), (v) -> v * Int64(2)) AS array_transform(make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)),(v) -> v * Int64(2))
 02)--EmptyRelation: rows=1
 physical_plan
-01)ProjectionExec: expr=[array_transform([1, 2, 3, 4, 5], (v) -> v@0 * 2) as array_transform(make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)),(v) -> v * Int64(2))]
+01)ProjectionExec: expr=[array_transform([1, 2, 3, 4, 5], (v) -> v@-1 * 2) as array_transform(make_array(Int64(1),Int64(2),Int64(3),Int64(4),Int64(5)),(v) -> v * Int64(2))]
 02)--PlaceholderRowExec
 
+query ?
+SELECT array_transform(
+	[[1]],
+	v -> array_concat(
+		array_transform(v, v -> v),
+		array_transform(v, v1 -> v1 + v[0])
+	)
+);
+----
+[[1, NULL]]
 
 query I??
 SELECT t.n, t.v, array_transform(t.v, (v, i) -> array_transform(v, (v, j) -> n) ) from t;
@@ -144,23 +154,27 @@ logical_plan
 01)Projection: Boolean(true) AS t.v = t.v, array_transform(List([1]), (v) -> v IS NOT NULL OR Boolean(NULL)) AS array_transform(make_array(Int64(1)),(v) -> v = v)
 02)--TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[true as t.v = t.v, array_transform([1], (v) -> v@0 IS NOT NULL OR NULL) as array_transform(make_array(Int64(1)),(v) -> v = v)]
+01)ProjectionExec: expr=[true as t.v = t.v, array_transform([1], (v) -> v@-1 IS NOT NULL OR NULL) as array_transform(make_array(Int64(1)),(v) -> v = v)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query error
 select array_transform();
 ----
-DataFusion error: Error during planning: 'array_transform' does not support zero arguments No function matches the given name and argument types 'array_transform()'. You might need to add explicit type casts.
-	Candidate functions:
-	array_transform(Any, Any)
+DataFusion error: Execution error: array_transform expects a value follewed by a lambda, got []
 
 
-query error DataFusion error: Execution error: expected list, got Field \{ name: "Int64\(1\)", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}
+query error DataFusion error: Execution error: expected list, got Field \{ "Int64\(1\)": Int64 \}
 select array_transform(1, v -> v*2);
 
-query error DataFusion error: Execution error: array_transform expects a value follewed by a lambda, got \[Lambda\(\["v"\], false\), Value\(Field \{ name: "make_array\(Int64\(1\),Int64\(2\)\)", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)\]
+query error DataFusion error: Execution error: array_transform expects a value follewed by a lambda, got \[Lambda, Value\(Field \{ name: "make_array\(Int64\(1\),Int64\(2\)\)", data_type: List\(Field \{ data_type: Int64, nullable: true \}\), nullable: true \}\)\]
 select array_transform(v -> v*2, [1, 2]);
 
-query error DataFusion error: Execution error: lambdas_schemas: array_transform argument 1 \(0\-indexed\), a lambda, supports up to 2 arguments, but got 3
+query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 2
 SELECT array_transform([1, 2], (e, i, j) -> i) from t;
+
+#todo: this should error due to duplicate names
+query ?
+SELECT array_transform([1], (v, v) -> v*2);
+----
+[0]

@@ -117,8 +117,6 @@ pub mod hash_set {
     pub use hashbrown::hash_set::Entry;
 }
 
-pub use hashbrown;
-
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.
 ///

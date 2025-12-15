@@ -27,7 +27,7 @@ use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::tree_node::{Transformed, TransformedResult};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_common::{ColumnStatistics, ScalarValue};
 use datafusion_datasource::file::FileSource;
@@ -39,7 +39,7 @@ use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::expressions::{self, Column};
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprExt};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
@@ -181,10 +181,10 @@ struct CustomPhysicalExprAdapter {
 impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
     fn rewrite(&self, mut expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         expr = expr
-            .transform_with_lambdas_params(|expr, lambdas_params| {
+            .transform(|expr| {
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                     let field_name = column.name();
-                    if !lambdas_params.contains(field_name) && self
+                    if self
                         .physical_file_schema
                         .field_with_name(field_name)
                         .ok()

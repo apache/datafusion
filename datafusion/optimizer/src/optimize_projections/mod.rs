@@ -639,7 +639,7 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 /// --Source(a, b)
 /// ```
 fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
-    expr.transform_up_with_lambdas_params(|expr, lambdas_params| {
+    expr.transform_up(|expr| {
         match expr {
             //  remove any intermediate aliases if they do not carry metadata
             Expr::Alias(alias) => {
@@ -653,7 +653,7 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                     false => Ok(Transformed::no(Expr::Alias(alias))),
                 }
             }
-            Expr::Column(col) if !col.is_lambda_parameter(lambdas_params) => {
+            Expr::Column(col) => {
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col)?;
                 // get the corresponding unaliased input expression

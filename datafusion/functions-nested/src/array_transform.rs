@@ -18,17 +18,23 @@
 //! [`ScalarUDFImpl`] definitions for array_transform function.
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray},
+    array::{
+        Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray,
+        RecordBatch, RecordBatchOptions,
+    },
     compute::take_record_batch,
-    datatypes::{DataType, Field},
+    datatypes::{DataType, Field, FieldRef, Schema},
 };
 use datafusion_common::{
-    HashSet, Result, exec_err, internal_err, tree_node::{Transformed, TreeNode}, utils::{elements_indices, list_indices, list_values, take_function_args}
+    HashMap, Result, exec_err, internal_err, tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter}, utils::{elements_indices, list_indices, list_values, take_function_args}
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter, Volatility, expr::Lambda, merge_captures_with_lazy_args
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter, Volatility,
 };
 use datafusion_macros::user_doc;
+use datafusion_physical_expr::expressions::{LambdaColumn, LambdaExpr};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::{any::Any, sync::Arc};
 
 make_udf_expr_and_func!(
@@ -115,7 +121,7 @@ impl ScalarUDFImpl for ArrayTransform {
             );
         };
 
-        //TODO: should metadata be passed? If so, with the same keys or prefixed/suffixed?
+        //TODO: should metadata be copied into the transformed array?
 
         // lambda is the resulting field of executing the lambda body
         // with the parameters returned in lambdas_parameters
@@ -151,6 +157,7 @@ impl ScalarUDFImpl for ArrayTransform {
         };
 
         let list_array = list_value.to_array(args.number_rows)?;
+        let list_values = list_values(&list_array)?;
 
         // if any column got captured, we need to adjust it to the values arrays,
         // duplicating values of list with mulitple values and removing values of empty lists
@@ -163,23 +170,26 @@ impl ScalarUDFImpl for ArrayTransform {
 
         // use closures and merge_captures_with_lazy_args so that it calls only the needed ones based on the number of arguments
         // avoiding unnecessary computations
-        let values_param = || Ok(Arc::clone(list_values(&list_array)?));
+        let values_param = || Ok(Arc::clone(list_values));
         let indices_param = || elements_indices(&list_array);
 
-        // the order of the merged schema is an unspecified implementation detail that may change in the future,
-        // using this function is the correct way to merge as it return the correct ordering and will change in sync
-        // the implementation without the need for fixes. It also computes only the parameters requested
-        let lambda_batch = merge_captures_with_lazy_args(
-            adjusted_captures.as_ref(),
-            &lambda.params, // ScalarUDF already merged the fields returned in lambdas_parameters with the parameters names definied in the lambda, so we don't need to
+        let binded_body = bind_lambda_columns(
+            Arc::clone(&lambda.body),
+            &lambda.params,
             &[&values_param, &indices_param],
         )?;
 
         // call the transforming expression with the record batch composed of the list values merged with captured columns
-        let transformed_values = lambda
-            .body
-            .evaluate(&lambda_batch)?
-            .into_array(lambda_batch.num_rows())?;
+        let transformed_values = binded_body
+            .evaluate(&adjusted_captures.unwrap_or_else(|| {
+                RecordBatch::try_new_with_options(
+                    Arc::new(Schema::empty()),
+                    vec![],
+                    &RecordBatchOptions::new().with_row_count(Some(list_values.len())),
+                )
+                .unwrap()
+            }))?
+            .into_array(list_values.len())?;
 
         let field = match args.return_field.data_type() {
             DataType::List(field)
@@ -233,7 +243,7 @@ impl ScalarUDFImpl for ArrayTransform {
         &self,
         args: &[ValueOrLambdaParameter],
     ) -> Result<Vec<Option<Vec<Field>>>> {
-        let [ValueOrLambdaParameter::Value(list), ValueOrLambdaParameter::Lambda(_, _)] =
+        let [ValueOrLambdaParameter::Value(list), ValueOrLambdaParameter::Lambda] =
             args
         else {
             return exec_err!(
@@ -253,14 +263,76 @@ impl ScalarUDFImpl for ArrayTransform {
         // we don't need to omit the index in the case the lambda don't specify, e.g. array_transform([], v -> v*2),
         // nor check whether the lambda contains more than two parameters, e.g. array_transform([], (v, i, j) -> v+i+j),
         // as datafusion will do that for us
-        let value = Field::new("value", field.data_type().clone(), field.is_nullable())
+        let value = Field::new("", field.data_type().clone(), field.is_nullable())
             .with_metadata(field.metadata().clone());
-        let index = Field::new("index", index_type, false);
+        let index = Field::new("", index_type, false);
 
         Ok(vec![None, Some(vec![value, index])])
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn bind_lambda_columns(
+    expr: Arc<dyn PhysicalExpr>,
+    params: &[FieldRef],
+    args: &[&dyn Fn() -> Result<ArrayRef>],
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let columns = std::iter::zip(params, args)
+        .map(|(param, arg)| Ok((param.name().as_str(), (arg()?, 0))))
+        .collect::<Result<HashMap<_, _>>>()?;
+
+    expr.rewrite(&mut BindLambdaColumn::new(columns)).data()
+}
+
+struct BindLambdaColumn<'a> {
+    columns: HashMap<&'a str, (ArrayRef, usize)>,
+}
+
+impl<'a> BindLambdaColumn<'a> {
+    fn new(columns: HashMap<&'a str, (ArrayRef, usize)>) -> Self {
+        Self { columns }
+    }
+}
+
+impl TreeNodeRewriter for BindLambdaColumn<'_> {
+    type Node = Arc<dyn PhysicalExpr>;
+
+    fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if let Some(lambda_column) = node.as_any().downcast_ref::<LambdaColumn>() {
+            if let Some((value, shadows)) = self.columns.get(lambda_column.name()) {
+                if *shadows == 0 {
+                    return Ok(Transformed::yes(Arc::new(
+                        lambda_column.clone().with_value(value.clone()),
+                    )));
+                }
+            }
+        } else if let Some(inner_lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
+            for param in inner_lambda.params() {
+                if let Some((_value, shadows)) = self.columns.get_mut(param.as_str()) {
+                    *shadows += 1;
+                }
+            }
+
+            if self.columns.values().all(|(_value, shadows)| *shadows > 0) {
+                return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+            }
+        }
+
+        Ok(Transformed::no(node))
+    }
+
+    fn f_up(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+        if let Some(inner_lambda) = node.as_any().downcast_ref::<LambdaExpr>() {
+            for param in inner_lambda.params() {
+                if let Some((_value, shadows)) = self.columns.get_mut(param.as_str()) {
+                    *shadows -= 1;
+                }
+            }
+        }
+
+        Ok(Transformed::no(node))
     }
 }

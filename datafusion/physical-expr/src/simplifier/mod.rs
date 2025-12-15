@@ -19,12 +19,12 @@
 
 use arrow::datatypes::Schema;
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
+    tree_node::{Transformed, TreeNode, TreeNodeRewriter},
     Result,
 };
 use std::sync::Arc;
 
-use crate::{PhysicalExpr, PhysicalExprExt};
+use crate::PhysicalExpr;
 
 pub mod unwrap_cast;
 
@@ -48,22 +48,6 @@ impl<'a> PhysicalExprSimplifier<'a> {
         &mut self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        return expr
-            .transform_up_with_schema(self.schema, |node, schema| {
-                // Apply unwrap cast optimization
-                #[cfg(test)]
-                let original_type = node.data_type(schema).unwrap();
-                let unwrapped = unwrap_cast::unwrap_cast_in_comparison(node, schema)?;
-                #[cfg(test)]
-                assert_eq!(
-                    unwrapped.data.data_type(schema).unwrap(),
-                    original_type,
-                    "Simplified expression should have the same data type as the original"
-            );
-                Ok(unwrapped)
-            })
-            .data();
-
         Ok(expr.rewrite(self)?.data)
     }
 }

@@ -26,8 +26,8 @@ use async_trait::async_trait;
 use datafusion::assert_batches_eq;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::tree_node::{Transformed, TransformedResult};
-use datafusion::common::{DFSchema, HashSet};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::DFSchema;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
@@ -38,7 +38,7 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::expressions::{CastExpr, Column, Literal};
-use datafusion::physical_expr::{PhysicalExpr, PhysicalExprExt};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::{lit, SessionConfig};
 use datafusion_physical_expr_adapter::{
@@ -308,12 +308,11 @@ impl PhysicalExprAdapter for DefaultValuePhysicalExprAdapter {
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         // First try our custom default value injection for missing columns
         let rewritten = expr
-            .transform_with_lambdas_params(|expr, lambdas_params| {
+            .transform(|expr| {
                 self.inject_default_values(
                     expr,
                     &self.logical_file_schema,
                     &self.physical_file_schema,
-                    lambdas_params,
                 )
             })
             .data()?;
@@ -349,15 +348,12 @@ impl DefaultValuePhysicalExprAdapter {
         expr: Arc<dyn PhysicalExpr>,
         logical_file_schema: &Schema,
         physical_file_schema: &Schema,
-        lambdas_params: &HashSet<String>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             let column_name = column.name();
 
             // Check if this column exists in the physical schema
-            if !lambdas_params.contains(column_name)
-                && physical_file_schema.index_of(column_name).is_err()
-            {
+            if physical_file_schema.index_of(column_name).is_err() {
                 // Column is missing from physical schema, check if logical schema has a default
                 if let Ok(logical_field) =
                     logical_file_schema.field_with_name(column_name)

@@ -18,11 +18,11 @@
 use std::sync::Arc;
 
 use crate::expressions::{self, Column};
-use crate::{create_physical_expr, LexOrdering, PhysicalExprExt, PhysicalSortExpr};
+use crate::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::tree_node::{Transformed, TransformedResult};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_err, Result};
 use datafusion_common::{DFSchema, HashMap};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -38,14 +38,14 @@ pub fn add_offset_to_expr(
     expr: Arc<dyn PhysicalExpr>,
     offset: isize,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_down_with_lambdas_params(|e, lambdas_params| match e.as_any().downcast_ref::<Column>() {
-        Some(col) if !lambdas_params.contains(col.name()) => {
+    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => {
             let Some(idx) = col.index().checked_add_signed(offset) else {
                 return plan_err!("Column index overflow");
             };
             Ok(Transformed::yes(Arc::new(Column::new(col.name(), idx))))
         }
-        _ => Ok(Transformed::no(e)),
+        None => Ok(Transformed::no(e)),
     })
     .data()
 }

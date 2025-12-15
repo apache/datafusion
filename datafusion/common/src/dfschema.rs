@@ -314,10 +314,8 @@ impl DFSchema {
             return;
         }
 
-        let self_fields: HashSet<(Option<&TableReference>, &str)> = self
-            .iter()
-            .map(|(qualifier, field)| (qualifier, field.name().as_str()))
-            .collect();
+        let self_fields: HashSet<(Option<&TableReference>, &FieldRef)> =
+            self.iter().collect();
         let self_unqualified_names: HashSet<&str> = self
             .inner
             .fields
@@ -330,10 +328,7 @@ impl DFSchema {
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
-                Some(q) => {
-                    self_fields.contains(&(Some(q), field.name().as_str()))
-                        || self_fields.contains(&(None, field.name().as_str()))
-                }
+                Some(q) => self_fields.contains(&(Some(q), field)),
                 // for unqualified columns, check as unqualified name
                 None => self_unqualified_names.contains(field.name().as_str()),
             };
@@ -870,11 +865,6 @@ impl DFSchema {
     /// Get functional dependencies
     pub fn functional_dependencies(&self) -> &FunctionalDependencies {
         &self.functional_dependencies
-    }
-
-    /// Get functional dependencies
-    pub fn field_qualifiers(&self) -> &[Option<TableReference>] {
-        &self.field_qualifiers
     }
 
     /// Iterate over the qualifiers and fields in the DFSchema

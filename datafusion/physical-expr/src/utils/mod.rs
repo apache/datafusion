@@ -22,7 +22,6 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::expressions::{BinaryExpr, Column};
-use crate::scalar_function::PhysicalExprExt;
 use crate::tree_node::ExprContext;
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
@@ -228,11 +227,9 @@ where
 /// Recursively extract referenced [`Column`]s within a [`PhysicalExpr`].
 pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
-    expr.apply_with_lambdas_params(|expr, lambdas_params| {
+    expr.apply(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            if !lambdas_params.contains(column.name()) {
-                columns.get_or_insert_owned(column);
-            }
+            columns.get_or_insert_owned(column);
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -254,16 +251,14 @@ pub fn reassign_expr_columns(
     expr: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_down_with_lambdas_params(|expr, lambdas_params| {
+    expr.transform_down(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            if !lambdas_params.contains(column.name()) {
-                let index = schema.index_of(column.name())?;
+            let index = schema.index_of(column.name())?;
 
-                return Ok(Transformed::yes(Arc::new(Column::new(
-                    column.name(),
-                    index,
-                ))));
-            }
+            return Ok(Transformed::yes(Arc::new(Column::new(
+                column.name(),
+                index,
+            ))));
         }
         Ok(Transformed::no(expr))
     })

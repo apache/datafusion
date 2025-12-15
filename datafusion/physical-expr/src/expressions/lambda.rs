@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical column reference: [`Column`]
+//! Physical lambda expression: [`LambdaExpr`]
 
 use std::hash::Hash;
 use std::sync::Arc;
@@ -23,16 +23,15 @@ use std::{any::Any, sync::OnceLock};
 
 use crate::expressions::Column;
 use crate::physical_expr::PhysicalExpr;
-use crate::PhysicalExprExt;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, HashSet, Result};
 use datafusion_expr::ColumnarValue;
 
-/// Represents a lambda with the given parameters name and body
+/// Represents a lambda with the given parameters names and body
 #[derive(Debug, Eq, Clone)]
 pub struct LambdaExpr {
     params: Vec<String>,
@@ -79,16 +78,14 @@ impl LambdaExpr {
             let mut indices = HashSet::new();
 
             self.body
-                .apply_with_lambdas_params(|expr, lambdas_params| {
+                .apply(|expr| {
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                        if !lambdas_params.contains(column.name()) {
-                            indices.insert(column.index());
-                        }
+                        indices.insert(column.index());
                     }
 
                     Ok(TreeNodeRecursion::Continue)
                 })
-                .unwrap();
+                .expect("closure should be infallibe");
 
             indices
         })
@@ -106,12 +103,12 @@ impl PhysicalExpr for LambdaExpr {
         self
     }
 
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(DataType::Null)
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.body.data_type(input_schema)
     }
 
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(true)
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        self.body.nullable(input_schema)
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {

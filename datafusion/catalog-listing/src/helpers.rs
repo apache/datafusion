@@ -52,9 +52,9 @@ use object_store::{ObjectMeta, ObjectStore};
 ///   was performed
 pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    expr.apply_with_lambdas_params(|expr, lambdas_params| match expr {
-        Expr::Column(col) => {
-            is_applicable &= col_names.contains(&col.name()) || col.is_lambda_parameter(lambdas_params);
+    expr.apply(|expr| match expr {
+        Expr::Column(Column { ref name, .. }) => {
+            is_applicable &= col_names.contains(&name.as_str());
             if is_applicable {
                 Ok(TreeNodeRecursion::Jump)
             } else {
@@ -87,7 +87,8 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         | Expr::ScalarSubquery(_)
         | Expr::GroupingSet(_)
         | Expr::Case(_)
-        | Expr::Lambda(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::Lambda(_)
+        | Expr::LambdaColumn(_) => Ok(TreeNodeRecursion::Continue),
 
         Expr::ScalarFunction(scalar_function) => {
             match scalar_function.func.signature().volatility {

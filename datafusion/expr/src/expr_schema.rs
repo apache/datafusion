@@ -16,12 +16,12 @@
 // under the License.
 
 use super::{Between, Expr, Like};
-use crate::expr::FieldMetadata;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
+use crate::expr::{FieldMetadata, LambdaColumn};
 use crate::type_coercion::functions::{
     fields_with_aggregate_udf, fields_with_window_udf,
 };
@@ -234,7 +234,10 @@ impl ExprSchemable for Expr {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
-            Expr::Lambda { .. } => Ok(DataType::Null),
+            Expr::Lambda(Lambda { params: _, body }) => body.get_type(schema),
+            Expr::LambdaColumn(LambdaColumn { name: _, field, .. }) => {
+                Ok(field.data_type().clone())
+            }
         }
     }
 
@@ -353,7 +356,8 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
-            Expr::Lambda { .. } => Ok(false),
+            Expr::Lambda(l) => l.body.nullable(input_schema),
+            Expr::LambdaColumn(c) => Ok(c.field.is_nullable()),
         }
     }
 
@@ -542,30 +546,14 @@ impl ExprSchemable for Expr {
 
                 func.return_field(&new_fields)
             }
-            // Expr::Lambda(Lambda { params, body}) => body.to_field(schema),
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let fields = if args.iter().any(|arg| matches!(arg, Expr::Lambda(_))) {
-                    let lambdas_schemas = func.arguments_expr_schema(args, schema)?;
-
-                    std::iter::zip(args, lambdas_schemas)
-                        // .map(|(e, schema)| e.to_field(schema).map(|(_, f)| f))
-                        .map(|(e, schema)| match e {
-                            Expr::Lambda(Lambda { params: _, body }) => {
-                                body.to_field(&schema).map(|(_, f)| f)
-                            }
-                            _ => e.to_field(&schema).map(|(_, f)| f),
-                        })
-                        .collect::<Result<Vec<_>>>()?
-                } else {
-                    args.iter()
-                        .map(|e| e.to_field(schema).map(|(_, f)| f))
-                        .collect::<Result<Vec<_>>>()?
-                };
-
-                let arg_types = fields
+                let (arg_types, fields): (Vec<DataType>, Vec<Arc<Field>>) = args
                     .iter()
-                    .map(|f| f.data_type().clone())
-                    .collect::<Vec<_>>();
+                    .map(|e| e.to_field(schema).map(|(_, f)| f))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .map(|f| (f.data_type().clone(), f))
+                    .unzip();
 
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
                 let new_data_types = data_types_with_scalar_udf(&arg_types, func)
@@ -637,6 +625,7 @@ impl ExprSchemable for Expr {
                 self.get_type(schema)?,
                 self.nullable(schema)?,
             ))),
+            Expr::LambdaColumn(c) => Ok(Arc::clone(&c.field)),
         }?;
 
         Ok((

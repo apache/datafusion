@@ -178,14 +178,6 @@ pub trait CSEController {
     /// if all are always evaluated.
     fn conditional_children(node: &Self::Node) -> Option<ChildrenList<&Self::Node>>;
 
-    // A helper method called on each node before is_ignored, during top-down traversal during the first,
-    // visiting traversal of CSE.
-    fn visit_f_down(&mut self, _node: &Self::Node) {}
-    
-    // A helper method called on each node after is_ignored, during bottom-up traversal during the first,
-    // visiting traversal of CSE.
-    fn visit_f_up(&mut self, _node: &Self::Node) {}
-
     // Returns true if a node is valid. If a node is invalid then it can't be eliminated.
     // Validity is propagated up which means no subtree can be eliminated that contains
     // an invalid node.
@@ -282,7 +274,7 @@ where
     /// thus can not be extracted as a common [`TreeNode`].
     conditional: bool,
 
-    controller: &'a mut C,
+    controller: &'a C,
 }
 
 /// Record item that used when traversing a [`TreeNode`] tree.
@@ -360,7 +352,6 @@ where
         self.visit_stack
             .push(VisitRecord::EnterMark(self.down_index));
         self.down_index += 1;
-        self.controller.visit_f_down(node);
 
         // If a node can short-circuit then some of its children might not be executed so
         // count the occurrence either normal or conditional.
@@ -423,7 +414,6 @@ where
         self.visit_stack
             .push(VisitRecord::NodeItem(node_id, is_valid));
         self.up_index += 1;
-        self.controller.visit_f_up(node);
 
         Ok(TreeNodeRecursion::Continue)
     }
@@ -542,7 +532,7 @@ where
 
     /// Add an identifier to `id_array` for every [`TreeNode`] in this tree.
     fn node_to_id_array<'n>(
-        &mut self,
+        &self,
         node: &'n N,
         node_stats: &mut NodeStats<'n, N>,
         id_array: &mut IdArray<'n, N>,
@@ -556,7 +546,7 @@ where
             random_state: &self.random_state,
             found_common: false,
             conditional: false,
-            controller: &mut self.controller,
+            controller: &self.controller,
         };
         node.visit(&mut visitor)?;
 
@@ -571,7 +561,7 @@ where
     /// Each element is itself the result of [`CSE::node_to_id_array`] for that node
     /// (e.g. the identifiers for each node in the tree)
     fn to_arrays<'n>(
-        &mut self,
+        &self,
         nodes: &'n [N],
         node_stats: &mut NodeStats<'n, N>,
     ) -> Result<(bool, Vec<IdArray<'n, N>>)> {
@@ -771,7 +761,7 @@ mod test {
     #[test]
     fn id_array_visitor() -> Result<()> {
         let alias_generator = AliasGenerator::new();
-        let mut eliminator = CSE::new(TestTreeNodeCSEController::new(
+        let eliminator = CSE::new(TestTreeNodeCSEController::new(
             &alias_generator,
             TestTreeNodeMask::Normal,
         ));
@@ -863,7 +853,7 @@ mod test {
         assert_eq!(expected, id_array);
 
         // include aggregates
-        let mut eliminator = CSE::new(TestTreeNodeCSEController::new(
+        let eliminator = CSE::new(TestTreeNodeCSEController::new(
             &alias_generator,
             TestTreeNodeMask::NormalAndAggregates,
         ));

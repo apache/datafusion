@@ -42,13 +42,14 @@ use std::task::{Context, Poll};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{internal_err, JoinSide, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{PhysicalExprExt, PhysicalExprRef};
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 // Re-exported from datafusion-physical-expr for backwards compatibility
 // We recommend updating your imports to use datafusion-physical-expr directly
@@ -865,12 +866,10 @@ fn try_unifying_projections(
     projection.expr().iter().for_each(|proj_expr| {
         proj_expr
             .expr
-            .apply_with_lambdas_params(|expr, lambdas_params| {
+            .apply(|expr| {
                 Ok({
                     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                        if !lambdas_params.contains(column.name()) {
-                            *column_ref_map.entry(column.clone()).or_default() += 1;
-                        }
+                        *column_ref_map.entry(column.clone()).or_default() += 1;
                     }
                     TreeNodeRecursion::Continue
                 })
@@ -958,31 +957,31 @@ fn new_columns_for_join_on(
         .filter_map(|on| {
             // Rewrite all columns in `on`
             Arc::clone(*on)
-                .transform_with_lambdas_params(|expr, lambdas_params| {
-                    match expr.as_any().downcast_ref::<Column>() {
-                        Some(column) if !lambdas_params.contains(column.name()) => {
-                            let new_column = projection_exprs
-                                .iter()
-                                .enumerate()
-                                .find(|(_, (proj_column, _))| {
-                                    column.name() == proj_column.name()
-                                        && column.index() + column_index_offset
-                                            == proj_column.index()
-                                })
-                                .map(|(index, (_, alias))| Column::new(alias, index));
-                            if let Some(new_column) = new_column {
-                                Ok(Transformed::yes(Arc::new(new_column)))
-                            } else {
-                                // If the column is not found in the projection expressions,
-                                // it means that the column is not projected. In this case,
-                                // we cannot push the projection down.
-                                internal_err!(
-                                    "Column {:?} not found in projection expressions",
-                                    column
-                                )
-                            }
+                .transform(|expr| {
+                    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                        // Find the column in the projection expressions
+                        let new_column = projection_exprs
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (proj_column, _))| {
+                                column.name() == proj_column.name()
+                                    && column.index() + column_index_offset
+                                        == proj_column.index()
+                            })
+                            .map(|(index, (_, alias))| Column::new(alias, index));
+                        if let Some(new_column) = new_column {
+                            Ok(Transformed::yes(Arc::new(new_column)))
+                        } else {
+                            // If the column is not found in the projection expressions,
+                            // it means that the column is not projected. In this case,
+                            // we cannot push the projection down.
+                            internal_err!(
+                                "Column {:?} not found in projection expressions",
+                                column
+                            )
                         }
-                        _ => Ok(Transformed::no(expr)),
+                    } else {
+                        Ok(Transformed::no(expr))
                     }
                 })
                 .data()

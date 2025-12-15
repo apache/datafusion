@@ -38,14 +38,13 @@ use datafusion_common::error::Result;
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
-    tree_node::Transformed, ScalarValue,
+    tree_node::{Transformed, TreeNode},
+    ScalarValue,
 };
 use datafusion_common::{Column, DFSchema};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{collect_columns, Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{
-    expressions as phys_expr, PhysicalExprExt, PhysicalExprRef,
-};
+use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
@@ -1205,9 +1204,9 @@ fn rewrite_column_expr(
     column_old: &phys_expr::Column,
     column_new: &phys_expr::Column,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    e.transform_with_lambdas_params(|expr, lambdas_params| {
+    e.transform(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
-            if !lambdas_params.contains(column.name()) && column == column_old {
+            if column == column_old {
                 return Ok(Transformed::yes(Arc::new(column_new.clone())));
             }
         }

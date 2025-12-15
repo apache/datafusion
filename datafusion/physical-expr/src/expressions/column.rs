@@ -22,13 +22,12 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
-use crate::PhysicalExprExt;
 use arrow::datatypes::FieldRef;
 use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use datafusion_common::tree_node::{Transformed, TransformedResult};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -68,8 +67,7 @@ use datafusion_expr::ColumnarValue;
 pub struct Column {
     /// The name of the column (used for debugging and display purposes)
     name: String,
-    /// The index of the column in its schema.
-    /// Within a lambda body, this refer to the lambda scoped schema, not the plan schema.
+    /// The index of the column in its schema
     index: usize,
 }
 
@@ -180,9 +178,9 @@ pub fn with_new_schema(
     expr: Arc<dyn PhysicalExpr>,
     schema: &SchemaRef,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_up_with_lambdas_params(|expr, lambdas_params| {
-        match expr.as_any().downcast_ref::<Column>() {
-            Some(col) if !lambdas_params.contains(col.name()) => {
+    Ok(expr
+        .transform_up(|expr| {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let idx = col.index();
                 let Some(field) = schema.fields().get(idx) else {
                     return plan_err!(
@@ -192,11 +190,11 @@ pub fn with_new_schema(
                 let new_col = Column::new(field.name(), idx);
 
                 Ok(Transformed::yes(Arc::new(new_col) as _))
+            } else {
+                Ok(Transformed::no(expr))
             }
-            _ => Ok(Transformed::no(expr)),
-        }
-    })
-    .data()
+        })?
+        .data)
 }
 
 #[cfg(test)]

@@ -20,11 +20,11 @@ use std::sync::Arc;
 
 use crate::expressions::Column;
 use crate::utils::collect_columns;
-use crate::{PhysicalExpr, PhysicalExprExt};
+use crate::PhysicalExpr;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
-use datafusion_common::tree_node::{Transformed, TransformedResult};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{internal_datafusion_err, internal_err, plan_err, Result};
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -499,16 +499,13 @@ pub fn update_expr(
     let mut state = RewriteState::Unchanged;
 
     let new_expr = Arc::clone(expr)
-        .transform_up_with_lambdas_params(|expr, lambdas_params| {
+        .transform_up(|expr| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
             }
 
-            let column = match expr.as_any().downcast_ref::<Column>() {
-                Some(column) if !lambdas_params.contains(column.name()) => column,
-                _ => {
-                            return Ok(Transformed::no(expr));
-                        }
+            let Some(column) = expr.as_any().downcast_ref::<Column>() else {
+                return Ok(Transformed::no(expr));
             };
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
@@ -619,14 +616,14 @@ impl ProjectionMapping {
         let mut map = IndexMap::<_, ProjectionTargets>::new();
         for (expr_idx, (expr, name)) in expr.into_iter().enumerate() {
             let target_expr = Arc::new(Column::new(&name, expr_idx)) as _;
-            let source_expr = expr.transform_down_with_schema(input_schema, |e, schema| match e.as_any().downcast_ref::<Column>() {
+            let source_expr = expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
                 Some(col) => {
-                    // Sometimes, an expression and its name in the schema
+                    // Sometimes, an expression and its name in the input_schema
                     // doesn't match. This can cause problems, so we make sure
-                    // that the expression name matches with the name in `schema`.
+                    // that the expression name matches with the name in `input_schema`.
                     // Conceptually, `source_expr` and `expression` should be the same.
                     let idx = col.index();
-                    let matching_field = schema.field(idx);
+                    let matching_field = input_schema.field(idx);
                     let matching_name = matching_field.name();
                     if col.name() != matching_name {
                         return internal_err!(
@@ -740,25 +737,21 @@ pub fn project_ordering(
 ) -> Option<LexOrdering> {
     let mut projected_exprs = vec![];
     for PhysicalSortExpr { expr, options } in ordering.iter() {
-        let transformed =
-            Arc::clone(expr).transform_up_with_lambdas_params(|expr, lambdas_params| {
-                let col = match expr.as_any().downcast_ref::<Column>() {
-                    Some(col) if !lambdas_params.contains(col.name()) => col,
-                    _ => {
-                        return Ok(Transformed::no(expr));
-                    }
-                };
+        let transformed = Arc::clone(expr).transform_up(|expr| {
+            let Some(col) = expr.as_any().downcast_ref::<Column>() else {
+                return Ok(Transformed::no(expr));
+            };
 
-                let name = col.name();
-                if let Some((idx, _)) = schema.column_with_name(name) {
-                    // Compute the new column expression (with correct index) after projection:
-                    Ok(Transformed::yes(Arc::new(Column::new(name, idx))))
-                } else {
-                    // Cannot find expression in the projected_schema,
-                    // signal this using an Err result
-                    plan_err!("")
-                }
-            });
+            let name = col.name();
+            if let Some((idx, _)) = schema.column_with_name(name) {
+                // Compute the new column expression (with correct index) after projection:
+                Ok(Transformed::yes(Arc::new(Column::new(name, idx))))
+            } else {
+                // Cannot find expression in the projected_schema,
+                // signal this using an Err result
+                plan_err!("")
+            }
+        });
 
         match transformed {
             Ok(transformed) => {

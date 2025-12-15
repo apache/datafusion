@@ -22,7 +22,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 
 use datafusion::assert_batches_eq;
 use datafusion::common::not_impl_err;
-use datafusion::common::tree_node::{Transformed, TransformedResult};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
@@ -31,7 +31,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::expressions::CastExpr;
-use datafusion::physical_expr::{PhysicalExpr, PhysicalExprExt};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::SessionConfig;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
@@ -181,10 +181,11 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
         expr = self.inner.rewrite(expr)?;
         // Now we can apply custom casting rules or even swap out all CastExprs for a custom cast kernel / expression
         // For example, [DataFusion Comet](https://github.com/apache/datafusion-comet) has a [custom cast kernel](https://github.com/apache/datafusion-comet/blob/b4ac876ab420ed403ac7fc8e1b29f42f1f442566/native/spark-expr/src/conversion_funcs/cast.rs#L133-L138).
-        expr.transform_with_schema(&self.physical_file_schema, |expr, schema| {
+        expr.transform(|expr| {
             if let Some(cast) = expr.as_any().downcast_ref::<CastExpr>() {
-                let input_data_type = cast.expr().data_type(schema)?;
-                let output_data_type = cast.data_type(schema)?;
+                let input_data_type =
+                    cast.expr().data_type(&self.physical_file_schema)?;
+                let output_data_type = cast.data_type(&self.physical_file_schema)?;
                 if !cast.is_bigger_cast(&input_data_type) {
                     return not_impl_err!(
                         "Unsupported CAST from {input_data_type} to {output_data_type}"

@@ -35,7 +35,7 @@ use arrow::array::{
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
-use datafusion_common::tree_node::{Transformed, TransformedResult};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
@@ -44,7 +44,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprExt, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::HashTable;
@@ -312,13 +312,13 @@ pub fn convert_sort_expr_with_filter_schema(
         // Since we are sure that one to one column mapping includes all columns, we convert
         // the sort expression into a filter expression.
         let converted_filter_expr = expr
-            .transform_up_with_lambdas_params(|p, lambdas_params| {
-                convert_filter_columns(p.as_ref(), &column_map, lambdas_params).map(
-                    |transformed| match transformed {
+            .transform_up(|p| {
+                convert_filter_columns(p.as_ref(), &column_map).map(|transformed| {
+                    match transformed {
                         Some(transformed) => Transformed::yes(transformed),
                         None => Transformed::no(p),
-                    },
-                )
+                    }
+                })
             })
             .data()?;
         // Search the converted `PhysicalExpr` in filter expression; if an exact
@@ -361,17 +361,14 @@ pub fn build_filter_input_order(
 fn convert_filter_columns(
     input: &dyn PhysicalExpr,
     column_map: &HashMap<Column, Column>,
-    lambdas_params: &HashSet<String>,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     // Attempt to downcast the input expression to a Column type.
-    Ok(match input.as_any().downcast_ref::<Column>() {
-        Some(col) if !lambdas_params.contains(col.name()) => {
-            column_map.get(col).map(|c| Arc::new(c.clone()) as _)
-        }
-        _ => {
-            // If the downcast fails, return the input expression as is.
-            None
-        }
+    Ok(if let Some(col) = input.as_any().downcast_ref::<Column>() {
+        // If the downcast is successful, retrieve the corresponding filter column.
+        column_map.get(col).map(|c| Arc::new(c.clone()) as _)
+    } else {
+        // If the downcast fails, return the input expression as is.
+        None
     })
 }
 

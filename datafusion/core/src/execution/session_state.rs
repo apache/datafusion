@@ -41,6 +41,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::Dialect;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     config_err, exec_err, plan_datafusion_err, DFSchema, DataFusionError,
     ResolvedTableReference, TableReference,
@@ -700,9 +701,7 @@ impl SessionState {
         let config_options = self.config_options();
         for rewrite in self.analyzer.function_rewrites() {
             expr = expr
-                .transform_up_with_schema(df_schema, |expr, df_schema| {
-                    rewrite.rewrite(expr, df_schema, config_options)
-                })?
+                .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
                 .data;
         }
         create_physical_expr(&expr, df_schema, self.execution_props())

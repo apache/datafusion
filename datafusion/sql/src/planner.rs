@@ -26,13 +26,14 @@ use arrow::datatypes::*;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
-use datafusion_common::TableReference;
 use datafusion_common::{
-    field_not_found, plan_datafusion_err, DFSchemaRef, Diagnostic, HashSet, SchemaError,
+    field_not_found, plan_datafusion_err, DFSchemaRef, Diagnostic, SchemaError,
 };
+use datafusion_common::{internal_err, TableReference};
 use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
+use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
@@ -265,8 +266,8 @@ pub struct PlannerContext {
     outer_from_schema: Option<DFSchemaRef>,
     /// The query schema defined by the table
     create_table_schema: Option<DFSchemaRef>,
-    /// The lambda introduced columns names
-    lambdas_parameters: HashSet<String>,
+    /// The parameters of all lambdas seen so far
+    lambdas_parameters: HashMap<String, FieldRef>,
 }
 
 impl Default for PlannerContext {
@@ -284,7 +285,7 @@ impl PlannerContext {
             outer_query_schema: None,
             outer_from_schema: None,
             create_table_schema: None,
-            lambdas_parameters: HashSet::new(),
+            lambdas_parameters: HashMap::new(),
         }
     }
 
@@ -371,15 +372,16 @@ impl PlannerContext {
         self.ctes.get(cte_name).map(|cte| cte.as_ref())
     }
 
-    pub fn lambdas_parameters(&self) -> &HashSet<String> {
+    pub fn lambdas_parameters(&self) -> &HashMap<String, FieldRef> {
         &self.lambdas_parameters
     }
 
     pub fn with_lambda_parameters(
         mut self,
-        arguments: impl IntoIterator<Item = String>,
+        arguments: impl IntoIterator<Item = FieldRef>,
     ) -> Self {
-        self.lambdas_parameters.extend(arguments);
+        self.lambdas_parameters
+            .extend(arguments.into_iter().map(|f| (f.name().clone(), f)));
 
         self
     }
@@ -545,11 +547,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         exprs: &[Expr],
     ) -> Result<()> {
-        exprs
+        find_column_exprs(exprs)
             .iter()
-            .flat_map(|expr| expr.column_refs())
-            .try_for_each(|col| {
-                match &col.relation {
+            .try_for_each(|col| match col {
+                Expr::Column(col) => match &col.relation {
                     Some(r) => schema.field_with_qualified_name(r, &col.name).map(|_| ()),
                     None => {
                         if !schema.fields_with_unqualified_name(&col.name).is_empty() {
@@ -599,7 +600,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         err.with_diagnostic(diagnostic)
                     }
                     _ => err,
-                })
+                }),
+                _ => internal_err!("Not a column"),
             })
     }
 

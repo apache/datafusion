@@ -23,16 +23,16 @@ use arrow::datatypes::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_err, Column, DFSchema, Diagnostic, HashMap, Result, ScalarValue
+    exec_datafusion_err, exec_err, internal_err, plan_err, Column, DFSchemaRef,
+    Diagnostic, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
     Alias, GroupingSet, Unnest, WindowFunction, WindowFunctionParams,
 };
-use datafusion_expr::tree_node::TreeNodeRewriterWithPayload;
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
@@ -44,9 +44,9 @@ use sqlparser::ast::{Ident, Value};
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     expr.clone()
-        .transform_up_with_lambdas_params(|nested_expr, lambdas_params| {
+        .transform_up(|nested_expr| {
             match nested_expr {
-                Expr::Column(col) if !col.is_lambda_parameter(lambdas_params) => {
+                Expr::Column(col) => {
                     let (qualifier, field) =
                         plan.schema().qualified_field_from_column(&col)?;
                     Ok(Transformed::yes(Expr::Column(Column::from((
@@ -81,7 +81,6 @@ pub(crate) fn rebase_expr(
     base_exprs: &[Expr],
     plan: &LogicalPlan,
 ) -> Result<Expr> {
-    //todo user transform_down_with_lambdas_params
     expr.clone()
         .transform_down(|nested_expr| {
             if base_exprs.contains(&nested_expr) {
@@ -232,8 +231,8 @@ pub(crate) fn resolve_aliases_to_exprs(
     expr: Expr,
     aliases: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    expr.transform_up_with_lambdas_params(|nested_expr, lambdas_params| match nested_expr {
-        Expr::Column(c) if c.relation.is_none() && !c.is_lambda_parameter(lambdas_params) => {
+    expr.transform_up(|nested_expr| match nested_expr {
+        Expr::Column(c) if c.relation.is_none() => {
             if let Some(aliased_expr) = aliases.get(&c.name) {
                 Ok(Transformed::yes(aliased_expr.clone()))
             } else {
@@ -372,6 +371,7 @@ This is only usedful when used with transform down up
 A full example of how the transformation works:
  */
 struct RecursiveUnnestRewriter<'a> {
+    input_schema: &'a DFSchemaRef,
     root_expr: &'a Expr,
     // Useful to detect which child expr is a part of/ not a part of unnest operation
     top_most_unnest: Option<Unnest>,
@@ -405,7 +405,6 @@ impl RecursiveUnnestRewriter<'_> {
         alias_name: String,
         expr_in_unnest: &Expr,
         struct_allowed: bool,
-        input_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         let inner_expr_name = expr_in_unnest.schema_name().to_string();
 
@@ -419,7 +418,7 @@ impl RecursiveUnnestRewriter<'_> {
         // column name as is, to comply with group by and order by
         let placeholder_column = Column::from_name(placeholder_name.clone());
 
-        let (data_type, _) = expr_in_unnest.data_type_and_nullable(input_schema)?;
+        let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
 
         match data_type {
             DataType::Struct(inner_fields) => {
@@ -469,18 +468,17 @@ impl RecursiveUnnestRewriter<'_> {
     }
 }
 
-impl TreeNodeRewriterWithPayload for RecursiveUnnestRewriter<'_> {
+impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     type Node = Expr;
-    type Payload<'a> = &'a DFSchema;
 
     /// This downward traversal needs to keep track of:
     /// - Whether or not some unnest expr has been visited from the top util the current node
     /// - If some unnest expr has been visited, maintain a stack of such information, this
     ///   is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
-    fn f_down(&mut self, expr: Expr, input_schema: &DFSchema) -> Result<Transformed<Expr>> {
+    fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref unnest_expr) = expr {
             let (data_type, _) =
-                unnest_expr.expr.data_type_and_nullable(input_schema)?;
+                unnest_expr.expr.data_type_and_nullable(self.input_schema)?;
             self.consecutive_unnest.push(Some(unnest_expr.clone()));
             // if expr inside unnest is a struct, do not consider
             // the next unnest as consecutive unnest (if any)
@@ -534,7 +532,7 @@ impl TreeNodeRewriterWithPayload for RecursiveUnnestRewriter<'_> {
     ///                       column2
     /// ```
     ///
-    fn f_up(&mut self, expr: Expr, input_schema: &DFSchema) -> Result<Transformed<Expr>> {
+    fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref traversing_unnest) = expr {
             if traversing_unnest == self.top_most_unnest.as_ref().unwrap() {
                 self.top_most_unnest = None;
@@ -570,7 +568,6 @@ impl TreeNodeRewriterWithPayload for RecursiveUnnestRewriter<'_> {
                     expr.schema_name().to_string(),
                     inner_expr,
                     struct_allowed,
-                    input_schema,
                 )?;
                 if struct_allowed {
                     self.transformed_root_exprs = Some(transformed_exprs.clone());
@@ -622,6 +619,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     original_expr: &Expr,
 ) -> Result<Vec<Expr>> {
     let mut rewriter = RecursiveUnnestRewriter {
+        input_schema: input.schema(),
         root_expr: original_expr,
         top_most_unnest: None,
         consecutive_unnest: vec![],
@@ -643,7 +641,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
         data: transformed_expr,
         transformed,
         tnr: _,
-    } = original_expr.clone().rewrite_with_schema(input.schema(), &mut rewriter)?;
+    } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
         // TODO: remove the next line after `Expr::Wildcard` is removed

@@ -20,6 +20,7 @@ use datafusion_common::{
     exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     Column, DFSchema, Result, Span, TableReference,
 };
+use datafusion_expr::expr::LambdaColumn;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
@@ -53,17 +54,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // identifier. (e.g. it is "foo.bar" not foo.bar)
             let normalize_ident = self.ident_normalizer.normalize(id);
 
-            if planner_context
+            if let Some(field) = planner_context
                 .lambdas_parameters()
-                .contains(&normalize_ident)
+                .get(&normalize_ident)
             {
-                let mut column = Column::new_unqualified(normalize_ident);
+                let mut lambda_column = LambdaColumn::new(normalize_ident, Arc::clone(field));
                 if self.options.collect_spans {
                     if let Some(span) = Span::try_from_sqlparser_span(id_span) {
-                        column.spans_mut().add_span(span);
+                        lambda_column.spans_mut().add_span(span);
                     }
                 }
-                return Ok(Expr::Column(column));
+                return Ok(Expr::LambdaColumn(lambda_column));
             }
 
             // Check for qualified field with unqualified name
