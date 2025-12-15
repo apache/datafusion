@@ -945,13 +945,25 @@ SELECT power(2.5, 0)
 ----
 1
 
-# TODO: check backward compatibility for a case with base in64 and exponent float64 since the power coercion is introduced
+# int64 base with decimal exponent (coerced to float computation)
+query R
+SELECT power(10, -2.0)
+----
+0.01
+
+query R
+SELECT power(2, -0.5)
+----
+0.707106781187
 
 # query error Unsupported data type Decimal128\(2, 1\) for power function
 # SELECT power(2.5, 4.0)
 
-query error Arrow error: .*in integer computation is out of bounds
+# power() with very large exponent returns infinity (Float64 behavior)
+query R
 SELECT power(2, 100000000000)
+----
+Infinity
 
 query error Arrow error: Arithmetic overflow: Unsupported exp value
 SELECT power(2::decimal(38, 0), -5)
@@ -1076,7 +1088,7 @@ SELECT power(2.5, 4)
 ----
 39.0625
 
-query I
+query R
 SELECT power(2, null)
 ----
 NULL

@@ -2559,7 +2559,6 @@ dependencies = [
  "arrow-ord",
  "arrow-schema",
  "async-trait",
- "chrono",
  "criterion",
  "datafusion-common",
  "datafusion-common-runtime",

@@ -26,7 +26,7 @@ use datafusion_common::assert_eq_or_internal_err;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_physical_plan::{
-    async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec, ExecutionPlan,
+    ExecutionPlan, async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
