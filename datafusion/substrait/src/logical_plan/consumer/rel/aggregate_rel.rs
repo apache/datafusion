@@ -122,7 +122,7 @@ pub async fn from_aggregate_rel(
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 async fn from_substrait_grouping(
     consumer: &impl SubstraitConsumer,
     grouping: &Grouping,

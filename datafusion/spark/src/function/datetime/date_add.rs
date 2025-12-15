@@ -23,10 +23,10 @@ use arrow::compute;
 use arrow::datatypes::{DataType, Date32Type};
 use arrow::error::ArrowError;
 use datafusion_common::cast::{
-    as_date32_array, as_int16_array, as_int32_array, as_int8_array,
+    as_date32_array, as_int8_array, as_int16_array, as_int32_array,
 };
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,

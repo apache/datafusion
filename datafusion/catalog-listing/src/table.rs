@@ -23,8 +23,8 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, plan_err, project_schema, Constraints, DataFusionError,
-    SchemaExt, Statistics,
+    Constraints, DataFusionError, SchemaExt, Statistics, internal_datafusion_err,
+    plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -34,7 +34,7 @@ use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
 };
 use datafusion_datasource::{
-    compute_all_files_statistics, ListingTableUrl, PartitionedFile, TableSchema,
+    ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -44,13 +44,24 @@ use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_expr::create_lex_ordering;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::ExecutionPlan;
-use futures::{future, stream, Stream, StreamExt, TryStreamExt};
+use datafusion_physical_plan::empty::EmptyExec;
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Result of a file listing operation from [`ListingTable::list_files_for_scan`].
+#[derive(Debug)]
+pub struct ListFilesResult {
+    /// File groups organized by the partitioning strategy.
+    pub file_groups: Vec<FileGroup>,
+    /// Aggregated statistics for all files.
+    pub statistics: Statistics,
+    /// Whether files are grouped by partition values (enables Hash partitioning).
+    pub grouped_by_partition: bool,
+}
 
 /// Built in [`TableProvider`] that reads data from one or more files as a single table.
 ///
@@ -446,7 +457,11 @@ impl TableProvider for ListingTable {
         // at the same time. This is because the limit should be applied after the filters are applied.
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
-        let (mut partitioned_file_lists, statistics) = self
+        let ListFilesResult {
+            file_groups: mut partitioned_file_lists,
+            statistics,
+            grouped_by_partition: partitioned_by_file_group,
+        } = self
             .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
 
@@ -478,7 +493,9 @@ impl TableProvider for ListingTable {
                 if new_groups.len() <= self.options.target_partitions {
                     partitioned_file_lists = new_groups;
                 } else {
-                    log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
+                    log::debug!(
+                        "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
+                    )
                 }
             }
             None => {} // no ordering required
@@ -508,6 +525,7 @@ impl TableProvider for ListingTable {
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())
+                    .with_partitioned_by_file_group(partitioned_by_file_group)
                     .build(),
             )
             .await?;
@@ -620,11 +638,15 @@ impl ListingTable {
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> datafusion_common::Result<(Vec<FileGroup>, Statistics)> {
+    ) -> datafusion_common::Result<ListFilesResult> {
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
-            return Ok((vec![], Statistics::new_unknown(&self.file_schema)));
+            return Ok(ListFilesResult {
+                file_groups: vec![],
+                statistics: Statistics::new_unknown(&self.file_schema),
+                grouped_by_partition: false,
+            });
         };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -658,7 +680,35 @@ impl ListingTable {
         let (file_group, inexact_stats) =
             get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
-        let file_groups = file_group.split_files(self.options.target_partitions);
+        // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
+        //
+        // When enabled, files are grouped by their Hive partition column values, allowing
+        // FileScanConfig to declare Hash partitioning. This enables the optimizer to skip
+        // hash repartitioning for aggregates and joins on partition columns.
+        let threshold = ctx.config_options().optimizer.preserve_file_partitions;
+
+        let (file_groups, grouped_by_partition) = if threshold > 0
+            && !self.options.table_partition_cols.is_empty()
+        {
+            let grouped =
+                file_group.group_by_partition_values(self.options.target_partitions);
+            if grouped.len() >= threshold {
+                (grouped, true)
+            } else {
+                let all_files: Vec<_> =
+                    grouped.into_iter().flat_map(|g| g.into_inner()).collect();
+                (
+                    FileGroup::new(all_files).split_files(self.options.target_partitions),
+                    false,
+                )
+            }
+        } else {
+            (
+                file_group.split_files(self.options.target_partitions),
+                false,
+            )
+        };
+
         let (mut file_groups, mut stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
@@ -678,7 +728,11 @@ impl ListingTable {
             }
             Ok::<_, DataFusionError>(())
         })?;
-        Ok((file_groups, stats))
+        Ok(ListFilesResult {
+            file_groups,
+            statistics: stats,
+            grouped_by_partition,
+        })
     }
 
     /// Collects statistics for a given partitioned file.
@@ -765,28 +819,25 @@ async fn get_files_with_limit(
         let file = file_result?;
 
         // Update file statistics regardless of state
-        if collect_stats {
-            if let Some(file_stats) = &file.statistics {
-                num_rows = if file_group.is_empty() {
-                    // For the first file, just take its row count
-                    file_stats.num_rows
-                } else {
-                    // For subsequent files, accumulate the counts
-                    num_rows.add(&file_stats.num_rows)
-                };
-            }
+        if collect_stats && let Some(file_stats) = &file.statistics {
+            num_rows = if file_group.is_empty() {
+                // For the first file, just take its row count
+                file_stats.num_rows
+            } else {
+                // For subsequent files, accumulate the counts
+                num_rows.add(&file_stats.num_rows)
+            };
         }
 
         // Always add the file to our group
         file_group.push(file);
 
         // Check if we've hit the limit (if one was specified)
-        if let Some(limit) = limit {
-            if let Precision::Exact(row_count) = num_rows {
-                if row_count > limit {
-                    state = ProcessingState::ReachedLimit;
-                }
-            }
+        if let Some(limit) = limit
+            && let Precision::Exact(row_count) = num_rows
+            && row_count > limit
+        {
+            state = ProcessingState::ReachedLimit;
         }
     }
     // If we still have files in the stream, it means that the limit kicked

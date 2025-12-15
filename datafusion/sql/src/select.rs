@@ -917,7 +917,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///   the aggregate
     /// * `order_by_post_aggr`     - The ORDER BY expressions rewritten to reference columns from
     ///   the aggregate
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn aggregate(
         &self,
         input: &LogicalPlan,

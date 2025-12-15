@@ -115,7 +115,7 @@ impl TryFrom<&Vec<SimpleExtensionDeclaration>> for Extensions {
 impl From<Extensions> for Vec<SimpleExtensionDeclaration> {
     // Silence deprecation warnings for `extension_uri_reference` during the uri -> urn migration
     // See: https://github.com/substrait-io/substrait/issues/856
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn from(val: Extensions) -> Vec<SimpleExtensionDeclaration> {
         let mut extensions = vec![];
         for (f_anchor, f_name) in val.functions {

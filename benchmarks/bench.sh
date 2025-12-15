@@ -629,22 +629,24 @@ data_tpch() {
     exit 1
 }
 
-# Points to TPCDS data generation instructions
+# Downloads TPC-DS data
 data_tpcds() {
-    TPCDS_DIR="${DATA_DIR}"
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
-    # Check if TPCDS data directory exists
-    if [ ! -d "${TPCDS_DIR}" ]; then
-        echo ""
-        echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
-        echo "  git clone https://github.com/apache/datafusion-benchmarks"
-        echo ""
-        return 1
+    # Check if `web_site.parquet` exists in the TPCDS data directory to verify data presence
+    echo "Checking TPC-DS data directory: ${TPCDS_DIR}"
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
+        mkdir -p "${TPCDS_DIR}"
+        # Download the DataFusion benchmarks repository zip if it is not already downloaded
+        if [ ! -f "${DATA_DIR}/datafusion-benchmarks.zip" ]; then
+          echo "Downloading DataFusion benchmarks repository zip to: ${DATA_DIR}/datafusion-benchmarks.zip"
+          wget --timeout=30 --tries=3 -O "${DATA_DIR}/datafusion-benchmarks.zip" https://github.com/apache/datafusion-benchmarks/archive/refs/heads/main.zip
+        fi
+        echo "Extracting TPC-DS parquet data to ${TPCDS_DIR}..."
+        unzip -o -j -d "${TPCDS_DIR}" "${DATA_DIR}/datafusion-benchmarks.zip" datafusion-benchmarks-main/tpcds/data/sf1/*
+        echo "TPC-DS data extracted."
     fi
-
-    echo ""
-    echo "TPC-DS data already exists in ${TPCDS_DIR}"
-    echo ""
+    echo "Done."
 }
 
 # Runs the tpch benchmark
@@ -682,21 +684,10 @@ run_tpch_mem() {
 
 # Runs the tpcds benchmark
 run_tpcds() {
-    TPCDS_DIR="${DATA_DIR}"
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
-    # Check if TPCDS data directory exists
-    if [ ! -d "${TPCDS_DIR}" ]; then
-        echo "Error: TPC-DS data directory does not exist: ${TPCDS_DIR}" >&2
-        echo "" >&2
-        echo "Please prepare TPC-DS data first by following instructions:" >&2
-        echo "  ./bench.sh data tpcds" >&2
-        echo "" >&2
-        exit 1
-    fi
-
-    # Check if directory contains parquet files
-    if ! find "${TPCDS_DIR}" -name "*.parquet" -print -quit | grep -q .; then
-        echo "Error: TPC-DS data directory exists but contains no parquet files: ${TPCDS_DIR}" >&2
+    # Check if TPCDS data directory and representative file exists
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
         echo "" >&2
         echo "Please prepare TPC-DS data first by following instructions:" >&2
         echo "  ./bench.sh data tpcds" >&2
