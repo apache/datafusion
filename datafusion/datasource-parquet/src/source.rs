@@ -767,7 +767,7 @@ impl FileSource for ParquetSource {
     /// # Returns
     /// - `Inexact`: Created an optimized source (e.g., reversed scan) that approximates the order
     /// - `Unsupported`: Cannot optimize for this ordering
-    fn try_pushdown_sort(
+    fn try_reverse_output(
         &self,
         order: &[PhysicalSortExpr],
     ) -> datafusion_common::Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {

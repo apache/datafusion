@@ -864,8 +864,9 @@ impl DataSource for FileScanConfig {
             .with_file_ordering_info(file_ordering)
             .unwrap_or_else(|_| Arc::clone(&self.file_source));
 
-        // Rest of the implementation stays the same...
-        let pushdown_result = file_source_with_ordering.try_pushdown_sort(order)?;
+        // Try to reverse the datasource with ordering info,
+        // and currently only ParquetSource supports it with inexact reverse with row groups.
+        let pushdown_result = file_source_with_ordering.try_reverse_output(order)?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {

@@ -139,7 +139,7 @@ pub trait FileSource: Send + Sync {
     /// * `Unsupported` - Cannot optimize for this ordering
     ///
     /// Default implementation returns `Unsupported`.
-    fn try_pushdown_sort(
+    fn try_reverse_output(
         &self,
         _order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
