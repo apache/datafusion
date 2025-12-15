@@ -24,7 +24,7 @@ use crate::function::math::hex::spark_sha2_hex;
 use arrow::array::{ArrayRef, AsArray, StringArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Int32Type};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, Result, ScalarValue,
+    Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -95,7 +95,7 @@ impl ScalarUDFImpl for SparkSha2 {
                     return exec_err!(
                         "{} function can only accept strings or binary arrays.",
                         self.name()
-                    )
+                    );
                 }
             }
         };
