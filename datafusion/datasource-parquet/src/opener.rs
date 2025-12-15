@@ -64,7 +64,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -118,6 +118,58 @@ pub(super) struct ParquetOpener {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+}
+
+/// Represents a prepared access plan with optional row selection
+struct PreparedAccessPlan {
+    /// Row group indexes to read
+    row_group_indexes: Vec<usize>,
+    /// Optional row selection for filtering within row groups
+    row_selection: Option<parquet::arrow::arrow_reader::RowSelection>,
+}
+
+impl PreparedAccessPlan {
+    /// Create a new prepared access plan from a ParquetAccessPlan
+    fn from_access_plan(
+        access_plan: ParquetAccessPlan,
+        rg_metadata: &[RowGroupMetaData],
+    ) -> Result<Self> {
+        let row_group_indexes = access_plan.row_group_indexes();
+        let row_selection = access_plan.into_overall_row_selection(rg_metadata)?;
+
+        Ok(Self {
+            row_group_indexes,
+            row_selection,
+        })
+    }
+
+    /// Reverse the access plan for reverse scanning
+    fn reverse(
+        mut self,
+        file_metadata: &parquet::file::metadata::ParquetMetaData,
+    ) -> Result<Self> {
+        // Reverse the row group indexes
+        self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
+
+        // If we have a row selection, reverse it to match the new row group order
+        if let Some(row_selection) = self.row_selection {
+            self.row_selection =
+                Some(reverse_row_selection(&row_selection, file_metadata)?);
+        }
+
+        Ok(self)
+    }
+
+    /// Apply this access plan to a ParquetRecordBatchStreamBuilder
+    fn apply_to_builder(
+        self,
+        mut builder: ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>>,
+    ) -> ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>> {
+        if let Some(row_selection) = self.row_selection {
+            builder = builder.with_row_selection(row_selection);
+        }
+        builder.with_row_groups(self.row_group_indexes)
+    }
 }
 
 impl FileOpener for ParquetOpener {
@@ -483,32 +535,17 @@ impl FileOpener for ParquetOpener {
                 );
             }
 
-            let row_group_indexes = access_plan.row_group_indexes();
+            // Prepare the access plan (extract row groups and row selection)
+            let mut prepared_plan =
+                PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)?;
 
-            // Extract row selection before potentially reversing
-            let row_selection_opt =
-                access_plan.into_overall_row_selection(rg_metadata)?;
-
+            // If reverse scanning is enabled, reverse the prepared plan
             if reverse_row_groups {
-                // Reverse the row groups
-                let reversed_indexes: Vec<_> =
-                    row_group_indexes.clone().into_iter().rev().collect();
-
-                // If we have a row selection, we need to rebuild it for the reversed order
-                if let Some(row_selection) = row_selection_opt {
-                    let reversed_selection =
-                        reverse_row_selection(&row_selection, file_metadata.as_ref())?;
-                    builder = builder.with_row_selection(reversed_selection);
-                }
-
-                builder = builder.with_row_groups(reversed_indexes);
-            } else {
-                // Normal forward scan
-                if let Some(row_selection) = row_selection_opt {
-                    builder = builder.with_row_selection(row_selection);
-                }
-                builder = builder.with_row_groups(row_group_indexes);
+                prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
             }
+
+            // Apply the prepared plan to the builder
+            builder = prepared_plan.apply_to_builder(builder);
 
             if let Some(limit) = limit {
                 builder = builder.with_limit(limit)
