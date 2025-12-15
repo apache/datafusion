@@ -847,8 +847,7 @@ async fn csv_explain_analyze_order_by() {
 
     // Ensure that the ordering is not optimized away from the plan
     // https://github.com/apache/datafusion/issues/6379
-    let needle =
-        "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
+    let needle = "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
     assert_contains!(&formatted, needle);
 }
 
@@ -888,7 +887,7 @@ async fn parquet_explain_analyze() {
         (i_file < i_rowgroup_stat)
             && (i_rowgroup_stat < i_rowgroup_bloomfilter)
             && (i_rowgroup_bloomfilter < i_page),
-            "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
+        "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
     );
 }
 

@@ -26,9 +26,9 @@ use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
 use datafusion::sql::sqlparser::ast::BinaryOperator;
 use datafusion_common::ScalarValue;
+use datafusion_expr::BinaryExpr;
 use datafusion_expr::expr::Alias;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
-use datafusion_expr::BinaryExpr;
 
 #[derive(Debug)]
 struct MyCustomPlanner;

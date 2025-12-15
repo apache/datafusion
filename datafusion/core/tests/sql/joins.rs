@@ -38,14 +38,16 @@ async fn join_change_in_planner() -> Result<()> {
         Field::new("a2", DataType::UInt32, false),
     ]));
     // Specify the ordering:
-    let file_sort_order = vec![[col("a1")]
-        .into_iter()
-        .map(|e| {
-            let ascending = true;
-            let nulls_first = false;
-            e.sort(ascending, nulls_first)
-        })
-        .collect::<Vec<_>>()];
+    let file_sort_order = vec![
+        [col("a1")]
+            .into_iter()
+            .map(|e| {
+                let ascending = true;
+                let nulls_first = false;
+                e.sort(ascending, nulls_first)
+            })
+            .collect::<Vec<_>>(),
+    ];
     register_unbounded_file_with_ordering(
         &ctx,
         schema.clone(),
@@ -95,14 +97,16 @@ async fn join_no_order_on_filter() -> Result<()> {
         Field::new("a3", DataType::UInt32, false),
     ]));
     // Specify the ordering:
-    let file_sort_order = vec![[col("a1")]
-        .into_iter()
-        .map(|e| {
-            let ascending = true;
-            let nulls_first = false;
-            e.sort(ascending, nulls_first)
-        })
-        .collect::<Vec<_>>()];
+    let file_sort_order = vec![
+        [col("a1")]
+            .into_iter()
+            .map(|e| {
+                let ascending = true;
+                let nulls_first = false;
+                e.sort(ascending, nulls_first)
+            })
+            .collect::<Vec<_>>(),
+    ];
     register_unbounded_file_with_ordering(
         &ctx,
         schema.clone(),
@@ -202,7 +206,10 @@ async fn join_change_in_planner_without_sort_not_allowed() -> Result<()> {
     match df.create_physical_plan().await {
         Ok(_) => panic!("Expecting error."),
         Err(e) => {
-            assert_eq!(e.strip_backtrace(), "SanityCheckPlan\ncaused by\nError during planning: Join operation cannot operate on a non-prunable stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag")
+            assert_eq!(
+                e.strip_backtrace(),
+                "SanityCheckPlan\ncaused by\nError during planning: Join operation cannot operate on a non-prunable stream without enabling the 'allow_symmetric_joins_without_pruning' configuration flag"
+            )
         }
     }
     Ok(())

@@ -23,8 +23,8 @@ use std::time::Duration;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::context::TaskContext;
 use datafusion::prelude::SessionConfig;
-use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::cache::DefaultListFilesCache;
+use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_plan::common::collect;
 

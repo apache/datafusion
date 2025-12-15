@@ -28,8 +28,8 @@ use crate::datasource::listing::{
 use crate::execution::context::SessionState;
 
 use arrow::datatypes::DataType;
-use datafusion_common::{arrow_datafusion_err, plan_err, ToDFSchema};
-use datafusion_common::{config_datafusion_err, Result};
+use datafusion_common::{Result, config_datafusion_err};
+use datafusion_common::{ToDFSchema, arrow_datafusion_err, plan_err};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -220,9 +220,9 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
         test_util::parquet_test_data,
     };
+    use datafusion_execution::cache::CacheAccessor;
     use datafusion_execution::cache::cache_manager::CacheManagerConfig;
     use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
-    use datafusion_execution::cache::CacheAccessor;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use glob::Pattern;

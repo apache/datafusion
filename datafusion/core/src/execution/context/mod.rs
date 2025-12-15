@@ -34,12 +34,12 @@ use crate::{
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
-    datasource::{provider_as_source, MemTable, ViewTable},
+    datasource::{MemTable, ViewTable, provider_as_source},
     error::Result,
     execution::{
+        FunctionRegistry,
         options::ArrowReadOptions,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
-        FunctionRegistry,
     },
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
@@ -59,43 +59,43 @@ pub use crate::execution::session_state::SessionState;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::MemoryCatalogProvider;
+use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
 use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
+    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
     config::{ConfigExtension, TableOptions},
     exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
     plan_datafusion_err, plan_err,
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
-    DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
 };
+pub use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::{
     DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
     DEFAULT_METADATA_CACHE_LIMIT,
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
-    DiskManagerBuilder, DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+    DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
 };
 use datafusion_execution::registry::SerializerRegistry;
-pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::RelationPlanner;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
+    Expr, UserDefinedLogicalNode, WindowUDF,
     expr_rewriter::FunctionRewrite,
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
-    Expr, UserDefinedLogicalNode, WindowUDF,
 };
+use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
-use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use datafusion_session::SessionStore;
 
@@ -695,7 +695,7 @@ impl SessionContext {
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
                         (Box::pin(async move { self.create_external_table(&cmd).await })
-                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>)
+                            as std::pin::Pin<Box<dyn Future<Output = _> + Send>>)
                             .await
                     }
                     DdlStatement::CreateMemoryTable(cmd) => {
@@ -1272,7 +1272,9 @@ impl SessionContext {
             match unit {
                 "m" if minutes.is_none() && seconds.is_none() => minutes = Some(number),
                 "s" if seconds.is_none() => seconds = Some(number),
-                _ => plan_err!("Invalid duration, unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order")?,
+                _ => plan_err!(
+                    "Invalid duration, unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order"
+                )?,
             }
         }
 
@@ -1320,13 +1322,12 @@ impl SessionContext {
                 .and_then(|c| c.schema(&resolved.schema))
         };
 
-        if let Some(schema) = maybe_schema {
-            if let Some(table_provider) = schema.table(&table).await? {
-                if table_provider.table_type() == table_type {
-                    schema.deregister_table(&table)?;
-                    return Ok(true);
-                }
-            }
+        if let Some(schema) = maybe_schema
+            && let Some(table_provider) = schema.table(&table).await?
+            && table_provider.table_type() == table_type
+        {
+            schema.deregister_table(&table)?;
+            return Ok(true);
         }
 
         Ok(false)
@@ -1342,7 +1343,7 @@ impl SessionContext {
                 _ => {
                     return Err(DataFusionError::Configuration(
                         "Function factory has not been configured".to_string(),
-                    ))
+                    ));
                 }
             }
         };
