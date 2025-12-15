@@ -38,7 +38,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # chrono must be compiled with wasmbind feature
-chrono = { version = "0.4", features = ["wasmbind"] }
+chrono = { version = ">=0.4.41, <=0.4.42", features = ["wasmbind"] }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
