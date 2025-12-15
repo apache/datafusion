@@ -49,12 +49,12 @@
 //! - Complete Sort elimination when ordering is guaranteed
 
 use crate::PhysicalOptimizerRule;
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use std::sync::Arc;
 
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.

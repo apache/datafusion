@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, AsArray, Date32Array};
 use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use chrono::{Datelike, Duration, NaiveDate};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_datafusion_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -99,7 +99,9 @@ impl ScalarUDFImpl for SparkLastDay {
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     other => {
-                        internal_err!("Unsupported data type {other:?} for Spark function `last_day`")
+                        internal_err!(
+                            "Unsupported data type {other:?} for Spark function `last_day`"
+                        )
                     }
                 }?;
                 Ok(ColumnarValue::Array(result))

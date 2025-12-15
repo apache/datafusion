@@ -44,9 +44,21 @@ pub mod expr_fn {
         "Same as parse_url but returns NULL if an invalid URL is provided.",
         args
     ));
-    export_functions!((url_decode, "Decodes a URL-encoded string in ‘application/x-www-form-urlencoded’ format to its original format.", args));
-    export_functions!((try_url_decode, "Same as url_decode but returns NULL if an invalid URL-encoded string is provided", args));
-    export_functions!((url_encode, "Encodes a string into a URL-encoded string in ‘application/x-www-form-urlencoded’ format.", args));
+    export_functions!((
+        url_decode,
+        "Decodes a URL-encoded string in ‘application/x-www-form-urlencoded’ format to its original format.",
+        args
+    ));
+    export_functions!((
+        try_url_decode,
+        "Same as url_decode but returns NULL if an invalid URL-encoded string is provided",
+        args
+    ));
+    export_functions!((
+        url_encode,
+        "Encodes a string into a URL-encoded string in ‘application/x-www-form-urlencoded’ format.",
+        args
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {

@@ -22,7 +22,7 @@ SELECT true, false, false = false, true = false
 true false true false
 
 # test_mathematical_expressions_with_null
-query RRRRRRRRRRRRRRRRRRRRRRRRIIIRRRRRRBB
+query RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRBB
 SELECT
     sqrt(NULL),
     cbrt(NULL),

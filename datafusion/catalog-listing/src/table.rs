@@ -23,8 +23,8 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, plan_err, project_schema, Constraints, DataFusionError,
-    SchemaExt, Statistics,
+    Constraints, DataFusionError, SchemaExt, Statistics, internal_datafusion_err,
+    plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -34,7 +34,7 @@ use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
 };
 use datafusion_datasource::{
-    compute_all_files_statistics, ListingTableUrl, PartitionedFile, TableSchema,
+    ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -44,9 +44,9 @@ use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_expr::create_lex_ordering;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::ExecutionPlan;
-use futures::{future, stream, Stream, StreamExt, TryStreamExt};
+use datafusion_physical_plan::empty::EmptyExec;
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::HashMap;
@@ -493,7 +493,9 @@ impl TableProvider for ListingTable {
                 if new_groups.len() <= self.options.target_partitions {
                     partitioned_file_lists = new_groups;
                 } else {
-                    log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
+                    log::debug!(
+                        "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
+                    )
                 }
             }
             None => {} // no ordering required
@@ -817,28 +819,25 @@ async fn get_files_with_limit(
         let file = file_result?;
 
         // Update file statistics regardless of state
-        if collect_stats {
-            if let Some(file_stats) = &file.statistics {
-                num_rows = if file_group.is_empty() {
-                    // For the first file, just take its row count
-                    file_stats.num_rows
-                } else {
-                    // For subsequent files, accumulate the counts
-                    num_rows.add(&file_stats.num_rows)
-                };
-            }
+        if collect_stats && let Some(file_stats) = &file.statistics {
+            num_rows = if file_group.is_empty() {
+                // For the first file, just take its row count
+                file_stats.num_rows
+            } else {
+                // For subsequent files, accumulate the counts
+                num_rows.add(&file_stats.num_rows)
+            };
         }
 
         // Always add the file to our group
         file_group.push(file);
 
         // Check if we've hit the limit (if one was specified)
-        if let Some(limit) = limit {
-            if let Precision::Exact(row_count) = num_rows {
-                if row_count > limit {
-                    state = ProcessingState::ReachedLimit;
-                }
-            }
+        if let Some(limit) = limit
+            && let Precision::Exact(row_count) = num_rows
+            && row_count > limit
+        {
+            state = ProcessingState::ReachedLimit;
         }
     }
     // If we still have files in the stream, it means that the limit kicked

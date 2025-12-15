@@ -19,7 +19,9 @@
 //! [`PhysicalExprAdapterFactory`], default implementations,
 //! and [`replace_columns_with_literals`].
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::compute::can_cast_types;
@@ -50,19 +52,25 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 /// # Arguments
 /// - `expr`: The physical expression in which to replace column references.
 /// - `replacements`: A mapping from column names to their corresponding literal `ScalarValue`s.
+///   Accepts various HashMap types including `HashMap<&str, &ScalarValue>`,
+///   `HashMap<String, ScalarValue>`, `HashMap<String, &ScalarValue>`, etc.
 ///
 /// # Returns
 /// - `Result<Arc<dyn PhysicalExpr>>`: The rewritten physical expression with columns replaced by literals.
-pub fn replace_columns_with_literals(
+pub fn replace_columns_with_literals<K, V>(
     expr: Arc<dyn PhysicalExpr>,
-    replacements: &HashMap<&str, &ScalarValue>,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform(|expr| {
+    replacements: &HashMap<K, V>,
+) -> Result<Arc<dyn PhysicalExpr>>
+where
+    K: Borrow<str> + Eq + Hash,
+    V: Borrow<ScalarValue>,
+{
+    expr.transform_down(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>()
             && let Some(replacement_value) = replacements.get(column.name())
         {
             return Ok(Transformed::yes(expressions::lit(
-                (*replacement_value).clone(),
+                replacement_value.borrow().clone(),
             )));
         }
         Ok(Transformed::no(expr))

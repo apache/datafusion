@@ -21,10 +21,10 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
-use datafusion_common::{assert_or_internal_err, HashMap, Result, ScalarValue};
+use datafusion_common::{HashMap, Result, ScalarValue, assert_or_internal_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::PartitionedFile;
-use datafusion_expr::{lit, utils, BinaryExpr, Operator};
+use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
     array::AsArray,
@@ -33,7 +33,7 @@ use arrow::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use futures::stream::FuturesUnordered;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use log::{debug, trace};
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -51,7 +51,7 @@ use object_store::{ObjectMeta, ObjectStore};
 pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
     let mut is_applicable = true;
     expr.apply(|expr| match expr {
-        Expr::Column(Column { ref name, .. }) => {
+        Expr::Column(Column { name, .. }) => {
             is_applicable &= col_names.contains(&name.as_str());
             if is_applicable {
                 Ok(TreeNodeRecursion::Jump)
@@ -247,16 +247,11 @@ fn populate_partition_values<'a>(
     partition_values: &mut HashMap<&'a str, PartitionValue>,
     filter: &'a Expr,
 ) {
-    if let Expr::BinaryExpr(BinaryExpr {
-        ref left,
-        op,
-        ref right,
-    }) = filter
-    {
+    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = filter {
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(Column { ref name, .. }), Expr::Literal(val, _))
-                | (Expr::Literal(val, _), Expr::Column(Column { ref name, .. })) => {
+                (Expr::Column(Column { name, .. }), Expr::Literal(val, _))
+                | (Expr::Literal(val, _), Expr::Column(Column { name, .. })) => {
                     if partition_values
                         .insert(name, PartitionValue::Single(val.to_string()))
                         .is_some()
@@ -466,7 +461,7 @@ mod tests {
     use std::ops::Not;
 
     use super::*;
-    use datafusion_expr::{case, col, lit, Expr};
+    use datafusion_expr::{Expr, case, col, lit};
 
     #[test]
     fn test_split_files() {
