@@ -17,10 +17,8 @@
 
 //! A custom binary heap implementation for performant top K aggregation.
 //!
-//! This module uses the **Strategy pattern** with runtime polymorphism: the `new_heap`
-//! factory function selects an appropriate heap implementation (`PrimitiveHeap` or `StringHeap`)
-//! based on the Arrow data type. All implementations conform to the `ArrowHeap` trait,
-//! enabling dynamic dispatch while keeping the interface uniform.
+//! the `new_heap` //! factory function selects an appropriate heap implementation
+//! based on the Arrow data type.
 //!
 //! Supported value types include Arrow primitives (integers, floats, decimals, intervals)
 //! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering.

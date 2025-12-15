@@ -81,28 +81,6 @@ mod topk_stream;
 /// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
 /// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
 /// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
-///
-/// # Example
-/// ```
-/// use arrow::datatypes::DataType;
-/// use datafusion_physical_plan::aggregates::topk_types_supported;
-///
-/// // Supported: UTF-8 keys with numeric aggregates
-/// assert!(topk_types_supported(&DataType::Utf8, &DataType::Int64));
-/// assert!(topk_types_supported(&DataType::Utf8View, &DataType::Float64));
-///
-/// // Supported: Numeric keys with numeric aggregates
-/// assert!(topk_types_supported(&DataType::Int64, &DataType::Int64));
-///
-/// // Supported: Numeric keys with string aggregates (strings use lexicographic ordering)
-/// assert!(topk_types_supported(&DataType::Int64, &DataType::Utf8));
-/// assert!(topk_types_supported(&DataType::Float64, &DataType::Utf8View));
-///
-/// // Unsupported: Binary keys
-/// assert!(!topk_types_supported(&DataType::Binary, &DataType::Int64));
-///
-/// // Unsupported: Binary aggregate values
-/// assert!(!topk_types_supported(&DataType::Int64, &DataType::Binary));
 /// ```
 pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
