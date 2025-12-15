@@ -890,9 +890,9 @@ fn add_roundrobin_on_top(
 /// distribution is satisfied by adding a Hash repartition.
 fn add_hash_on_top(
     input: DistributionContext,
-    hash_exprs: &[Arc<dyn PhysicalExpr>],
+    hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
-    allow_subset: bool,
+    allow_subset_satisfy_partitioning: bool,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
     // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
@@ -900,20 +900,22 @@ fn add_hash_on_top(
         return Ok(input);
     }
 
-    let dist = Distribution::HashPartitioned(hash_exprs.to_owned());
+    let dist = Distribution::HashPartitioned(hash_exprs);
     let satisfaction = input.plan.output_partitioning().satisfy(
         &dist,
         input.plan.equivalence_properties(),
-        allow_subset,
+        allow_subset_satisfy_partitioning,
     );
 
     // Add hash repartitioning when:
-    // - The hash distribution requirement is not satisfied, or
-    // - We can increase parallelism by adding hash partitioning (but NOT if using subset logic,
-    //   as that would break file partition grouping)
-    let needs_repartition = !satisfaction.is_satisfied()
-        || (n_target > input.plan.output_partitioning().partition_count()
-            && !satisfaction.is_subset());
+    // - When subset satisfaction is enabled (current >= threshold): only repartition if not satisfied
+    // - When below threshold (current < threshold): repartition if expressions don't match OR to increase parallelism
+    let needs_repartition = if allow_subset_satisfy_partitioning {
+        !satisfaction.is_satisfied()
+    } else {
+        !satisfaction.is_satisfied()
+            || n_target > input.plan.output_partitioning().partition_count()
+    };
 
     if needs_repartition {
         // When there is an existing ordering, we preserve ordering during
@@ -1184,8 +1186,8 @@ pub fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
-    let repartition_subset_satisfactions =
-        config.optimizer.repartition_subset_satisfactions;
+    let subset_satisfaction_threshold =
+        config.optimizer.subset_satisfaction_partition_threshold;
     let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
         && matches!(
             dist_context.plan.pipeline_behavior(),
@@ -1266,9 +1268,13 @@ pub fn ensure_distribution(
                 // Unless partitioning increases the partition count, it is not beneficial:
                 && increases_partition_count;
 
-            let allow_subset_partition = !repartition_subset_satisfactions
-                && !is_partitioned_join
-                && !increases_partition_count;
+            // Allow subset satisfaction when:
+            // 1. Current partition count >= threshold
+            // 2. Not a partitioned join since must use exact hash matching for joins
+            let current_partitions = child.plan.output_partitioning().partition_count();
+            let allow_subset_satisfy_partitioning = current_partitions
+                >= subset_satisfaction_threshold
+                && !is_partitioned_join;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
@@ -1295,9 +1301,9 @@ pub fn ensure_distribution(
                     if hash_necessary {
                         child = add_hash_on_top(
                             child,
-                            &exprs.to_vec(),
+                            exprs.to_vec(),
                             target_partitions,
-                            allow_subset_partition,
+                            allow_subset_satisfy_partitioning,
                         )?;
                     }
                 }

@@ -1000,28 +1000,33 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
-        /// Should DataFusion still repartition if the required partitioning
-        /// expression is a subset of the current partition expression.
+        /// Partition count threshold for subset satisfaction optimization.
         ///
-        /// How the option is used:
-        ///     - repartition_subset_satisfactions=true: Always repartition on a subset satisfaction.
-        ///     - repartition_subset_satisfactions=false: Only repartition if target_partitions > current partitions (increases parallelism).
+        /// When the current partition count is >= this threshold, DataFusion will
+        /// skip repartitioning if the required partitioning expression is a subset
+        /// of the current partition expression such as Hash([a]) satisfies Hash([a, b]).
         ///
-        /// Example (repartition_subset_satisfactions = false):
+        /// When the current partition count is < this threshold, DataFusion will
+        /// repartition to increase parallelism even when subset satisfaction applies.
+        ///
+        /// Set to 0 to always repartition (disable subset satisfaction optimization).
+        /// Set to a high value to always use subset satisfaction.
+        ///
+        /// Example (subset_satisfaction_partition_threshold = 4):
         /// ```text
-        ///     Hash([a]) satisfies Hash([a, b]) (Hash([a, b]) is subset of Hash([a]))
+        ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a]))
         ///
-        /// If target_partitions > number of partitions:
+        /// If current partitions (3) < threshold (4), repartition to increase parallelism:
         /// AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
         ///   RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
         ///     AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
-        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3),
+        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)
         ///
-        /// If target_partitions <= number of partitions:
-        /// AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
-        ///   DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8),
+        /// If current partitions (8) >= threshold (4), use subset satisfaction (no repartition):
+        /// AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///   DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
         /// ```
-        pub repartition_subset_satisfactions: bool, default = false
+        pub subset_satisfaction_partition_threshold: usize, default = 4
 
         /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
         /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and

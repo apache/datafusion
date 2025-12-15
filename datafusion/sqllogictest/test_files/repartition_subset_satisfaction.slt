@@ -31,10 +31,10 @@ statement ok
 set datafusion.optimizer.enable_round_robin_repartition = false;
 
 statement ok
-set datafusion.optimizer.preserve_file_partitions = 1;
+set datafusion.execution.target_partitions = 3;
 
 statement ok
-set datafusion.execution.target_partitions = 3;
+set datafusion.optimizer.preserve_file_partitions = 1;
 
 # Create fact table partitioned by f_dkey (3 partitions)
 # Each partition has data sorted by timestamp
@@ -144,7 +144,7 @@ LOCATION 'test_files/scratch/repartition_subset_satisfaction/dimension/';
 
 # With subset repartitioning forced (disables subset optimization)
 statement ok
-set datafusion.optimizer.repartition_subset_satisfactions = true;
+set datafusion.optimizer.subset_satisfaction_partition_threshold = 4;
 
 query TT
 EXPLAIN SELECT f_dkey, date_bin(INTERVAL '30 seconds', timestamp) as time_bin,
@@ -188,7 +188,7 @@ C 2023-01-01T09:12:30 2 262.7
 
 # With subset logic enabled (default - enables subset optimization)
 statement ok
-set datafusion.optimizer.repartition_subset_satisfactions = false;
+set datafusion.optimizer.subset_satisfaction_partition_threshold = 1;
 
 query TT
 EXPLAIN SELECT f_dkey, date_bin(INTERVAL '30 seconds', timestamp) as time_bin,
@@ -234,7 +234,7 @@ C 2023-01-01T09:12:30 2 262.7
 
 # With subset repartitioning forced (disables subset optimization)
 statement ok
-set datafusion.optimizer.repartition_subset_satisfactions = true;
+set datafusion.optimizer.subset_satisfaction_partition_threshold = 4;
 
 query TT
 EXPLAIN SELECT f_dkey, timestamp, value,
@@ -278,7 +278,7 @@ C 2023-01-01T09:00:20 310.2 3
 
 # With subset logic enabled (default - enables subset optimization)
 statement ok
-set datafusion.optimizer.repartition_subset_satisfactions = false;
+set datafusion.optimizer.subset_satisfaction_partition_threshold = 1;
 
 query TT
 EXPLAIN SELECT f_dkey, timestamp, value,
@@ -324,95 +324,95 @@ C 2023-01-01T09:00:20 310.2 3
 
 # With subset repartitioning forced (disables subset optimization)
 statement ok
-set datafusion.optimizer.repartition_subset_satisfactions = true;
+set datafusion.optimizer.subset_satisfaction_partition_threshold = 4;
 
 query TT
-EXPLAIN SELECT env, time_bin, AVG(max_bin_val)
+EXPLAIN SELECT env, time_bin, AVG(max_bin_value) AS avg_max_value
 FROM
-  (
+(
     SELECT  f_dkey,
             date_bin(INTERVAL '30 seconds', timestamp) AS time_bin,
-            MAX(env) AS env,
-            MAX(value) AS max_bin_val
+            env,
+            MAX(value) AS max_bin_value
     FROM
-    (
-        SELECT f.f_dkey, f.timestamp, d.env, f.value
-        FROM
-            (SELECT DISTINCT d_dkey, env
-            FROM   dimension_table
-            WHERE  service = 'log'
-            ) AS d,
-            fact_table_ordered AS f
-        WHERE d.d_dkey = f.f_dkey
-    ) AS j
-    GROUP BY f_dkey, time_bin
-  ) AS a
+        (
+        SELECT
+            f.f_dkey,
+            d.env,
+            d.service,
+            d.host,
+            f.timestamp,
+            f.value
+        FROM dimension_table d
+        INNER JOIN fact_table_ordered f ON d.d_dkey = f.f_dkey
+        WHERE service = 'log'
+        ) AS j
+    GROUP BY f_dkey, time_bin, env
+) AS a
 GROUP BY env, time_bin
 ORDER BY env, time_bin;
 ----
 logical_plan
 01)Sort: a.env ASC NULLS LAST, a.time_bin ASC NULLS LAST
-02)--Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_val)]]
-03)----SubqueryAlias: a
-04)------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, max(j.env) AS env, max(j.value) AS max_bin_val
-05)--------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp)]], aggr=[[max(j.env), max(j.value)]]
-06)----------SubqueryAlias: j
-07)------------Projection: f.f_dkey, f.timestamp, d.env, f.value
-08)--------------Inner Join: d.d_dkey = f.f_dkey
-09)----------------SubqueryAlias: d
-10)------------------Aggregate: groupBy=[[dimension_table.d_dkey, dimension_table.env]], aggr=[[]]
-11)--------------------Projection: dimension_table.d_dkey, dimension_table.env
+02)--Projection: a.env, a.time_bin, avg(a.max_bin_value) AS avg_max_value
+03)----Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_value)]]
+04)------SubqueryAlias: a
+05)--------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, j.env, max(j.value) AS max_bin_value
+06)----------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp), j.env]], aggr=[[max(j.value)]]
+07)------------SubqueryAlias: j
+08)--------------Projection: f.f_dkey, d.env, f.timestamp, f.value
+09)----------------Inner Join: d.d_dkey = f.f_dkey
+10)------------------SubqueryAlias: d
+11)--------------------Projection: dimension_table.env, dimension_table.d_dkey
 12)----------------------Filter: dimension_table.service = Utf8View("log")
 13)------------------------TableScan: dimension_table projection=[env, service, d_dkey], partial_filters=[dimension_table.service = Utf8View("log")]
-14)----------------SubqueryAlias: f
-15)------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
+14)------------------SubqueryAlias: f
+15)--------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
 01)SortPreservingMergeExec: [env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
 02)--SortExec: expr=[env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[avg(a.max_bin_val)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([env@0, time_bin@1], 3), input_partitions=3
-06)----------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[avg(a.max_bin_val)]
-07)------------ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as time_bin, max(j.env)@2 as env, max(j.value)@3 as max_bin_val]
-08)--------------AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)], aggr=[max(j.env), max(j.value)], ordering_mode=Sorted
-09)----------------SortExec: expr=[f_dkey@0 ASC NULLS LAST, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 ASC NULLS LAST], preserve_partitioning=[true]
-10)------------------CoalesceBatchesExec: target_batch_size=8192
-11)--------------------RepartitionExec: partitioning=Hash([f_dkey@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1], 3), input_partitions=3
-12)----------------------AggregateExec: mode=Partial, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)], aggr=[max(j.env), max(j.value)], ordering_mode=Sorted
-13)------------------------ProjectionExec: expr=[f_dkey@3 as f_dkey, timestamp@1 as timestamp, env@0 as env, value@2 as value]
-14)--------------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d_dkey@0, f_dkey@2)], projection=[env@1, timestamp@2, value@3, f_dkey@4]
-15)----------------------------CoalescePartitionsExec
-16)------------------------------AggregateExec: mode=FinalPartitioned, gby=[d_dkey@0 as d_dkey, env@1 as env], aggr=[]
-17)--------------------------------CoalesceBatchesExec: target_batch_size=8192
-18)----------------------------------RepartitionExec: partitioning=Hash([d_dkey@0, env@1], 3), input_partitions=3
-19)------------------------------------AggregateExec: mode=Partial, gby=[d_dkey@0 as d_dkey, env@1 as env], aggr=[]
-20)--------------------------------------ProjectionExec: expr=[d_dkey@1 as d_dkey, env@0 as env]
-21)----------------------------------------FilterExec: service@1 = log, projection=[env@0, d_dkey@2]
-22)------------------------------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=A/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=D/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=C/data.parquet]]}, projection=[env, service, d_dkey], file_type=parquet, predicate=service@1 = log, pruning_predicate=service_null_count@2 != row_count@3 AND service_min@0 <= log AND log <= service_max@1, required_guarantees=[service in (log)]
-23)----------------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+03)----ProjectionExec: expr=[env@0 as env, time_bin@1 as time_bin, avg(a.max_bin_value)@2 as avg_max_value]
+04)------AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[avg(a.max_bin_value)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([env@0, time_bin@1], 3), input_partitions=3
+07)------------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[avg(a.max_bin_value)]
+08)--------------ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as time_bin, env@2 as env, max(j.value)@3 as max_bin_value]
+09)----------------AggregateExec: mode=FinalPartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp), env@2 as env], aggr=[max(j.value)], ordering_mode=PartiallySorted([0, 1])
+10)------------------SortExec: expr=[f_dkey@0 ASC NULLS LAST, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 ASC NULLS LAST], preserve_partitioning=[true]
+11)--------------------CoalesceBatchesExec: target_batch_size=8192
+12)----------------------RepartitionExec: partitioning=Hash([f_dkey@0, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1, env@2], 3), input_partitions=3
+13)------------------------AggregateExec: mode=Partial, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@2) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp), env@1 as env], aggr=[max(j.value)], ordering_mode=PartiallySorted([0, 1])
+14)--------------------------ProjectionExec: expr=[f_dkey@3 as f_dkey, env@0 as env, timestamp@1 as timestamp, value@2 as value]
+15)----------------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d_dkey@1, f_dkey@2)], projection=[env@0, timestamp@2, value@3, f_dkey@4]
+16)------------------------------CoalescePartitionsExec
+17)--------------------------------FilterExec: service@1 = log, projection=[env@0, d_dkey@2]
+18)----------------------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=A/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=D/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=C/data.parquet]]}, projection=[env, service, d_dkey], file_type=parquet, predicate=service@1 = log, pruning_predicate=service_null_count@2 != row_count@3 AND service_min@0 <= log AND log <= service_max@1, required_guarantees=[service in (log)]
+19)------------------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 # Verify results without subset satisfaction
 query TPR rowsort
-SELECT env, time_bin, AVG(max_bin_val)
+SELECT env, time_bin, AVG(max_bin_value) AS avg_max_value
 FROM
-  (
+(
     SELECT  f_dkey,
             date_bin(INTERVAL '30 seconds', timestamp) AS time_bin,
-            MAX(env) AS env,
-            MAX(value) AS max_bin_val
+            env,
+            MAX(value) AS max_bin_value
     FROM
-    (
-        SELECT f.f_dkey, f.timestamp, d.env, f.value
-        FROM
-            (SELECT DISTINCT d_dkey, env
-            FROM   dimension_table
-            WHERE  service = 'log'
-            ) AS d,
-            fact_table_ordered AS f
-        WHERE d.d_dkey = f.f_dkey
-    ) AS j
-    GROUP BY f_dkey, time_bin
-  ) AS a
+        (
+        SELECT
+            f.f_dkey,
+            d.env,
+            d.service,
+            d.host,
+            f.timestamp,
+            f.value
+        FROM dimension_table d
+        INNER JOIN fact_table_ordered f ON d.d_dkey = f.f_dkey
+        WHERE service = 'log'
+        ) AS j
+    GROUP BY f_dkey, time_bin, env
+) AS a
 GROUP BY env, time_bin
 ORDER BY env, time_bin;
 ----
@@ -425,88 +425,91 @@ prod 2023-01-01T09:12:30 197.7
 
 # With subset logic enabled (default - enables subset optimization)
 statement ok
-set datafusion.optimizer.repartition_subset_satisfactions = false;
+set datafusion.optimizer.subset_satisfaction_partition_threshold = 1;
 
 query TT
-EXPLAIN SELECT env, time_bin, AVG(max_bin_val)
+EXPLAIN SELECT env, time_bin, AVG(max_bin_value) AS avg_max_value
 FROM
-  (
+(
     SELECT  f_dkey,
             date_bin(INTERVAL '30 seconds', timestamp) AS time_bin,
-            MAX(env) AS env,
-            MAX(value) AS max_bin_val
+            env,
+            MAX(value) AS max_bin_value
     FROM
-    (
-        SELECT f.f_dkey, f.timestamp, d.env, f.value
-        FROM
-            (SELECT DISTINCT d_dkey, env
-            FROM   dimension_table
-            WHERE  service = 'log'
-            ) AS d,
-            fact_table_ordered AS f
-        WHERE d.d_dkey = f.f_dkey
-    ) AS j
-    GROUP BY f_dkey, time_bin
-  ) AS a
+        (
+        SELECT
+            f.f_dkey,
+            d.env,
+            d.service,
+            d.host,
+            f.timestamp,
+            f.value
+        FROM dimension_table d
+        INNER JOIN fact_table_ordered f ON d.d_dkey = f.f_dkey
+        WHERE service = 'log'
+        ) AS j
+    GROUP BY f_dkey, time_bin, env
+) AS a
 GROUP BY env, time_bin
 ORDER BY env, time_bin;
 ----
 logical_plan
 01)Sort: a.env ASC NULLS LAST, a.time_bin ASC NULLS LAST
-02)--Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_val)]]
-03)----SubqueryAlias: a
-04)------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, max(j.env) AS env, max(j.value) AS max_bin_val
-05)--------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp)]], aggr=[[max(j.env), max(j.value)]]
-06)----------SubqueryAlias: j
-07)------------Projection: f.f_dkey, f.timestamp, d.env, f.value
-08)--------------Inner Join: d.d_dkey = f.f_dkey
-09)----------------SubqueryAlias: d
-10)------------------Aggregate: groupBy=[[dimension_table.d_dkey, dimension_table.env]], aggr=[[]]
-11)--------------------Projection: dimension_table.d_dkey, dimension_table.env
+02)--Projection: a.env, a.time_bin, avg(a.max_bin_value) AS avg_max_value
+03)----Aggregate: groupBy=[[a.env, a.time_bin]], aggr=[[avg(a.max_bin_value)]]
+04)------SubqueryAlias: a
+05)--------Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp) AS time_bin, j.env, max(j.value) AS max_bin_value
+06)----------Aggregate: groupBy=[[j.f_dkey, date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"), j.timestamp), j.env]], aggr=[[max(j.value)]]
+07)------------SubqueryAlias: j
+08)--------------Projection: f.f_dkey, d.env, f.timestamp, f.value
+09)----------------Inner Join: d.d_dkey = f.f_dkey
+10)------------------SubqueryAlias: d
+11)--------------------Projection: dimension_table.env, dimension_table.d_dkey
 12)----------------------Filter: dimension_table.service = Utf8View("log")
 13)------------------------TableScan: dimension_table projection=[env, service, d_dkey], partial_filters=[dimension_table.service = Utf8View("log")]
-14)----------------SubqueryAlias: f
-15)------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
+14)------------------SubqueryAlias: f
+15)--------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
 01)SortPreservingMergeExec: [env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
 02)--SortExec: expr=[env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[avg(a.max_bin_val)]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([env@0, time_bin@1], 3), input_partitions=3
-06)----------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[avg(a.max_bin_val)]
-07)------------ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as time_bin, max(j.env)@2 as env, max(j.value)@3 as max_bin_val]
-08)--------------AggregateExec: mode=SinglePartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@1) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)], aggr=[max(j.env), max(j.value)], ordering_mode=Sorted
-09)----------------ProjectionExec: expr=[f_dkey@3 as f_dkey, timestamp@1 as timestamp, env@0 as env, value@2 as value]
-10)------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d_dkey@0, f_dkey@2)], projection=[env@1, timestamp@2, value@3, f_dkey@4]
-11)--------------------CoalescePartitionsExec
-12)----------------------AggregateExec: mode=SinglePartitioned, gby=[d_dkey@0 as d_dkey, env@1 as env], aggr=[]
-13)------------------------ProjectionExec: expr=[d_dkey@1 as d_dkey, env@0 as env]
-14)--------------------------FilterExec: service@1 = log, projection=[env@0, d_dkey@2]
-15)----------------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=A/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=D/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=C/data.parquet]]}, projection=[env, service, d_dkey], file_type=parquet, predicate=service@1 = log, pruning_predicate=service_null_count@2 != row_count@3 AND service_min@0 <= log AND log <= service_max@1, required_guarantees=[service in (log)]
-16)--------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+03)----ProjectionExec: expr=[env@0 as env, time_bin@1 as time_bin, avg(a.max_bin_value)@2 as avg_max_value]
+04)------AggregateExec: mode=FinalPartitioned, gby=[env@0 as env, time_bin@1 as time_bin], aggr=[avg(a.max_bin_value)]
+05)--------CoalesceBatchesExec: target_batch_size=8192
+06)----------RepartitionExec: partitioning=Hash([env@0, time_bin@1], 3), input_partitions=3
+07)------------AggregateExec: mode=Partial, gby=[env@1 as env, time_bin@0 as time_bin], aggr=[avg(a.max_bin_value)]
+08)--------------ProjectionExec: expr=[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp)@1 as time_bin, env@2 as env, max(j.value)@3 as max_bin_value]
+09)----------------AggregateExec: mode=SinglePartitioned, gby=[f_dkey@0 as f_dkey, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }, timestamp@2) as date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 30000000000 }"),j.timestamp), env@1 as env], aggr=[max(j.value)], ordering_mode=PartiallySorted([0, 1])
+10)------------------ProjectionExec: expr=[f_dkey@3 as f_dkey, env@0 as env, timestamp@1 as timestamp, value@2 as value]
+11)--------------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d_dkey@1, f_dkey@2)], projection=[env@0, timestamp@2, value@3, f_dkey@4]
+12)----------------------CoalescePartitionsExec
+13)------------------------FilterExec: service@1 = log, projection=[env@0, d_dkey@2]
+14)--------------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=A/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=D/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/dimension/d_dkey=C/data.parquet]]}, projection=[env, service, d_dkey], file_type=parquet, predicate=service@1 = log, pruning_predicate=service_null_count@2 != row_count@3 AND service_min@0 <= log AND log <= service_max@1, required_guarantees=[service in (log)]
+15)----------------------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=A/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=B/data.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition_subset_satisfaction/fact/f_dkey=C/data.parquet]]}, projection=[timestamp, value, f_dkey], output_ordering=[f_dkey@2 ASC NULLS LAST, timestamp@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
 
 # Verify results match with subset satisfaction
 query TPR rowsort
-SELECT env, time_bin, AVG(max_bin_val)
+SELECT env, time_bin, AVG(max_bin_value) AS avg_max_value
 FROM
-  (
+(
     SELECT  f_dkey,
             date_bin(INTERVAL '30 seconds', timestamp) AS time_bin,
-            MAX(env) AS env,
-            MAX(value) AS max_bin_val
+            env,
+            MAX(value) AS max_bin_value
     FROM
-    (
-        SELECT f.f_dkey, f.timestamp, d.env, f.value
-        FROM
-            (SELECT DISTINCT d_dkey, env
-            FROM   dimension_table
-            WHERE  service = 'log'
-            ) AS d,
-            fact_table_ordered AS f
-        WHERE d.d_dkey = f.f_dkey
-    ) AS j
-    GROUP BY f_dkey, time_bin
-  ) AS a
+        (
+        SELECT
+            f.f_dkey,
+            d.env,
+            d.service,
+            d.host,
+            f.timestamp,
+            f.value
+        FROM dimension_table d
+        INNER JOIN fact_table_ordered f ON d.d_dkey = f.f_dkey
+        WHERE service = 'log'
+        ) AS j
+    GROUP BY f_dkey, time_bin, env
+) AS a
 GROUP BY env, time_bin
 ORDER BY env, time_bin;
 ----
