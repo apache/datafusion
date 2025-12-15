@@ -44,6 +44,7 @@ impl CoalesceBatches {
         Self::default()
     }
 }
+
 impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::coalesce::LimitedBatchCoalescer;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
@@ -24,16 +25,21 @@ use arrow::array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use futures::Stream;
 use futures::stream::StreamExt;
 use log::trace;
 use std::any::Any;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, ready};
+
+const ASYNC_FN_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
 
 /// This structure evaluates a set of async expressions on a record
 /// batch producing a new record batch
@@ -47,6 +53,10 @@ pub struct AsyncFuncExec {
     input: Arc<dyn ExecutionPlan>,
     cache: PlanProperties,
     metrics: ExecutionPlanMetricsSet,
+    /// Target batch size for output batches
+    batch_size: usize,
+    /// Number of rows to fetch
+    fetch: Option<usize>,
 }
 
 impl AsyncFuncExec {
@@ -81,7 +91,18 @@ impl AsyncFuncExec {
             async_exprs,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
+            batch_size: ASYNC_FN_EXEC_DEFAULT_BATCH_SIZE,
+            fetch: None,
         })
+    }
+
+    // TODO(feniljain): Should these accept &mut?
+    pub fn with_batch_size(&mut self, batch_size: usize) {
+        self.batch_size = batch_size;
+    }
+
+    pub fn with_fetch(&mut self, fetch: usize) {
+        self.fetch = Some(fetch);
     }
 
     /// This function creates the cache object that stores the plan properties
@@ -188,7 +209,16 @@ impl ExecutionPlan for AsyncFuncExec {
         let schema_captured = self.schema();
         let config_options_ref = Arc::clone(context.session_config().options());
 
-        let stream_with_async_functions = input_stream.then(move |batch| {
+        let coalesced_input_stream = CoalesceInputStream {
+            input_stream,
+            batch_coalescer: LimitedBatchCoalescer::new(
+                Arc::clone(&schema_captured),
+                self.batch_size,
+                self.fetch,
+            ),
+        };
+
+        let stream_with_async_functions = coalesced_input_stream.then(move |batch| {
             // need to clone *again* to capture the async_exprs and schema in the
             // stream and satisfy lifetime requirements.
             let async_exprs_captured = Arc::clone(&async_exprs_captured);
@@ -218,6 +248,49 @@ impl ExecutionPlan for AsyncFuncExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+}
+
+struct CoalesceInputStream {
+    input_stream: Pin<Box<dyn RecordBatchStream + Send>>,
+    batch_coalescer: LimitedBatchCoalescer,
+}
+
+impl Stream for CoalesceInputStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let mut completed = false;
+
+        loop {
+            if let Some(batch) = self.batch_coalescer.next_completed_batch() {
+                return Poll::Ready(Some(Ok(batch)));
+            }
+
+            if completed {
+                return Poll::Ready(None);
+            }
+
+            match ready!(self.input_stream.poll_next_unpin(cx)) {
+                Some(Ok(batch)) => {
+                    if let Err(err) = self.batch_coalescer.push_batch(batch) {
+                        return Poll::Ready(Some(Err(err)));
+                    }
+                }
+                Some(err) => {
+                    return Poll::Ready(Some(err));
+                }
+                None => {
+                    completed = true;
+                    if let Err(err) = self.batch_coalescer.finish() {
+                        return Poll::Ready(Some(Err(err)));
+                    }
+                }
+            }
+        }
     }
 }
 
