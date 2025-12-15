@@ -18,14 +18,18 @@
 use arrow::array::ArrayRef;
 use arrow::compute::like;
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, exec_err};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, exec_err, plan_datafusion_err};
+use datafusion_expr::type_coercion::binary::like_coercion;
+use datafusion_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
 use std::sync::Arc;
 
-/// LIKE function for case-sensitive pattern matching
+/// Spark-compatible LIKE for case-sensitive pattern matching. Uses the
+/// same coercion rules as DataFusion's built-in LIKE operator and
+/// preserves nullability based on the input arguments.
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#like>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkLike {
@@ -41,7 +45,7 @@ impl Default for SparkLike {
 impl SparkLike {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -65,6 +69,22 @@ impl ScalarUDFImpl for SparkLike {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(spark_like, vec![])(&args.args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        match (arg_types.first(), arg_types.get(1)) {
+            (Some(lhs), Some(rhs)) => {
+                let common_type = like_coercion(lhs, rhs).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "LIKE does not support argument types {:?} and {:?}",
+                        lhs,
+                        rhs
+                    )
+                })?;
+                Ok(vec![common_type.clone(), common_type])
+            }
+            _ => exec_err!("like function requires exactly 2 arguments"),
+        }
     }
 }
 
