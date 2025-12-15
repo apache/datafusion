@@ -279,6 +279,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../upgrading.html">Upgrade Guides</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../extensions.html">Extensions List</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../extending-sql.html">Extending SQL Syntax</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../using-the-dataframe-api.html">Using the DataFrame API</a></li>
 
@@ -1270,7 +1271,8 @@ validation of the input <code class="docutils literal notranslate"><span class="
 </section>
 <section id="custom-expression-planning">
 <h2>Custom Expression Planning<a class="headerlink" href="#custom-expression-planning" title="Link to this heading">#</a></h2>
-<p>DataFusion provides native support for common SQL operators by default such as <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code>. However it does not provide support for other operators such as <code class="docutils literal notranslate"><span class="pre">&#64;&gt;</span></code>. To override DataFusion’s default handling or support unsupported operators, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion</p>
+<p>DataFusion provides native support for common SQL operators and constructs by default such as <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">||</span></code>. However it does not provide support for other operators such as <code class="docutils literal notranslate"><span class="pre">&#64;&gt;</span></code> or constructs like <code class="docutils literal notranslate"><span class="pre">TABLESAMPLE</span></code> which are less common or vary more between SQL dialects. To override DataFusion’s default handling or support these unsupported features, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion.</p>
+<p>For a comprehensive guide on extending SQL syntax including <code class="docutils literal notranslate"><span class="pre">ExprPlanner</span></code>, <code class="docutils literal notranslate"><span class="pre">TypePlanner</span></code>, and <code class="docutils literal notranslate"><span class="pre">RelationPlanner</span></code>, see <a class="reference internal" href="../extending-sql.html"><span class="std std-doc">Extending DataFusion’s SQL Syntax</span></a></p>
 <section id="implementing-custom-expression-planning">
 <h3>Implementing Custom Expression Planning<a class="headerlink" href="#implementing-custom-expression-planning" title="Link to this heading">#</a></h3>
 <p>To extend DataFusion with support for custom operators not natively available, you need to:</p>
