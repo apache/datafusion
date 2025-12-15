@@ -801,9 +801,6 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "30")]
     pub skip_arrow_metadata: bool,
-    /// default = true
-    #[prost(bool, tag = "35")]
-    pub enable_reverse_row_groups: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

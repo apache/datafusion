@@ -713,7 +713,7 @@ impl OptimizationTest {
     pub fn new<O>(
         input_plan: Arc<dyn ExecutionPlan>,
         opt: O,
-        enable_reverse_row_groups: bool,
+        enable_sort_pushdown: bool,
     ) -> Self
     where
         O: PhysicalOptimizerRule,
@@ -722,7 +722,7 @@ impl OptimizationTest {
         let input_schema = input_plan.schema();
 
         let mut config = ConfigOptions::new();
-        config.execution.parquet.enable_reverse_row_groups = enable_reverse_row_groups;
+        config.optimizer.enable_sort_pushdown = enable_sort_pushdown;
         let output_result = opt.optimize(input_plan, &config);
         let output = output_result
             .and_then(|plan| {

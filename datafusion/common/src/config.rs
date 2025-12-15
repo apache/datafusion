@@ -837,18 +837,6 @@ config_namespace! {
         /// writing out already in-memory data, such as from a cached
         /// data frame.
         pub maximum_buffered_record_batches_per_stream: usize, default = 2
-
-        /// Enable reverse row groups when sort pushdown optimization for Parquet files.
-        /// When enabled, optimizes queries with ORDER BY:
-        /// - Reordering files to read last files first
-        /// - Reversing row group read order when beneficial
-        /// Returns **inexact ordering**: Sort operator is kept for correctness,
-        /// but can terminate early for TopK queries (ORDER BY ... LIMIT N),
-        /// providing huge speedup.
-        /// Memory: No additional overhead (only changes read order).
-        /// Future TODO: Will add option to support detecting perfectly sorted data and eliminate Sort completely.
-        /// Default: true
-        pub enable_reverse_row_groups: bool, default = true
     }
 }
 
@@ -1091,6 +1079,21 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// Enable sort pushdown optimization.
+        /// When enabled, attempts to push sort requirements down to data sources
+        /// that can natively handle them (e.g., by reversing file/row group read order).
+        ///
+        /// Returns **inexact ordering**: Sort operator is kept for correctness,
+        /// but optimized input enables early termination for TopK queries (ORDER BY ... LIMIT N),
+        /// providing significant speedup.
+        ///
+        /// Memory: No additional overhead (only changes read order).
+        ///
+        /// Future: Will add option to detect perfectly sorted data and eliminate Sort completely.
+        ///
+        /// Default: true
+        pub enable_sort_pushdown: bool, default = true
     }
 }
 

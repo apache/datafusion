@@ -77,7 +77,7 @@ impl PhysicalOptimizerRule for PushdownSort {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check if sort pushdown optimization is enabled
-        if !config.execution.parquet.enable_reverse_row_groups {
+        if !config.optimizer.enable_sort_pushdown {
             return Ok(plan);
         }
 

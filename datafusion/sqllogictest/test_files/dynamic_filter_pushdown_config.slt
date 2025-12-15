@@ -487,7 +487,7 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 
 # Test 6.4: Disable sort pushdown
 statement ok
-SET datafusion.execution.parquet.enable_reverse_row_groups = false;
+SET datafusion.optimizer.enable_sort_pushdown = false;
 
 query TT
 EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
@@ -501,7 +501,7 @@ physical_plan
 
 # Re-enable
 statement ok
-SET datafusion.execution.parquet.enable_reverse_row_groups = true;
+SET datafusion.optimizer.enable_sort_pushdown = true;
 
 # Test 6.5: With OFFSET
 query TT
@@ -616,7 +616,7 @@ ORDER BY id ASC;
 
 # Disable reverse scan and verify it still works
 statement ok
-SET datafusion.execution.parquet.enable_reverse_row_groups = false;
+SET datafusion.optimizer.enable_sort_pushdown = false;
 
 query ITI
 SELECT * FROM multi_rg_sorted
@@ -630,7 +630,7 @@ ORDER BY id DESC LIMIT 5;
 
 # Re-enable
 statement ok
-SET datafusion.execution.parquet.enable_reverse_row_groups = true;
+SET datafusion.optimizer.enable_sort_pushdown = true;
 
 # Test 6.7: Sort pushdown with more than one partition
 # Create multiple parquet files to trigger it
@@ -751,4 +751,4 @@ statement ok
 DROP TABLE sorted_parquet;
 
 statement ok
-SET datafusion.execution.parquet.enable_reverse_row_groups = true;
+SET datafusion.optimizer.enable_sort_pushdown = true;

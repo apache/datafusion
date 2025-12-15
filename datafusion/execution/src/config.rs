@@ -389,15 +389,6 @@ impl SessionConfig {
         self
     }
 
-    /// Enables or disables sort pushdown optimization for Parquet files
-    pub fn with_parquet_enable_reverse_row_groups(mut self, enabled: bool) -> Self {
-        self.options_mut()
-            .execution
-            .parquet
-            .enable_reverse_row_groups = enabled;
-        self
-    }
-
     /// Enables or disables the collection of statistics after listing files
     pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
         self.options_mut().execution.collect_statistics = enabled;
@@ -431,6 +422,13 @@ impl SessionConfig {
     /// add round robin repartition to increase parallelism to leverage more CPU cores.
     pub fn round_robin_repartition(&self) -> bool {
         self.options.optimizer.enable_round_robin_repartition
+    }
+
+    /// Enables or disables sort pushdown optimization, and currently only
+    /// applies to Parquet data source.
+    pub fn with_enable_sort_pushdown(mut self, enabled: bool) -> Self {
+        self.options_mut().optimizer.enable_sort_pushdown = enabled;
+        self
     }
 
     /// Set the size of [`sort_spill_reservation_bytes`] to control

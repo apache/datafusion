@@ -1111,7 +1111,7 @@ impl serde::Serialize for ColumnStats {
             struct_ser.serialize_field("distinctCount", v)?;
         }
         if let Some(v) = self.byte_size.as_ref() {
-            struct_ser.serialize_field("ByteSize", v)?;
+            struct_ser.serialize_field("byteSize", v)?;
         }
         struct_ser.end()
     }
@@ -1134,7 +1134,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             "distinct_count",
             "distinctCount",
             "byte_size",
-            "ByteSize",
+            "byteSize",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1144,7 +1144,6 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             SumValue,
             NullCount,
             DistinctCount,
-            
             ByteSize,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1172,7 +1171,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             "sumValue" | "sum_value" => Ok(GeneratedField::SumValue),
                             "nullCount" | "null_count" => Ok(GeneratedField::NullCount),
                             "distinctCount" | "distinct_count" => Ok(GeneratedField::DistinctCount),
-                            "ByteSize" | "byte_size" => Ok(GeneratedField::ByteSize),
+                            "byteSize" | "byte_size" => Ok(GeneratedField::ByteSize),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1232,7 +1231,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                         }
                         GeneratedField::ByteSize => {
                             if byte_size__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ByteSize"));
+                                return Err(serde::de::Error::duplicate_field("byteSize"));
                             }
                             byte_size__ = map_.next_value()?;
                         }
@@ -5612,9 +5611,6 @@ impl serde::Serialize for ParquetOptions {
         if self.skip_arrow_metadata {
             len += 1;
         }
-        if self.enable_reverse_row_groups {
-            len += 1;
-        }
         if self.dictionary_page_size_limit != 0 {
             len += 1;
         }
@@ -5719,9 +5715,6 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.skip_arrow_metadata {
             struct_ser.serialize_field("skipArrowMetadata", &self.skip_arrow_metadata)?;
-        }
-        if self.enable_reverse_row_groups {
-            struct_ser.serialize_field("enableSortPushdown", &self.enable_reverse_row_groups)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5871,8 +5864,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "binaryAsString",
             "skip_arrow_metadata",
             "skipArrowMetadata",
-            "enable_reverse_row_groups",
-            "enableSortPushdown",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5922,7 +5913,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             SchemaForceViewTypes,
             BinaryAsString,
             SkipArrowMetadata,
-            EnableSortPushdown,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5976,7 +5966,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
                             "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
                             "skipArrowMetadata" | "skip_arrow_metadata" => Ok(GeneratedField::SkipArrowMetadata),
-                            "enableSortPushdown" | "enable_reverse_row_groups" => Ok(GeneratedField::EnableSortPushdown),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -6028,7 +6017,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut schema_force_view_types__ = None;
                 let mut binary_as_string__ = None;
                 let mut skip_arrow_metadata__ = None;
-                let mut enable_reverse_row_groups__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -6156,12 +6144,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             skip_arrow_metadata__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::EnableSortPushdown => {
-                            if enable_reverse_row_groups__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("enableSortPushdown"));
-                            }
-                            enable_reverse_row_groups__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictionaryPageSizeLimit"));
@@ -6278,7 +6260,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
                     binary_as_string: binary_as_string__.unwrap_or_default(),
                     skip_arrow_metadata: skip_arrow_metadata__.unwrap_or_default(),
-                    enable_reverse_row_groups: enable_reverse_row_groups__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
