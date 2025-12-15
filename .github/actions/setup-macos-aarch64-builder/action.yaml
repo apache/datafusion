@@ -21,7 +21,7 @@ inputs:
   rust-version:
     description: 'version of rust to install (e.g. stable)'
     required: true
-    default: 'stable'
+    default: '1.86.0'
 runs:
   using: "composite"
   steps:
@@ -40,7 +40,7 @@ runs:
       shell: bash
       run: |
         rustup toolchain install stable --no-self-update
-        rustup default stable
+        rustup default 1.86.0
         rustup component add rustfmt
     - name: Setup rust cache
       uses: Swatinem/rust-cache@v2

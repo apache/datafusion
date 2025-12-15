@@ -25,7 +25,7 @@ keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
 homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
-rust-version = "1.81.0"
+rust-version = "1.86.0"
 readme = "README.md"
 
 [dependencies]
