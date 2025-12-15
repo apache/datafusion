@@ -41,6 +41,7 @@ use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
+use datafusion_physical_plan::joins::HashTableLookupExpr;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -52,6 +53,7 @@ use crate::protobuf::{
 
 use super::PhysicalExtensionCodec;
 
+#[expect(clippy::needless_pass_by_value)]
 pub fn serialize_physical_aggr_expr(
     aggr_expr: Arc<AggregateFunctionExpr>,
     codec: &dyn PhysicalExtensionCodec,
@@ -225,6 +227,30 @@ pub fn serialize_physical_expr(
     // it can be serialized
     let value = snapshot_physical_expr(Arc::clone(value))?;
     let expr = value.as_any();
+
+    // HashTableLookupExpr is used for dynamic filter pushdown in hash joins.
+    // It contains an Arc<dyn JoinHashMapType> (the build-side hash table) which
+    // cannot be serialized - the hash table is a runtime structure built during
+    // execution on the build side.
+    //
+    // We replace it with lit(true) which is safe because:
+    // 1. The filter is a performance optimization, not a correctness requirement
+    // 2. lit(true) passes all rows, so no valid rows are incorrectly filtered out
+    // 3. The join itself will still produce correct results, just without the
+    //    benefit of early filtering on the probe side
+    //
+    // In distributed execution, the remote worker won't have access to the hash
+    // table anyway, so the best we can do is skip this optimization.
+    if expr.downcast_ref::<HashTableLookupExpr>().is_some() {
+        let value = datafusion_proto_common::ScalarValue {
+            value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
+                true,
+            )),
+        };
+        return Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Literal(value)),
+        });
+    }
 
     if let Some(expr) = expr.downcast_ref::<Column>() {
         Ok(protobuf::PhysicalExprNode {
@@ -527,18 +553,31 @@ pub fn serialize_file_scan_config(
             .with_metadata(conf.file_schema().metadata.clone()),
     );
 
+    let projection_exprs = conf
+        .file_source
+        .projection()
+        .as_ref()
+        .map(|projection_exprs| {
+            let projections = projection_exprs.iter().cloned().collect::<Vec<_>>();
+            Ok::<_, DataFusionError>(protobuf::ProjectionExprs {
+                projections: projections
+                    .into_iter()
+                    .map(|expr| {
+                        Ok(protobuf::ProjectionExpr {
+                            alias: expr.alias.to_string(),
+                            expr: Some(serialize_physical_expr(&expr.expr, codec)?),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            })
+        })
+        .transpose()?;
+
     Ok(protobuf::FileScanExecConf {
         file_groups,
-        statistics: Some((&conf.file_source.statistics().unwrap()).into()),
+        statistics: Some((&conf.statistics()).into()),
         limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
-        projection: conf
-            .projection_exprs
-            .as_ref()
-            .map(|p| p.column_indices())
-            .unwrap_or((0..schema.fields().len()).collect::<Vec<_>>())
-            .iter()
-            .map(|n| *n as u32)
-            .collect(),
+        projection: vec![],
         schema: Some(schema.as_ref().try_into()?),
         table_partition_cols: conf
             .table_partition_cols()
@@ -554,6 +593,7 @@ pub fn serialize_file_scan_config(
             .collect::<Vec<_>>(),
         constraints: Some(conf.constraints.clone().into()),
         batch_size: conf.batch_size.map(|s| s as u64),
+        projection_exprs,
     })
 }
 

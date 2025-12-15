@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![deny(clippy::allow_attributes)]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
@@ -35,7 +36,8 @@
     )
 )]
 #![warn(missing_docs, clippy::needless_borrow)]
-#![deny(clippy::needless_pass_by_value)]
+// Use `allow` instead of `expect` for test configuration to explicitly
+// disable the lint for all test code rather than expecting violations
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! [DataFusion] is an extensible query engine written in Rust that
@@ -360,7 +362,7 @@
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
 //! [`tree_node module`]: datafusion_expr::logical_plan::tree_node
 //! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
-//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
 //!
 //! ### Physical Plans
 //!
@@ -649,7 +651,7 @@
 //!
 //! [Tokio]:  https://tokio.rs
 //! [`Runtime`]: tokio::runtime::Runtime
-//! [thread_pools example]: https://github.com/apache/datafusion/tree/main/datafusion-examples/examples/thread_pools.rs
+//! [thread_pools example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/thread_pools.rs
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec

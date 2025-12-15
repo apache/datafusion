@@ -763,6 +763,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "6")]
     pub reorder_filters: bool,
+    /// default = false
+    #[prost(bool, tag = "34")]
+    pub force_filter_selections: bool,
     /// default = 1024 * 1024
     #[prost(uint64, tag = "7")]
     pub data_pagesize_limit: u64,
@@ -927,6 +930,8 @@ pub struct ColumnStats {
     pub null_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "4")]
     pub distinct_count: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "6")]
+    pub byte_size: ::core::option::Option<Precision>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

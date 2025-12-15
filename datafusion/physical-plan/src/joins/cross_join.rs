@@ -21,33 +21,35 @@
 use std::{any::Any, sync::Arc, task::Poll};
 
 use super::utils::{
-    adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
-    BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
-    StatefulStreamResult,
+    BatchSplitter, BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer,
+    OnceAsync, OnceFut, StatefulStreamResult, adjust_right_output_partitioning,
+    reorder_output_after_swap,
 };
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, ProjectionExec,
+    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs,
 };
 use crate::{
-    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics, handle_state,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, JoinType, Result, ScalarValue};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_common::{
+    JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
+};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, ready};
 
 /// Data of the left side that is buffered into memory
 #[derive(Debug)]
@@ -59,7 +61,7 @@ struct JoinLeftData {
     _reservation: MemoryReservation,
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 /// Cross Join Execution Plan
 ///
 /// This operator is used when there are no predicates between two tables and
@@ -300,12 +302,12 @@ impl ExecutionPlan for CrossJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if self.left.output_partitioning().partition_count() != 1 {
-            return internal_err!(
-                "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
+        assert_eq_or_internal_err!(
+            self.left.output_partitioning().partition_count(),
+            1,
+            "Invalid CrossJoinExec, the output partition count of the left child must be 1,\
                  consider using CoalescePartitionsExec or the EnforceDistribution rule"
-            );
-        }
+        );
 
         let stream = self.right.execute(partition, Arc::clone(&context))?;
 
@@ -447,6 +449,7 @@ fn stats_cartesian_product(
                 })
                 .map(|row_count| s.sum_value.multiply(&row_count))
                 .unwrap_or(Precision::Absent),
+            byte_size: Precision::Absent,
         })
         .chain(right_col_stats.into_iter().map(|s| {
             ColumnStatistics {
@@ -465,6 +468,7 @@ fn stats_cartesian_product(
                     })
                     .map(|row_count| s.sum_value.multiply(&row_count))
                     .unwrap_or(Precision::Absent),
+                byte_size: Precision::Absent,
             }
         }))
         .collect();
@@ -702,6 +706,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -709,6 +714,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -722,6 +728,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
+                byte_size: Precision::Absent,
             }],
         };
 
@@ -739,6 +746,7 @@ mod tests {
                         42 * right_row_count as i64,
                     ))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -746,6 +754,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3 * right_row_count),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
@@ -755,6 +764,7 @@ mod tests {
                         20 * left_row_count as i64,
                     ))),
                     null_count: Precision::Exact(2 * left_row_count),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -776,6 +786,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -783,6 +794,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -796,6 +808,7 @@ mod tests {
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
+                byte_size: Precision::Absent,
             }],
         };
 
@@ -811,6 +824,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Absent, // we don't know the row count on the right
                     null_count: Precision::Absent, // we don't know the row count on the right
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -818,6 +832,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent, // we don't know the row count on the right
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
@@ -827,6 +842,7 @@ mod tests {
                         20 * left_row_count as i64,
                     ))),
                     null_count: Precision::Exact(2 * left_row_count),
+                    byte_size: Precision::Absent,
                 },
             ],
         };

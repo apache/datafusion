@@ -37,8 +37,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_catalog::cte_worktable::CteWorkTable;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    context, internal_datafusion_err, internal_err, not_impl_err, plan_err, Result,
-    TableReference, ToDFSchema,
+    assert_or_internal_err, context, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err, Result, TableReference, ToDFSchema,
 };
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
@@ -606,27 +606,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable {
-                        schema: pb_schema.try_into()?,
-                        name: from_table_reference(
+                    CreateExternalTable::builder(
+                        from_table_reference(
                             create_extern_table.name.as_ref(),
                             "CreateExternalTable",
                         )?,
-                        location: create_extern_table.location.clone(),
-                        file_type: create_extern_table.file_type.clone(),
-                        table_partition_cols: create_extern_table
-                            .table_partition_cols
-                            .clone(),
-                        order_exprs,
-                        if_not_exists: create_extern_table.if_not_exists,
-                        or_replace: create_extern_table.or_replace,
-                        temporary: create_extern_table.temporary,
-                        definition,
-                        unbounded: create_extern_table.unbounded,
-                        options: create_extern_table.options.clone(),
-                        constraints: constraints.into(),
-                        column_defaults,
-                    },
+                        create_extern_table.location.clone(),
+                        create_extern_table.file_type.clone(),
+                        pb_schema.try_into()?,
+                    )
+                    .with_partition_cols(create_extern_table.table_partition_cols.clone())
+                    .with_order_exprs(order_exprs)
+                    .with_if_not_exists(create_extern_table.if_not_exists)
+                    .with_or_replace(create_extern_table.or_replace)
+                    .with_temporary(create_extern_table.temporary)
+                    .with_definition(definition)
+                    .with_unbounded(create_extern_table.unbounded)
+                    .with_options(create_extern_table.options.clone())
+                    .with_constraints(constraints.into())
+                    .with_column_defaults(column_defaults)
+                    .build(),
                 )))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -776,11 +775,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 builder.build()
             }
             LogicalPlanType::Union(union) => {
-                if union.inputs.len() < 2 {
-                    return internal_err!(
-                        "Protobuf deserialization error, Union was require at least two input."
-                    );
-                }
+                assert_or_internal_err!(
+                    union.inputs.len() >= 2,
+                    "Protobuf deserialization error, Union requires at least two inputs."
+                );
                 let (first, rest) = union.inputs.split_first().unwrap();
                 let mut builder = LogicalPlanBuilder::from(
                     first.try_into_logical_plan(ctx, extension_codec)?,

@@ -37,7 +37,7 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput, SpillMetrics,
     SplitMetrics,
 };
-use crate::projection::{make_with_child, update_ordering, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -57,15 +57,15 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, unwrap_or_internal_err, DataFusionError,
-    Result,
+    DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
+    unwrap_or_internal_err,
 };
+use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::{lit, DynamicFilterPhysicalExpr};
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -266,7 +266,7 @@ struct ExternalSorter {
 impl ExternalSorter {
     // TODO: make a builder or some other nicer API to avoid the
     // clippy warning
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         partition_id: usize,
         schema: SchemaRef,
@@ -425,9 +425,10 @@ impl ExternalSorter {
                 (*max_record_batch_size).max(batch.get_sliced_size()?);
         }
 
-        if !globally_sorted_batches.is_empty() {
-            return internal_err!("This function consumes globally_sorted_batches, so it should be empty after taking.");
-        }
+        assert_or_internal_err!(
+            globally_sorted_batches.is_empty(),
+            "This function consumes globally_sorted_batches, so it should be empty after taking."
+        );
 
         Ok(())
     }
@@ -518,11 +519,10 @@ impl ExternalSorter {
     /// Sorts the in-memory batches and merges them into a single sorted run, then writes
     /// the result to spill files.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
-        if self.in_mem_batches.is_empty() {
-            return internal_err!(
-                "in_mem_batches must not be empty when attempting to sort and spill"
-            );
-        }
+        assert_or_internal_err!(
+            !self.in_mem_batches.is_empty(),
+            "in_mem_batches must not be empty when attempting to sort and spill"
+        );
 
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
@@ -534,11 +534,10 @@ impl ExternalSorter {
             self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
         // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
         // to construct a globally sorted stream.
-        if !self.in_mem_batches.is_empty() {
-            return internal_err!(
-                "in_mem_batches should be empty after constructing sorted stream"
-            );
-        }
+        assert_or_internal_err!(
+            self.in_mem_batches.is_empty(),
+            "in_mem_batches should be empty after constructing sorted stream"
+        );
         // 'global' here refers to all buffered batches when the memory limit is
         // reached. This variable will buffer the sorted batches after
         // sort-preserving merge and incrementally append to spill files.
@@ -570,11 +569,10 @@ impl ExternalSorter {
         // Sanity check after spilling
         let buffers_cleared_property =
             self.in_mem_batches.is_empty() && globally_sorted_batches.is_empty();
-        if !buffers_cleared_property {
-            return internal_err!(
-                "in_mem_batches and globally_sorted_batches should be cleared before"
-            );
-        }
+        assert_or_internal_err!(
+            buffers_cleared_property,
+            "in_mem_batches and globally_sorted_batches should be cleared before"
+        );
 
         // Reserve headroom for next sort/merge
         self.reserve_memory_for_merge()?;
@@ -1089,13 +1087,16 @@ impl DisplayAs for SortExec {
                 let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
-                        write!(f, "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr)?;
-                        if let Some(filter) = &self.filter {
-                            if let Ok(current) = filter.read().expr().current() {
-                                if !current.eq(&lit(true)) {
-                                    write!(f, ", filter=[{current}]")?;
-                                }
-                            }
+                        write!(
+                            f,
+                            "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]",
+                            self.expr
+                        )?;
+                        if let Some(filter) = &self.filter
+                            && let Ok(current) = filter.read().expr().current()
+                            && !current.eq(&lit(true))
+                        {
+                            write!(f, ", filter=[{current}]")?;
                         }
                         if !self.common_sort_prefix.is_empty() {
                             write!(f, ", sort_prefix=[")?;
@@ -1113,7 +1114,11 @@ impl DisplayAs for SortExec {
                             Ok(())
                         }
                     }
-                    None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
+                    None => write!(
+                        f,
+                        "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]",
+                        self.expr
+                    ),
                 }
             }
             DisplayFormatType::TreeRender => match self.fetch {
@@ -1205,7 +1210,12 @@ impl ExecutionPlan for SortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start SortExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
         let mut input = self.input.execute(partition, Arc::clone(&context))?;
 
@@ -1354,10 +1364,10 @@ impl ExecutionPlan for SortExec {
         let mut child =
             ChildFilterDescription::from_child(&parent_filters, self.input())?;
 
-        if let Some(filter) = &self.filter {
-            if config.optimizer.enable_topk_dynamic_filter_pushdown {
-                child = child.with_self_filter(filter.read().expr());
-            }
+        if let Some(filter) = &self.filter
+            && config.optimizer.enable_topk_dynamic_filter_pushdown
+        {
+            child = child.with_self_filter(filter.read().expr());
         }
 
         Ok(FilterDescription::new().with_child(child))
@@ -1376,8 +1386,8 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::test;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
     use crate::test::{assert_is_pending, make_partition};
 
     use arrow::array::*;
@@ -1386,11 +1396,11 @@ mod tests {
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
+    use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_execution::RecordBatchStream;
-    use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::{Column, Literal};
 
     use futures::{FutureExt, Stream};
     use insta::assert_snapshot;
@@ -2152,8 +2162,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_return_stream_with_batches_in_the_requested_size_when_sorting_in_place(
-    ) -> Result<()> {
+    async fn should_return_stream_with_batches_in_the_requested_size_when_sorting_in_place()
+    -> Result<()> {
         let batch_size = 100;
 
         let create_task_ctx = |_: &[RecordBatch]| {
@@ -2204,8 +2214,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_return_stream_with_batches_in_the_requested_size_when_having_a_single_batch(
-    ) -> Result<()> {
+    async fn should_return_stream_with_batches_in_the_requested_size_when_having_a_single_batch()
+    -> Result<()> {
         let batch_size = 100;
 
         let create_task_ctx = |_: &[RecordBatch]| {
@@ -2268,8 +2278,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_return_stream_with_batches_in_the_requested_size_when_having_to_spill(
-    ) -> Result<()> {
+    async fn should_return_stream_with_batches_in_the_requested_size_when_having_to_spill()
+    -> Result<()> {
         let batch_size = 100;
 
         let create_task_ctx = |generated_batches: &[RecordBatch]| {

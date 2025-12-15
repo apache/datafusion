@@ -24,7 +24,7 @@ repository = { workspace = true }
 authors = { workspace = true }
 readme = "README.md"
 license = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -48,7 +48,9 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
+datafusion-functions-nested = { workspace = true }
 log = { workspace = true }
+percent-encoding = "2.3.2"
 rand = { workspace = true }
 sha1 = "0.10"
 url = { workspace = true }

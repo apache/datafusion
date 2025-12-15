@@ -17,10 +17,10 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use hashbrown::HashMap;
 
-use crate::{error::_plan_err, DataFusionError, ScalarValue};
+use crate::{DataFusionError, ScalarValue, error::_plan_err};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
 #[derive(Debug, Clone)]
@@ -319,6 +319,16 @@ impl FieldMetadata {
         }
 
         field.with_metadata(self.to_hashmap())
+    }
+
+    /// Updates the metadata on the FieldRef with this metadata, if it is not empty.
+    pub fn add_to_field_ref(&self, mut field_ref: FieldRef) -> FieldRef {
+        if self.inner.is_empty() {
+            return field_ref;
+        }
+
+        Arc::make_mut(&mut field_ref).set_metadata(self.to_hashmap());
+        field_ref
     }
 }
 

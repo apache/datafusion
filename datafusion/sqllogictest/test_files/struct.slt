@@ -53,9 +53,9 @@ select * from struct_values;
 query TT
 select arrow_typeof(s1), arrow_typeof(s2) from struct_values;
 ----
-Struct("c0": nullable Int32) Struct("a": nullable Int32, "b": nullable Utf8View)
-Struct("c0": nullable Int32) Struct("a": nullable Int32, "b": nullable Utf8View)
-Struct("c0": nullable Int32) Struct("a": nullable Int32, "b": nullable Utf8View)
+Struct("c0": Int32) Struct("a": Int32, "b": Utf8View)
+Struct("c0": Int32) Struct("a": Int32, "b": Utf8View)
+Struct("c0": Int32) Struct("a": Int32, "b": Utf8View)
 
 
 # struct[i]
@@ -229,12 +229,12 @@ select named_struct('field_a', 1, 'field_b', 2);
 query T
 select arrow_typeof(named_struct('first', 1, 'second', 2, 'third', 3));
 ----
-Struct("first": nullable Int64, "second": nullable Int64, "third": nullable Int64)
+Struct("first": Int64, "second": Int64, "third": Int64)
 
 query T
 select arrow_typeof({'first': 1, 'second': 2, 'third': 3});
 ----
-Struct("first": nullable Int64, "second": nullable Int64, "third": nullable Int64)
+Struct("first": Int64, "second": Int64, "third": Int64)
 
 # test nested struct literal
 query ?
@@ -413,7 +413,7 @@ create table t(a struct<r varchar, c int>, b struct<r varchar, c float>) as valu
 query T
 select arrow_typeof([a, b]) from t;
 ----
-List(nullable Struct("r": nullable Utf8View, "c": nullable Float32))
+List(Struct("r": Utf8View, "c": Float32))
 
 query ?
 select [a, b] from t;
@@ -464,12 +464,12 @@ select * from t;
 query T
 select arrow_typeof(c1) from t;
 ----
-Struct("r": nullable Utf8View, "b": nullable Int32)
+Struct("r": Utf8View, "b": Int32)
 
 query T
 select arrow_typeof(c2) from t;
 ----
-Struct("r": nullable Utf8View, "b": nullable Float32)
+Struct("r": Utf8View, "b": Float32)
 
 statement ok
 drop table t;
@@ -486,8 +486,8 @@ select * from t;
 query T
 select arrow_typeof(column1) from t;
 ----
-Struct("r": nullable Utf8, "c": nullable Float64)
-Struct("r": nullable Utf8, "c": nullable Float64)
+Struct("r": Utf8, "c": Float64)
+Struct("r": Utf8, "c": Float64)
 
 statement ok
 drop table t;
@@ -519,9 +519,9 @@ select coalesce(s1) from t;
 query T
 select arrow_typeof(coalesce(s1, s2)) from t;
 ----
-Struct("a": nullable Float32, "b": nullable Utf8View)
-Struct("a": nullable Float32, "b": nullable Utf8View)
-Struct("a": nullable Float32, "b": nullable Utf8View)
+Struct("a": Float32, "b": Utf8View)
+Struct("a": Float32, "b": Utf8View)
+Struct("a": Float32, "b": Utf8View)
 
 statement ok
 drop table t;
@@ -546,9 +546,9 @@ select coalesce(s1, s2) from t;
 query T
 select arrow_typeof(coalesce(s1, s2)) from t;
 ----
-Struct("a": nullable Float32, "b": nullable Utf8View)
-Struct("a": nullable Float32, "b": nullable Utf8View)
-Struct("a": nullable Float32, "b": nullable Utf8View)
+Struct("a": Float32, "b": Utf8View)
+Struct("a": Float32, "b": Utf8View)
+Struct("a": Float32, "b": Utf8View)
 
 statement ok
 drop table t;
@@ -583,7 +583,7 @@ create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as valu
 query T
 select arrow_typeof([a, b]) from t;
 ----
-List(nullable Struct("r": nullable Utf8View, "c": nullable Float32))
+List(Struct("r": Utf8View, "c": Float32))
 
 statement ok
 drop table t;
@@ -606,13 +606,13 @@ create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float,
 query T
 select arrow_typeof(a) from t;
 ----
-Struct("r": nullable Utf8View, "c": nullable Int32, "g": nullable Float32)
+Struct("r": Utf8View, "c": Int32, "g": Float32)
 
 # type of each column should not coerced but perserve as it is
 query T
 select arrow_typeof(b) from t;
 ----
-Struct("r": nullable Utf8View, "c": nullable Float32, "g": nullable Int32)
+Struct("r": Utf8View, "c": Float32, "g": Int32)
 
 statement ok
 drop table t;

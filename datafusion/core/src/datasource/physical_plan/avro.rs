@@ -84,7 +84,7 @@ mod tests {
         let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
         let conf = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
             .with_file(meta.into())
-            .with_projection_indices(Some(vec![0, 1, 2]))
+            .with_projection_indices(Some(vec![0, 1, 2]))?
             .build();
 
         let source_exec = DataSourceExec::from_data_source(conf);
@@ -156,7 +156,7 @@ mod tests {
         let source = Arc::new(AvroSource::new(Arc::clone(&file_schema)));
         let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file(meta.into())
-            .with_projection_indices(projection)
+            .with_projection_indices(projection)?
             .build();
 
         let source_exec = DataSourceExec::from_data_source(conf);
@@ -231,7 +231,7 @@ mod tests {
         let conf = FileScanConfigBuilder::new(object_store_url, source)
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.
-            .with_projection_indices(projection)
+            .with_projection_indices(projection)?
             .with_file(partitioned_file)
             .build();
 

@@ -22,10 +22,10 @@ use std::sync::Arc;
 
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
-    LexOrdering, Statement as DFStatement,
+    LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
-    object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
+    ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
 };
 use crate::utils::normalize_ident;
 
@@ -33,26 +33,26 @@ use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
-    unqualified_field_not_found, Column, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue, SchemaError, SchemaReference, TableReference,
-    ToDFSchema,
+    Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
+    ScalarValue, SchemaError, SchemaReference, TableReference, ToDFSchema, exec_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, schema_err,
+    unqualified_field_not_found,
 };
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
-use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
+    Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
     EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
-    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
-    SortExpr, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
-    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    Volatility, WriteOp,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
+    ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
+    TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast, col,
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, IndexColumn, IndexType, NullsDistinctOption, OrderByExpr,
@@ -211,6 +211,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 format,
                 statement,
             }) => self.explain_to_plan(verbose, analyze, format, *statement),
+            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement),
         }
     }
 
@@ -716,18 +717,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     ObjectType::Schema => {
                         let name = match name {
-                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table }),
-                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table, catalog: schema }),
-                            TableReference::Full { catalog: _, schema: _, table: _ } => {
-                                Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
+                            TableReference::Bare { table } => {
+                                Ok(SchemaReference::Bare { schema: table })
                             }
+                            TableReference::Partial { schema, table } => {
+                                Ok(SchemaReference::Full {
+                                    schema: table,
+                                    catalog: schema,
+                                })
+                            }
+                            TableReference::Full {
+                                catalog: _,
+                                schema: _,
+                                table: _,
+                            } => Err(ParserError(
+                                "Invalid schema specifier (has 3 parts)".to_string(),
+                            )),
                         }?;
-                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
-                            name,
-                            if_exists,
-                            cascade,
-                            schema: DFSchemaRef::new(DFSchema::empty()),
-                        })))
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(
+                            DropCatalogSchema {
+                                name,
+                                if_exists,
+                                cascade,
+                                schema: DFSchemaRef::new(DFSchema::empty()),
+                            },
+                        )))
                     }
                     _ => not_impl_err!(
                         "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
@@ -955,7 +969,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let table_name = match table {
                     TableObject::TableName(table_name) => table_name,
                     TableObject::TableFunction(_) => {
-                        return not_impl_err!("INSERT INTO Table functions not supported")
+                        return not_impl_err!(
+                            "INSERT INTO Table functions not supported"
+                        );
                     }
                 };
                 if let Some(or) = or {
@@ -1237,12 +1253,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 if let (Some(pos_default), Some(pos_non_default)) =
                     (first_default, last_non_default)
+                    && pos_non_default > pos_default
                 {
-                    if pos_non_default > pos_default {
-                        return plan_err!(
-                            "Non-default arguments cannot follow default arguments."
-                        );
-                    }
+                    return plan_err!(
+                        "Non-default arguments cannot follow default arguments."
+                    );
                 }
                 // At the moment functions can't be qualified `schema.name`
                 let name = match &name.0[..] {
@@ -1269,7 +1284,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let count_positional =
                         fields.iter().filter(|f| f.name() == "").count();
                     if !(count_positional == 0 || count_positional == fields.len()) {
-                        return plan_err!("All function arguments must use either named or positional style.");
+                        return plan_err!(
+                            "All function arguments must use either named or positional style."
+                        );
                     }
                 }
                 let mut planner_context = PlannerContext::new()
@@ -1642,22 +1659,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let constraints =
             self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-            PlanCreateExternalTable {
-                schema: df_schema,
-                name,
-                location,
-                file_type,
-                table_partition_cols,
-                if_not_exists,
-                or_replace,
-                temporary,
-                definition,
-                order_exprs: ordered_exprs,
-                unbounded,
-                options: options_map,
-                constraints,
-                column_defaults,
-            },
+            PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                .with_partition_cols(table_partition_cols)
+                .with_if_not_exists(if_not_exists)
+                .with_or_replace(or_replace)
+                .with_temporary(temporary)
+                .with_definition(definition)
+                .with_order_exprs(ordered_exprs)
+                .with_unbounded(unbounded)
+                .with_options(options_map)
+                .with_constraints(constraints)
+                .with_column_defaults(column_defaults)
+                .build(),
         )))
     }
 
@@ -1868,7 +1881,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .iter()
                 .any(|opt| opt.key == variable);
 
-            if !is_valid_variable {
+            // Check if it's a runtime variable
+            let is_runtime_variable = variable.starts_with("datafusion.runtime.");
+
+            if !is_valid_variable && !is_runtime_variable {
                 return plan_err!(
                     "'{variable}' is not a variable which can be viewed with 'SHOW'"
                 );
@@ -1902,6 +1918,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let variable = object_name_to_string(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
+                // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
                 if variable_lower == "timezone" || variable_lower == "time.zone" {
                     variable_lower = "datafusion.execution.time_zone".to_string();
                 }
@@ -1934,6 +1951,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )))
             }
             other => not_impl_err!("SET variant not implemented yet: {other:?}"),
+        }
+    }
+
+    fn reset_statement_to_plan(&self, statement: ResetStatement) -> Result<LogicalPlan> {
+        match statement {
+            ResetStatement::Variable(variable) => {
+                let variable = object_name_to_string(&variable);
+                let mut variable_lower = variable.to_lowercase();
+
+                // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
+                if variable_lower == "timezone" || variable_lower == "time.zone" {
+                    variable_lower = "datafusion.execution.time_zone".to_string();
+                }
+
+                Ok(LogicalPlan::Statement(PlanStatement::ResetVariable(
+                    ResetVariable {
+                        variable: variable_lower,
+                    },
+                )))
+            }
         }
     }
 
@@ -2141,7 +2178,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     } else {
                         value_indices[column_index] = Some(i);
                     }
-                    Ok(table_schema.field(column_index).clone())
+                    Ok(Arc::clone(table_schema.field(column_index)))
                 })
                 .collect::<Result<Vec<_>>>()?;
             (Fields::from(fields), value_indices)
@@ -2214,7 +2251,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             (false, false) => InsertOp::Append,
             (true, false) => InsertOp::Overwrite,
             (false, true) => InsertOp::Replace,
-            (true, true) => plan_err!("Conflicting insert operations: `overwrite` and `replace_into` cannot both be true")?,
+            (true, true) => plan_err!(
+                "Conflicting insert operations: `overwrite` and `replace_into` cannot both be true"
+            )?,
         };
 
         let plan = LogicalPlan::Dml(DmlStatement::new(

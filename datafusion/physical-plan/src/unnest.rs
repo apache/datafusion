@@ -18,7 +18,7 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
-use std::task::{ready, Poll};
+use std::task::{Poll, ready};
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{
@@ -32,8 +32,8 @@ use crate::{
 };
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray,
-    Int64Array, LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray,
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
+    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray, new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -43,13 +43,13 @@ use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, Constraints, HashMap, HashSet, Result,
-    UnnestOptions,
+    Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
+    internal_err,
 };
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::PhysicalExpr;
 use futures::{Stream, StreamExt};
 use log::trace;
 
@@ -90,7 +90,7 @@ impl UnnestExec {
             &input,
             &list_column_indices,
             &struct_column_indices,
-            Arc::clone(&schema),
+            &schema,
         )?;
 
         Ok(UnnestExec {
@@ -109,7 +109,7 @@ impl UnnestExec {
         input: &Arc<dyn ExecutionPlan>,
         list_column_indices: &[ListUnnest],
         struct_column_indices: &[usize],
-        schema: SchemaRef,
+        schema: &SchemaRef,
     ) -> Result<PlanProperties> {
         // Find out which indices are not unnested, such that they can be copied over from the input plan
         let input_schema = input.schema();
@@ -159,7 +159,7 @@ impl UnnestExec {
         // the unnest operation invalidates any global uniqueness or primary-key constraints.
         let input_eq_properties = input.equivalence_properties();
         let eq_properties = input_eq_properties
-            .project(&projection_mapping, Arc::clone(&schema))
+            .project(&projection_mapping, Arc::clone(schema))
             .with_constraints(Constraints::default());
 
         // Output partitioning must use the projection mapping

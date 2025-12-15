@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
 use std::sync::Arc;
 
@@ -187,6 +189,7 @@ impl FlightService for FlightServiceImpl {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn to_tonic_err(e: datafusion::error::DataFusionError) -> Status {
     Status::internal(format!("{e:?}"))
 }

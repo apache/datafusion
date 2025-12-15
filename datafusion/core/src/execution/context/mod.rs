@@ -45,8 +45,8 @@ use crate::{
     logical_expr::{
         CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
         CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, SetVariable,
-        TableType, UNNAMED_TABLE,
+        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, ResetVariable,
+        SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -63,7 +63,7 @@ use datafusion_catalog::MemoryCatalogProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
     config::{ConfigExtension, TableOptions},
@@ -72,10 +72,16 @@ use datafusion_common::{
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
     DFSchema, DataFusionError, ParamValues, SchemaReference, TableReference,
 };
+use datafusion_execution::cache::cache_manager::DEFAULT_METADATA_CACHE_LIMIT;
 pub use datafusion_execution::config::SessionConfig;
+use datafusion_execution::disk_manager::{
+    DiskManagerBuilder, DEFAULT_MAX_TEMP_DIRECTORY_SIZE,
+};
 use datafusion_execution::registry::SerializerRegistry;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+#[cfg(feature = "sql")]
+use datafusion_expr::planner::RelationPlanner;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     expr_rewriter::FunctionRewrite,
@@ -478,6 +484,11 @@ impl SessionContext {
         self.state.write().append_optimizer_rule(optimizer_rule);
     }
 
+    /// Removes an optimizer rule by name, returning `true` if it existed.
+    pub fn remove_optimizer_rule(&self, name: &str) -> bool {
+        self.state.write().remove_optimizer_rule(name)
+    }
+
     /// Adds an analyzer rule to the end of the existing rules.
     ///
     /// See [`SessionState`] for more control of when the rule is applied.
@@ -711,7 +722,12 @@ impl SessionContext {
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
-                self.set_variable(stmt).await
+                self.set_variable(stmt).await?;
+                self.return_empty_dataframe()
+            }
+            LogicalPlan::Statement(Statement::ResetVariable(stmt)) => {
+                self.reset_variable(stmt).await?;
+                self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
@@ -776,7 +792,7 @@ impl SessionContext {
     /// * [`SessionState::create_physical_expr`] for a lower level API
     ///
     /// [simplified]: datafusion_optimizer::simplify_expressions
-    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+    /// [expr_api]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
     pub fn create_physical_expr(
         &self,
         expr: Expr,
@@ -1069,7 +1085,7 @@ impl SessionContext {
         exec_err!("Schema '{schemaref}' doesn't exist.")
     }
 
-    async fn set_variable(&self, stmt: SetVariable) -> Result<DataFrame> {
+    async fn set_variable(&self, stmt: SetVariable) -> Result<()> {
         let SetVariable {
             variable, value, ..
         } = stmt;
@@ -1099,11 +1115,37 @@ impl SessionContext {
             for udf in udfs_to_update {
                 state.register_udf(udf)?;
             }
-
-            drop(state);
         }
 
-        self.return_empty_dataframe()
+        Ok(())
+    }
+
+    async fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
+        let variable = stmt.variable;
+        if variable.starts_with("datafusion.runtime.") {
+            return self.reset_runtime_variable(&variable);
+        }
+
+        let mut state = self.state.write();
+        state.config_mut().options_mut().reset(&variable)?;
+
+        // Refresh UDFs to ensure configuration-dependent behavior updates
+        let config_options = state.config().options();
+        let udfs_to_update: Vec<_> = state
+            .scalar_functions()
+            .values()
+            .filter_map(|udf| {
+                udf.inner()
+                    .with_updated_config(config_options)
+                    .map(Arc::new)
+            })
+            .collect();
+
+        for udf in udfs_to_update {
+            state.register_udf(udf)?;
+        }
+
+        Ok(())
     }
 
     fn set_runtime_variable(&self, variable: &str, value: &str) -> Result<()> {
@@ -1125,6 +1167,37 @@ impl SessionContext {
             "metadata_cache_limit" => {
                 let limit = Self::parse_memory_limit(value)?;
                 builder.with_metadata_cache_limit(limit)
+            }
+            _ => return plan_err!("Unknown runtime configuration: {variable}"),
+            // Remember to update `reset_runtime_variable()` when adding new options
+        };
+
+        *state = SessionStateBuilder::from(state.clone())
+            .with_runtime_env(Arc::new(builder.build()?))
+            .build();
+
+        Ok(())
+    }
+
+    fn reset_runtime_variable(&self, variable: &str) -> Result<()> {
+        let key = variable.strip_prefix("datafusion.runtime.").unwrap();
+
+        let mut state = self.state.write();
+
+        let mut builder = RuntimeEnvBuilder::from_runtime_env(state.runtime_env());
+        match key {
+            "memory_limit" => {
+                builder.memory_pool = None;
+            }
+            "max_temp_directory_size" => {
+                builder =
+                    builder.with_max_temp_directory_size(DEFAULT_MAX_TEMP_DIRECTORY_SIZE);
+            }
+            "temp_directory" => {
+                builder.disk_manager_builder = Some(DiskManagerBuilder::default());
+            }
+            "metadata_cache_limit" => {
+                builder = builder.with_metadata_cache_limit(DEFAULT_METADATA_CACHE_LIMIT);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
@@ -1363,6 +1436,18 @@ impl SessionContext {
     /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
     pub fn register_udwf(&self, f: WindowUDF) {
         self.state.write().register_udwf(Arc::new(f)).ok();
+    }
+
+    #[cfg(feature = "sql")]
+    /// Registers a [`RelationPlanner`] to customize SQL table-factor planning.
+    ///
+    /// Planners are invoked in reverse registration order, allowing newer
+    /// planners to take precedence over existing ones.
+    pub fn register_relation_planner(
+        &self,
+        planner: Arc<dyn RelationPlanner>,
+    ) -> Result<()> {
+        self.state.write().register_relation_planner(planner)
     }
 
     /// Deregisters a UDF within this context.
@@ -1794,6 +1879,12 @@ impl FunctionRegistry for SessionContext {
     }
 }
 
+impl datafusion_execution::TaskContextProvider for SessionContext {
+    fn task_ctx(&self) -> Arc<TaskContext> {
+        SessionContext::task_ctx(self)
+    }
+}
+
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
@@ -1837,7 +1928,7 @@ pub trait QueryPlanner: Debug {
 /// because the implementation and requirements vary widely. Please see
 /// [function_factory example] for a reference implementation.
 ///
-/// [function_factory example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/function_factory.rs
+/// [function_factory example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/function_factory.rs
 ///
 /// # Examples of syntax that can be supported
 ///
@@ -2536,5 +2627,50 @@ mod tests {
                 _ => Ok(None),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn remove_optimizer_rule() -> Result<()> {
+        let get_optimizer_rules = |ctx: &SessionContext| {
+            ctx.state()
+                .optimizer()
+                .rules
+                .iter()
+                .map(|r| r.name().to_owned())
+                .collect::<HashSet<_>>()
+        };
+
+        let ctx = SessionContext::new();
+        assert!(get_optimizer_rules(&ctx).contains("simplify_expressions"));
+
+        // default plan
+        let plan = ctx
+            .sql("select 1 + 1")
+            .await?
+            .into_optimized_plan()?
+            .to_string();
+        assert_snapshot!(plan, @r"
+        Projection: Int64(2) AS Int64(1) + Int64(1)
+          EmptyRelation: rows=1
+        ");
+
+        assert!(ctx.remove_optimizer_rule("simplify_expressions"));
+        assert!(!get_optimizer_rules(&ctx).contains("simplify_expressions"));
+
+        // plan without the simplify_expressions rule
+        let plan = ctx
+            .sql("select 1 + 1")
+            .await?
+            .into_optimized_plan()?
+            .to_string();
+        assert_snapshot!(plan, @r"
+        Projection: Int64(1) + Int64(1)
+          EmptyRelation: rows=1
+        ");
+
+        // attempting to remove a non-existing rule returns false
+        assert!(!ctx.remove_optimizer_rule("simplify_expressions"));
+
+        Ok(())
     }
 }

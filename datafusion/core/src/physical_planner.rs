@@ -60,6 +60,7 @@ use crate::schema_equivalence::schema_satisfied_by;
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
+use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
@@ -686,6 +687,17 @@ impl DefaultPhysicalPlanner {
                     )
                 {
                     let mut differences = Vec::new();
+
+                    if physical_input_schema.metadata()
+                        != physical_input_schema_from_logical.metadata()
+                    {
+                        differences.push(format!(
+                            "schema metadata differs: (physical) {:?} vs (logical) {:?}",
+                            physical_input_schema.metadata(),
+                            physical_input_schema_from_logical.metadata()
+                        ));
+                    }
+
                     if physical_input_schema.fields().len()
                         != physical_input_schema_from_logical.fields().len()
                     {
@@ -714,6 +726,15 @@ impl DefaultPhysicalPlanner {
                         }
                         if physical_field.is_nullable() && !logical_field.is_nullable() {
                             differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
+                        }
+                        if physical_field.metadata() != logical_field.metadata() {
+                            differences.push(format!(
+                                "field metadata at index {} [{}]: (physical) {:?} vs (logical) {:?}",
+                                i,
+                                physical_field.name(),
+                                physical_field.metadata(),
+                                logical_field.metadata()
+                            ));
                         }
                     }
                     return internal_err!("Physical input schema should be the same as the one converted from logical input schema. Differences: {}", differences
@@ -1212,7 +1233,7 @@ impl DefaultPhysicalPlanner {
                         let filter_df_fields = filter_df_fields
                             .into_iter()
                             .map(|(qualifier, field)| {
-                                (qualifier.cloned(), Arc::new(field.clone()))
+                                (qualifier.cloned(), Arc::clone(field))
                             })
                             .collect();
 
@@ -1757,11 +1778,11 @@ fn qualify_join_schema_sides(
     let join_fields = join_schema.fields();
 
     // Validate lengths
-    if join_fields.len() != left_fields.len() + right_fields.len() {
-        return internal_err!(
-            "Join schema field count must match left and right field count."
-        );
-    }
+    assert_eq_or_internal_err!(
+        join_fields.len(),
+        left_fields.len() + right_fields.len(),
+        "Join schema field count must match left and right field count."
+    );
 
     // Validate field names match
     for (i, (field, expected)) in join_fields
@@ -2520,7 +2541,9 @@ impl<'a> OptimizationInvariantChecker<'a> {
         previous_schema: &Arc<Schema>,
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
-        if self.rule.schema_check() && plan.schema() != *previous_schema {
+        if self.rule.schema_check()
+            && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
+        {
             internal_err!("PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
                 self.rule.name(),
                 previous_schema,
@@ -2534,6 +2557,38 @@ impl<'a> OptimizationInvariantChecker<'a> {
 
         Ok(())
     }
+}
+
+/// Checks if the change from `old` schema to `new` is allowed or not.
+///
+/// The current implementation only allows nullability of individual fields to change
+/// from 'nullable' to 'not nullable'. This can happen due to physical expressions knowing
+/// more about their null-ness than their logical counterparts.
+/// This change is allowed because for any field the non-nullable domain `F` is a strict subset
+/// of the nullable domain `F ∪ { NULL }`. A physical schema that guarantees a stricter subset
+/// of values will not violate any assumptions made based on the less strict schema.
+fn is_allowed_schema_change(old: &Schema, new: &Schema) -> bool {
+    if new.metadata != old.metadata {
+        return false;
+    }
+
+    if new.fields.len() != old.fields.len() {
+        return false;
+    }
+
+    let new_fields = new.fields.iter().map(|f| f.as_ref());
+    let old_fields = old.fields.iter().map(|f| f.as_ref());
+    old_fields
+        .zip(new_fields)
+        .all(|(old, new)| is_allowed_field_change(old, new))
+}
+
+fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> bool {
+    new_field.name() == old_field.name()
+        && new_field.data_type() == old_field.data_type()
+        && new_field.metadata() == old_field.metadata()
+        && (new_field.is_nullable() == old_field.is_nullable()
+            || !new_field.is_nullable())
 }
 
 impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
@@ -3071,7 +3126,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct("foo": Boolean), Utf8]"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct("foo": non-null Boolean), Utf8]"#
         );
 
         Ok(())
@@ -3882,5 +3937,229 @@ digraph {
             .await?;
 
         Ok(())
+    }
+
+    // --- Tests for aggregate schema mismatch error messages ---
+
+    use crate::catalog::TableProvider;
+    use datafusion_catalog::Session;
+    use datafusion_expr::TableType;
+
+    /// A TableProvider that returns schemas for logical planning vs physical planning.
+    /// Used to test schema mismatch error messages.
+    #[derive(Debug)]
+    struct MockSchemaTableProvider {
+        logical_schema: SchemaRef,
+        physical_schema: SchemaRef,
+    }
+
+    #[async_trait]
+    impl TableProvider for MockSchemaTableProvider {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.logical_schema)
+        }
+
+        fn table_type(&self) -> TableType {
+            TableType::Base
+        }
+
+        async fn scan(
+            &self,
+            _state: &dyn Session,
+            _projection: Option<&Vec<usize>>,
+            _filters: &[Expr],
+            _limit: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(NoOpExecutionPlan::new(Arc::clone(
+                &self.physical_schema,
+            ))))
+        }
+    }
+
+    /// Attempts to plan a query with potentially mismatched schemas.
+    async fn plan_with_schemas(
+        logical_schema: SchemaRef,
+        physical_schema: SchemaRef,
+        query: &str,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let provider = MockSchemaTableProvider {
+            logical_schema,
+            physical_schema,
+        };
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(provider)).unwrap();
+
+        ctx.sql(query).await.unwrap().create_physical_plan().await
+    }
+
+    #[tokio::test]
+    // When schemas match, planning proceeds past the schema_satisfied_by check.
+    // It then panics on unimplemented error in NoOpExecutionPlan.
+    #[should_panic(expected = "NoOpExecutionPlan")]
+    async fn test_aggregate_schema_check_passes() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+
+        plan_with_schemas(
+            Arc::clone(&schema),
+            schema,
+            "SELECT count(*) FROM test GROUP BY c1",
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_schema_mismatch_metadata() {
+        let logical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let physical_schema = Arc::new(
+            Schema::new(vec![Field::new("c1", DataType::Int32, false)])
+                .with_metadata(HashMap::from([("key".into(), "value".into())])),
+        );
+
+        let err = plan_with_schemas(
+            logical_schema,
+            physical_schema,
+            "SELECT count(*) FROM test GROUP BY c1",
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(err.to_string(), "schema metadata differs");
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_schema_mismatch_field_count() {
+        let logical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let physical_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]));
+
+        let err = plan_with_schemas(
+            logical_schema,
+            physical_schema,
+            "SELECT count(*) FROM test GROUP BY c1",
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(err.to_string(), "Different number of fields");
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_schema_mismatch_field_name() {
+        let logical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let physical_schema = Arc::new(Schema::new(vec![Field::new(
+            "different_name",
+            DataType::Int32,
+            false,
+        )]));
+
+        let err = plan_with_schemas(
+            logical_schema,
+            physical_schema,
+            "SELECT count(*) FROM test GROUP BY c1",
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(err.to_string(), "field name at index");
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_schema_mismatch_field_type() {
+        let logical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let physical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int64, false)]));
+
+        let err = plan_with_schemas(
+            logical_schema,
+            physical_schema,
+            "SELECT count(*) FROM test GROUP BY c1",
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(err.to_string(), "field data type at index");
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_schema_mismatch_field_nullability() {
+        let logical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let physical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+
+        let err = plan_with_schemas(
+            logical_schema,
+            physical_schema,
+            "SELECT count(*) FROM test GROUP BY c1",
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(err.to_string(), "field nullability at index");
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_schema_mismatch_field_metadata() {
+        let logical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let physical_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)
+                .with_metadata(HashMap::from([("key".into(), "value".into())]))]));
+
+        let err = plan_with_schemas(
+            logical_schema,
+            physical_schema,
+            "SELECT count(*) FROM test GROUP BY c1",
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(err.to_string(), "field metadata at index");
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_schema_mismatch_multiple() {
+        let logical_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Utf8, false),
+        ]));
+        let physical_schema = Arc::new(
+            Schema::new(vec![
+                Field::new("c1", DataType::Int64, true)
+                    .with_metadata(HashMap::from([("key".into(), "value".into())])),
+                Field::new("c2", DataType::Utf8, false),
+            ])
+            .with_metadata(HashMap::from([(
+                "schema_key".into(),
+                "schema_value".into(),
+            )])),
+        );
+
+        let err = plan_with_schemas(
+            logical_schema,
+            physical_schema,
+            "SELECT count(*) FROM test GROUP BY c1",
+        )
+        .await
+        .unwrap_err();
+
+        // Verify all applicable error fragments are present
+        let err_str = err.to_string();
+        assert_contains!(&err_str, "schema metadata differs");
+        assert_contains!(&err_str, "field data type at index");
+        assert_contains!(&err_str, "field nullability at index");
+        assert_contains!(&err_str, "field metadata at index");
     }
 }

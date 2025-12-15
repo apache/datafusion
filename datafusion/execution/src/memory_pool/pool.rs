@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::memory_pool::{
-    human_readable_size, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation, human_readable_size,
 };
 use datafusion_common::HashMap;
-use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, resources_datafusion_err};
 use log::debug;
 use parking_lot::Mutex;
 use std::{
@@ -260,8 +260,13 @@ fn insufficient_capacity_err(
     additional: usize,
     available: usize,
 ) -> DataFusionError {
-    resources_datafusion_err!("Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total pool", 
-    human_readable_size(additional), reservation.registration.consumer.name, human_readable_size(reservation.size), human_readable_size(available))
+    resources_datafusion_err!(
+        "Failed to allocate additional {} for {} with {} already allocated for this reservation - {} remain available for the total pool",
+        human_readable_size(additional),
+        reservation.registration.consumer.name,
+        human_readable_size(reservation.size),
+        human_readable_size(available)
+    )
 }
 
 #[derive(Debug)]
@@ -319,8 +324,8 @@ impl TrackedConsumer {
 ///
 /// For more examples of using `TrackConsumersPool`, see the [memory_pool_tracking.rs] example
 ///
-/// [memory_pool_tracking.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_tracking.rs
-/// [memory_pool_execution_plan.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
+/// [memory_pool_tracking.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_tracking.rs
+/// [memory_pool_execution_plan.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
 #[derive(Debug)]
 pub struct TrackConsumersPool<I> {
     /// The wrapped memory pool that actually handles reservation logic
@@ -466,8 +471,8 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                     DataFusionError::ResourcesExhausted(
                         provide_top_memory_consumers_to_error_msg(
                             &reservation.consumer().name,
-                            e,
-                            self.report_top(self.top.into()),
+                            &e,
+                            &self.report_top(self.top.into()),
                         ),
                     )
                 }
@@ -494,16 +499,18 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 
 fn provide_top_memory_consumers_to_error_msg(
     consumer_name: &str,
-    error_msg: String,
-    top_consumers: String,
+    error_msg: &str,
+    top_consumers: &str,
 ) -> String {
-    format!("Additional allocation failed for {consumer_name} with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}")
+    format!(
+        "Additional allocation failed for {consumer_name} with top memory consumers (across reservations) as:\n{top_consumers}\nError: {error_msg}"
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::{allow_duplicates, assert_snapshot, Settings};
+    use insta::{Settings, allow_duplicates, assert_snapshot};
     use std::sync::Arc;
 
     fn make_settings() -> Settings {

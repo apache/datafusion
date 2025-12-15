@@ -21,8 +21,8 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_integer, ArrowNumericType, BooleanArray, ListArray, PrimitiveArray,
-    PrimitiveBuilder,
+    ArrowNumericType, BooleanArray, ListArray, PrimitiveArray, PrimitiveBuilder,
+    downcast_integer,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -40,12 +40,13 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_datafusion_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
-    function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
-    Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    function::AccumulatorArgs, utils::format_state_name,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
@@ -137,12 +138,14 @@ impl AggregateUDFImpl for Median {
             "median"
         };
 
-        Ok(vec![Field::new(
-            format_state_name(args.name, state_name),
-            DataType::List(Arc::new(field)),
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, state_name),
+                DataType::List(Arc::new(field)),
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -189,12 +192,12 @@ impl AggregateUDFImpl for Median {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let num_args = args.exprs.len();
-        if num_args != 1 {
-            return internal_err!(
-                "median should only have 1 arg, but found num args:{}",
-                args.exprs.len()
-            );
-        }
+        assert_eq_or_internal_err!(
+            num_args,
+            1,
+            "median should only have 1 arg, but found num args:{}",
+            num_args
+        );
 
         let dt = args.expr_fields[0].data_type().clone();
 

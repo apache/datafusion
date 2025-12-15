@@ -36,16 +36,16 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{config::ConfigOptions, internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
 };
-use datafusion_physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, with_new_children_if_necessary};
 
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 
 /// Attempts to recursively push given filters from the top of the tree into leaves.
 ///
@@ -461,22 +461,18 @@ fn push_down_filters(
 
     let filter_description_parent_filters = filter_description.parent_filters();
     let filter_description_self_filters = filter_description.self_filters();
-    if filter_description_parent_filters.len() != children.len() {
-        return internal_err!(
-            "Filter pushdown expected FilterDescription to have parent filters for {}, but got {} for node {}",
-            children.len(),
-            filter_description_parent_filters.len(),
-            node.name()
-        );
-    }
-    if filter_description_self_filters.len() != children.len() {
-        return internal_err!(
-            "Filter pushdown expected FilterDescription to have self filters for {}, but got {} for node {}",
-            children.len(),
-            filter_description_self_filters.len(),
-            node.name()
-        );
-    }
+    assert_eq_or_internal_err!(
+        filter_description_parent_filters.len(),
+        children.len(),
+        "Filter pushdown expected parent filters count to match number of children for node {}",
+        node.name()
+    );
+    assert_eq_or_internal_err!(
+        filter_description_self_filters.len(),
+        children.len(),
+        "Filter pushdown expected self filters count to match number of children for node {}",
+        node.name()
+    );
 
     for (child_idx, (child, parent_filters, self_filters)) in izip!(
         children,
@@ -525,15 +521,12 @@ fn push_down_filters(
         // from our parents and filters that the current node injected. We need to de-entangle
         // this since we do need to distinguish between them.
         let mut all_filters = result.filters.into_iter().collect_vec();
-        if all_filters.len() != num_self_filters + num_parent_filters {
-            return internal_err!(
-                "Filter pushdown did not return the expected number of filters: expected {} self filters and {} parent filters, but got {}. Likely culprit is {}",
-                num_self_filters,
-                num_parent_filters,
-                all_filters.len(),
-                child.name()
-            );
-        }
+        assert_eq_or_internal_err!(
+            all_filters.len(),
+            num_self_filters + num_parent_filters,
+            "Filter pushdown did not return the expected number of filters from {}",
+            child.name()
+        );
         let parent_filters = all_filters
             .split_off(num_self_filters)
             .into_iter()

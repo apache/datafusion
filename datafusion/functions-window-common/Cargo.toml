@@ -21,7 +21,7 @@ description = "Common functions for implementing user-defined window functions f
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 authors = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 license = { workspace = true }
 repository = { workspace = true }

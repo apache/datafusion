@@ -104,6 +104,7 @@ fn int64_stats() -> ColumnStatistics {
         max_value: Precision::Exact(1_000_000.into()),
         min_value: Precision::Exact(0.into()),
         distinct_count: Precision::Absent,
+        byte_size: Precision::Absent,
     }
 }
 
@@ -131,10 +132,7 @@ pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
     .with_statistics(statistics)
     .build();
 
-    assert_eq!(
-        config.file_source.statistics().unwrap().num_rows,
-        Precision::Inexact(10000)
-    );
+    assert_eq!(config.statistics().num_rows, Precision::Inexact(10000));
     DataSourceExec::from_data_source(config)
 }
 

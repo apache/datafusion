@@ -26,8 +26,8 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::types::{logical_int64, logical_string, NativeType};
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::types::{NativeType, logical_int64, logical_string};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
@@ -115,7 +115,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
         Utf8View => {
             let string_view_array = args[0].as_string_view();
             repeat_impl::<i32, &StringViewArray>(
-                string_view_array,
+                &string_view_array,
                 number_array,
                 i32::MAX as usize,
             )
@@ -123,7 +123,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
         Utf8 => {
             let string_array = args[0].as_string::<i32>();
             repeat_impl::<i32, &GenericStringArray<i32>>(
-                string_array,
+                &string_array,
                 number_array,
                 i32::MAX as usize,
             )
@@ -131,7 +131,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
         LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
             repeat_impl::<i64, &GenericStringArray<i64>>(
-                string_array,
+                &string_array,
                 number_array,
                 i64::MAX as usize,
             )
@@ -144,7 +144,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn repeat_impl<'a, T, S>(
-    string_array: S,
+    string_array: &S,
     number_array: &Int64Array,
     max_str_len: usize,
 ) -> Result<ArrayRef>
@@ -199,7 +199,7 @@ mod tests {
     use arrow::datatypes::DataType::Utf8;
 
     use datafusion_common::ScalarValue;
-    use datafusion_common::{exec_err, Result};
+    use datafusion_common::{Result, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::string::repeat::RepeatFunc;

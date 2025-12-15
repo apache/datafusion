@@ -53,7 +53,7 @@ pub struct GlobalRequirements {
 }
 
 impl LimitPushdown {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

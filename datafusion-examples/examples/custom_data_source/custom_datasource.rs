@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Formatter};
@@ -194,6 +196,7 @@ struct CustomExec {
 }
 
 impl CustomExec {
+    #[expect(clippy::needless_pass_by_value)]
     fn new(
         projections: Option<&Vec<usize>>,
         schema: SchemaRef,

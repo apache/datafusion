@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This lint violation is acceptable for tests, so suppress for now
+// Issue: <https://github.com/apache/datafusion/issues/18503>
+#![expect(clippy::needless_pass_by_value)]
+
 use std::any::Any;
 use std::hash::Hash;
 #[cfg(test)]
@@ -23,11 +27,11 @@ use std::vec;
 
 use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
-use datafusion_common::{assert_contains, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, assert_contains};
 use datafusion_expr::{
-    col, logical_plan::LogicalPlan, test::function_stub::sum_udaf, ColumnarValue,
-    CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, CreateIndex, DdlStatement, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility, col, logical_plan::LogicalPlan,
+    test::function_stub::sum_udaf,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -1335,8 +1339,8 @@ fn select_aggregate_with_group_by_with_having_using_column_by_alias() {
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_their_aliases(
-) {
+fn select_aggregate_with_group_by_with_having_using_columns_with_and_without_their_aliases()
+ {
     let sql = "SELECT first_name AS fn, MAX(age) AS max_age
                    FROM person
                    GROUP BY first_name
@@ -1443,8 +1447,8 @@ fn select_aggregate_aliased_with_group_by_with_having_referencing_aggregate_by_i
 }
 
 #[test]
-fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compound_aggregate_by_its_alias(
-) {
+fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compound_aggregate_by_its_alias()
+ {
     let sql = "SELECT first_name, MAX(age) + 1 AS max_age_plus_one
                    FROM person
                    GROUP BY first_name
@@ -1462,8 +1466,8 @@ fn select_aggregate_compound_aliased_with_group_by_with_having_referencing_compo
 }
 
 #[test]
-fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not_in_select(
-) {
+fn select_aggregate_with_group_by_with_having_using_derived_column_aggregate_not_in_select()
+ {
     let sql = "SELECT first_name, MAX(age)
                    FROM person
                    GROUP BY first_name
@@ -2380,7 +2384,7 @@ fn create_external_table_with_compression_type() {
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON LOCATION 'foo.json.gz' OPTIONS ('format.compression' 'gzip')",
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON LOCATION 'foo.json.bz2' OPTIONS ('format.compression' 'bzip2')",
         "CREATE EXTERNAL TABLE t(c1 int) STORED AS NONSTANDARD LOCATION 'foo.unk' OPTIONS ('format.compression' 'gzip')",
-         ];
+    ];
 
     allow_duplicates! {
         for sql in sqls {
@@ -3066,8 +3070,7 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id] ORDE
 /// ```
 #[test]
 fn over_partition_by_order_by_no_dup() {
-    let sql =
-        "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
@@ -3093,8 +3096,7 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orde
 /// ```
 #[test]
 fn over_partition_by_order_by_mix_up() {
-    let sql =
-            "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
@@ -3120,8 +3122,7 @@ Projection: orders.order_id, max(orders.qty) PARTITION BY [orders.order_id, orde
 /// FIXME: for now we are not detecting prefix of sorting keys in order to save one sort exec phase
 #[test]
 fn over_partition_by_order_by_mix_up_prefix() {
-    let sql =
-            "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
+    let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
@@ -3253,6 +3254,55 @@ Sort: avg(person.age) + avg(person.age) ASC NULLS LAST
   Projection: avg(person.age) + avg(person.age), date_trunc(Utf8("month"), person.birth_date) AS birth_date
     Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]
       TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_aggregate_on_non_selected_column() {
+    let sql = "SELECT state FROM person GROUP BY state ORDER BY MIN(age)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Sort: min(person.age) ASC NULLS LAST
+    Projection: person.state, min(person.age)
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age)]]
+        TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_multiple_aggregates_on_non_selected_columns() {
+    let sql =
+        "SELECT state FROM person GROUP BY state ORDER BY MIN(age), MAX(salary) DESC";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.state
+  Sort: min(person.age) ASC NULLS LAST, max(person.salary) DESC NULLS FIRST
+    Projection: person.state, min(person.age), max(person.salary)
+      Aggregate: groupBy=[[person.state]], aggr=[[min(person.age), max(person.salary)]]
+        TableScan: person
+"#
+    );
+}
+
+#[test]
+fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
+    let sql = "SELECT id FROM person GROUP BY id ORDER BY min(age)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+Projection: person.id
+  Sort: min(person.age) ASC NULLS LAST
+    Projection: person.id, min(person.age)
+      Aggregate: groupBy=[[person.id]], aggr=[[min(person.age)]]
+        TableScan: person
 "#
     );
 }
@@ -3617,8 +3667,7 @@ Projection: p.id
 
 #[test]
 fn scalar_subquery() {
-    let sql =
-        "SELECT p.id, (SELECT MAX(id) FROM person WHERE last_name = p.last_name) FROM person p";
+    let sql = "SELECT p.id, (SELECT MAX(id) FROM person WHERE last_name = p.last_name) FROM person p";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
@@ -3826,12 +3875,11 @@ fn order_by_unaliased_name() {
     assert_snapshot!(
         plan,
         @r#"
-Projection: z, q
-  Sort: p.state ASC NULLS LAST
-    Projection: p.state AS z, sum(p.age) AS q, p.state
-      Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
-        SubqueryAlias: p
-          TableScan: person
+Sort: z ASC NULLS LAST
+  Projection: p.state AS z, sum(p.age) AS q
+    Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]
+      SubqueryAlias: p
+        TableScan: person
 "#
     );
 }
@@ -3917,6 +3965,13 @@ Limit: skip=3, fetch=5
       TableScan: person
 "#
     );
+}
+
+#[test]
+fn fetch_clause_is_not_supported() {
+    let sql = "SELECT 1 FETCH NEXT 1 ROW ONLY";
+    let err = logical_plan(sql).unwrap_err();
+    assert_contains!(err.to_string(), "FETCH clause is not supported yet");
 }
 
 #[test]
@@ -4332,8 +4387,7 @@ fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str)
 
 #[test]
 fn select_order_by_with_cast() {
-    let sql =
-        "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
+    let sql = "SELECT first_name AS first_name FROM (SELECT first_name AS first_name FROM person) ORDER BY CAST(first_name as INT)";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,

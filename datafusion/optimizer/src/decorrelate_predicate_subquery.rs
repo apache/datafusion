@@ -27,14 +27,14 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{internal_err, plan_err, Column, Result};
+use datafusion_common::{Column, Result, assert_or_internal_err, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
-    exists, in_subquery, lit, not, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
-    LogicalPlan, LogicalPlanBuilder, Operator,
+    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
+    in_subquery, lit, not, not_exists, not_in_subquery,
 };
 
 use log::debug;
@@ -79,11 +79,10 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 .into_iter()
                 .partition(has_subquery);
 
-        if with_subqueries.is_empty() {
-            return internal_err!(
-                "can not find expected subqueries in DecorrelatePredicateSubquery"
-            );
-        }
+        assert_or_internal_err!(
+            !with_subqueries.is_empty(),
+            "can not find expected subqueries in DecorrelatePredicateSubquery"
+        );
 
         // iterate through all exists clauses in predicate, turning each into a join
         let mut cur_input = Arc::unwrap_or_clone(filter.input);
@@ -365,8 +364,8 @@ fn build_join(
             })),
         ) => {
             let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            in_predicate
+
+            Expr::eq(left.deref().clone(), Expr::Column(right_col))
         }
         (None, None) => lit(true),
         _ => return Ok(None),

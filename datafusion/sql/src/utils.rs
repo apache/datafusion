@@ -20,14 +20,14 @@
 use std::vec;
 
 use arrow::datatypes::{
-    DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
+    DECIMAL_DEFAULT_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType,
 };
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
+    Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
     assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
-    Column, DFSchemaRef, DataFusionError, Diagnostic, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
 use datafusion_expr::expr::{
@@ -35,7 +35,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
-    col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
+    ColumnUnnestList, Expr, ExprSchemable, LogicalPlan, col, expr_vec_fmt,
 };
 
 use indexmap::IndexMap;
@@ -97,6 +97,7 @@ pub(crate) enum CheckColumnsMustReferenceAggregatePurpose {
     Projection,
     Having,
     Qualify,
+    OrderBy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,11 +117,16 @@ impl CheckColumnsSatisfyExprsPurpose {
             Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::Qualify) => {
                 "Column in QUALIFY must be in GROUP BY or an aggregate function"
             }
+            Self::Aggregate(CheckColumnsMustReferenceAggregatePurpose::OrderBy) => {
+                "Column in ORDER BY must be in GROUP BY or an aggregate function"
+            }
         }
     }
 
     fn diagnostic_message(&self, expr: &Expr) -> String {
-        format!("'{expr}' must appear in GROUP BY clause because it's not an aggregate expression")
+        format!(
+            "'{expr}' must appear in GROUP BY clause because it's not an aggregate expression"
+        )
     }
 }
 
@@ -219,7 +225,8 @@ pub(crate) fn resolve_positions_to_exprs(
         }
         Expr::Literal(ScalarValue::Int64(Some(position)), _) => plan_err!(
             "Cannot find column with position {} in SELECT clause. Valid columns: 1 to {}",
-            position, select_exprs.len()
+            position,
+            select_exprs.len()
         ),
         _ => Ok(expr),
     }
@@ -288,7 +295,7 @@ pub(crate) fn make_decimal_type(
         (Some(p), Some(s)) => (p as u8, s as i8),
         (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
-            return plan_err!("Cannot specify only scale for decimal data type")
+            return plan_err!("Cannot specify only scale for decimal data type");
         }
         (None, None) => (DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
     };
@@ -417,8 +424,8 @@ impl RecursiveUnnestRewriter<'_> {
         // This is due to the fact that unnest transformation should keep the original
         // column name as is, to comply with group by and order by
         let placeholder_column = Column::from_name(placeholder_name.clone());
-
-        let (data_type, _) = expr_in_unnest.data_type_and_nullable(self.input_schema)?;
+        let field = expr_in_unnest.to_field(self.input_schema)?.1;
+        let data_type = field.data_type();
 
         match data_type {
             DataType::Struct(inner_fields) => {
@@ -432,12 +439,10 @@ impl RecursiveUnnestRewriter<'_> {
                 );
                 self.columns_unnestings
                     .insert(Column::from_name(placeholder_name.clone()), None);
-                Ok(
-                    get_struct_unnested_columns(&placeholder_name, &inner_fields)
-                        .into_iter()
-                        .map(Expr::Column)
-                        .collect(),
-                )
+                Ok(get_struct_unnested_columns(&placeholder_name, inner_fields)
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect())
             }
             DataType::List(_)
             | DataType::FixedSizeList(_, _)
@@ -478,8 +483,8 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
     ///   is used to detect if some recursive unnest expr exists (e.g **unnest(unnest(unnest(3d column))))**
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::Unnest(ref unnest_expr) = expr {
-            let (data_type, _) =
-                unnest_expr.expr.data_type_and_nullable(self.input_schema)?;
+            let field = unnest_expr.expr.to_field(self.input_schema)?.1;
+            let data_type = field.data_type();
             self.consecutive_unnest.push(Some(unnest_expr.clone()));
             // if expr inside unnest is a struct, do not consider
             // the next unnest as consecutive unnest (if any)
@@ -673,7 +678,7 @@ mod tests {
     use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
-        col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,
+        ColumnUnnestList, EmptyRelation, LogicalPlan, col, lit, unnest,
     };
     use datafusion_functions::core::expr_ext::FieldAccessor;
     use datafusion_functions_aggregate::expr_fn::count;
@@ -745,13 +750,15 @@ mod tests {
         // Only the bottom most unnest exprs are transformed
         assert_eq!(
             transformed_exprs,
-            vec![col("__unnest_placeholder(3d_col,depth=2)")
-                .alias("UNNEST(UNNEST(3d_col))")
-                .add(
-                    col("__unnest_placeholder(3d_col,depth=2)")
-                        .alias("UNNEST(UNNEST(3d_col))")
-                )
-                .add(col("i64_col"))]
+            vec![
+                col("__unnest_placeholder(3d_col,depth=2)")
+                    .alias("UNNEST(UNNEST(3d_col))")
+                    .add(
+                        col("__unnest_placeholder(3d_col,depth=2)")
+                            .alias("UNNEST(UNNEST(3d_col))")
+                    )
+                    .add(col("i64_col"))
+            ]
         );
         column_unnests_eq(
             vec![
@@ -787,7 +794,9 @@ mod tests {
             ]
         );
         column_unnests_eq(
-            vec!["__unnest_placeholder(3d_col)=>[__unnest_placeholder(3d_col,depth=2)|depth=2, __unnest_placeholder(3d_col,depth=1)|depth=1]"],
+            vec![
+                "__unnest_placeholder(3d_col)=>[__unnest_placeholder(3d_col,depth=2)|depth=2, __unnest_placeholder(3d_col,depth=1)|depth=1]",
+            ],
             &unnest_placeholder_columns,
         );
         // Still reference struct_col in original schema but with alias,
@@ -879,9 +888,11 @@ mod tests {
         // Only transform the unnest children
         assert_eq!(
             transformed_exprs,
-            vec![col("__unnest_placeholder(array_col,depth=1)")
-                .alias("UNNEST(array_col)")
-                .add(lit(1i64))]
+            vec![
+                col("__unnest_placeholder(array_col,depth=1)")
+                    .alias("UNNEST(array_col)")
+                    .add(lit(1i64))
+            ]
         );
 
         // Keep appending to the current vector

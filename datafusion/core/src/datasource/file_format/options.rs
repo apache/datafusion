@@ -523,6 +523,12 @@ impl<'a> NdJsonReadOptions<'a> {
         self.file_sort_order = file_sort_order;
         self
     }
+
+    /// Specify how many rows to read for schema inference
+    pub fn schema_infer_max_records(mut self, schema_infer_max_records: usize) -> Self {
+        self.schema_infer_max_records = schema_infer_max_records;
+        self
+    }
 }
 
 #[async_trait]

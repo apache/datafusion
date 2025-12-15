@@ -40,6 +40,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 // Initialize the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
+#[expect(clippy::needless_pass_by_value)]
 fn sort_preserving_merge_operator(
     session_ctx: Arc<SessionContext>,
     rt: &Runtime,
