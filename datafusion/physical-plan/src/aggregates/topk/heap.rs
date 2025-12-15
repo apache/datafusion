@@ -240,9 +240,10 @@ impl ArrowHeap for StringHeap {
         if !self.heap.is_full() {
             return false;
         }
-        let new_val = self.value(row_idx).to_string();
+        let new_val = self.value(row_idx);
         let worst_val = self.heap.worst_val().expect("Missing root");
-        (!self.desc && new_val > *worst_val) || (self.desc && new_val < *worst_val)
+        (!self.desc && new_val > worst_val.as_str())
+            || (self.desc && new_val < worst_val.as_str())
     }
 
     fn worst_map_idx(&self) -> usize {
@@ -264,7 +265,22 @@ impl ArrowHeap for StringHeap {
         row_idx: usize,
         map: &mut Vec<(usize, usize)>,
     ) {
-        let new_val = self.value(row_idx).to_string();
+        // Compare borrowed &str before allocating to avoid unnecessary allocations
+        // when the new value doesn't improve the heap
+        let new_str = self.value(row_idx);
+        let existing = self.heap.heap[heap_idx]
+            .as_ref()
+            .expect("Missing heap item");
+
+        // Early exit if new value doesn't improve existing value
+        if (!self.desc && new_str.cmp(existing.val.as_str()) != Ordering::Less)
+            || (self.desc && new_str.cmp(existing.val.as_str()) != Ordering::Greater)
+        {
+            return;
+        }
+
+        // Only allocate when we know we'll update the heap
+        let new_val = new_str.to_string();
         self.heap.replace_if_better(heap_idx, new_val, map);
     }
 
