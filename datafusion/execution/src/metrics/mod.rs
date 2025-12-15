@@ -22,14 +22,13 @@ mod builder;
 mod custom;
 mod value;
 
+use datafusion_common::HashMap;
 use parking_lot::Mutex;
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
     sync::Arc,
 };
-
-use crate::HashMap;
 
 // public exports
 
@@ -48,7 +47,7 @@ pub use value::{
 /// [`ExecutionPlanMetricsSet`].
 ///
 /// ```
-/// use datafusion_common::metrics::*;
+/// use datafusion_execution::metrics::*;
 ///
 /// let metrics = ExecutionPlanMetricsSet::new();
 /// assert!(metrics.clone_inner().output_rows().is_none());

@@ -71,7 +71,6 @@ indexmap = { workspace = true }
 libc = "0.2.177"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }
-parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = { workspace = true }
 recursive = { workspace = true, optional = true }

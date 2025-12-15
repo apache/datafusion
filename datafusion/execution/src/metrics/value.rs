@@ -18,9 +18,10 @@
 //! Value representation of metrics
 
 use super::CustomMetricValue;
-use crate::instant::Instant;
-use crate::{human_readable_count, human_readable_duration, human_readable_size};
 use chrono::{DateTime, Utc};
+use datafusion_common::{
+    human_readable_count, human_readable_duration, human_readable_size, instant::Instant,
+};
 use parking_lot::Mutex;
 use std::{
     borrow::{Borrow, Cow},
@@ -1031,8 +1032,8 @@ impl Display for MetricValue {
 mod tests {
     use std::any::Any;
 
-    use crate::units::MB;
     use chrono::TimeZone;
+    use datafusion_common::units::MB;
 
     use super::*;
 

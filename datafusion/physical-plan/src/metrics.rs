@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Metrics were moved to `datafusion-common`, but this module continues to
-//! re-export them to keep the public APIs stable.
+//! Metrics live in `datafusion-execution`; this module re-exports them to keep
+//! the public APIs stable.
 
-pub use datafusion_common::metrics::*;
+pub use datafusion_execution::metrics::*;

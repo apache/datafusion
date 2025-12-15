@@ -20,17 +20,16 @@
 use std::task::Poll;
 
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{Result, utils::memory::get_record_batch_memory_size};
 
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
-use crate::Result;
-use crate::utils::memory::get_record_batch_memory_size;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator
 ///
 /// Example:
 /// ```
-/// use datafusion_common::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+/// use datafusion_execution::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 /// let metrics = ExecutionPlanMetricsSet::new();
 ///
 /// let partition = 2;
