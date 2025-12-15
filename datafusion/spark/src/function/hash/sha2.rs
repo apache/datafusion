@@ -100,11 +100,27 @@ impl ScalarUDFImpl for SparkSha2 {
             }
         };
 
+        let scalar_null_present = args
+            .scalar_arguments
+            .iter()
+            .any(|scalar| scalar.is_some_and(|s| s.is_null()));
+
+        let unsupported_bit_length_literal = args
+            .scalar_arguments
+            .get(1)
+            .and_then(|opt| *opt)
+            .and_then(|scalar| match scalar {
+                // Supported bit_lengths: 0, 224, 256, 384, 512
+                ScalarValue::Int32(Some(v)) => {
+                    Some(!matches!(v, 0 | 224 | 256 | 384 | 512))
+                }
+                _ => None,
+            })
+            .unwrap_or(false);
+
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
-            || args
-                .scalar_arguments
-                .iter()
-                .any(|scalar| scalar.is_some_and(|s| s.is_null()));
+            || scalar_null_present
+            || unsupported_bit_length_literal;
 
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
@@ -313,6 +329,17 @@ mod tests {
                 Arc::new(Field::new("bit_length", DataType::Int32, false)),
             ],
             scalar_arguments: &[None, Some(&null_scalar)],
+        })?;
+        assert!(out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Utf8);
+
+        let unsupported_scalar = ScalarValue::Int32(Some(128));
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[
+                Arc::new(Field::new("expr", DataType::Binary, false)),
+                Arc::new(Field::new("bit_length", DataType::Int32, false)),
+            ],
+            scalar_arguments: &[None, Some(&unsupported_scalar)],
         })?;
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);
