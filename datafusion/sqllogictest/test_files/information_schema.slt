@@ -274,7 +274,7 @@ datafusion.execution.time_zone NULL
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false
 datafusion.explain.analyze_level dev
 datafusion.explain.auto_explain false
-datafusion.explain.auto_explain_min_duration 0
+datafusion.explain.auto_explain_min_duration_ms 0
 datafusion.explain.auto_explain_output stdout
 datafusion.explain.format indent
 datafusion.explain.logical_plan_only false
@@ -407,8 +407,8 @@ datafusion.execution.target_partitions 7 Number of partitions for query executio
 datafusion.execution.time_zone NULL The default time zone Some functions, e.g. `now` return timestamps in this time zone
 datafusion.execution.use_row_number_estimates_to_optimize_partitioning false Should DataFusion use row number estimates at the input to decide whether increasing parallelism is beneficial or not. By default, only exact row numbers (not estimates) are used for this decision. Setting this flag to `true` will likely produce better plans. if the source of statistics is accurate. We plan to make this the default in the future.
 datafusion.explain.analyze_level dev Verbosity level for "EXPLAIN ANALYZE". Default is "dev" "summary" shows common metrics for high-level insights. "dev" provides deep operator-level introspection for developers.
-datafusion.explain.auto_explain false Whether to enable the `auto_explain` mode. In this mode, the execution plan is automatically written to the location set by `auto_explain_output`, if the plan's total duration is greater or equal to `auto_explain_min_duration`, in milliseconds.
-datafusion.explain.auto_explain_min_duration 0 In the `auto_explain` mode, only output plans if their duration is bigger than this value, in milliseconds.
+datafusion.explain.auto_explain false Whether to enable the `auto_explain` mode. In this mode, the execution plan is automatically written to the location set by `auto_explain_output`, if the plan's total duration is greater or equal to `auto_explain_min_duration_ms`.
+datafusion.explain.auto_explain_min_duration_ms 0 In the `auto_explain` mode, only output plans if their duration is bigger than or equal to this value (milliseconds).
 datafusion.explain.auto_explain_output stdout Output location used in the `auto_explain` mode. Supports `stdout`, `stderr`, or a file path (file is created if it does not exist; plans are appended to the file).
 datafusion.explain.format indent Display format of explain. Default is "indent". When set to "tree", it will print the plan in a tree-rendered format.
 datafusion.explain.logical_plan_only false When set to true, the explain statement will only print logical plans

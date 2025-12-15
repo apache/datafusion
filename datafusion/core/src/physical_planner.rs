@@ -1627,7 +1627,9 @@ impl DefaultPhysicalPlanner {
         );
         plan.enable_auto_explain();
         plan.set_auto_explain_output(options.explain.auto_explain_output.clone());
-        plan.set_auto_explain_min_duration(options.explain.auto_explain_min_duration);
+        plan.set_auto_explain_min_duration_ms(
+            options.explain.auto_explain_min_duration_ms,
+        );
         Arc::new(plan)
     }
 }

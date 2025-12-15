@@ -68,7 +68,7 @@ pub struct AnalyzeExec {
     auto_explain_output: String,
     /// In the `auto_explain` mode, only output if the execution is greater or equal to this value,
     /// in milliseconds. (default=0)
-    auto_explain_min_duration: usize,
+    auto_explain_min_duration_ms: usize,
 }
 
 impl AnalyzeExec {
@@ -90,7 +90,7 @@ impl AnalyzeExec {
             cache,
             auto_explain: false,
             auto_explain_output: "stdout".to_owned(),
-            auto_explain_min_duration: 0,
+            auto_explain_min_duration_ms: 0,
         }
     }
 
@@ -133,7 +133,7 @@ impl AnalyzeExec {
     }
 
     pub fn set_auto_explain_min_duration_ms(&mut self, value: usize) {
-        self.auto_explain_min_duration = value
+        self.auto_explain_min_duration_ms = value
     }
 }
 
@@ -192,7 +192,7 @@ impl ExecutionPlan for AnalyzeExec {
         if self.auto_explain {
             plan.enable_auto_explain();
             plan.set_auto_explain_output(self.auto_explain_output.clone());
-            plan.set_auto_explain_min_duration(self.auto_explain_min_duration);
+            plan.set_auto_explain_min_duration_ms(self.auto_explain_min_duration_ms);
         }
 
         Ok(Arc::new(plan))
@@ -240,7 +240,7 @@ impl ExecutionPlan for AnalyzeExec {
         let inner_schema = Arc::clone(&self.input.schema());
         let auto_explain = self.auto_explain;
         let auto_explain_output = self.auto_explain_output.clone();
-        let auto_explain_min_duration = self.auto_explain_min_duration;
+        let auto_explain_min_duration_ms = self.auto_explain_min_duration_ms;
 
         let output = async move {
             let mut batches = vec![];
@@ -265,7 +265,7 @@ impl ExecutionPlan for AnalyzeExec {
             )?;
 
             if auto_explain {
-                if duration.as_millis() >= auto_explain_min_duration as u128 {
+                if duration.as_millis() >= auto_explain_min_duration_ms as u128 {
                     export_auto_explain(out, &auto_explain_output)?;
                 }
                 concat_batches(&inner_schema, &batches).map_err(DataFusionError::from)
@@ -459,7 +459,7 @@ mod tests {
         ");
 
         // check that with a longer runtime a new plan is not printed
-        analyze_exec.set_auto_explain_min_duration(1000000);
+        analyze_exec.set_auto_explain_min_duration_ms(1000000);
         collect(Arc::new(analyze_exec.clone()), Arc::clone(&task_ctx)).await?;
         assert_snapshot!(fs::read_to_string(&output_path)?,
         @r"
@@ -472,7 +472,7 @@ mod tests {
         ");
 
         // test again with the default min duration
-        analyze_exec.set_auto_explain_min_duration(0);
+        analyze_exec.set_auto_explain_min_duration_ms(0);
         collect(Arc::new(analyze_exec.clone()), Arc::clone(&task_ctx)).await?;
         assert_snapshot!(fs::read_to_string(&output_path)?,
         @r"

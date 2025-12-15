@@ -1120,16 +1120,16 @@ config_namespace! {
 
         /// Whether to enable the `auto_explain` mode. In this mode, the execution plan is
         /// automatically written to the location set by `auto_explain_output`, if the plan's total
-        /// duration is greater or equal to `auto_explain_min_duration`, in milliseconds.
+        /// duration is greater or equal to `auto_explain_min_duration_ms`.
         pub auto_explain: bool, default = false
 
         /// Output location used in the `auto_explain` mode. Supports `stdout`, `stderr`, or a file
         /// path (file is created if it does not exist; plans are appended to the file).
         pub auto_explain_output: String, default = "stdout".to_owned()
 
-        /// In the `auto_explain` mode, only output plans if their duration is bigger than or equal to this
-        /// value, in milliseconds.
-        pub auto_explain_min_duration: usize, default = 0
+        /// In the `auto_explain` mode, only output plans if their duration is bigger than or equal
+        /// to this value (milliseconds).
+        pub auto_explain_min_duration_ms: usize, default = 0
     }
 }
 
