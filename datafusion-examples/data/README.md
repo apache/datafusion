@@ -18,6 +18,7 @@
 -->
 
 ## Example datasets
+
 | Filename                 | Path                                                                      | Description                                                                                                                                                                                                                  |
 | ------------------------ | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `aggregate_test_100.csv` | [`data/csv/aggregate_test_100.csv`](./csv/aggregate_test_100.csv)         | Multi-column CSV dataset with mixed data types (strings, signed/unsigned integers, floats, doubles). Used for aggregation, projection, filtering, and query planning examples. Derived from Arrow-style aggregate test data. |
