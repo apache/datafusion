@@ -133,9 +133,8 @@ impl ScalarUDFImpl for SparkWidthBucket {
         internal_err!("return_field_from_args should be used instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-        Ok(Arc::new(Field::new(self.name(), Int32, nullable)))
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), Int32, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -795,7 +794,7 @@ mod tests {
 
         let func = SparkWidthBucket::new();
 
-        // Test with all non-nullable args - result should be non-nullable
+        // Test with all non-nullable args - result should always be nullable (Spark behavior)
         let non_nullable_v: FieldRef = Arc::new(Field::new("v", Float64, false));
         let non_nullable_lo: FieldRef = Arc::new(Field::new("lo", Float64, false));
         let non_nullable_hi: FieldRef = Arc::new(Field::new("hi", Float64, false));
@@ -811,11 +810,11 @@ mod tests {
             scalar_arguments: &[None, None, None, None],
         })?;
         assert!(
-            !result.is_nullable(),
-            "width_bucket should NOT be nullable when all args are non-nullable"
+            result.is_nullable(),
+            "width_bucket should always be nullable to match Spark behavior"
         );
 
-        // Test with nullable value - result should be nullable
+        // Test with nullable value - result should still be nullable
         let nullable_v: FieldRef = Arc::new(Field::new("v", Float64, true));
         let result = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[
@@ -828,7 +827,7 @@ mod tests {
         })?;
         assert!(
             result.is_nullable(),
-            "width_bucket should be nullable when any arg is nullable"
+            "width_bucket should always be nullable to match Spark behavior"
         );
 
         Ok(())
