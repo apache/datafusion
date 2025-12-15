@@ -132,7 +132,7 @@ impl AnalyzeExec {
         self.auto_explain_output = value
     }
 
-    pub fn set_auto_explain_min_duration(&mut self, value: usize) {
+    pub fn set_auto_explain_min_duration_ms(&mut self, value: usize) {
         self.auto_explain_min_duration = value
     }
 }
