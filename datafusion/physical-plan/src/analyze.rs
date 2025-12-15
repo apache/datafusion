@@ -181,13 +181,21 @@ impl ExecutionPlan for AnalyzeExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self::new(
+        let mut plan = Self::new(
             self.verbose,
             self.show_statistics,
             self.metric_types.clone(),
             children.pop().unwrap(),
             Arc::clone(&self.schema),
-        )))
+        );
+
+        if self.auto_explain {
+            plan.enable_auto_explain();
+            plan.set_auto_explain_output(self.auto_explain_output.clone());
+            plan.set_auto_explain_min_duration(self.auto_explain_min_duration);
+        }
+
+        Ok(Arc::new(plan))
     }
 
     fn execute(
