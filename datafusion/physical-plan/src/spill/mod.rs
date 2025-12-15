@@ -21,6 +21,8 @@ pub(crate) mod in_progress_spill_file;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
 
+// Moved for refactor, re-export to keep the public API stable
+pub use datafusion_common::utils::memory::get_record_batch_memory_size;
 // Re-export SpillManager for doctests only (hidden from public docs)
 #[doc(hidden)]
 pub use spill_manager::SpillManager;
@@ -29,11 +31,10 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::ptr::NonNull;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{ArrayData, BufferSpec, layout};
+use arrow::array::{BufferSpec, layout};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{
     MetadataVersion,
@@ -43,7 +44,7 @@ use arrow::ipc::{
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::config::SpillCompression;
-use datafusion_common::{DataFusionError, HashSet, Result, exec_datafusion_err};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::RecordBatchStream;
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -250,74 +251,6 @@ pub fn spill_record_batch_by_size(
     Ok(())
 }
 
-/// Calculate total used memory of this batch.
-///
-/// This function is used to estimate the physical memory usage of the `RecordBatch`.
-/// It only counts the memory of large data `Buffer`s, and ignores metadata like
-/// types and pointers.
-/// The implementation will add up all unique `Buffer`'s memory
-/// size, due to:
-/// - The data pointer inside `Buffer` are memory regions returned by global memory
-///   allocator, those regions can't have overlap.
-/// - The actual used range of `ArrayRef`s inside `RecordBatch` can have overlap
-///   or reuse the same `Buffer`. For example: taking a slice from `Array`.
-///
-/// Example:
-/// For a `RecordBatch` with two columns: `col1` and `col2`, two columns are pointing
-/// to a sub-region of the same buffer.
-///
-/// {xxxxxxxxxxxxxxxxxxx} <--- buffer
-///       ^    ^  ^    ^
-///       |    |  |    |
-/// col1->{    }  |    |
-/// col2--------->{    }
-///
-/// In the above case, `get_record_batch_memory_size` will return the size of
-/// the buffer, instead of the sum of `col1` and `col2`'s actual memory size.
-///
-/// Note: Current `RecordBatch`.get_array_memory_size()` will double count the
-/// buffer memory size if multiple arrays within the batch are sharing the same
-/// `Buffer`. This method provides temporary fix until the issue is resolved:
-/// <https://github.com/apache/arrow-rs/issues/6439>
-pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
-    // Store pointers to `Buffer`'s start memory address (instead of actual
-    // used data region's pointer represented by current `Array`)
-    let mut counted_buffers: HashSet<NonNull<u8>> = HashSet::new();
-    let mut total_size = 0;
-
-    for array in batch.columns() {
-        let array_data = array.to_data();
-        count_array_data_memory_size(&array_data, &mut counted_buffers, &mut total_size);
-    }
-
-    total_size
-}
-
-/// Count the memory usage of `array_data` and its children recursively.
-fn count_array_data_memory_size(
-    array_data: &ArrayData,
-    counted_buffers: &mut HashSet<NonNull<u8>>,
-    total_size: &mut usize,
-) {
-    // Count memory usage for `array_data`
-    for buffer in array_data.buffers() {
-        if counted_buffers.insert(buffer.data_ptr()) {
-            *total_size += buffer.capacity();
-        } // Otherwise the buffer's memory is already counted
-    }
-
-    if let Some(null_buffer) = array_data.nulls()
-        && counted_buffers.insert(null_buffer.inner().inner().data_ptr())
-    {
-        *total_size += null_buffer.inner().inner().capacity();
-    }
-
-    // Count all children `ArrayData` recursively
-    for child in array_data.child_data() {
-        count_array_data_memory_size(child, counted_buffers, total_size);
-    }
-}
-
 /// Write in Arrow IPC Stream format to a file.
 ///
 /// Stream format is used for spill because it supports dictionary replacement, and the random
@@ -415,9 +348,9 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
-    use arrow::array::{ArrayRef, Float64Array, Int32Array, ListArray, StringArray};
+    use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::compute::cast;
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
     use datafusion_execution::runtime_env::RuntimeEnv;
@@ -663,133 +596,6 @@ mod tests {
         )
         .await?;
         Ok(())
-    }
-
-    #[test]
-    fn test_get_record_batch_memory_size() {
-        // Create a simple record batch with two columns
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("ints", DataType::Int32, true),
-            Field::new("float64", DataType::Float64, false),
-        ]));
-
-        let int_array =
-            Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4), Some(5)]);
-        let float64_array = Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0]);
-
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(int_array), Arc::new(float64_array)],
-        )
-        .unwrap();
-
-        let size = get_record_batch_memory_size(&batch);
-        assert_eq!(size, 60);
-    }
-
-    #[test]
-    fn test_get_record_batch_memory_size_with_null() {
-        // Create a simple record batch with two columns
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("ints", DataType::Int32, true),
-            Field::new("float64", DataType::Float64, false),
-        ]));
-
-        let int_array = Int32Array::from(vec![None, Some(2), Some(3)]);
-        let float64_array = Float64Array::from(vec![1.0, 2.0, 3.0]);
-
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(int_array), Arc::new(float64_array)],
-        )
-        .unwrap();
-
-        let size = get_record_batch_memory_size(&batch);
-        assert_eq!(size, 100);
-    }
-
-    #[test]
-    fn test_get_record_batch_memory_size_empty() {
-        // Test with empty record batch
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "ints",
-            DataType::Int32,
-            false,
-        )]));
-
-        let int_array: Int32Array = Int32Array::from(vec![] as Vec<i32>);
-        let batch = RecordBatch::try_new(schema, vec![Arc::new(int_array)]).unwrap();
-
-        let size = get_record_batch_memory_size(&batch);
-        assert_eq!(size, 0, "Empty batch should have 0 memory size");
-    }
-
-    #[test]
-    fn test_get_record_batch_memory_size_shared_buffer() {
-        // Test with slices that share the same underlying buffer
-        let original = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let slice1 = original.slice(0, 3);
-        let slice2 = original.slice(2, 3);
-
-        // `RecordBatch` with `original` array
-        // ----
-        let schema_origin = Arc::new(Schema::new(vec![Field::new(
-            "origin_col",
-            DataType::Int32,
-            false,
-        )]));
-        let batch_origin =
-            RecordBatch::try_new(schema_origin, vec![Arc::new(original)]).unwrap();
-
-        // `RecordBatch` with all columns are reference to `original` array
-        // ----
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("slice1", DataType::Int32, false),
-            Field::new("slice2", DataType::Int32, false),
-        ]));
-
-        let batch_sliced =
-            RecordBatch::try_new(schema, vec![Arc::new(slice1), Arc::new(slice2)])
-                .unwrap();
-
-        // Two sizes should all be only counting the buffer in `original` array
-        let size_origin = get_record_batch_memory_size(&batch_origin);
-        let size_sliced = get_record_batch_memory_size(&batch_sliced);
-
-        assert_eq!(size_origin, size_sliced);
-    }
-
-    #[test]
-    fn test_get_record_batch_memory_size_nested_array() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "nested_int",
-                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
-                false,
-            ),
-            Field::new(
-                "nested_int2",
-                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
-                false,
-            ),
-        ]));
-
-        let int_list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(1), Some(2), Some(3)]),
-        ]);
-
-        let int_list_array2 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(4), Some(5), Some(6)]),
-        ]);
-
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(int_list_array), Arc::new(int_list_array2)],
-        )
-        .unwrap();
-
-        let size = get_record_batch_memory_size(&batch);
-        assert_eq!(size, 8208);
     }
 
     // ==== Spill manager tests ====

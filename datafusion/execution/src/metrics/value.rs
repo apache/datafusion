@@ -19,9 +19,8 @@
 
 use super::CustomMetricValue;
 use chrono::{DateTime, Utc};
-use datafusion_common::instant::Instant;
 use datafusion_common::{
-    human_readable_count, human_readable_duration, human_readable_size,
+    human_readable_count, human_readable_duration, human_readable_size, instant::Instant,
 };
 use parking_lot::Mutex;
 use std::{

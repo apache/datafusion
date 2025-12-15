@@ -607,4 +607,88 @@ mod test {
         // wait_complete should return immediately
         dynamic_filter.wait_complete().await;
     }
+
+    #[test]
+    fn test_with_new_children_independence() {
+        // Create a schema with columns a, b, c, d
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+
+        // Create expression col(a) + col(b)
+        let col_a = col("a", &schema).unwrap();
+        let col_b = col("b", &schema).unwrap();
+        let col_c = col("c", &schema).unwrap();
+        let col_d = col("d", &schema).unwrap();
+
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::Plus,
+            Arc::clone(&col_b),
+        ));
+
+        // Create DynamicFilterPhysicalExpr with children [col_a, col_b]
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            expr as Arc<dyn PhysicalExpr>,
+        ));
+
+        // Clone the Arc (two references to the same DynamicFilterPhysicalExpr)
+        let clone_1 = Arc::clone(&dynamic_filter);
+        let clone_2 = Arc::clone(&dynamic_filter);
+
+        // Call with_new_children with different children on each clone
+        // clone_1: replace [a, b] with [b, c] -> expression becomes b + c
+        let remapped_1 = clone_1
+            .with_new_children(vec![Arc::clone(&col_b), Arc::clone(&col_c)])
+            .unwrap();
+
+        // clone_2: replace [a, b] with [b, d] -> expression becomes b + d
+        let remapped_2 = clone_2
+            .with_new_children(vec![Arc::clone(&col_b), Arc::clone(&col_d)])
+            .unwrap();
+
+        // Create a RecordBatch with columns a=1,2,3  b=10,20,30  c=100,200,300  d=1000,2000,3000
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])), // a
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])), // b
+                Arc::new(arrow::array::Int32Array::from(vec![100, 200, 300])), // c
+                Arc::new(arrow::array::Int32Array::from(vec![1000, 2000, 3000])), // d
+            ],
+        )
+        .unwrap();
+
+        // Evaluate both remapped expressions
+        let result_1 = remapped_1.evaluate(&batch).unwrap();
+        let result_2 = remapped_2.evaluate(&batch).unwrap();
+
+        // Extract arrays from results
+        let ColumnarValue::Array(arr_1) = result_1 else {
+            panic!("Expected ColumnarValue::Array for result_1");
+        };
+        let ColumnarValue::Array(arr_2) = result_2 else {
+            panic!("Expected ColumnarValue::Array for result_2");
+        };
+
+        // Verify result_1 = b + c = [110, 220, 330]
+        let expected_1: Arc<dyn arrow::array::Array> =
+            Arc::new(arrow::array::Int32Array::from(vec![110, 220, 330]));
+        assert!(
+            arr_1.eq(&expected_1),
+            "Expected b + c = [110, 220, 330], got {arr_1:?}",
+        );
+
+        // Verify result_2 = b + d = [1010, 2020, 3030]
+        let expected_2: Arc<dyn arrow::array::Array> =
+            Arc::new(arrow::array::Int32Array::from(vec![1010, 2020, 3030]));
+        assert!(
+            arr_2.eq(&expected_2),
+            "Expected b + d = [1010, 2020, 3030], got {arr_2:?}",
+        );
+    }
 }
