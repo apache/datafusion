@@ -24,9 +24,9 @@ use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
 
 use crate::PhysicalOptimizerRule;
 use itertools::Itertools;
@@ -113,17 +113,15 @@ impl LimitedDistinctAggregation {
                 return Ok(Transformed::no(plan));
             }
             if let Some(aggr) = plan.as_any().downcast_ref::<AggregateExec>() {
-                if found_match_aggr {
-                    if let Some(parent_aggr) =
+                if found_match_aggr
+                    && let Some(parent_aggr) =
                         match_aggr.as_any().downcast_ref::<AggregateExec>()
-                    {
-                        if !parent_aggr.group_expr().eq(aggr.group_expr()) {
-                            // a partial and final aggregation with different groupings disqualifies
-                            // rewriting the child aggregation
-                            rewrite_applicable = false;
-                            return Ok(Transformed::no(plan));
-                        }
-                    }
+                    && !parent_aggr.group_expr().eq(aggr.group_expr())
+                {
+                    // a partial and final aggregation with different groupings disqualifies
+                    // rewriting the child aggregation
+                    rewrite_applicable = false;
+                    return Ok(Transformed::no(plan));
                 }
                 // either we run into an Aggregate and transform it, or disable the rewrite
                 // for subsequent children

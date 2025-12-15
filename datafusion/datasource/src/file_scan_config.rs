@@ -730,6 +730,7 @@ impl DataSource for FileScanConfig {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
             // Get statistics for a specific partition
+            // Note: FileGroup statistics include partition columns (computed from partition_values)
             if let Some(file_group) = self.file_groups.get(partition)
                 && let Some(stat) = file_group.file_statistics(None)
             {
