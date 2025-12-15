@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Extending DataFusion's SQL Syntax
+# Extending SQL Syntax
 
 DataFusion provides a flexible extension system that allows you to customize SQL
 parsing and planning without modifying the core codebase. This is useful when you
@@ -32,9 +32,10 @@ need to:
 When DataFusion processes a SQL query, it goes through these stages:
 
 ```text
-┌─────────────┐    ┌─────────┐    ┌───────────────────────────────┐    ┌─────────────┐
-│ SQL String  │───▶│ Parser  │───▶│ SqlToRel (SQL to LogicalPlan) │───▶│ LogicalPlan │
-└─────────────┘    └─────────┘    └───────────────────────────────┘    └─────────────┘
+┌─────────────┐    ┌─────────┐    ┌──────────────────────┐    ┌─────────────┐
+│ SQL String  │───▶│ Parser  │───▶│      SqlToRel        │───▶│ LogicalPlan │
+└─────────────┘    └─────────┘    │ (SQL to LogicalPlan) │    └─────────────┘
+                                  └──────────────────────┘
                                               │
                                               │ uses
                                               ▼
@@ -54,13 +55,13 @@ logical plan.
 
 DataFusion provides three planner traits for extending SQL:
 
-| Trait             | Purpose                                 | Registration Method                        |
-| ----------------- | --------------------------------------- | ------------------------------------------ |
-| `ExprPlanner`     | Custom expressions and operators        | `ctx.register_expr_planner()`              |
-| `TypePlanner`     | Custom SQL data types                   | `SessionStateBuilder::with_type_planner()` |
-| `RelationPlanner` | Custom FROM clause elements (relations) | `ctx.register_relation_planner()`          |
+| Trait               | Purpose                                 | Registration Method                        |
+| ------------------- | --------------------------------------- | ------------------------------------------ |
+| [`ExprPlanner`]     | Custom expressions and operators        | `ctx.register_expr_planner()`              |
+| [`TypePlanner`]     | Custom SQL data types                   | `SessionStateBuilder::with_type_planner()` |
+| [`RelationPlanner`] | Custom FROM clause elements (relations) | `ctx.register_relation_planner()`          |
 
-**Planner Precedence**: Multiple `ExprPlanner`s and `RelationPlanner`s can be
+**Planner Precedence**: Multiple [`ExprPlanner`]s and [`RelationPlanner`]s can be
 registered; they are invoked in reverse registration order (last registered wins).
 Return `Original(...)` to delegate to the next planner. Only one `TypePlanner`
 can be active at a time.
@@ -91,14 +92,14 @@ See the [ExprPlanner API documentation] for full method signatures.
 This example maps the `->` operator to string concatenation:
 
 ```rust
-use std::sync::Arc;
-use datafusion::common::DFSchema;
-use datafusion::error::Result;
-use datafusion::logical_expr::Operator;
-use datafusion::prelude::*;
-use datafusion::sql::sqlparser::ast::BinaryOperator;
+# use std::sync::Arc;
+# use datafusion::common::DFSchema;
+# use datafusion::error::Result;
+# use datafusion::logical_expr::Operator;
+# use datafusion::prelude::*;
+# use datafusion::sql::sqlparser::ast::BinaryOperator;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
-use datafusion_expr::BinaryExpr;
+# use datafusion_expr::BinaryExpr;
 
 #[derive(Debug)]
 struct MyCustomPlanner;
@@ -151,13 +152,13 @@ when you need to support SQL types that aren't natively recognized.
 #### Example: Custom DATETIME Type
 
 ```rust
-use std::sync::Arc;
-use arrow::datatypes::{DataType, TimeUnit};
-use datafusion::error::Result;
-use datafusion::prelude::*;
-use datafusion::execution::SessionStateBuilder;
+# use std::sync::Arc;
+# use arrow::datatypes::{DataType, TimeUnit};
+# use datafusion::error::Result;
+# use datafusion::prelude::*;
+# use datafusion::execution::SessionStateBuilder;
 use datafusion_expr::planner::TypePlanner;
-use sqlparser::ast;
+# use sqlparser::ast;
 
 #[derive(Debug)]
 struct MyTypePlanner;
@@ -210,7 +211,7 @@ enables you to implement SQL constructs like:
 
 #### The RelationPlannerContext
 
-When implementing `RelationPlanner`, you receive a `RelationPlannerContext` that
+When implementing [`RelationPlanner`], you receive a [`RelationPlannerContext`] that
 provides utilities for planning:
 
 | Method                      | Purpose                                         |
@@ -224,22 +225,22 @@ See the [RelationPlanner API documentation] for additional methods like
 
 #### Implementation Strategies
 
-There are two main approaches when implementing a `RelationPlanner`:
+There are two main approaches when implementing a [`RelationPlanner`]:
 
 1. **Rewrite to Standard SQL**: Transform custom syntax into equivalent standard
    operations that DataFusion already knows how to execute (e.g., PIVOT → GROUP BY
    with CASE expressions). This is the simplest approach when possible.
 
-2. **Custom Logical and Physical Nodes**: Create a `UserDefinedLogicalNode` to
-   represent the operation in the logical plan, along with a custom `ExecutionPlan`
+2. **Custom Logical and Physical Nodes**: Create a [`UserDefinedLogicalNode`] to
+   represent the operation in the logical plan, along with a custom [`ExecutionPlan`]
    to execute it. Both are required for end-to-end execution.
 
 #### Example: Basic RelationPlanner Structure
 
 ```rust
-use std::sync::Arc;
-use datafusion::error::Result;
-use datafusion::prelude::*;
+# use std::sync::Arc;
+# use datafusion::error::Result;
+# use datafusion::prelude::*;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
@@ -290,12 +291,8 @@ approach:
 
 ### TABLESAMPLE (Custom Logical and Physical Nodes)
 
-The [table_sample.rs] example shows a complete end-to-end implementation including:
-
-- Parsing TABLESAMPLE syntax via `RelationPlanner`
-- Custom logical node (`TableSamplePlanNode`)
-- Custom physical operator (`SampleExec`)
-- Bernoulli sampling with reproducible seeds
+The [table_sample.rs] example shows a complete end-to-end implementation of how to
+support queries such as:
 
 ```sql
 SELECT * FROM table TABLESAMPLE BERNOULLI(10 PERCENT) REPEATABLE(42)
@@ -303,10 +300,8 @@ SELECT * FROM table TABLESAMPLE BERNOULLI(10 PERCENT) REPEATABLE(42)
 
 ### PIVOT/UNPIVOT (Rewrite Strategy)
 
-The [pivot_unpivot.rs] example demonstrates rewriting custom syntax to standard SQL:
-
-- PIVOT → GROUP BY with CASE expressions
-- UNPIVOT → UNION ALL of projections
+The [pivot_unpivot.rs] example demonstrates rewriting custom syntax to standard SQL
+for queries such as:
 
 ```sql
 SELECT * FROM sales
@@ -315,10 +310,10 @@ SELECT * FROM sales
 
 ## Recap
 
-1. Use `ExprPlanner` for custom operators and expression handling
-2. Use `TypePlanner` for custom SQL data types
-3. Use `RelationPlanner` for custom FROM clause syntax (TABLESAMPLE, PIVOT, etc.)
-4. Register planners via `SessionContext` or `SessionStateBuilder`
+1. Use [`ExprPlanner`] for custom operators and expression handling
+2. Use [`TypePlanner` for custom SQL data types
+3. Use [`RelationPlanner`] for custom FROM clause syntax (TABLESAMPLE, PIVOT, etc.)
+4. Register planners via [`SessionContext`] or [`SessionStateBuilder`]
 
 ## See Also
 
@@ -330,6 +325,11 @@ SELECT * FROM sales
 [`exprplanner`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html
 [`typeplanner`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.TypePlanner.html
 [`relationplanner`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.RelationPlanner.html
+[`userdefinedlogicalnode`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.UserDefinedLogicalNode.html
+[`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
+[`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
+[`sessionstatebuilder`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html
+[`relationplannercontext`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/trait.RelationPlannerContext.html
 [exprplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html
 [typeplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.TypePlanner.html
 [relationplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.RelationPlanner.html
