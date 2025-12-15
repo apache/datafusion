@@ -313,10 +313,18 @@ mod tests {
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);
 
+        let null_expr: FieldRef = Arc::new(Field::new("expr", DataType::Null, true));
+        let out = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[null_expr, Arc::clone(&non_nullable_bit_length)],
+            scalar_arguments: &[None, None],
+        })?;
+        assert!(out.is_nullable());
+        assert_eq!(out.data_type(), &DataType::Null);
+
         let null_bit_length: FieldRef =
             Arc::new(Field::new("bit_length", DataType::Null, true));
         let out = func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[non_nullable_expr, null_bit_length],
+            arg_fields: &[Arc::clone(&non_nullable_expr), null_bit_length],
             scalar_arguments: &[None, None],
         })?;
         assert!(out.is_nullable());
@@ -325,7 +333,7 @@ mod tests {
         let null_scalar = ScalarValue::Int32(None);
         let out = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[
-                nullable_expr,
+                Arc::clone(&non_nullable_expr),
                 Arc::new(Field::new("bit_length", DataType::Int32, false)),
             ],
             scalar_arguments: &[None, Some(&null_scalar)],
