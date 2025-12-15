@@ -44,7 +44,7 @@ if ! command -v typos &> /dev/null; then
 fi
 
 # For dependency graph checks
-if ! cargo depgraph --help > /dev/null 2>&1; then
+if ! command -v cargo-depgraph > /dev/null 2>&1; then
     echo "Installing cargo-depgraph using cargo"
     cargo install cargo-depgraph --version ^1.6 --locked
 fi
