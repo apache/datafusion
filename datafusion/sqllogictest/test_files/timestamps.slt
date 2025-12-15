@@ -2847,8 +2847,12 @@ select make_date(t.year, t.month, '4') from table_nums t;
 statement ok
 insert into table_nums values (2024, null, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+query D
 select make_date(t.year, t.month, t.day) from table_nums t;
+----
+2024-01-23
+2023-11-30
+NULL
 
 statement ok
 drop table table_nums;
@@ -2867,48 +2871,344 @@ select make_date(t.year, t.month, t.day) from table_strings t;
 statement ok
 insert into table_strings values (2024, null, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+query D
 select make_date(t.year, t.month, t.day) from table_strings t;
+----
+2024-01-23
+2023-11-30
+NULL
 
 statement ok
 drop table table_strings;
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 13, 23
+query error DataFusion error: Execution error: Month value '13' is out of range
 select make_date(2024, 13, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 1, 32
-select make_date(2024, 01, 32);
+query error DataFusion error: Execution error: Day value '32' is out of range
+select make_date(2024, 1, 32);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+query error DataFusion error: Execution error: Month value '0' is out of range
 select make_date(2024, 0, 23);
 
 query error DataFusion error: Execution error: Month value '\-1' is out of range
 select make_date(2024, -1, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 12, 0
+query error DataFusion error: Execution error: Day value '0' is out of range
 select make_date(2024, 12, 0);
 
-query error DataFusion error: Execution error: Day value '\-1' is out of range
+query error DataFusion error: Execution error: Month value '13' is out of range
 select make_date(2024, 13, -1);
 
-query error DataFusion error: Execution error: Unable to parse date from null/empty value
+query D
 select make_date(null, 1, 23);
+----
+NULL
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+query error Cast error: Cannot cast string '' to value of Int32 type
 select make_date('', 1, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from null/empty value
+query D
 select make_date(2024, null, 23);
+----
+NULL
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+query error Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 select make_date(2024, '', 27);
 
-query error DataFusion error: Execution error: Unable to parse date from null/empty value
+query D
 select make_date(2024, 1, null);
+----
+NULL
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+query error Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 select make_date(2024, 1, '');
 
+query error DataFusion error: Execution error: Unable to parse date from 2024, 11, 31
+select make_date(2024, 11, 31);
+
+query D
+select make_date(null, 1::bigint, 14::bigint unsigned);
+----
+NULL
+
+query error DataFusion error: Error during planning: Function 'make_date' expects 3 arguments but received 1
+select make_date(1);
+
+query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int32\), Int32\)\) but received NativeType::Interval\(MonthDayNano\), DataType: Interval\(MonthDayNano\)
+select make_date(interval '1 day', '2001-05-21'::timestamp, '2001-05-21'::timestamp);
+
+##########
+## make time tests
+##########
+
+query D
+select make_time(22, 1, 27);
+----
+22:01:27
+
+query D
+select make_time(22, 0, 0);
+----
+22:00:00
+
+query D
+select make_time(0, 0, 0);
+----
+00:00:00
+
+query D
+select make_time(22, 2, 29);
+----
+22:02:29
+
+query D
+select make_time(null, null, null);
+----
+NULL
+
+query D
+select make_time(null, 1, 23);
+----
+NULL
+
+query D
+select make_time(22, null, 23);
+----
+NULL
+
+query D
+select make_time(22, 1, null);
+----
+NULL
+
+query D
+select make_time('22', '01', '27');
+----
+22:01:27
+
+query D
+select make_time(12 + 11, '01', '27');
+----
+23:01:27
+
+query D
+select make_time(22::tinyint, 01::tinyint, 27::tinyint);
+----
+22:01:27
+
+query D
+select make_time(22::smallint, 01::smallint, 27::smallint);
+----
+22:01:27
+
+query D
+select make_time(22::int, 01::int, 27::int);
+----
+22:01:27
+
+query D
+select make_time(22::bigint, 01::bigint, 27::bigint);
+----
+22:01:27
+
+query D
+select make_time(22::tinyint unsigned, 01::tinyint unsigned, 27::tinyint unsigned);
+----
+22:01:27
+
+query D
+select make_time(22::smallint unsigned, 01::smallint unsigned, 27::smallint unsigned);
+----
+22:01:27
+
+query D
+select make_time(22::int unsigned, 01::int unsigned, 27::int unsigned);
+----
+22:01:27
+
+query D
+select make_time(22::bigint unsigned, 01::bigint unsigned, 27::bigint unsigned);
+----
+22:01:27
+
+query D
+select make_time(arrow_cast(22, 'Int32'), arrow_cast(1, 'Int32'), arrow_cast(27, 'Int32'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast(22, 'Int64'), arrow_cast(1, 'Int64'), arrow_cast(27, 'Int64'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'Utf8'), arrow_cast('1', 'Utf8'), arrow_cast('27', 'Utf8'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'Utf8View'), arrow_cast('1', 'Utf8View'), arrow_cast('27', 'Utf8View'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'LargeUtf8'), arrow_cast('1', 'LargeUtf8'), arrow_cast('27', 'LargeUtf8'));
+----
+22:01:27
+
+query D
+select make_time(22, arrow_cast('1', 'Int64'), arrow_cast('27', 'UInt32'));
+----
+22:01:27
+
+query D
+select make_time(22, arrow_cast('1', 'UInt64'), arrow_cast('27', 'UInt32'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'Utf8'), arrow_cast('1', 'LargeUtf8'), arrow_cast('27', 'Utf8'));
+----
+22:01:27
+
+query D
+select make_time(22, arrow_cast('1', 'LargeUtf8'), arrow_cast('27', 'Utf8'));
+----
+22:01:27
+
+query error Can't cast value 18446744073709551615 to type Int32
+select make_time(22, 18446744073709551615, 27);
+
+query T
+select arrow_typeof(make_time(22, 1, 27));
+----
+Time32(s)
+
+statement ok
+create table table_nums (hour int, minute int, second int) as values
+    (22, 1, 23),
+    (20, 11, 30);
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_nums t;
+----
+22:01:23
+20:11:30
+
+query D
+select make_time(21, t.minute, t.second) from table_nums t;
+----
+21:01:23
+21:11:30
+
+query D
+select make_time(t.hour, 3, t.second) from table_nums t;
+----
+22:03:23
+20:03:30
+
+query D
+select make_time(t.hour, t.minute, 4) from table_nums t;
+----
+22:01:04
+20:11:04
+
+query D
+select make_time('21', t.minute, t.second) from table_nums t;
+----
+21:01:23
+21:11:30
+
+query D
+select make_time(t.hour, '3', t.second) from table_nums t;
+----
+22:03:23
+20:03:30
+
+query D
+select make_time(t.hour, t.minute, '4') from table_nums t;
+----
+22:01:04
+20:11:04
+
+statement ok
+insert into table_nums values (25, null, 77);
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_nums t;
+----
+22:01:23
+20:11:30
+NULL
+
+statement ok
+drop table table_nums;
+
+statement ok
+create table table_strings (hour varchar(4), minute varchar(2), second varchar(2)) as values
+    ('22', '1', '23'),
+    ('23', '11', '30');
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_strings t;
+----
+22:01:23
+23:11:30
+
+statement ok
+insert into table_strings values ('33', null, '23');
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_strings t;
+----
+22:01:23
+23:11:30
+NULL
+
+statement ok
+insert into table_strings values ('33', '12', '23');
+
+query error  DataFusion error: Execution error: Hour value '33' is out of range
+select make_time(t.hour, t.minute, t.second) from table_strings t;
+
+statement ok
+drop table table_strings;
+
+query error Function 'make_time' expects 3 arguments but received 1
+select make_time(22);
+
+query error Function 'make_time' expects 3 arguments but received 2
+select make_time(22, 22);
+
+query error  DataFusion error: Execution error: Hour value '26' is out of range
+select make_time(26, 13, 23);
+
+query error DataFusion error: Execution error: Second value '62' is out of range
+select make_time(22, 01, 62);
+
+query error  DataFusion error: Execution error: Minute value '64' is out of range
+select make_time(22, 64, 23);
+
+query error DataFusion error: Execution error: Hour value '-1' is out of range
+select make_time(-1, 12, 0);
+
+query error DataFusion error: Execution error: Minute value '-1' is out of range
+select make_time(22, -1, 23);
+
+query error DataFusion error: Execution error: Second value '-1' is out of range
+select make_time(22, 13, -1);
+
+query error Cannot cast string '' to value of Int32 type
+select make_time('', 1, 23);
+
+query error Cannot cast string '' to value of Int32 type
+select make_time(22, '', 27);
+
+query error Cannot cast string '' to value of Int32 type
+select make_time(22, 1, '');
+
+query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int32\), Int32\)\) but received NativeType::Float64, DataType: Float64
+select make_time(arrow_cast(22, 'Float64'), 1, '');
 
 ##########
 ## to_char tests

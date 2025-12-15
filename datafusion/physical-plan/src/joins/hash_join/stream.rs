@@ -23,25 +23,24 @@
 use std::sync::Arc;
 use std::task::Poll;
 
+use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
-    equal_rows_arr, get_final_indices_from_shared_bitmap, OnceFut,
+    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
 };
-use crate::joins::PartitionMode;
 use crate::{
-    handle_state,
+    RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
     joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
-        adjust_indices_by_join_type, apply_join_filter_to_indices,
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
+        StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
-        need_produce_result_in_final, BuildProbeJoinMetrics, ColumnIndex, JoinFilter,
-        JoinHashMapType, StatefulStreamResult,
+        need_produce_result_in_final,
     },
-    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
@@ -49,13 +48,13 @@ use arrow::compute::BatchCoalescer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, JoinSide, JoinType, NullEquality, Result,
+    JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -476,11 +475,12 @@ impl HashJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
         // build hash table from left (build) side, if not yet done
-        let left_data = ready!(self
-            .build_side
-            .try_as_initial_mut()?
-            .left_fut
-            .get_shared(cx))?;
+        let left_data = ready!(
+            self.build_side
+                .try_as_initial_mut()?
+                .left_fut
+                .get_shared(cx)
+        )?;
         build_timer.done();
 
         // Handle dynamic filter build-side information accumulation
@@ -494,7 +494,9 @@ impl HashJoinStream {
             let left_side_partition_id = match self.mode {
                 PartitionMode::Partitioned => self.partition,
                 PartitionMode::CollectLeft => 0,
-                PartitionMode::Auto => unreachable!("PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"),
+                PartitionMode::Auto => unreachable!(
+                    "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
+                ),
             };
 
             // Determine pushdown strategy based on availability of InList values
