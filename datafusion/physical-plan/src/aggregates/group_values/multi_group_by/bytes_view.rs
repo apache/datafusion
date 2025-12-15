@@ -132,13 +132,26 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             equal_to_results.iter_mut(),
         );
 
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to, don't need to check
-            if !*equal_to_result {
-                continue;
-            }
+        // if the input array has no nulls, can skip null check
+        if array.null_count() == 0 {
+            for (&lhs_row, &rhs_row, equal_to_result) in iter {
+                // Has found not equal to, don't need to check
+                if !*equal_to_result {
+                    continue;
+                }
 
-            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+                *equal_to_result =
+                    self.do_equal_to_inner_values_only(lhs_row, array, rhs_row);
+            }
+        } else {
+            for (&lhs_row, &rhs_row, equal_to_result) in iter {
+                // Has found not equal to, don't need to check
+                if !*equal_to_result {
+                    continue;
+                }
+
+                *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+            }
         }
     }
 
@@ -226,18 +239,25 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         let exist_null = self.nulls.is_null(lhs_row);
         let input_null = array.is_null(rhs_row);
         if let Some(result) = nulls_equal_to(exist_null, input_null) {
-            return result;
+            result
+        } else {
+            self.do_equal_to_inner_values_only(lhs_row, array, rhs_row)
         }
+    }
 
-        // Otherwise, we need to check their values
-        let exist_view = unsafe {
-            *self.views.get_unchecked(lhs_row)
-        };
+    /// Same as equal_to_inner, but without null checks
+    ///
+    /// Checks only the values for equality
+    fn do_equal_to_inner_values_only(
+        &self,
+        lhs_row: usize,
+        array: &GenericByteViewArray<B>,
+        rhs_row: usize,
+    ) -> bool {
+        let exist_view = unsafe { *self.views.get_unchecked(lhs_row) };
         let exist_view_len = exist_view as u32;
 
-        let input_view = unsafe {
-            *array.views().get_unchecked(rhs_row)
-        };
+        let input_view = unsafe { *array.views().get_unchecked(rhs_row) };
         let input_view_len = input_view as u32;
 
         // The check logic
@@ -250,19 +270,9 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
 
         if exist_view_len <= 12 {
-            let exist_inline = unsafe {
-                GenericByteViewArray::<B>::inline_value(
-                    &exist_view,
-                    exist_view_len as usize,
-                )
-            };
-            let input_inline = unsafe {
-                GenericByteViewArray::<B>::inline_value(
-                    &input_view,
-                    input_view_len as usize,
-                )
-            };
-            exist_inline == input_inline
+            // the views are inlined and the lengths are equal, so just
+            // compare the views directly
+            exist_view == input_view
         } else {
             let exist_prefix =
                 unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
