@@ -22,9 +22,6 @@
 //!
 //! Supported value types include Arrow primitives (integers, floats, decimals, intervals)
 //! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering.
-//!
-//! Note: String values are owned/cloned on insertion. For very high cardinality or large
-//! strings with large limits, this may add overhead compared to primitive types.
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
 use arrow::array::{
@@ -209,7 +206,7 @@ impl StringHeap {
     ///
     /// Note: Null values should not appear in the input; the aggregation layer
     /// ensures nulls are filtered before reaching this code.
-    fn value(&self, row_idx: usize) -> String {
+    fn value(&self, row_idx: usize) -> &str {
         extract_string_value(&self.batch, &self.data_type, row_idx)
     }
 }
@@ -221,11 +218,15 @@ impl StringHeap {
 ///
 /// # Panics
 /// Panics if the index is out of bounds or if the data type is unsupported.
-fn extract_string_value(batch: &ArrayRef, data_type: &DataType, idx: usize) -> String {
+fn extract_string_value<'a>(
+    batch: &'a ArrayRef,
+    data_type: &DataType,
+    idx: usize,
+) -> &'a str {
     match data_type {
-        DataType::Utf8 => batch.as_string::<i32>().value(idx).to_string(),
-        DataType::LargeUtf8 => batch.as_string::<i64>().value(idx).to_string(),
-        DataType::Utf8View => batch.as_string_view().value(idx).to_string(),
+        DataType::Utf8 => batch.as_string::<i32>().value(idx),
+        DataType::LargeUtf8 => batch.as_string::<i64>().value(idx),
+        DataType::Utf8View => batch.as_string_view().value(idx),
         _ => unreachable!("Unsupported string type: {:?}", data_type),
     }
 }
@@ -239,7 +240,7 @@ impl ArrowHeap for StringHeap {
         if !self.heap.is_full() {
             return false;
         }
-        let new_val = self.value(row_idx);
+        let new_val = self.value(row_idx).to_string();
         let worst_val = self.heap.worst_val().expect("Missing root");
         (!self.desc && new_val > *worst_val) || (self.desc && new_val < *worst_val)
     }
@@ -253,7 +254,7 @@ impl ArrowHeap for StringHeap {
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        let new_val = self.value(row_idx);
+        let new_val = self.value(row_idx).to_string();
         self.heap.append_or_replace(new_val, map_idx, map);
     }
 
@@ -263,7 +264,7 @@ impl ArrowHeap for StringHeap {
         row_idx: usize,
         map: &mut Vec<(usize, usize)>,
     ) {
-        let new_val = self.value(row_idx);
+        let new_val = self.value(row_idx).to_string();
         self.heap.replace_if_better(heap_idx, new_val, map);
     }
 
@@ -601,9 +602,8 @@ pub fn new_heap(
         };
     }
 
-    let vt_clone = vt.clone();
     downcast_primitive! {
-        vt_clone => (downcast_helper, vt_clone),
+        vt => (downcast_helper, vt),
         _ => {}
     }
 
