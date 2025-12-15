@@ -16,19 +16,21 @@
 // under the License.
 
 use arrow::array::{
+    Array, ArrayRef, Int64Array, PrimitiveArray,
     cast::AsArray,
     types::{Float64Type, Int64Type},
-    Array, ArrayRef, Int64Array, PrimitiveArray,
 };
 use arrow::array::{BooleanArray, Decimal128Array, Float64Array};
-use arrow::datatypes::{DataType, Decimal128Type, Field, FieldRef};
-use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
+use arrow::datatypes::{
+    DECIMAL128_MAX_PRECISION, DataType, Decimal128Type, Field, FieldRef,
+};
+use datafusion_common::{DataFusionError, Result, ScalarValue, downcast_value, exec_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::Volatility::Immutable;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
+use std::mem::size_of_val;
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct SparkTrySum {
@@ -44,7 +46,7 @@ impl Default for SparkTrySum {
 impl SparkTrySum {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -90,15 +92,12 @@ impl TrySumAccumulator {
         if self.failed {
             return;
         }
-        for i in 0..arr.len() {
-            if arr.is_null(i) {
-                continue;
-            }
-            let v = arr.value(i);
-            self.sum_i64 = match self.sum_i64 {
-                None => Some(v),
+
+        for v in arr.iter().flatten() {
+            match self.sum_i64 {
+                None => self.sum_i64 = Some(v),
                 Some(acc) => match acc.checked_add(v) {
-                    Some(s) => Some(s),
+                    Some(s) => self.sum_i64 = Some(s),
                     None => {
                         self.failed = true;
                         return;
@@ -112,11 +111,7 @@ impl TrySumAccumulator {
         if self.failed {
             return;
         }
-        for i in 0..arr.len() {
-            if arr.is_null(i) {
-                continue;
-            }
-            let v = arr.value(i);
+        for v in arr.iter().flatten() {
             self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + v);
         }
     }
@@ -125,27 +120,25 @@ impl TrySumAccumulator {
         if self.failed {
             return;
         }
-        for i in 0..arr.len() {
-            if arr.is_null(i) {
-                continue;
-            }
-            let v = arr.value(i);
-            self.sum_dec128 = match self.sum_dec128 {
-                None => Some(v),
+
+        for v in arr.iter().flatten() {
+            let new_sum = match self.sum_dec128 {
+                None => v,
                 Some(acc) => match acc.checked_add(v) {
-                    Some(sum) => Some(sum),
+                    Some(sum) => sum,
                     None => {
                         self.failed = true;
                         return;
                     }
                 },
             };
-            if let Some(sum) = self.sum_dec128 {
-                if exceeds_decimal128_precision(sum, p) {
-                    self.failed = true;
-                    return;
-                }
+
+            if exceeds_decimal128_precision(new_sum, p) {
+                self.failed = true;
+                return;
             }
+
+            self.sum_dec128 = Some(new_sum);
         }
     }
 }
@@ -190,9 +183,7 @@ impl Accumulator for TrySumAccumulator {
                 self.update_dec128(array, p, s);
             }
             ref dt => {
-                return Err(DataFusionError::Plan(format!(
-                    "try_sum: unsupported type in update_batch: {dt:?}"
-                )))
+                return exec_err!("try_sum: unsupported type in update_batch: {dt:?}");
             }
         }
         Ok(())
@@ -211,7 +202,7 @@ impl Accumulator for TrySumAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of::<Self>()
+        size_of_val(self)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -232,63 +223,31 @@ impl Accumulator for TrySumAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // 1) merge flag failed
+        // Check if any partition has failed
         let failed_arr = downcast_value!(states[1], BooleanArray);
-        for i in 0..failed_arr.len() {
-            if failed_arr.is_valid(i) && failed_arr.value(i) {
+        for failed in failed_arr.iter().flatten() {
+            if failed {
                 self.failed = true;
                 return Ok(());
             }
         }
 
+        // Merge the sum values using the same logic as update_batch
         match self.dtype {
             DataType::Int64 => {
                 let array = downcast_value!(states[0], Int64Array);
-                for value in array.iter().flatten() {
-                    self.sum_i64 = match self.sum_i64 {
-                        None => Some(value),
-                        Some(acc) => match acc.checked_add(value) {
-                            Some(s) => Some(s),
-                            None => {
-                                self.failed = true;
-                                return Ok(());
-                            }
-                        },
-                    };
-                }
+                self.update_i64(array);
             }
             DataType::Float64 => {
                 let array = downcast_value!(states[0], Float64Array);
-                for value in array.iter().flatten() {
-                    self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + value);
-                }
+                self.update_f64(array);
             }
-            DataType::Decimal128(p, _s) => {
+            DataType::Decimal128(p, s) => {
                 let array = downcast_value!(states[0], Decimal128Array);
-                for value in array.iter().flatten() {
-                    let next = match self.sum_dec128 {
-                        None => value,
-                        Some(acc) => match acc.checked_add(value) {
-                            Some(sum) => sum,
-                            None => {
-                                self.failed = true;
-                                return Ok(());
-                            }
-                        },
-                    };
-
-                    if exceeds_decimal128_precision(next, p) {
-                        self.failed = true;
-                        return Ok(());
-                    }
-
-                    self.sum_dec128 = Some(next);
-                }
+                self.update_dec128(array, p, s);
             }
             ref dt => {
-                return Err(DataFusionError::Execution(format!(
-                    "try_sum: type not supported in merge_batch: {dt:?}"
-                )))
+                return exec_err!("try_sum: type not supported in merge_batch: {dt:?}");
             }
         }
 
@@ -327,24 +286,20 @@ impl AggregateUDFImpl for SparkTrySum {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
 
         let dt = &arg_types[0];
-        let result_type = match *dt {
+        let result_type = match dt {
             Null => Float64,
             Decimal128(p, s) => {
-                let p2 = std::cmp::min(p + 10, 38);
-                Decimal128(p2, s)
+                let new_precision = DECIMAL128_MAX_PRECISION.min(p + 10);
+                Decimal128(new_precision, *s)
             }
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
             Float16 | Float32 | Float64 => Float64,
 
-            ref other => {
-                return Err(DataFusionError::Plan(format!(
-                    "try_sum: unsupported type: {other:?}"
-                )))
-            }
+            other => return exec_err!("try_sum: unsupported type: {other:?}"),
         };
 
         Ok(result_type)
@@ -371,10 +326,10 @@ impl AggregateUDFImpl for SparkTrySum {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         use DataType::*;
         if arg_types.len() != 1 {
-            return Err(DataFusionError::Plan(format!(
+            return exec_err!(
                 "try_sum: exactly 1 argument expected, got {}",
                 arg_types.len()
-            )));
+            );
         }
 
         let dt = &arg_types[0];
@@ -383,11 +338,7 @@ impl AggregateUDFImpl for SparkTrySum {
             Decimal128(p, s) => Decimal128(*p, *s),
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
             Float16 | Float32 | Float64 => Float64,
-            other => {
-                return Err(DataFusionError::Plan(format!(
-                    "try_sum: unsupported type: {other:?}"
-                )))
-            }
+            other => return exec_err!("try_sum: unsupported type: {other:?}"),
         };
         Ok(vec![coerced])
     }
@@ -400,8 +351,8 @@ impl AggregateUDFImpl for SparkTrySum {
 #[cfg(test)]
 mod tests {
     use arrow::array::BooleanArray;
-    use datafusion_common::arrow::array::Float64Array;
     use datafusion_common::ScalarValue;
+    use datafusion_common::arrow::array::Float64Array;
     use std::sync::Arc;
 
     use super::*;
