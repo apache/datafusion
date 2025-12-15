@@ -927,6 +927,7 @@ mod test {
     use std::sync::Arc;
 
     use super::{ConstantColumns, constant_columns_from_stats};
+    use crate::{DefaultParquetFileReaderFactory, opener::ParquetOpener};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -948,8 +949,7 @@ mod test {
     use futures::{Stream, StreamExt};
     use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
-
-    use crate::{DefaultParquetFileReaderFactory, opener::ParquetOpener};
+    use parquet::file::properties::WriterProperties;
 
     fn constant_int_stats() -> (Statistics, SchemaRef) {
         let schema = Arc::new(Schema::new(vec![
@@ -1082,11 +1082,23 @@ mod test {
         filename: &str,
         batch: arrow::record_batch::RecordBatch,
     ) -> usize {
+        write_parquet_batches(store, filename, vec![batch], None).await
+    }
+
+    /// Write multiple batches to a parquet file with optional writer properties
+    async fn write_parquet_batches(
+        store: Arc<dyn ObjectStore>,
+        filename: &str,
+        batches: Vec<arrow::record_batch::RecordBatch>,
+        props: Option<WriterProperties>,
+    ) -> usize {
         let mut out = BytesMut::new().writer();
         {
-            let mut writer =
-                ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
-            writer.write(&batch).unwrap();
+            let schema = batches[0].schema();
+            let mut writer = ArrowWriter::try_new(&mut out, schema, props).unwrap();
+            for batch in batches {
+                writer.write(&batch).unwrap();
+            }
             writer.finish().unwrap();
         }
         let data = out.into_inner().freeze();
@@ -1570,21 +1582,13 @@ mod test {
             .set_max_row_group_size(3) // Force each batch into its own row group
             .build();
 
-        let mut out = BytesMut::new().writer();
-        {
-            let mut writer =
-                ArrowWriter::try_new(&mut out, batch1.schema(), Some(props)).unwrap();
-            writer.write(&batch1).unwrap();
-            writer.write(&batch2).unwrap();
-            writer.write(&batch3).unwrap();
-            writer.finish().unwrap();
-        }
-        let data = out.into_inner().freeze();
-        let data_len = data.len();
-        store
-            .put(&Path::from("test.parquet"), data.into())
-            .await
-            .unwrap();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch1.clone(), batch2, batch3],
+            Some(props),
+        )
+        .await;
 
         let schema = batch1.schema();
         let file = PartitionedFile::new(
@@ -1716,21 +1720,13 @@ mod test {
             .set_max_row_group_size(4)
             .build();
 
-        let mut out = BytesMut::new().writer();
-        {
-            let mut writer =
-                ArrowWriter::try_new(&mut out, batch1.schema(), Some(props)).unwrap();
-            writer.write(&batch1).unwrap();
-            writer.write(&batch2).unwrap();
-            writer.write(&batch3).unwrap();
-            writer.finish().unwrap();
-        }
-        let data = out.into_inner().freeze();
-        let data_len = data.len();
-        store
-            .put(&Path::from("test.parquet"), data.into())
-            .await
-            .unwrap();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch1.clone(), batch2, batch3],
+            Some(props),
+        )
+        .await;
 
         let schema = batch1.schema();
 
