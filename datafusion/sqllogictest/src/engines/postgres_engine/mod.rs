@@ -351,7 +351,7 @@ impl sqllogictest::AsyncDB for Postgres {
     }
 }
 
-fn convert_rows(rows: Vec<Row>) -> Vec<Vec<String>> {
+fn convert_rows(rows: &[Row]) -> Vec<Vec<String>> {
     rows.iter()
         .map(|row| {
             row.columns()
