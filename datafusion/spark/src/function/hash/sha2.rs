@@ -274,6 +274,7 @@ mod tests {
     fn test_sha2_nullability() -> Result<()> {
         let func = SparkSha2::new();
 
+        // expr: Binary (non-null), bit_length: Int32 (non-null) -> Utf8 (non-null)
         let non_nullable_expr: FieldRef =
             Arc::new(Field::new("expr", DataType::Binary, false));
         let non_nullable_bit_length: FieldRef =
@@ -289,6 +290,7 @@ mod tests {
         assert!(!out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);
 
+        // expr: Binary (nullable), bit_length: Int32 (non-null) -> Utf8 (nullable)
         let nullable_expr: FieldRef =
             Arc::new(Field::new("expr", DataType::Binary, true));
         let out = func.return_field_from_args(ReturnFieldArgs {
@@ -301,6 +303,7 @@ mod tests {
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);
 
+        // expr: Binary (non-null), bit_length: Int32 (nullable) -> Utf8 (nullable)
         let nullable_bit_length: FieldRef =
             Arc::new(Field::new("bit_length", DataType::Int32, true));
         let out = func.return_field_from_args(ReturnFieldArgs {
@@ -313,6 +316,7 @@ mod tests {
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);
 
+        // expr: Null (nullable), bit_length: Int32 (non-null) -> Null (nullable)
         let null_expr: FieldRef = Arc::new(Field::new("expr", DataType::Null, true));
         let out = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[null_expr, Arc::clone(&non_nullable_bit_length)],
@@ -321,6 +325,7 @@ mod tests {
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Null);
 
+        // expr: Binary (non-null), bit_length: Null (nullable) -> Null (nullable)
         let null_bit_length: FieldRef =
             Arc::new(Field::new("bit_length", DataType::Null, true));
         let out = func.return_field_from_args(ReturnFieldArgs {
@@ -330,22 +335,24 @@ mod tests {
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Null);
 
+        // expr: Binary (non-null), bit_length scalar: Int32(NULL) -> Utf8 (nullable)
         let null_scalar = ScalarValue::Int32(None);
         let out = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[
                 Arc::clone(&non_nullable_expr),
-                Arc::new(Field::new("bit_length", DataType::Int32, false)),
+                Arc::clone(&non_nullable_bit_length),
             ],
             scalar_arguments: &[None, Some(&null_scalar)],
         })?;
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);
 
+        // expr: Binary (non-null), bit_length scalar: Int32(128, unsupported) -> Utf8 (nullable)
         let unsupported_scalar = ScalarValue::Int32(Some(128));
         let out = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[
-                Arc::new(Field::new("expr", DataType::Binary, false)),
-                Arc::new(Field::new("bit_length", DataType::Int32, false)),
+                Arc::clone(&non_nullable_expr),
+                Arc::clone(&non_nullable_bit_length),
             ],
             scalar_arguments: &[None, Some(&unsupported_scalar)],
         })?;
