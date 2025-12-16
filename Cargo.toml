@@ -91,19 +91,19 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "57.1.0", features = [
+arrow = { version = "57.2.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "57.1.0", default-features = false }
-arrow-flight = { version = "57.1.0", features = [
+arrow-buffer = { version = "57.2.0", default-features = false }
+arrow-flight = { version = "57.2.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "57.1.0", default-features = false, features = [
+arrow-ipc = { version = "57.2.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "57.1.0", default-features = false }
-arrow-schema = { version = "57.1.0", default-features = false }
+arrow-ord = { version = "57.2.0", default-features = false }
+arrow-schema = { version = "57.2.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -166,7 +166,7 @@ log = "^0.4"
 num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "57.1.0", default-features = false, features = [
+parquet = { version = "57.2.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -271,3 +271,32 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+## Temporary arrow-rs patch until 57.2.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+
+#arrow = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow" }
+#arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-array" }
+#arrow-buffer = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-buffer" }
+#arrow-cast = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-cast" }
+#arrow-data = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-data" }
+#arrow-ipc = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-ipc" }
+#arrow-schema = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-schema" }
+#arrow-select = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-select" }
+#arrow-string = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-string" }
+#arrow-ord = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-ord" }
+#arrow-flight = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-flight" }
+#parquet = { path= "/Users/andrewlamb/Software/arrow-rs2/parquet" }
