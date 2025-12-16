@@ -117,15 +117,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         self.do_append_val_inner(arr, row);
     }
 
-    fn vectorized_equal_to_inner(
+    /// Comparison when there are no nulls in array
+    fn vectorized_equal_to_no_nulls(
         &self,
         lhs_rows: &[usize],
-        array: &ArrayRef,
+        array: &GenericByteViewArray<B>,
         rhs_rows: &[usize],
         equal_to_results: &mut [bool],
     ) {
-        let array = array.as_byte_view::<B>();
-
         let iter = izip!(
             lhs_rows.iter(),
             rhs_rows.iter(),
@@ -133,9 +132,32 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         );
 
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            // Has found not equal to, don't need to check
             if !*equal_to_result {
-                continue;
+                continue; // short circuit on first column mismatch
+            }
+
+            *equal_to_result =
+                self.do_equal_to_inner_values_only(lhs_row, array, rhs_row);
+        }
+    }
+
+    /// Comparison when there are nulls in array
+    fn vectorized_equal_to_nulls(
+        &self,
+        lhs_rows: &[usize],
+        array: &GenericByteViewArray<B>,
+        rhs_rows: &[usize],
+        equal_to_results: &mut [bool],
+    ) {
+        let iter = izip!(
+            lhs_rows.iter(),
+            rhs_rows.iter(),
+            equal_to_results.iter_mut(),
+        );
+
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+            if !*equal_to_result {
+                continue; // short circuit on first column mismatch
             }
 
             *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
@@ -216,6 +238,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
     }
 
+    /// Checks value and null for equality
     fn do_equal_to_inner(
         &self,
         lhs_row: usize,
@@ -228,12 +251,22 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         if let Some(result) = nulls_equal_to(exist_null, input_null) {
             return result;
         }
+        self.do_equal_to_inner_values_only(lhs_row, array, rhs_row)
+    }
 
-        // Otherwise, we need to check their values
-        let exist_view = self.views[lhs_row];
+    /// Checks only the values for equality
+    #[inline(always)]
+    fn do_equal_to_inner_values_only(
+        &self,
+        lhs_row: usize,
+        array: &GenericByteViewArray<B>,
+        rhs_row: usize,
+    ) -> bool {
+        // SAFETY: the row indexes passed to vectorized_equal are in bounds
+        let exist_view = unsafe { *self.views.get_unchecked(lhs_row) };
         let exist_view_len = exist_view as u32;
-
-        let input_view = array.views()[rhs_row];
+        // SAFETY: the row indexes passed to vectorized_equal are in bounds
+        let input_view = unsafe { *array.views().get_unchecked(rhs_row) };
         let input_view_len = input_view as u32;
 
         // The check logic
@@ -246,19 +279,9 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
 
         if exist_view_len <= 12 {
-            let exist_inline = unsafe {
-                GenericByteViewArray::<B>::inline_value(
-                    &exist_view,
-                    exist_view_len as usize,
-                )
-            };
-            let input_inline = unsafe {
-                GenericByteViewArray::<B>::inline_value(
-                    &input_view,
-                    input_view_len as usize,
-                )
-            };
-            exist_inline == input_inline
+            // the views are inlined and the lengths are equal, so just
+            // compare the views directly
+            exist_view == input_view
         } else {
             let exist_prefix =
                 unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
@@ -507,7 +530,17 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
         rows: &[usize],
         equal_to_results: &mut [bool],
     ) {
-        self.vectorized_equal_to_inner(group_indices, array, rows, equal_to_results);
+        let array = array.as_byte_view::<B>();
+        if array.null_count() == 0 {
+            self.vectorized_equal_to_no_nulls(
+                group_indices,
+                array,
+                rows,
+                equal_to_results,
+            );
+        } else {
+            self.vectorized_equal_to_nulls(group_indices, array, rows, equal_to_results);
+        }
     }
 
     fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()> {
