@@ -21,7 +21,7 @@ description = "Function packages for the DataFusion query engine"
 keywords = ["datafusion", "logical", "plan", "expressions"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -86,7 +86,7 @@ rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { version = "^0.10.9", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
-uuid = { version = "1.18", features = ["v4"], optional = true }
+uuid = { version = "1.19", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

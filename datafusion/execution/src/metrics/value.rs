@@ -19,17 +19,16 @@
 
 use super::CustomMetricValue;
 use chrono::{DateTime, Utc};
-use datafusion_common::instant::Instant;
 use datafusion_common::{
-    human_readable_count, human_readable_duration, human_readable_size,
+    human_readable_count, human_readable_duration, human_readable_size, instant::Instant,
 };
 use parking_lot::Mutex;
 use std::{
     borrow::{Borrow, Cow},
     fmt::{Debug, Display},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -1076,12 +1075,11 @@ mod tests {
     fn new_custom_counter(name: &'static str, value: usize) -> MetricValue {
         let custom_counter = CustomCounter::default();
         custom_counter.count.fetch_add(value, Ordering::Relaxed);
-        let custom_val = MetricValue::Custom {
+
+        MetricValue::Custom {
             name: Cow::Borrowed(name),
             value: Arc::new(custom_counter),
-        };
-
-        custom_val
+        }
     }
 
     #[test]

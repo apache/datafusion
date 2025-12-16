@@ -2942,23 +2942,22 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
         @r"
-    +---------------+------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                   |
-    +---------------+------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                        |
-    |               |   TableScan: t1 projection=[a, b]                                                                                      |
-    |               |   SubqueryAlias: __correlated_sq_1                                                                                     |
-    |               |     Projection: count(Int64(1)) AS count(*)                                                                            |
-    |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]                                                                |
-    |               |         TableScan: t2 projection=[]                                                                                    |
-    | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |
-    |               |   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
-    |               |     ProjectionExec: expr=[4 as count(*)]                                                                               |
-    |               |       PlaceholderRowExec                                                                                               |
-    |               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
-    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
-    |               |                                                                                                                        |
-    +---------------+------------------------------------------------------------------------------------------------------------------------+
+    +---------------+----------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                 |
+    +---------------+----------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                      |
+    |               |   TableScan: t1 projection=[a, b]                                                                                    |
+    |               |   SubqueryAlias: __correlated_sq_1                                                                                   |
+    |               |     Projection: count(Int64(1)) AS count(*)                                                                          |
+    |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]                                                              |
+    |               |         TableScan: t2 projection=[]                                                                                  |
+    | physical_plan | HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
+    |               |   ProjectionExec: expr=[4 as count(*)]                                                                               |
+    |               |     PlaceholderRowExec                                                                                               |
+    |               |   ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
+    |               |     DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
+    |               |                                                                                                                      |
+    +---------------+----------------------------------------------------------------------------------------------------------------------+
     "
     );
 
@@ -2988,22 +2987,21 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
         @r"
-    +---------------+------------------------------------------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                                                                   |
-    +---------------+------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                        |
-    |               |   TableScan: t1 projection=[a, b]                                                                                      |
-    |               |   SubqueryAlias: __correlated_sq_1                                                                                     |
-    |               |     Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]                                                      |
-    |               |       TableScan: t2 projection=[]                                                                                      |
-    | physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |
-    |               |   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
-    |               |     ProjectionExec: expr=[4 as count(*)]                                                                               |
-    |               |       PlaceholderRowExec                                                                                               |
-    |               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
-    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
-    |               |                                                                                                                        |
-    +---------------+------------------------------------------------------------------------------------------------------------------------+
+    +---------------+----------------------------------------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                                                 |
+    +---------------+----------------------------------------------------------------------------------------------------------------------+
+    | logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                      |
+    |               |   TableScan: t1 projection=[a, b]                                                                                    |
+    |               |   SubqueryAlias: __correlated_sq_1                                                                                   |
+    |               |     Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]                                                    |
+    |               |       TableScan: t2 projection=[]                                                                                    |
+    | physical_plan | HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
+    |               |   ProjectionExec: expr=[4 as count(*)]                                                                               |
+    |               |     PlaceholderRowExec                                                                                               |
+    |               |   ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
+    |               |     DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
+    |               |                                                                                                                      |
+    +---------------+----------------------------------------------------------------------------------------------------------------------+
     "
     );
 
@@ -3286,7 +3284,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r###"
+        @r"
     +---------------+---------------------------------------------------------------+
     | plan_type     | plan                                                          |
     +---------------+---------------------------------------------------------------+
@@ -3296,7 +3294,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     |               |   PlaceholderRowExec                                          |
     |               |                                                               |
     +---------------+---------------------------------------------------------------+
-    "###
+    "
     );
 
     Ok(())

@@ -16,17 +16,20 @@
 // under the License.
 
 use std::any::Any;
+use std::sync::Arc;
 
 use crate::function::map::utils::{
-    get_element_type, get_list_offsets, get_list_values,
-    map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
+    get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
+    map_type_from_key_value_types,
 };
 use arrow::array::{Array, ArrayRef, NullBufferBuilder, StructArray};
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 /// Spark-compatible `map_from_entries` expression
@@ -63,9 +66,28 @@ impl ScalarUDFImpl for MapFromEntries {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [entries_type] = take_function_args("map_from_entries", arg_types)?;
-        let entries_element_type = get_element_type(entries_type)?;
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [entries_field] = args.arg_fields else {
+            return exec_err!("map_from_entries: expected one argument");
+        };
+
+        let (entries_element_field, entries_element_type) =
+            match entries_field.data_type() {
+                DataType::List(field)
+                | DataType::LargeList(field)
+                | DataType::FixedSizeList(field, _) => {
+                    Ok((field.as_ref(), field.data_type()))
+                }
+                wrong_type => exec_err!(
+                    "map_from_entries: expected array<struct<key, value>>, got {:?}",
+                    wrong_type
+                ),
+            }?;
+
         let (keys_type, values_type) = match entries_element_type {
             DataType::Struct(fields) if fields.len() == 2 => {
                 Ok((fields[0].data_type(), fields[1].data_type()))
@@ -75,7 +97,11 @@ impl ScalarUDFImpl for MapFromEntries {
                 wrong_type
             ),
         }?;
-        Ok(map_type_from_key_value_types(keys_type, values_type))
+
+        let map_type = map_type_from_key_value_types(keys_type, values_type);
+        let nullable = entries_field.is_nullable() || entries_element_field.is_nullable();
+
+        Ok(Arc::new(Field::new(self.name(), map_type, nullable)))
     }
 
     fn invoke_with_args(
@@ -130,4 +156,63 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         None,
         res_nulls.as_ref(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Fields;
+    use datafusion_expr::ReturnFieldArgs;
+
+    fn make_entries_field(array_nullable: bool, element_nullable: bool) -> FieldRef {
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, true),
+        ]));
+        Arc::new(Field::new(
+            "entries",
+            DataType::List(Arc::new(Field::new("item", struct_type, element_nullable))),
+            array_nullable,
+        ))
+    }
+
+    #[test]
+    fn test_map_from_entries_nullability_matches_input() {
+        let func = MapFromEntries::new();
+        let expected_type =
+            map_type_from_key_value_types(&DataType::Int32, &DataType::Utf8);
+
+        // Non-nullable array and elements => non-nullable result
+        let non_nullable_field = make_entries_field(false, false);
+        let result = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&non_nullable_field)],
+                scalar_arguments: &[None],
+            })
+            .expect("should infer field");
+        assert!(!result.is_nullable());
+        assert_eq!(result.data_type(), &expected_type);
+
+        // Nullable elements should make result nullable even if array is non-nullable
+        let element_nullable_field = make_entries_field(false, true);
+        let result = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&element_nullable_field)],
+                scalar_arguments: &[None],
+            })
+            .expect("should infer field");
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), &expected_type);
+
+        // Nullable array should also yield nullable result
+        let array_nullable_field = make_entries_field(true, false);
+        let result = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&array_nullable_field)],
+                scalar_arguments: &[None],
+            })
+            .expect("should infer field");
+        assert!(result.is_nullable());
+        assert_eq!(result.data_type(), &expected_type);
+    }
 }

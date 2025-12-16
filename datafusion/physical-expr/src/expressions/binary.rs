@@ -17,26 +17,26 @@
 
 mod kernels;
 
-use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::PhysicalExpr;
+use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
-use arrow::compute::{cast, filter_record_batch, SlicesIterator};
+use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_expr::binary::BinaryTypeCoercer;
-use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
+use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
 use datafusion_expr::statistics::{
-    combine_bernoullis, combine_gaussians, create_bernoulli_from_comparison,
-    new_generic_from_binary_op, Distribution,
+    Distribution, combine_bernoullis, combine_gaussians,
+    create_bernoulli_from_comparison, new_generic_from_binary_op,
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp};
@@ -278,18 +278,14 @@ impl PhysicalExpr for BinaryExpr {
         let result_type = self.data_type(input_schema)?;
 
         // If the left-hand side is an array and the right-hand side is a non-null scalar, try the optimized kernel.
-        if let (ColumnarValue::Array(array), ColumnarValue::Scalar(ref scalar)) =
-            (&lhs, &rhs)
+        if let (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) = (&lhs, &rhs)
+            && !scalar.is_null()
+            && let Some(result_array) =
+                self.evaluate_array_scalar(array, scalar.clone())?
         {
-            if !scalar.is_null() {
-                if let Some(result_array) =
-                    self.evaluate_array_scalar(array, scalar.clone())?
-                {
-                    let final_array = result_array
-                        .and_then(|a| to_result_type_array(&self.op, a, &result_type));
-                    return final_array.map(ColumnarValue::Array);
-                }
-            }
+            let final_array = result_array
+                .and_then(|a| to_result_type_array(&self.op, a, &result_type));
+            return final_array.map(ColumnarValue::Array);
         }
 
         // if both arrays or both literals - extract arrays and continue execution
@@ -420,10 +416,10 @@ impl PhysicalExpr for BinaryExpr {
             // We might be able to construct the output statistics more accurately,
             // without falling back to an unknown distribution, if we are dealing
             // with Gaussian distributions and numerical operations.
-            if let (Gaussian(left), Gaussian(right)) = (left, right) {
-                if let Some(result) = combine_gaussians(&self.op, left, right)? {
-                    return Ok(Gaussian(result));
-                }
+            if let (Gaussian(left), Gaussian(right)) = (left, right)
+                && let Some(result) = combine_gaussians(&self.op, left, right)?
+            {
+                return Ok(Gaussian(result));
             }
         } else if self.op.is_logic_operator() {
             // If we are dealing with logical operators, we expect (and can only
@@ -540,8 +536,8 @@ fn to_result_type_array(
                     Ok(cast(&array, result_type)?)
                 } else {
                     internal_err!(
-                            "Incompatible Dictionary value type {value_type} with result type {result_type} of Binary operator {op:?}"
-                        )
+                        "Incompatible Dictionary value type {value_type} with result type {result_type} of Binary operator {op:?}"
+                    )
                 }
             }
             _ => Ok(array),
@@ -895,7 +891,7 @@ pub fn similar_to(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, try_cast, Column, Literal};
+    use crate::expressions::{Column, Literal, col, lit, try_cast};
     use datafusion_expr::lit as expr_lit;
 
     use datafusion_common::plan_datafusion_err;
@@ -1018,7 +1014,8 @@ mod tests {
             ]);
             let a = $A_ARRAY::from($A_VEC);
             let b = $B_ARRAY::from($B_VEC);
-            let (lhs, rhs) = BinaryTypeCoercer::new(&$A_TYPE, &$OP, &$B_TYPE).get_input_types()?;
+            let (lhs, rhs) =
+                BinaryTypeCoercer::new(&$A_TYPE, &$OP, &$B_TYPE).get_input_types()?;
 
             let left = try_cast(col("a", &schema)?, &schema, lhs)?;
             let right = try_cast(col("b", &schema)?, &schema, rhs)?;
@@ -1034,7 +1031,10 @@ mod tests {
             assert_eq!(expression.data_type(&schema)?, $C_TYPE);
 
             // compute
-            let result = expression.evaluate(&batch)?.into_array(batch.num_rows()).expect("Failed to convert to array");
+            let result = expression
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array");
 
             // verify that the array's data_type is correct
             assert_eq!(*result.data_type(), $C_TYPE);
@@ -1048,8 +1048,7 @@ mod tests {
             for (i, x) in $VEC.iter().enumerate() {
                 let v = result.value(i);
                 assert_eq!(
-                    v,
-                    *x,
+                    v, *x,
                     "Unexpected output at position {i}:\n\nActual:\n{v}\n\nExpected:\n{x}"
                 );
             }
@@ -4426,11 +4425,13 @@ mod tests {
 
         // evaluate expression
         let result = expr.evaluate(&batch);
-        assert!(result
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Overflow happened on: 2147483647 + 1"));
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Overflow happened on: 2147483647 + 1")
+        );
         Ok(())
     }
 
@@ -4455,11 +4456,13 @@ mod tests {
 
         // evaluate expression
         let result = expr.evaluate(&batch);
-        assert!(result
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Overflow happened on: -2147483648 - 1"));
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Overflow happened on: -2147483648 - 1")
+        );
         Ok(())
     }
 
@@ -4484,11 +4487,13 @@ mod tests {
 
         // evaluate expression
         let result = expr.evaluate(&batch);
-        assert!(result
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Overflow happened on: 2147483647 * 2"));
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Overflow happened on: 2147483647 * 2")
+        );
         Ok(())
     }
 
@@ -4797,9 +4802,10 @@ mod tests {
             let child_refs = child_view.iter().collect::<Vec<_>>();
             for op in &ops {
                 let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
-                assert!(expr
-                    .propagate_statistics(&parent, child_refs.as_slice())?
-                    .is_some());
+                assert!(
+                    expr.propagate_statistics(&parent, child_refs.as_slice())?
+                        .is_some()
+                );
             }
         }
 
