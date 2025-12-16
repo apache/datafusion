@@ -1,4 +1,4 @@
-#![allow(clippy::allow_attributes)]
+#[allow(clippy::allow_attributes)]
 
 impl serde::Serialize for AggLimit {
     #[allow(deprecated)]
