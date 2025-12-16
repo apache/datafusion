@@ -221,7 +221,53 @@ fn hash_array_primitive<T>(
     }
 }
 
-// TODO FIX: can't hash view if it isn't inlined (otherwise it can have different offsets
+/// Hash a string view array.
+///
+/// Templated to optimize inner loop based on presence of nulls and external buffers.
+///
+/// HAS_NULLS: do we have to check in the inner loop
+/// HAS_BUFFERS: if true, array has external buffers; if false, all strings are inlined/ less then 12 bytes
+/// REHASH: if true, combining with existing hash, otherwise initializing
+fn hash_string_view_array_inner<const HAS_NULLS: bool, const HAS_BUFFERS: bool, const REHASH: bool> (
+    array: &StringViewArray,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) {
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+        if HAS_NULLS && array.is_null(i) {
+            continue;
+        }
+        // SAFETY: length is verified above so i is within bounds
+        let v = unsafe { *array.views().get_unchecked(i) };
+        let view_len = v as u32;
+        // all views are inlined, no need to access external buffers
+        if !HAS_BUFFERS || view_len <= 12 {
+            if REHASH {
+                *hash = combine_hashes(v.hash_one(random_state), *hash);
+            } else {
+                *hash = v.hash_one(random_state);
+            }
+            continue;
+        }
+        // view is not inlined, so we need to hash the bytes as well
+        let view = ByteView::from(v);
+        let data = unsafe { array.data_buffers().get_unchecked(view.buffer_index as usize) };
+        let offset = view.offset as usize;
+        // SAFETY: view is a valid view as it came from the array
+        let view_bytes = unsafe { data.get_unchecked(offset..offset + view_len as usize) };
+        if REHASH {
+            *hash = combine_hashes(view_bytes.hash_one(random_state), *hash);
+        } else {
+            *hash = view_bytes.hash_one(random_state);
+        }
+    }
+}
 
 /// Builds hash values for array views and writes them into `hashes_buffer`
 /// If `rehash==true` this combines the previous hash value in the buffer
@@ -236,68 +282,16 @@ fn hash_string_view_array(
     rehash: bool,
 )
 {
-    assert_eq!(
-        hashes_buffer.len(),
-        array.len(),
-        "hashes_buffer and array should be of equal length"
-    );
-
-    let get_value = |v| {
-        let view_len = v as u32;
-        let view = ByteView::from(v);
-        let data = unsafe { array.data_buffers().get_unchecked(view.buffer_index as usize) };
-        let offset = view.offset as usize;
-        unsafe { data.get_unchecked(offset..offset + view_len as usize) }
-    };
-
-    if array.null_count() == 0 {
-        if rehash {
-            for (hash, &v) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                let view_len = v as u32;
-                // if the length is not inlined, then we need to hash the bytes as well
-                if view_len > 12 {
-                    *hash = combine_hashes(get_value(v).hash_one(random_state), *hash);
-                } else {
-                    *hash = combine_hashes(v.hash_one(random_state), *hash);
-                }
-            }
-        } else {
-            for (hash, &v) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                let view_len = v as u32;
-                // if the length is not inlined, then we need to hash the bytes as well
-                if view_len > 12 {
-                    *hash = get_value(v).hash_one(random_state);
-                } else {
-                    *hash = v.hash_one(random_state);
-                }
-            }
-        }
-    } else if rehash {
-        for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-            if !array.is_null(i) {
-                let view = unsafe { *array.views().get_unchecked(i) };
-                let view_len = view as u32;
-                // if the length is not inlined, then we need to hash the bytes as well
-                if view_len > 12 {
-                    *hash = combine_hashes(get_value(view).hash_one(random_state), *hash);
-                } else {
-                    *hash = combine_hashes(view.hash_one(random_state), *hash);
-                }
-            }
-        }
-    } else {
-        for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-            if !array.is_null(i) {
-                let view = unsafe { *array.views().get_unchecked(i) };
-                let view_len = view as u32;
-                // if the length is not inlined, then we need to hash the bytes as well
-                if view_len > 12 {
-                    *hash = get_value(view).hash_one(random_state);
-                } else {
-                    *hash = view.hash_one(random_state);
-                }
-            }
-        }
+    // instantiate the correct version based on presence of nulls and external buffers
+    match (array.null_count() != 0, !array.data_buffers().is_empty(), rehash) {
+        (false, false, false) => hash_string_view_array_inner::<false, false, false>(array, random_state, hashes_buffer),
+        (false, false, true) => hash_string_view_array_inner::<false, false, true>(array, random_state, hashes_buffer),
+        (false, true, false) => hash_string_view_array_inner::<false, true, false>(array, random_state, hashes_buffer),
+        (false, true, true) => hash_string_view_array_inner::<false, true, true>(array, random_state, hashes_buffer),
+        (true, false, false) => hash_string_view_array_inner::<true, false, false>(array, random_state, hashes_buffer),
+        (true, false, true) => hash_string_view_array_inner::<true, false, true>(array, random_state, hashes_buffer),
+        (true, true, false) => hash_string_view_array_inner::<true, true, false>(array, random_state, hashes_buffer),
+        (true, true, true) => hash_string_view_array_inner::<true, true, true>(array, random_state, hashes_buffer),
     }
 }
 
