@@ -34,13 +34,33 @@ DataFusion operators expose runtime metrics so you can understand where time is 
 | output_bytes    | Memory usage of all output batches. Note: This value may be overestimated. If multiple output `RecordBatch` instances share underlying memory buffers, their sizes will be counted multiple times. |
 | output_batches  | Total number of output batches the operator produces.                                                                                                                                              |
 
+### BuildProbeJoinMetrics
+
+| Metric              | Description                                                          |
+| ------------------- | -------------------------------------------------------------------- |
+| build_time          | Total time for collecting build-side of join.                        |
+| build_input_batches | Number of batches consumed by build-side.                            |
+| build_input_rows    | Number of rows consumed by build-side.                               |
+| build_mem_used      | Memory used by build-side in bytes.                                  |
+| join_time           | Total time for joining probe-side batches to the build-side batches. |
+| input_batches       | Number of batches consumed by probe-side of this operator.           |
+| input_rows          | Number of rows consumed by probe-side this operator.                 |
+| probe_hit_rate      | Fraction of probe rows that found more than one match.               |
+| avg_fanout          | Average number of build matches per matched probe row.               |
+
 ## Operator-specific Metrics
 
 ### FilterExec
 
-| Metric      | Description                                                       |
-| ----------- | ----------------------------------------------------------------- |
-| selectivity | Selectivity of the filter, calculated as output_rows / input_rows |
+| Metric      | Description                                                        |
+| ----------- | ------------------------------------------------------------------ |
+| selectivity | Selectivity of the filter, calculated as output_rows / input_rows. |
+
+### NestedLoopJoinExec
+
+| Metric      | Description                                                      |
+| ----------- | ---------------------------------------------------------------- |
+| selectivity | Selectivity of the join: output_rows / (left_rows * right_rows). |
 
 ## TODO
 
