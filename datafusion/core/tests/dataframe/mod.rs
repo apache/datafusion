@@ -20,10 +20,10 @@ mod dataframe_functions;
 mod describe;
 
 use arrow::array::{
-    record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
-    FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder,
-    Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
-    StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
+    Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
+    FixedSizeListBuilder, Float32Array, Float64Array, Int8Array, Int32Array,
+    Int32Builder, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
+    StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, record_batch,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
@@ -66,8 +66,8 @@ use datafusion::test_util::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
 use datafusion_common::{
-    assert_contains, internal_datafusion_err, Constraint, Constraints, DFSchema,
-    DataFusionError, ScalarValue, SchemaError, TableReference, UnnestOptions,
+    Constraint, Constraints, DFSchema, DataFusionError, ScalarValue, SchemaError,
+    TableReference, UnnestOptions, assert_contains, internal_datafusion_err,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file_format::format_as_file_type;
@@ -76,21 +76,21 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, NullTreatment, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
-    cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
-    scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
-    LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    Expr, ExprFunctionExt, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+    ScalarFunctionImplementation, SortExpr, TableType, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition, cast, col, create_udf, exists,
+    in_subquery, lit, out_ref_col, placeholder, scalar_subquery, when, wildcard,
 };
+use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::{displayable, ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
 
 use datafusion::error::Result as DataFusionResult;
 use datafusion_functions_window::expr_fn::lag;
@@ -2234,12 +2234,14 @@ async fn row_writer_resize_test() -> Result<()> {
 
     let data = RecordBatch::try_new(
         schema,
-        vec![
-            Arc::new(StringArray::from(vec![
-                Some("2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
-                Some("3a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800"),
-            ]))
-        ],
+        vec![Arc::new(StringArray::from(vec![
+            Some(
+                "2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            Some(
+                "3a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000800",
+            ),
+        ]))],
     )?;
 
     let ctx = SessionContext::new();
@@ -3114,15 +3116,17 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let df_results = ctx
         .table("t1")
         .await?
-        .select(vec![count_all_window()
-            .order_by(vec![Sort::new(col("a"), false, true)])
-            .window_frame(WindowFrame::new_bounds(
-                WindowFrameUnits::Range,
-                WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
-                WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
-            ))
-            .build()
-            .unwrap()])?
+        .select(vec![
+            count_all_window()
+                .order_by(vec![Sort::new(col("a"), false, true)])
+                .window_frame(WindowFrame::new_bounds(
+                    WindowFrameUnits::Range,
+                    WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+                    WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+                ))
+                .build()
+                .unwrap(),
+        ])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -3150,8 +3154,8 @@ async fn test_count_wildcard_on_window() -> Result<()> {
 
 #[tokio::test]
 // Test with `repartition_sorts` disabled, causing a full resort of the data
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false(
-) -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
+-> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
@@ -3168,8 +3172,8 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
 
 #[tokio::test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true(
-) -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
+-> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r#"
@@ -6306,7 +6310,10 @@ async fn test_insert_into_checking() -> Result<()> {
         .await
         .unwrap_err();
 
-    assert_contains!(e.to_string(), "Inserting query schema mismatch: Expected table field 'a' with type Int64, but got 'column1' with type Utf8");
+    assert_contains!(
+        e.to_string(),
+        "Inserting query schema mismatch: Expected table field 'a' with type Int64, but got 'column1' with type Utf8"
+    );
 
     Ok(())
 }
@@ -6438,7 +6445,10 @@ async fn test_insert_into_casting_support() -> Result<()> {
         .await
         .unwrap_err();
 
-    assert_contains!(e.to_string(), "Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8.");
+    assert_contains!(
+        e.to_string(),
+        "Inserting query schema mismatch: Expected table field 'a' with type Float16, but got 'a' with type Utf8."
+    );
 
     // Testing case2:
     // Inserting query schema mismatch: Expected table field 'a' with type Utf8View, but got 'a' with type Utf8.

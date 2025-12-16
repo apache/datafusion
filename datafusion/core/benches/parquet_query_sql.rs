@@ -23,14 +23,14 @@ use arrow::datatypes::{
     SchemaRef,
 };
 use arrow::record_batch::RecordBatch;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::instant::Instant;
 use futures::stream::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
-use rand::distr::uniform::SampleUniform;
 use rand::distr::Alphanumeric;
+use rand::distr::uniform::SampleUniform;
 use rand::prelude::*;
 use rand::rng;
 use std::fs::File;

@@ -25,11 +25,11 @@ use datafusion::catalog::memory::MemTable;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::prelude::*;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
-use datafusion_expr::Expr;
 use datafusion_sql::sqlparser::ast::TableFactor;
 use insta::assert_snapshot;
 
