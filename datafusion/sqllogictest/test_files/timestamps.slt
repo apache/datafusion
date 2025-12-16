@@ -3168,7 +3168,7 @@ NULL
 statement ok
 insert into table_strings values ('33', '12', '23');
 
-query error  DataFusion error: Execution error: Hour value '33' is out of range
+query error DataFusion error: Execution error: Hour value '33' is out of range
 select make_time(t.hour, t.minute, t.second) from table_strings t;
 
 statement ok
@@ -3180,13 +3180,13 @@ select make_time(22);
 query error Function 'make_time' expects 3 arguments but received 2
 select make_time(22, 22);
 
-query error  DataFusion error: Execution error: Hour value '26' is out of range
+query error DataFusion error: Execution error: Hour value '26' is out of range
 select make_time(26, 13, 23);
 
 query error DataFusion error: Execution error: Second value '62' is out of range
 select make_time(22, 01, 62);
 
-query error  DataFusion error: Execution error: Minute value '64' is out of range
+query error DataFusion error: Execution error: Minute value '64' is out of range
 select make_time(22, 64, 23);
 
 query error DataFusion error: Execution error: Hour value '-1' is out of range

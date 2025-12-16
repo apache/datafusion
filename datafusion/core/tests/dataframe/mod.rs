@@ -1102,26 +1102,26 @@ async fn window_using_aggregates() -> Result<()> {
     | first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     |             |          |                 |               |        |     |      | 1  | -85  |
-    | -85         | -101     | 14              | -12           | -101   | 83  | -101 | 4  | -54  |
-    | -85         | -101     | 17              | -25           | -101   | 83  | -101 | 5  | -31  |
-    | -85         | -12      | 10              | -32           | -12    | 83  | -85  | 3  | 13   |
-    | -85         | -25      | 3               | -56           | -25    | -25 | -85  | 1  | -5   |
-    | -85         | -31      | 18              | -29           | -31    | 83  | -101 | 5  | 36   |
-    | -85         | -38      | 16              | -25           | -38    | 83  | -101 | 4  | 65   |
+    | -85         | -101     | 14              | -12           | -12    | 83  | -101 | 4  | -54  |
+    | -85         | -101     | 17              | -25           | -25    | 83  | -101 | 5  | -31  |
+    | -85         | -12      | 10              | -32           | -34    | 83  | -85  | 3  | 13   |
+    | -85         | -25      | 3               | -56           | -56    | -25 | -85  | 1  | -5   |
+    | -85         | -31      | 18              | -29           | -28    | 83  | -101 | 5  | 36   |
+    | -85         | -38      | 16              | -25           | -25    | 83  | -101 | 4  | 65   |
     | -85         | -43      | 7               | -43           | -43    | 83  | -85  | 2  | 45   |
-    | -85         | -48      | 6               | -35           | -48    | 83  | -85  | 2  | -43  |
-    | -85         | -5       | 4               | -37           | -5     | -5  | -85  | 1  | 83   |
-    | -85         | -54      | 15              | -17           | -54    | 83  | -101 | 4  | -38  |
-    | -85         | -56      | 2               | -70           | -56    | -56 | -85  | 1  | -25  |
-    | -85         | -72      | 9               | -43           | -72    | 83  | -85  | 3  | -12  |
+    | -85         | -48      | 6               | -35           | -36    | 83  | -85  | 2  | -43  |
+    | -85         | -5       | 4               | -37           | -40    | -5  | -85  | 1  | 83   |
+    | -85         | -54      | 15              | -17           | -18    | 83  | -101 | 4  | -38  |
+    | -85         | -56      | 2               | -70           | 57     | -56 | -85  | 1  | -25  |
+    | -85         | -72      | 9               | -43           | -43    | 83  | -85  | 3  | -12  |
     | -85         | -85      | 1               | -85           | -85    | -85 | -85  | 1  | -56  |
-    | -85         | 13       | 11              | -17           | 13     | 83  | -85  | 3  | 14   |
-    | -85         | 13       | 11              | -25           | 13     | 83  | -85  | 3  | 13   |
-    | -85         | 14       | 12              | -12           | 14     | 83  | -85  | 3  | 17   |
-    | -85         | 17       | 13              | -11           | 17     | 83  | -85  | 4  | -101 |
-    | -85         | 45       | 8               | -34           | 45     | 83  | -85  | 3  | -72  |
-    | -85         | 65       | 17              | -17           | 65     | 83  | -101 | 5  | -101 |
-    | -85         | 83       | 5               | -25           | 83     | 83  | -85  | 2  | -48  |
+    | -85         | 13       | 11              | -17           | -18    | 83  | -85  | 3  | 14   |
+    | -85         | 13       | 11              | -25           | -25    | 83  | -85  | 3  | 13   |
+    | -85         | 14       | 12              | -12           | -12    | 83  | -85  | 3  | 17   |
+    | -85         | 17       | 13              | -11           | -8     | 83  | -85  | 4  | -101 |
+    | -85         | 45       | 8               | -34           | -34    | 83  | -85  | 3  | -72  |
+    | -85         | 65       | 17              | -17           | -18    | 83  | -101 | 5  | -101 |
+    | -85         | 83       | 5               | -25           | -25    | 83  | -85  | 2  | -48  |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     "###
     );
@@ -2906,10 +2906,9 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     |               |     SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]                               |
     |               |       ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*), count(Int64(1))@1 as count(Int64(1))] |
     |               |         AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))]                       |
-    |               |           CoalesceBatchesExec: target_batch_size=8192                                                      |
-    |               |             RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1                               |
-    |               |               AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]                          |
-    |               |                 DataSourceExec: partitions=1, partition_sizes=[1]                                          |
+    |               |           RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1                                 |
+    |               |             AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]                            |
+    |               |               DataSourceExec: partitions=1, partition_sizes=[1]                                            |
     |               |                                                                                                            |
     +---------------+------------------------------------------------------------------------------------------------------------+
     "
@@ -2927,10 +2926,9 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                       |
     |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true] |
     |               |     AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(*)]  |
-    |               |       CoalesceBatchesExec: target_batch_size=8192                          |
-    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1   |
-    |               |           AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(*)]     |
-    |               |             DataSourceExec: partitions=1, partition_sizes=[1]              |
+    |               |       RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1     |
+    |               |         AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(*)]       |
+    |               |           DataSourceExec: partitions=1, partition_sizes=[1]                |
     |               |                                                                            |
     +---------------+----------------------------------------------------------------------------+
     "
@@ -3342,10 +3340,9 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |         CoalescePartitionsExec                                                                                             |
     |               |           ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                            |
     |               |             AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                   |
-    |               |               CoalesceBatchesExec: target_batch_size=8192                                                                  |
-    |               |                 RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                           |
-    |               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                      |
-    |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                      |
+    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
+    |               |                 AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                        |
+    |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
     |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
     |               |                                                                                                                            |
     +---------------+----------------------------------------------------------------------------------------------------------------------------+
@@ -3399,10 +3396,9 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |         CoalescePartitionsExec                                                                                             |
     |               |           ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                   |
     |               |             AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                          |
-    |               |               CoalesceBatchesExec: target_batch_size=8192                                                                  |
-    |               |                 RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                           |
-    |               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                             |
-    |               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                      |
+    |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
+    |               |                 AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                               |
+    |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
     |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
     |               |                                                                                                                            |
     +---------------+----------------------------------------------------------------------------------------------------------------------------+
