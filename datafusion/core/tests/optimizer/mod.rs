@@ -33,12 +33,12 @@ use datafusion::functions::datetime::expr_fn;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TransformedResult;
 use datafusion_common::{
-    plan_err, DFSchema, DFSchemaRef, Result, ScalarValue, TableReference,
+    DFSchema, DFSchemaRef, Result, ScalarValue, TableReference, plan_err,
 };
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    and, col, lit, or, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan,
-    Operator, ScalarUDF, TableSource, WindowUDF,
+    AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
+    TableSource, WindowUDF, and, col, lit, or,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;

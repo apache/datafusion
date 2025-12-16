@@ -38,8 +38,8 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{NullEquality, ScalarValue};
-use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::expressions::Literal;
 
 use itertools::Itertools;
 use rand::Rng;
@@ -921,7 +921,9 @@ impl JoinFuzzTestCase {
                 std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
                 std::fs::create_dir_all(fuzz_debug).unwrap();
                 let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
-                println!("Test result data mismatch found. HJ rows {hj_rows}, SMJ rows {smj_rows}, NLJ rows {nlj_rows}");
+                println!(
+                    "Test result data mismatch found. HJ rows {hj_rows}, SMJ rows {smj_rows}, NLJ rows {nlj_rows}"
+                );
                 println!("The debug is ON. Input data will be saved to {out_dir_name}");
 
                 Self::save_partitioned_batches_as_parquet(
@@ -972,14 +974,18 @@ impl JoinFuzzTestCase {
             }
 
             if join_tests.contains(&NljHj) {
-                let err_msg_rowcnt = format!("NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {batch_size}");
+                let err_msg_rowcnt = format!(
+                    "NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {batch_size}"
+                );
                 assert_eq!(nlj_rows, hj_rows, "{}", err_msg_rowcnt.as_str());
                 if nlj_rows == 0 && hj_rows == 0 {
                     // both joins returned no rows, skip content comparison
                     continue;
                 }
 
-                let err_msg_contents = format!("NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {batch_size}");
+                let err_msg_contents = format!(
+                    "NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {batch_size}"
+                );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
                 for (i, (nlj_line, hj_line)) in nlj_formatted_sorted
@@ -997,10 +1003,16 @@ impl JoinFuzzTestCase {
             }
 
             if join_tests.contains(&HjSmj) {
-                let err_msg_row_cnt = format!("HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}", &batch_size);
+                let err_msg_row_cnt = format!(
+                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}",
+                    &batch_size
+                );
                 assert_eq!(hj_rows, smj_rows, "{}", err_msg_row_cnt.as_str());
 
-                let err_msg_contents = format!("SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}", &batch_size);
+                let err_msg_contents = format!(
+                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}",
+                    &batch_size
+                );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
                 if smj_rows > 0 || hj_rows > 0 {

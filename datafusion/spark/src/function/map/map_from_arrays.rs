@@ -25,7 +25,7 @@ use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
