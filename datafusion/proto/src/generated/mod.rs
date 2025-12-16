@@ -24,6 +24,7 @@ pub mod datafusion {
     include!("datafusion_proto_common.rs");
 
     #[cfg(feature = "json")]
+    #[allow(clippy::allow_attributes)]
     include!("pbjson.rs");
 }
 
