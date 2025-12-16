@@ -64,13 +64,14 @@ use std::time::Duration;
 use tokio::runtime::{Handle, Runtime};
 use tokio::select;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RangeBatchGenerator {
     schema: SchemaRef,
     value_range: Range<i64>,
     boundedness: Boundedness,
     batch_size: usize,
     poll_count: usize,
+    original_range: Range<i64>,
 }
 
 impl std::fmt::Display for RangeBatchGenerator {
@@ -110,6 +111,13 @@ impl LazyBatchGenerator for RangeBatchGenerator {
             RecordBatch::try_new(Arc::clone(&self.schema), vec![Arc::new(array)])?;
         Ok(Some(batch))
     }
+
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        let mut new = self.clone();
+        new.poll_count = 0;
+        new.value_range = new.original_range.clone();
+        Arc::new(RwLock::new(new))
+    }
 }
 
 fn make_lazy_exec(column_name: &str, pretend_infinite: bool) -> LazyMemoryExec {
@@ -139,9 +147,10 @@ fn make_lazy_exec_with_range(
     let batch_gen = RangeBatchGenerator {
         schema: Arc::clone(&schema),
         boundedness,
-        value_range: range,
+        value_range: range.clone(),
         batch_size: 8192,
         poll_count: 0,
+        original_range: range,
     };
 
     // Wrap the generator in a trait object behind Arc<RwLock<_>>
