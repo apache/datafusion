@@ -77,7 +77,7 @@ use datafusion_common::tree_node::{
 pub struct OptimizeProjections {}
 
 impl OptimizeProjections {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
