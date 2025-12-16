@@ -23,15 +23,14 @@ use std::sync::Arc;
 
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use arrow_avro::schema::{AvroSchema, SCHEMA_METADATA_KEY};
-use datafusion_common::DataFusionError;
 use datafusion_common::error::Result;
-use datafusion_datasource::TableSchema;
+use datafusion_common::DataFusionError;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_datasource::TableSchema;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
@@ -212,16 +211,6 @@ impl FileSource for AvroSource {
         "avro"
     }
 
-    fn repartitioned(
-        &self,
-        _target_partitions: usize,
-        _repartition_file_min_size: usize,
-        _output_ordering: Option<LexOrdering>,
-        _config: &FileScanConfig,
-    ) -> Result<Option<FileScanConfig>> {
-        Ok(None)
-    }
-
     fn with_schema_adapter_factory(
         &self,
         schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
@@ -242,7 +231,7 @@ mod private {
     use std::io::BufReader;
 
     use bytes::Buf;
-    use datafusion_datasource::{PartitionedFile, file_stream::FileOpenFuture};
+    use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
 
