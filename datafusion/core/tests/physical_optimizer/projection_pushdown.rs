@@ -482,8 +482,8 @@ fn test_memory_after_projection() -> Result<()> {
     let memory = create_projecting_memory_exec();
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("d", 2)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 3)), "e".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("d", 2)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 3)), "e"),
             ProjectionExpr::new(Arc::new(Column::new("a", 1)), "a"),
         ],
         memory.clone(),
