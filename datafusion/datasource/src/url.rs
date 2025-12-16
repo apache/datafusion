@@ -830,7 +830,7 @@ mod tests {
         let runtime_with_cache = RuntimeEnvBuilder::new()
             .with_object_list_cache_limit(1024 * 1024) // 1MB limit
             .build_arc()?;
-        let session_with_cache = MockSessionWithRuntime::new(runtime_with_cache);
+        let session_with_cache = MockSession::with_runtime_env(runtime_with_cache);
 
         // Test cases: (url, prefix, description)
         let test_cases = vec![
@@ -931,7 +931,7 @@ mod tests {
         let runtime = RuntimeEnvBuilder::new()
             .with_object_list_cache_limit(1024 * 1024) // 1MB limit
             .build_arc()?;
-        let session = MockSessionWithRuntime::new(runtime);
+        let session = MockSession::with_runtime_env(runtime);
 
         let url = ListingTableUrl::parse("/sales/")?;
 
@@ -1139,82 +1139,13 @@ mod tests {
                 runtime_env: Arc::new(RuntimeEnv::default()),
             }
         }
-    }
 
-    /// MockSession variant that accepts a custom RuntimeEnv (for cache testing)
-    struct MockSessionWithRuntime {
-        config: SessionConfig,
-        runtime_env: Arc<RuntimeEnv>,
-    }
-
-    impl MockSessionWithRuntime {
-        fn new(runtime_env: Arc<RuntimeEnv>) -> Self {
+        /// Create a MockSession with a custom RuntimeEnv (for cache testing)
+        fn with_runtime_env(runtime_env: Arc<RuntimeEnv>) -> Self {
             Self {
                 config: SessionConfig::new(),
                 runtime_env,
             }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl Session for MockSessionWithRuntime {
-        fn session_id(&self) -> &str {
-            unimplemented!()
-        }
-
-        fn config(&self) -> &SessionConfig {
-            &self.config
-        }
-
-        async fn create_physical_plan(
-            &self,
-            _logical_plan: &LogicalPlan,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
-        }
-
-        fn create_physical_expr(
-            &self,
-            _expr: Expr,
-            _df_schema: &DFSchema,
-        ) -> Result<Arc<dyn PhysicalExpr>> {
-            unimplemented!()
-        }
-
-        fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
-            unimplemented!()
-        }
-
-        fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
-            unimplemented!()
-        }
-
-        fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
-            unimplemented!()
-        }
-
-        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
-            &self.runtime_env
-        }
-
-        fn execution_props(&self) -> &ExecutionProps {
-            unimplemented!()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            unimplemented!()
-        }
-
-        fn table_options(&self) -> &TableOptions {
-            unimplemented!()
-        }
-
-        fn table_options_mut(&mut self) -> &mut TableOptions {
-            unimplemented!()
-        }
-
-        fn task_ctx(&self) -> Arc<TaskContext> {
-            unimplemented!()
         }
     }
 
