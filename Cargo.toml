@@ -272,3 +272,32 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+## Temporary arrow-rs patch until 57.2.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+
+#arrow = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow" }
+#arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-array" }
+#arrow-buffer = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-buffer" }
+#arrow-cast = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-cast" }
+#arrow-data = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-data" }
+#arrow-ipc = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-ipc" }
+#arrow-schema = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-schema" }
+#arrow-select = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-select" }
+#arrow-string = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-string" }
+#arrow-ord = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-ord" }
+#arrow-flight = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-flight" }
+#parquet = { path= "/Users/andrewlamb/Software/arrow-rs2/parquet" }
