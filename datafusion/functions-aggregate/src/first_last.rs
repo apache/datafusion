@@ -40,7 +40,8 @@ use arrow::datatypes::{
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err, not_impl_err,
+    DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err,
+    not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
