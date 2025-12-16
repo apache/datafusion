@@ -17,7 +17,8 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::Field;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
     exec_datafusion_err, internal_err, plan_datafusion_err, NullEquality,
     RecursionUnnestOption, Result, ScalarValue, TableReference, UnnestOptions,
@@ -527,8 +528,10 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            let field = Field::new("", data_type, cast.nullable.unwrap_or(true));
+            let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
+            let field = data_type
+                .into_nullable_field()
+                .with_nullable(cast.nullable.unwrap_or(true));
             Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
         }
         ExprType::TryCast(cast) => {
@@ -538,8 +541,10 @@ pub fn parse_expr(
                 "expr",
                 codec,
             )?);
-            let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            let field = Field::new("", data_type, cast.nullable.unwrap_or(true));
+            let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
+            let field = data_type
+                .into_nullable_field()
+                .with_nullable(cast.nullable.unwrap_or(true));
             Ok(Expr::TryCast(TryCast::new_from_field(
                 expr,
                 Arc::new(field),

@@ -627,14 +627,19 @@ impl ExprSchemable for Expr {
             // _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
             Expr::Cast(Cast { expr, field }) => expr
                 .to_field(schema)
-                .map(|(_, f)| {
-                    // This currently propagates the nullability of the input
-                    // expression as the resulting physical expression does
-                    // not currently consider the nullability specified here
-                    f.as_ref()
+                .map(|(_table_ref, destination_field)| {
+                    // This propagates the nullability of the input rather than
+                    // force the nullability of the destination field. This is
+                    // usually the desired behaviour (i.e., specifying a cast
+                    // destination type usually does not force a user to pick
+                    // nullability, and assuming `true` would prevent the non-nullability
+                    // of the parent expression to make the result eligible for
+                    // optimizations that only apply to non-nullable values).
+                    destination_field
+                        .as_ref()
                         .clone()
                         .with_data_type(field.data_type().clone())
-                        .with_metadata(f.metadata().clone())
+                        .with_metadata(destination_field.metadata().clone())
                 })
                 .map(Arc::new),
             Expr::Placeholder(Placeholder {
