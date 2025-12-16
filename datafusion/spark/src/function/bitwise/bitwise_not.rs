@@ -18,9 +18,9 @@
 use arrow::array::*;
 use arrow::compute::kernels::bitwise;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Int16Type, Int32Type, Int64Type, Int8Type,
+    DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type,
 };
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_functions::utils::make_scalar_function;

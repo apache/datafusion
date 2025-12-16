@@ -20,17 +20,17 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_integer_array, Array, ArrayRef, ArrowPrimitiveType, AsArray, Int32Array,
-    Int8Array, PrimitiveArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, Int8Array, Int32Array, PrimitiveArray,
+    downcast_integer_array,
 };
 use arrow::compute::try_binary;
-use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int8Type};
-use datafusion_common::types::{logical_int32, NativeType};
+use arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef, Int8Type, Int32Type};
+use datafusion_common::types::{NativeType, logical_int32};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -83,7 +83,13 @@ impl ScalarUDFImpl for SparkBitGet {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int8)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Spark derives nullability for BinaryExpression from its children
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), DataType::Int8, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -117,4 +123,44 @@ fn spark_bit_get(args: &[ArrayRef]) -> Result<ArrayRef> {
         d => internal_err!("Unsupported datatype for bit_get: {d}"),
     )?;
     Ok(Arc::new(ret))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Field;
+
+    #[test]
+    fn test_bit_get_nullability_non_nullable_inputs() {
+        let func = SparkBitGet::new();
+        let value_field = Arc::new(Field::new("value", DataType::Int32, false));
+        let pos_field = Arc::new(Field::new("pos", DataType::Int32, false));
+
+        let out_field = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[value_field, pos_field],
+                scalar_arguments: &[None, None],
+            })
+            .unwrap();
+
+        assert_eq!(out_field.data_type(), &DataType::Int8);
+        assert!(!out_field.is_nullable());
+    }
+
+    #[test]
+    fn test_bit_get_nullability_nullable_inputs() {
+        let func = SparkBitGet::new();
+        let value_field = Arc::new(Field::new("value", DataType::Int32, true));
+        let pos_field = Arc::new(Field::new("pos", DataType::Int32, false));
+
+        let out_field = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[value_field, pos_field],
+                scalar_arguments: &[None, None],
+            })
+            .unwrap();
+
+        assert_eq!(out_field.data_type(), &DataType::Int8);
+        assert!(out_field.is_nullable());
+    }
 }

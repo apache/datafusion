@@ -30,10 +30,10 @@ use datafusion_common::cast::{
     as_interval_mdn_array, as_interval_ym_array,
 };
 use datafusion_common::types::{
-    logical_duration_microsecond, logical_float64, logical_int32, logical_interval_mdn,
-    logical_interval_year_month, NativeType,
+    NativeType, logical_duration_microsecond, logical_float64, logical_int32,
+    logical_interval_mdn, logical_interval_year_month,
 };
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
