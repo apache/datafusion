@@ -962,13 +962,12 @@ select log(value) from (values (1e3), (1e4), (1e5)) as t(value);
 5
 
 # log with negative scale and different bases
-# Note: Results may come in different order depending on execution
-query R
-select log(base, 1e4) from (values (10.0), (2.0), (3.0)) as t(base) order by base ;
+query R rowsort
+select log(base, 1e4) from (values (10.0), (2.0), (3.0)) as t(base);
 ----
 13.287712379549
-8.383613097158
 4
+8.383613097158
 
 # power with decimals
 
