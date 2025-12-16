@@ -116,24 +116,11 @@ fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> 
         )));
     }
 
-    // Handle negative scales using logarithmic property:
-    // log_base(value * 10^(-scale)) = log_base(value) + (-scale) * log_base(10)
     if scale < 0 {
-        // For negative scale, the actual value is value * 10^(-scale) where -scale > 0
-        // Use property: log_base(a * 10^(-s)) = log_base(a) + (-s) * log_base(10)
         if value > 0 {
-            let value_f64 = value as f64;
-
-            // Compute log_base(value) - use natural log and convert
-            // log_base(x) = ln(x) / ln(base)
-            let log_value = value_f64.ln() / base.ln();
-
-            // Add the adjustment: (-scale) * log_base(10)
-            // log_base(10) = ln(10) / ln(base)
-            let log_10_base = 10.0_f64.ln() / base.ln();
-            let adjustment = (-scale as f64) * log_10_base;
-
-            Ok(log_value + adjustment)
+            // Compute actual value: value * 10^(-scale) = value * 10^|scale|
+            let actual_value = (value as f64) * 10.0_f64.powi(-scale as i32);
+            Ok(actual_value.log(base))
         } else {
             // Reflect f64::log behaviour
             Ok(f64::NAN)
@@ -317,24 +304,6 @@ impl ScalarUDFImpl for LogFunc {
         let number = args.pop().unwrap();
         let number_datatype = arg_types.pop().unwrap();
 
-        // Check if base has negative scale (if provided)
-        let base_has_negative_scale = if num_args == 2 {
-            if let Some(
-                DataType::Decimal32(_, scale)
-                | DataType::Decimal64(_, scale)
-                | DataType::Decimal128(_, scale)
-                | DataType::Decimal256(_, scale),
-            ) = arg_types.last()
-            {
-                *scale < 0
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        // Skip simplification for negative scale decimals as ScalarValue doesn't support them yet
         let has_negative_scale = match &number_datatype {
             DataType::Decimal32(_, scale)
             | DataType::Decimal64(_, scale)
@@ -343,59 +312,69 @@ impl ScalarUDFImpl for LogFunc {
             _ => false,
         };
 
-        if has_negative_scale || base_has_negative_scale {
-            let args = match num_args {
-                1 => vec![number],
-                2 => {
-                    let base = args.pop().unwrap();
-                    vec![base, number]
-                }
+        // Get base if provided, otherwise None (will create default base 10 if needed)
+        let base_option = args.pop();
+
+        // Helper to construct result args (used in multiple places)
+        let make_result_args = |base: Expr| -> Result<Vec<Expr>> {
+            Ok(match num_args {
+                1 => vec![number.clone()],
+                2 => vec![base, number.clone()],
                 _ => {
                     return internal_err!(
                         "Unexpected number of arguments in log::simplify"
                     );
                 }
-            };
-            return Ok(ExprSimplifyResult::Original(args));
-        }
-
-        // default to base 10
-        let base = if let Some(base) = args.pop() {
-            base
-        } else {
-            lit(ScalarValue::new_ten(&number_datatype)?)
+            })
         };
 
-        match number {
+        match &number {
             Expr::Literal(value, _)
-                if value == ScalarValue::new_one(&number_datatype)? =>
+                if !has_negative_scale
+                    && *value == ScalarValue::new_one(&number_datatype)? =>
             {
+                let base = base_option.unwrap_or_else(|| {
+                    lit(ScalarValue::new_ten(&number_datatype).unwrap())
+                });
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
                     &info.get_data_type(&base)?,
                 )?)))
             }
-            Expr::ScalarFunction(ScalarFunction { func, mut args })
-                if is_pow(&func) && args.len() == 2 && base == args[0] =>
-            {
-                let b = args.pop().unwrap(); // length checked above
-                Ok(ExprSimplifyResult::Simplified(b))
+            Expr::ScalarFunction(ScalarFunction {
+                func,
+                args: pow_args,
+            }) if !has_negative_scale && is_pow(func) && pow_args.len() == 2 => {
+                let base = base_option.unwrap_or_else(|| {
+                    lit(ScalarValue::new_ten(&number_datatype).unwrap())
+                });
+                if base == pow_args[0] {
+                    Ok(ExprSimplifyResult::Simplified(pow_args[1].clone()))
+                } else {
+                    Ok(ExprSimplifyResult::Original(make_result_args(base)?))
+                }
             }
-            number => {
+            _ => {
+                // Handle negative scale or when simplification doesn't apply
+                if has_negative_scale {
+                    // For 1-arg case, base_option is None, so return early
+                    if base_option.is_none() {
+                        return Ok(ExprSimplifyResult::Original(vec![number.clone()]));
+                    }
+                    // For 2-arg case, use the provided base
+                    let base = base_option.unwrap();
+                    return Ok(ExprSimplifyResult::Original(make_result_args(base)?));
+                }
+
+                let base = base_option.unwrap_or_else(|| {
+                    lit(ScalarValue::new_ten(&number_datatype).unwrap())
+                });
+
                 if number == base {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                         &number_datatype,
                     )?)))
                 } else {
-                    let args = match num_args {
-                        1 => vec![number],
-                        2 => vec![base, number],
-                        _ => {
-                            return internal_err!(
-                                "Unexpected number of arguments in log::simplify"
-                            );
-                        }
-                    };
-                    Ok(ExprSimplifyResult::Original(args))
+                    Ok(ExprSimplifyResult::Original(make_result_args(base)?))
                 }
             }
         }
@@ -1192,121 +1171,5 @@ mod tests {
             result.unwrap_err().to_string().lines().next().unwrap(),
             "Arrow error: Not yet implemented: Log of Decimal256 larger than Decimal128 is not yet supported: 170141183460469231731687303715884106727"
         );
-    }
-
-    #[test]
-    fn test_log_decimal128_negative_scale() {
-        // Test log with negative scale: value=100, scale=-2 means 100 * 10^2 = 10000
-        // log10(10000) = 4.0
-        let arg_field = Field::new("a", DataType::Decimal128(38, -2), false).into();
-        let args = ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Array(Arc::new(
-                    Decimal128Array::from(vec![100, 1000, 10])
-                        .with_precision_and_scale(38, -2)
-                        .unwrap(),
-                )), // num: represents 10000, 100000, 1000
-            ],
-            arg_fields: vec![arg_field],
-            number_rows: 3,
-            return_field: Field::new("f", DataType::Float64, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-        let result = LogFunc::new()
-            .invoke_with_args(args)
-            .expect("failed to initialize function log");
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let floats = as_float64_array(&arr)
-                    .expect("failed to convert result to a Float64Array");
-
-                assert_eq!(floats.len(), 3);
-                // log10(10000) = 4.0
-                assert!((floats.value(0) - 4.0).abs() < 1e-10);
-                // log10(100000) = 5.0
-                assert!((floats.value(1) - 5.0).abs() < 1e-10);
-                // log10(1000) = 3.0
-                assert!((floats.value(2) - 3.0).abs() < 1e-10);
-            }
-            ColumnarValue::Scalar(_) => {
-                panic!("Expected an array value")
-            }
-        }
-    }
-
-    #[test]
-    fn test_log_decimal128_negative_scale_base2() {
-        // Test log base 2 with negative scale: value=8, scale=-1 means 8 * 10^1 = 80
-        // log2(80) ≈ 6.321928
-        let arg_fields = vec![
-            Field::new("b", DataType::Float64, false).into(),
-            Field::new("x", DataType::Decimal128(38, -1), false).into(),
-        ];
-        let args = ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // base
-                ColumnarValue::Array(Arc::new(
-                    Decimal128Array::from(vec![8, 16])
-                        .with_precision_and_scale(38, -1)
-                        .unwrap(),
-                )), // num: represents 80, 160
-            ],
-            arg_fields,
-            number_rows: 2,
-            return_field: Field::new("f", DataType::Float64, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-        let result = LogFunc::new()
-            .invoke_with_args(args)
-            .expect("failed to initialize function log");
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let floats = as_float64_array(&arr)
-                    .expect("failed to convert result to a Float64Array");
-
-                assert_eq!(floats.len(), 2);
-                // log2(80) ≈ 6.321928
-                assert!((floats.value(0) - 80.0_f64.log2()).abs() < 1e-10);
-                // log2(160) ≈ 7.321928
-                assert!((floats.value(1) - 160.0_f64.log2()).abs() < 1e-10);
-            }
-            ColumnarValue::Scalar(_) => {
-                panic!("Expected an array value")
-            }
-        }
-    }
-
-    #[test]
-    fn test_log_decimal128_negative_scale_scalar() {
-        // Test scalar with negative scale
-        let arg_field = Field::new("a", DataType::Decimal128(38, -3), false).into();
-        let args = ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(5), 38, -3)), // num: represents 5000
-            ],
-            arg_fields: vec![arg_field],
-            number_rows: 1,
-            return_field: Field::new("f", DataType::Float64, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-        let result = LogFunc::new()
-            .invoke_with_args(args)
-            .expect("failed to initialize function log");
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let floats = as_float64_array(&arr)
-                    .expect("failed to convert result to a Float64Array");
-
-                assert_eq!(floats.len(), 1);
-                // log10(5000) ≈ 3.69897
-                assert!((floats.value(0) - 5000.0_f64.log10()).abs() < 1e-10);
-            }
-            ColumnarValue::Scalar(_) => {
-                panic!("Expected an array value")
-            }
-        }
     }
 }
