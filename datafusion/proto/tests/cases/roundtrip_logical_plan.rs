@@ -1793,7 +1793,7 @@ fn round_trip_datatype() {
         ),
         DataType::Union(
             UnionFields::try_new(
-                vec![5, 8, 1],
+                vec![5, 8, 1, 100],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
