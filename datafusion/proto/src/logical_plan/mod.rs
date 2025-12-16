@@ -423,7 +423,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                             Arc::new(json)
                         }
-                        FileFormatType::Avro(_) => {
+                        FileFormatType::Avro(..) => {
                             #[cfg(feature = "avro")]
                             {
                                 Arc::new(AvroFormat)
