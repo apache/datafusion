@@ -16,6 +16,7 @@
 // under the License.
 
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 mod file_pruner;
 mod pruning_predicate;
