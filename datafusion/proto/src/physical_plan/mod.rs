@@ -1010,6 +1010,8 @@ impl protobuf::PhysicalPlanNode {
             vec![]
         };
 
+        let has_grouping_set = hash_agg.has_grouping_set;
+
         let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
             internal_datafusion_err!("input_schema in AggregateNode is missing.")
         })?;
@@ -1107,7 +1109,7 @@ impl protobuf::PhysicalPlanNode {
 
         let agg = AggregateExec::try_new(
             agg_mode,
-            PhysicalGroupBy::new(group_expr, null_expr, groups),
+            PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
             physical_aggr_expr,
             physical_filter_expr,
             input,
@@ -2540,6 +2542,7 @@ impl protobuf::PhysicalPlanNode {
                     null_expr,
                     groups,
                     limit,
+                    has_grouping_set: exec.group_expr().has_grouping_set(),
                 },
             ))),
         })

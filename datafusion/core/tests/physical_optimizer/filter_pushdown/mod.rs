@@ -18,7 +18,7 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
-    array::{record_batch, Float64Array, Int32Array, RecordBatch, StringArray},
+    array::{Float64Array, Int32Array, RecordBatch, StringArray, record_batch},
     datatypes::{DataType, Field, Schema, SchemaRef},
     util::pretty::pretty_format_batches,
 };
@@ -27,8 +27,8 @@ use datafusion::{
     assert_batches_eq,
     logical_expr::Operator,
     physical_plan::{
-        expressions::{BinaryExpr, Column, Literal},
         PhysicalExpr,
+        expressions::{BinaryExpr, Column, Literal},
     },
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
@@ -36,7 +36,7 @@ use datafusion::{
 use datafusion_catalog::memory::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
 use datafusion_datasource::{
-    file_groups::FileGroup, file_scan_config::FileScanConfigBuilder, PartitionedFile,
+    PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
@@ -45,15 +45,16 @@ use datafusion_functions_aggregate::{
     count::count_udaf,
     min_max::{max_udaf, min_udaf},
 };
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
 use datafusion_physical_expr::{
-    aggregate::{AggregateExprBuilder, AggregateFunctionExpr},
     Partitioning, ScalarFunctionExpr,
+    aggregate::{AggregateExprBuilder, AggregateFunctionExpr},
 };
-use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::{
-    filter_pushdown::FilterPushdown, PhysicalOptimizerRule,
+    PhysicalOptimizerRule, filter_pushdown::FilterPushdown,
 };
 use datafusion_physical_plan::{
+    ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_batches::CoalesceBatchesExec,
     coalesce_partitions::CoalescePartitionsExec,
@@ -61,14 +62,13 @@ use datafusion_physical_plan::{
     filter::FilterExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
-    ExecutionPlan,
 };
 
 use datafusion_physical_plan::union::UnionExec;
 use futures::StreamExt;
-use object_store::{memory::InMemory, ObjectStore};
+use object_store::{ObjectStore, memory::InMemory};
 use regex::Regex;
-use util::{format_plan_for_test, OptimizationTest, TestNode, TestScanBuilder};
+use util::{OptimizationTest, TestNode, TestScanBuilder, format_plan_for_test};
 
 use crate::physical_optimizer::filter_pushdown::util::TestSource;
 
@@ -182,12 +182,14 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
-    let build_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8View, ["ba", "bb"]),
-        ("c", Float64, [1.0, 2.0])
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8View, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8View, false),
@@ -199,12 +201,14 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
         .build();
 
     // Create probe side with more values
-    let probe_batches = vec![record_batch!(
-        ("d", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("e", Utf8View, ["ba", "bb", "bc", "bd"]),
-        ("f", Float64, [1.0, 2.0, 3.0, 4.0])
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("d", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("e", Utf8View, ["ba", "bb", "bc", "bd"]),
+            ("f", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("d", DataType::Utf8, false),
         Field::new("e", DataType::Utf8View, false),
@@ -299,12 +303,14 @@ async fn test_static_filter_pushdown_through_hash_join() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
-    let build_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8View, ["ba", "bb"]),
-        ("c", Float64, [1.0, 2.0])
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8View, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8View, false),
@@ -316,12 +322,14 @@ async fn test_static_filter_pushdown_through_hash_join() {
         .build();
 
     // Create probe side with more values
-    let probe_batches = vec![record_batch!(
-        ("d", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("e", Utf8View, ["ba", "bb", "bc", "bd"]),
-        ("f", Float64, [1.0, 2.0, 3.0, 4.0])
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("d", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("e", Utf8View, ["ba", "bb", "bc", "bd"]),
+            ("f", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("d", DataType::Utf8, false),
         Field::new("e", DataType::Utf8View, false),
@@ -562,15 +570,14 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
         FilterExec::try_new(col_lit_predicate("a", "foo", &schema()), coalesce).unwrap(),
     );
 
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema()).unwrap()])
-                .schema(schema())
-                .alias("cnt")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
     let group_by = PhysicalGroupBy::new_single(vec![
         (col("a", &schema()).unwrap(), "a".to_string()),
         (col("b", &schema()).unwrap(), "b".to_string()),
@@ -975,12 +982,14 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
-    let build_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8, ["ba", "bb"]),
-        ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -992,12 +1001,14 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
         .build();
 
     // Create probe side with more values
-    let probe_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-        ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -1143,12 +1154,14 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     // +---------------+------------------------------------------------------------+
 
     // Create build side with limited values
-    let build_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8, ["ba", "bb"]),
-        ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -1160,12 +1173,14 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         .build();
 
     // Create probe side with more values
-    let probe_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-        ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -1363,12 +1378,14 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
-    let build_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8, ["ba", "bb"]),
-        ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -1380,12 +1397,14 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
         .build();
 
     // Create probe side with more values
-    let probe_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-        ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -1542,10 +1561,9 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
 
     // Create test data for three tables: t1, t2, t3
     // t1: small table with limited values (will be build side of outer join)
-    let t1_batches =
-        vec![
-            record_batch!(("a", Utf8, ["aa", "ab"]), ("x", Float64, [1.0, 2.0])).unwrap(),
-        ];
+    let t1_batches = vec![
+        record_batch!(("a", Utf8, ["aa", "ab"]), ("x", Float64, [1.0, 2.0])).unwrap(),
+    ];
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("x", DataType::Float64, false),
@@ -1556,12 +1574,14 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
         .build();
 
     // t2: larger table (will be probe side of inner join, build side of outer join)
-    let t2_batches = vec![record_batch!(
-        ("b", Utf8, ["aa", "ab", "ac", "ad", "ae"]),
-        ("c", Utf8, ["ca", "cb", "cc", "cd", "ce"]),
-        ("y", Float64, [1.0, 2.0, 3.0, 4.0, 5.0])
-    )
-    .unwrap()];
+    let t2_batches = vec![
+        record_batch!(
+            ("b", Utf8, ["aa", "ab", "ac", "ad", "ae"]),
+            ("c", Utf8, ["ca", "cb", "cc", "cd", "ce"]),
+            ("y", Float64, [1.0, 2.0, 3.0, 4.0, 5.0])
+        )
+        .unwrap(),
+    ];
     let t2_schema = Arc::new(Schema::new(vec![
         Field::new("b", DataType::Utf8, false),
         Field::new("c", DataType::Utf8, false),
@@ -1573,11 +1593,13 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
         .build();
 
     // t3: largest table (will be probe side of inner join)
-    let t3_batches = vec![record_batch!(
-        ("d", Utf8, ["ca", "cb", "cc", "cd", "ce", "cf", "cg", "ch"]),
-        ("z", Float64, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
-    )
-    .unwrap()];
+    let t3_batches = vec![
+        record_batch!(
+            ("d", Utf8, ["ca", "cb", "cc", "cd", "ce", "cf", "cg", "ch"]),
+            ("z", Float64, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        )
+        .unwrap(),
+    ];
     let t3_schema = Arc::new(Schema::new(vec![
         Field::new("d", DataType::Utf8, false),
         Field::new("z", DataType::Float64, false),
@@ -1689,12 +1711,14 @@ async fn test_hashjoin_parent_filter_pushdown() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
-    let build_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8, ["ba", "bb"]),
-        ("c", Float64, [1.0, 2.0])
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0])
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -1706,12 +1730,14 @@ async fn test_hashjoin_parent_filter_pushdown() {
         .build();
 
     // Create probe side with more values
-    let probe_batches = vec![record_batch!(
-        ("d", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("e", Utf8, ["ba", "bb", "bc", "bd"]),
-        ("f", Float64, [1.0, 2.0, 3.0, 4.0])
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("d", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("e", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("f", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("d", DataType::Utf8, false),
         Field::new("e", DataType::Utf8, false),
@@ -2112,11 +2138,9 @@ async fn test_aggregate_dynamic_filter_min_max_different_columns() {
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Int32, true),
     ]));
-    let batches =
-        vec![
-            record_batch!(("a", Int32, [5, 1, 3, 8]), ("b", Int32, [7, 2, 4, 9]))
-                .unwrap(),
-        ];
+    let batches = vec![
+        record_batch!(("a", Int32, [5, 1, 3, 8]), ("b", Int32, [7, 2, 4, 9])).unwrap(),
+    ];
 
     let min_expr =
         AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
@@ -2151,12 +2175,14 @@ async fn test_aggregate_dynamic_filter_multiple_mixed_expressions() {
         Field::new("b", DataType::Int32, true),
         Field::new("c", DataType::Int32, true),
     ]));
-    let batches = vec![record_batch!(
-        ("a", Int32, [5, 1, 3, 8]),
-        ("b", Int32, [10, 4, 6, 12]),
-        ("c", Int32, [100, 70, 90, 110])
-    )
-    .unwrap()];
+    let batches = vec![
+        record_batch!(
+            ("a", Int32, [5, 1, 3, 8]),
+            ("b", Int32, [10, 4, 6, 12]),
+            ("c", Int32, [100, 70, 90, 110])
+        )
+        .unwrap(),
+    ];
 
     let min_a = AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema).unwrap()])
         .schema(Arc::clone(&schema))
@@ -2328,10 +2354,9 @@ async fn test_aggregate_filter_pushdown() {
     // when the filter references grouping columns
     // Simulates: SELECT a, COUNT(b) FROM table WHERE a = 'x' GROUP BY a
 
-    let batches =
-        vec![
-            record_batch!(("a", Utf8, ["x", "y"]), ("b", Utf8, ["foo", "bar"])).unwrap(),
-        ];
+    let batches = vec![
+        record_batch!(("a", Utf8, ["x", "y"]), ("b", Utf8, ["foo", "bar"])).unwrap(),
+    ];
 
     let scan = TestScanBuilder::new(schema())
         .with_support(true)
@@ -2392,10 +2417,9 @@ async fn test_no_pushdown_filter_on_aggregate_result() {
     // SELECT a, COUNT(b) as cnt FROM table GROUP BY a HAVING cnt > 5
     // The filter on 'cnt' cannot be pushed down because it's an aggregate result
 
-    let batches =
-        vec![
-            record_batch!(("a", Utf8, ["x", "y"]), ("b", Utf8, ["foo", "bar"])).unwrap(),
-        ];
+    let batches = vec![
+        record_batch!(("a", Utf8, ["x", "y"]), ("b", Utf8, ["foo", "bar"])).unwrap(),
+    ];
 
     let scan = TestScanBuilder::new(schema())
         .with_support(true)
@@ -2464,15 +2488,14 @@ fn test_pushdown_filter_on_non_first_grouping_column() {
     // The filter is on 'b' (second grouping column), should push down
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
-                .schema(schema())
-                .alias("cnt")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
 
     let group_by = PhysicalGroupBy::new_single(vec![
         (col("a", &schema()).unwrap(), "a".to_string()),
@@ -2515,15 +2538,14 @@ fn test_no_pushdown_grouping_sets_filter_on_missing_column() {
     // Test that filters on columns missing from some grouping sets are NOT pushed through
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
-                .schema(schema())
-                .alias("cnt")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
 
     // Create GROUPING SETS with (a, b) and (b)
     let group_by = PhysicalGroupBy::new(
@@ -2545,6 +2567,7 @@ fn test_no_pushdown_grouping_sets_filter_on_missing_column() {
             vec![false, false], // (a, b) - both present
             vec![true, false],  // (b) - a is NULL, b present
         ],
+        true,
     );
 
     let aggregate = Arc::new(
@@ -2585,15 +2608,14 @@ fn test_pushdown_grouping_sets_filter_on_common_column() {
     // Test that filters on columns present in ALL grouping sets ARE pushed through
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
-                .schema(schema())
-                .alias("cnt")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
 
     // Create GROUPING SETS with (a, b) and (b)
     let group_by = PhysicalGroupBy::new(
@@ -2615,6 +2637,7 @@ fn test_pushdown_grouping_sets_filter_on_common_column() {
             vec![false, false], // (a, b) - both present
             vec![true, false],  // (b) - a is NULL, b present
         ],
+        true,
     );
 
     let aggregate = Arc::new(
@@ -2656,15 +2679,14 @@ fn test_pushdown_with_empty_group_by() {
     // There are no grouping columns, so the filter should still push down
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
-                .schema(schema())
-                .alias("cnt")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
 
     // Empty GROUP BY - no grouping columns
     let group_by = PhysicalGroupBy::new_single(vec![]);
@@ -2716,15 +2738,14 @@ fn test_pushdown_with_computed_grouping_key() {
     )) as Arc<dyn PhysicalExpr>;
     let filter = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
 
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema()).unwrap()])
-                .schema(schema())
-                .alias("cnt")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
 
     let c_plus_one = Arc::new(BinaryExpr::new(
         col("c", &schema()).unwrap(),
@@ -2784,11 +2805,13 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
         .build();
 
     // Create probe side with some data
-    let probe_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab", "ac"]),
-        ("b", Utf8, ["ba", "bb", "bc"])
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac"]),
+            ("b", Utf8, ["ba", "bb", "bc"])
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -3053,12 +3076,14 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with limited values
-    let build_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8, ["ba", "bb"]),
-        ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -3070,12 +3095,14 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         .build();
 
     // Create probe side with more values
-    let probe_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-        ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -3218,12 +3245,14 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
-    let build_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab"]),
-        ("b", Utf8, ["ba", "bb"]),
-        ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -3235,12 +3264,14 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
         .build();
 
     // Create probe side with more values
-    let probe_batches = vec![record_batch!(
-        ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-        ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-        ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -3367,12 +3398,14 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Create build side with integer keys
-    let build_batches = vec![record_batch!(
-        ("id1", Int32, [1, 2]),
-        ("id2", Int32, [10, 20]),
-        ("value", Float64, [100.0, 200.0])
-    )
-    .unwrap()];
+    let build_batches = vec![
+        record_batch!(
+            ("id1", Int32, [1, 2]),
+            ("id2", Int32, [10, 20]),
+            ("value", Float64, [100.0, 200.0])
+        )
+        .unwrap(),
+    ];
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("id1", DataType::Int32, false),
         Field::new("id2", DataType::Int32, false),
@@ -3384,12 +3417,14 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
         .build();
 
     // Create probe side with more integer rows
-    let probe_batches = vec![record_batch!(
-        ("id1", Int32, [1, 2, 3, 4]),
-        ("id2", Int32, [10, 20, 30, 40]),
-        ("data", Utf8, ["a", "b", "c", "d"])
-    )
-    .unwrap()];
+    let probe_batches = vec![
+        record_batch!(
+            ("id1", Int32, [1, 2, 3, 4]),
+            ("id2", Int32, [10, 20, 30, 40]),
+            ("data", Utf8, ["a", "b", "c", "d"])
+        )
+        .unwrap(),
+    ];
     let probe_side_schema = Arc::new(Schema::new(vec![
         Field::new("id1", DataType::Int32, false),
         Field::new("id2", DataType::Int32, false),

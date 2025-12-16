@@ -319,6 +319,8 @@ datafusion.optimizer.repartition_sorts true
 datafusion.optimizer.repartition_windows true
 datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
+datafusion.runtime.list_files_cache_limit 1M
+datafusion.runtime.list_files_cache_ttl NULL
 datafusion.runtime.max_temp_directory_size 100G
 datafusion.runtime.memory_limit unlimited
 datafusion.runtime.metadata_cache_limit 50M
@@ -450,6 +452,8 @@ datafusion.optimizer.repartition_sorts true Should DataFusion execute sorts in a
 datafusion.optimizer.repartition_windows true Should DataFusion repartition data using the partitions keys to execute window functions in parallel using the provided `target_partitions` level
 datafusion.optimizer.skip_failed_rules false When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail
 datafusion.optimizer.top_down_join_key_reordering true When set to true, the physical plan optimizer will run a top down process to reorder the join keys
+datafusion.runtime.list_files_cache_limit 1M Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
+datafusion.runtime.list_files_cache_ttl NULL TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.
 datafusion.runtime.max_temp_directory_size 100G Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
 datafusion.runtime.memory_limit unlimited Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.
 datafusion.runtime.metadata_cache_limit 50M Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.

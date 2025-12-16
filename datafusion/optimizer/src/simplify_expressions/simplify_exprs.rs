@@ -143,7 +143,7 @@ impl SimplifyExpressions {
 }
 
 impl SimplifyExpressions {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

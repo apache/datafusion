@@ -1278,7 +1278,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
 
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
-        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
         vec![aggr_expr],
         vec![None],
         window,
@@ -1396,7 +1396,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
 
     let aggregate = Arc::new(AggregateExec::try_new(
         AggregateMode::Final,
-        PhysicalGroupBy::new(vec![], vec![], vec![]),
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
         vec![aggr_expr],
         vec![None],
         window,

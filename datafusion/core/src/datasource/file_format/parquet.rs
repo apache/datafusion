@@ -107,8 +107,8 @@ pub(crate) mod test_util {
 mod tests {
 
     use std::fmt::{self, Display, Formatter};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
@@ -120,6 +120,7 @@ mod tests {
     use arrow::array::RecordBatch;
     use arrow_schema::Schema;
     use datafusion_catalog::Session;
+    use datafusion_common::ScalarValue::Utf8;
     use datafusion_common::cast::{
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
         as_float64_array, as_int32_array, as_timestamp_nanosecond_array,
@@ -127,7 +128,6 @@ mod tests {
     use datafusion_common::config::{ParquetOptions, TableParquetOptions};
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::ScalarValue::Utf8;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -135,33 +135,33 @@ mod tests {
     use datafusion_datasource_parquet::{
         ParquetFormat, ParquetFormatFactory, ParquetSink,
     };
+    use datafusion_execution::TaskContext;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_execution::TaskContext;
     use datafusion_expr::dml::InsertOp;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use crate::test_util::bounded_stream;
     use arrow::array::{
-        types::Int32Type, Array, ArrayRef, DictionaryArray, Int32Array, Int64Array,
-        StringArray,
+        Array, ArrayRef, DictionaryArray, Int32Array, Int64Array, StringArray,
+        types::Int32Type,
     };
     use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
     use datafusion_datasource_parquet::metadata::DFParquetMetadata;
-    use futures::stream::BoxStream;
     use futures::StreamExt;
+    use futures::stream::BoxStream;
     use insta::assert_snapshot;
-    use object_store::local::LocalFileSystem;
     use object_store::ObjectMeta;
+    use object_store::local::LocalFileSystem;
     use object_store::{
-        path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
-        PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
     };
-    use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
+    use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::file::metadata::{
         KeyValue, ParquetColumnIndex, ParquetMetaData, ParquetOffsetIndex,
     };
@@ -930,7 +930,10 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{values:?}"));
+        assert_eq!(
+            "[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]",
+            format!("{values:?}")
+        );
 
         Ok(())
     }

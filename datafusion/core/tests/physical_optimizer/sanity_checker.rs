@@ -30,13 +30,13 @@ use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTab
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_physical_expr::expressions::{col, Literal};
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::{displayable, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use async_trait::async_trait;
 
