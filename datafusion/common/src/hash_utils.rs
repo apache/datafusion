@@ -162,7 +162,7 @@ macro_rules! hash_value {
         })+
     };
 }
-hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64);
+hash_value!(i8, i16, i32, i64, u128, i128, i256, u8, u16, u32, u64);
 hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! hash_float_value {
@@ -216,6 +216,86 @@ fn hash_array_primitive<T>(
             if !array.is_null(i) {
                 let value = unsafe { array.value_unchecked(i) };
                 *hash = value.hash_one(random_state);
+            }
+        }
+    }
+}
+
+// TODO FIX: can't hash view if it isn't inlined (otherwise it can have different offsets
+
+/// Builds hash values for array views and writes them into `hashes_buffer`
+/// If `rehash==true` this combines the previous hash value in the buffer
+/// with the new hash using `combine_hashes`
+///
+/// TODO: make general for butesview as well
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_string_view_array(
+    array: &StringViewArray,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+)
+{
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    let get_value = |v| {
+        let view_len = v as u32;
+        let view = ByteView::from(v);
+        let data = unsafe { array.data_buffers().get_unchecked(view.buffer_index as usize) };
+        let offset = view.offset as usize;
+        unsafe { data.get_unchecked(offset..offset + view_len as usize) }
+    };
+
+    if array.null_count() == 0 {
+        if rehash {
+            for (hash, &v) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                let view_len = v as u32;
+                // if the length is not inlined, then we need to hash the bytes as well
+                if view_len > 12 {
+                    *hash = combine_hashes(get_value(v).hash_one(random_state), *hash);
+                } else {
+                    *hash = combine_hashes(v.hash_one(random_state), *hash);
+                }
+            }
+        } else {
+            for (hash, &v) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                let view_len = v as u32;
+                // if the length is not inlined, then we need to hash the bytes as well
+                if view_len > 12 {
+                    *hash = get_value(v).hash_one(random_state);
+                } else {
+                    *hash = v.hash_one(random_state);
+                }
+            }
+        }
+    } else if rehash {
+        for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+            if !array.is_null(i) {
+                let view = unsafe { *array.views().get_unchecked(i) };
+                let view_len = view as u32;
+                // if the length is not inlined, then we need to hash the bytes as well
+                if view_len > 12 {
+                    *hash = combine_hashes(get_value(view).hash_one(random_state), *hash);
+                } else {
+                    *hash = combine_hashes(view.hash_one(random_state), *hash);
+                }
+            }
+        }
+    } else {
+        for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+            if !array.is_null(i) {
+                let view = unsafe { *array.views().get_unchecked(i) };
+                let view_len = view as u32;
+                // if the length is not inlined, then we need to hash the bytes as well
+                if view_len > 12 {
+                    *hash = get_value(view).hash_one(random_state);
+                } else {
+                    *hash = view.hash_one(random_state);
+                }
             }
         }
     }
@@ -568,7 +648,7 @@ fn hash_single_array(
         DataType::Null => hash_null(random_state, hashes_buffer, rehash),
         DataType::Boolean => hash_array(&as_boolean_array(array)?, random_state, hashes_buffer, rehash),
         DataType::Utf8 => hash_array(&as_string_array(array)?, random_state, hashes_buffer, rehash),
-        DataType::Utf8View => hash_array(&as_string_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::Utf8View => hash_string_view_array(as_string_view_array(array)?, random_state, hashes_buffer, rehash),
         DataType::LargeUtf8 => hash_array(&as_largestring_array(array), random_state, hashes_buffer, rehash),
         DataType::Binary => hash_array(&as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
         DataType::BinaryView => hash_array(&as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
