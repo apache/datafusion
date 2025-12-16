@@ -45,11 +45,13 @@ pub async fn parquet_exec_visitor() -> datafusion::common::Result<()> {
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format));
 
+    let table_path = format!("file://{}", path.to_str().unwrap());
+
     // First example were we use an absolute path, which requires no additional setup.
     let _ = ctx
         .register_listing_table(
             "my_table",
-            path.to_str().unwrap(),
+            &table_path,
             listing_options.clone(),
             None,
             None,

@@ -123,10 +123,12 @@ async fn query_parquet() -> Result<()> {
     let listing_options =
         ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
 
+    let table_path = format!("file://{}", path.to_str().unwrap());
+
     // First example were we use an absolute path, which requires no additional setup.
     ctx.register_listing_table(
         "my_table",
-        path.to_str().unwrap(),
+        &table_path,
         listing_options.clone(),
         None,
         None,
@@ -155,8 +157,9 @@ async fn query_parquet() -> Result<()> {
         ],
         &results);
 
-    // Second example were we temporarily move into the test data's parent directory and
-    // simulate a relative path, this requires registering an ObjectStore.
+    // Second example where we change the current working directory and explicitly
+    // register a local filesystem object store. This demonstrates how listing tables
+    // resolve paths via an ObjectStore, even when using filesystem-backed data.
     let cur_dir = std::env::current_dir()?;
 
     let test_data_path_parent = path
