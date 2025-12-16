@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::ReturnFieldArgs;
-use datafusion_common::arrow::datatypes::FieldRef;
 use arrow::array::Array;
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::ReturnFieldArgs;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -86,23 +86,12 @@ impl ScalarUDFImpl for SparkConcat {
             "return_type should not be called for Spark concat"
         )
     }
-    fn return_field_from_args(
-        &self,
-        args: ReturnFieldArgs<'_>,
-    ) -> Result<FieldRef> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
         // Spark semantics: concat returns NULL if ANY input is NULL
-        let nullable = args
-            .arg_fields
-            .iter()
-            .any(|f| f.is_nullable());
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
-        Ok(Arc::new(Field::new(
-            "concat",
-            DataType::Utf8,
-            nullable,
-        )))
+        Ok(Arc::new(Field::new("concat", DataType::Utf8, nullable)))
     }
-
 }
 
 /// Represents the null state for Spark concat
@@ -256,7 +245,6 @@ mod tests {
     use datafusion_expr::ReturnFieldArgs;
     use std::sync::Arc;
 
-
     #[test]
     fn test_concat_basic() -> Result<()> {
         test_scalar_function!(
@@ -335,5 +323,4 @@ mod tests {
 
         Ok(())
     }
-
 }
