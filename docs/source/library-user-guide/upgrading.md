@@ -45,15 +45,23 @@ directly on the `Field`. For example:
 In prior versions, `ListingTableProvider` would issue `LIST` commands to
 the underlying object store each time it needed to list files for a query.
 To improve performance, `ListingTableProvider` now caches the results of
-`LIST` commands for the lifetime of the `ListingTableProvider` instance.
+`LIST` commands for the lifetime of the `ListingTableProvider` instance or
+until a cache entry expires.
 
 Note that by default the cache has no expiration time, so if files are added or removed
 from the underlying object store, the `ListingTableProvider` will not see
 those changes until the `ListingTableProvider` instance is dropped and recreated.
 
-You will be able to configure the maximum cache size and cache expiration time via a configuration option:
+You can configure the maximum cache size and cache entry expiration time via configuration options:
 
-See <https://github.com/apache/datafusion/issues/19056> for more details.
+`datafusion.runtime.list_files_cache_limit`
+`datafusion.runtime.list_files_cache_ttl`
+
+Caching can be disable by setting the limit to 0:
+
+```sql
+SET datafusion.runtime.list_files_cache_limit TO "0K";
+```
 
 Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
 

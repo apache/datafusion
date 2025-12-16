@@ -117,15 +117,40 @@ async fn multi_query_multi_file_csv_file() {
     +---------+-------+-------+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 4
-    - LIST prefix=data
+    Total Requests: 3
     - GET  (opts) path=data/file_0.csv
     - GET  (opts) path=data/file_1.csv
     - GET  (opts) path=data/file_2.csv
     "
     );
 
-    // the second query should re-use the cached LIST results and should not reissue LIST
+    // Force a cache eviction by removing the data limit for the cache
+    assert_snapshot!(
+        test.query("set datafusion.runtime.list_files_cache_limit=\"0K\"").await,
+        @r"
+    ------- Query Output (0 rows) -------
+    ++
+    ++
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 0
+    "
+    );
+
+    // Then re-enable the cache
+    assert_snapshot!(
+        test.query("set datafusion.runtime.list_files_cache_limit=\"1M\"").await,
+        @r"
+    ------- Query Output (0 rows) -------
+    ++
+    ++
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 0
+    "
+    );
+
+    // this query should list the table since the cache entries were evicted
     assert_snapshot!(
         test.query("select * from csv_table").await,
         @r"
@@ -144,6 +169,30 @@ async fn multi_query_multi_file_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
+    - GET  (opts) path=data/file_0.csv
+    - GET  (opts) path=data/file_1.csv
+    - GET  (opts) path=data/file_2.csv
+    "
+    );
+
+    // this query should not list the table since the entries were added in the previous query
+    assert_snapshot!(
+        test.query("select * from csv_table").await,
+        @r"
+    ------- Query Output (6 rows) -------
+    +---------+-------+-------+
+    | c1      | c2    | c3    |
+    +---------+-------+-------+
+    | 0.0     | 0.0   | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00001 | 1e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    | 0.00002 | 2e-12 | true  |
+    | 0.00003 | 5e-12 | false |
+    +---------+-------+-------+
+    ------- Object Store Request Summary -------
+    RequestCountingObjectStore()
+    Total Requests: 3
     - GET  (opts) path=data/file_0.csv
     - GET  (opts) path=data/file_1.csv
     - GET  (opts) path=data/file_2.csv
@@ -170,8 +219,7 @@ async fn query_multi_csv_file() {
     +---------+-------+-------+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 4
-    - LIST prefix=data
+    Total Requests: 3
     - GET  (opts) path=data/file_0.csv
     - GET  (opts) path=data/file_1.csv
     - GET  (opts) path=data/file_2.csv
@@ -198,8 +246,7 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 4
-    - LIST prefix=data
+    Total Requests: 3
     - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     - GET  (opts) path=data/a=3/b=30/c=300/file_3.csv
@@ -236,8 +283,7 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 2
-    - LIST prefix=data
+    Total Requests: 1
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     "
     );
@@ -254,8 +300,7 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 2
-    - LIST prefix=data
+    Total Requests: 1
     - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
     "
     );
@@ -290,8 +335,7 @@ async fn query_partitioned_csv_file() {
     +---------+-------+-------+---+----+-----+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 2
-    - LIST prefix=data
+    Total Requests: 1
     - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
     "
     );
