@@ -29,7 +29,7 @@ use datafusion_expr::statistics::{
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 pub enum FFI_Distribution {
     Uniform(FFI_UniformDistribution),
     Exponential(FFI_ExponentialDistribution),
