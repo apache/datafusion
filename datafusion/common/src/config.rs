@@ -1016,13 +1016,13 @@ config_namespace! {
         /// ```text
         ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a])
         ///
-        ///     If current partitions (3) < threshold (4), repartition to increase parallelism:
+        ///     If current partitions (3) < threshold (4), repartition:
         ///     AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
         ///       RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
         ///         AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
         ///           DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)
         ///
-        ///     If current partitions (8) >= threshold (4), use subset satisfaction (no repartition):
+        ///     If current partitions (8) >= threshold (4), use subset satisfaction:
         ///     AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
         ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
         /// ```
