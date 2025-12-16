@@ -155,25 +155,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             PhysicalPlanType::JsonScan(scan) => {
                 self.try_into_json_scan_physical_plan(scan, ctx, extension_codec)
             }
-            #[cfg(feature = "parquet")]
             PhysicalPlanType::ParquetScan(scan) => {
                 self.try_into_parquet_scan_physical_plan(scan, ctx, extension_codec)
             }
-            #[cfg(not(feature = "parquet"))]
-            PhysicalPlanType::ParquetScan(_) => {
-                panic!(
-                    "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
-                )
-            }
-            #[cfg(feature = "avro")]
             PhysicalPlanType::AvroScan(scan) => {
                 self.try_into_avro_scan_physical_plan(scan, ctx, extension_codec)
-            }
-            #[cfg(not(feature = "avro"))]
-            PhysicalPlanType::AvroScan(_) => {
-                panic!(
-                    "Unable to process Avro PhysicalPlan when `avro` feature is not enabled"
-                )
             }
             PhysicalPlanType::MemoryScan(scan) => {
                 self.try_into_memory_scan_physical_plan(scan, ctx, extension_codec)
@@ -686,6 +672,7 @@ impl protobuf::PhysicalPlanNode {
     }
 
     #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
     fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
@@ -751,7 +738,7 @@ impl protobuf::PhysicalPlanNode {
         panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
     }
 
-    #[cfg(feature = "avro")]
+    #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
     fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
@@ -770,6 +757,9 @@ impl protobuf::PhysicalPlanNode {
             )?;
             Ok(DataSourceExec::from_data_source(conf))
         }
+
+        #[cfg(not(feature = "avro"))]
+        panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
     }
 
     fn try_into_memory_scan_physical_plan(
