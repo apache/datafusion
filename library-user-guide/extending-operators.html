@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Extending DataFusion’s operators: custom LogicalPlan and Execution Plans &#8212; Apache DataFusion  documentation</title>
+    <title>Extending Operators &#8212; Apache DataFusion  documentation</title>
   
   
   
@@ -292,9 +292,9 @@
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="custom-table-providers.html">Custom Table Provider</a></li>
 <li class="toctree-l1"><a class="reference internal" href="table-constraints.html">Table Constraint Enforcement</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Extending Operators</a></li>
 <li class="toctree-l1"><a class="reference internal" href="profiling.html">Profiling Cookbook</a></li>
-<li class="toctree-l1"><a class="reference internal" href="query-optimizer.html">DataFusion Query Optimizer</a></li>
+<li class="toctree-l1"><a class="reference internal" href="query-optimizer.html">Query Optimizer</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
 <ul class="nav bd-sidenav">
@@ -367,7 +367,7 @@
         <i class="fa-solid fa-home"></i>
       </a>
     </li>
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Extending Operators</span></li>
   </ul>
 </nav>
 </div>
@@ -402,9 +402,9 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="extending-datafusion-s-operators-custom-logicalplan-and-execution-plans">
-<h1>Extending DataFusion’s operators: custom LogicalPlan and Execution Plans<a class="headerlink" href="#extending-datafusion-s-operators-custom-logicalplan-and-execution-plans" title="Link to this heading">#</a></h1>
-<p>DataFusion supports extension of operators by transforming logical plan and execution plan through customized <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html">optimizer rules</a>. This section will use the µWheel project to illustrate such capabilities.</p>
+<section id="extending-operators">
+<h1>Extending Operators<a class="headerlink" href="#extending-operators" title="Link to this heading">#</a></h1>
+<p>DataFusion supports extending operators by transforming <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html"><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code></a> through customized <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html">optimizer rules</a>. This section will use the µWheel project to illustrate such capabilities.</p>
 <section id="about-datafusion-wheel">
 <h2>About DataFusion µWheel<a class="headerlink" href="#about-datafusion-wheel" title="Link to this heading">#</a></h2>
 <p><a class="reference external" href="https://github.com/uwheel/datafusion-uwheel/tree/main">DataFusion µWheel</a> is a native DataFusion optimizer which improves query performance for time-based analytics through fast temporal aggregation and pruning using custom indices. The integration of µWheel into DataFusion is a joint effort with the DataFusion community.</p>

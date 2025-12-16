@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>DataFusion Query Optimizer &#8212; Apache DataFusion  documentation</title>
+    <title>Query Optimizer &#8212; Apache DataFusion  documentation</title>
   
   
   
@@ -292,9 +292,9 @@
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="custom-table-providers.html">Custom Table Provider</a></li>
 <li class="toctree-l1"><a class="reference internal" href="table-constraints.html">Table Constraint Enforcement</a></li>
-<li class="toctree-l1"><a class="reference internal" href="extending-operators.html">Extending DataFusion’s operators: custom LogicalPlan and Execution Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="extending-operators.html">Extending Operators</a></li>
 <li class="toctree-l1"><a class="reference internal" href="profiling.html">Profiling Cookbook</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">DataFusion Query Optimizer</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Query Optimizer</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
 <ul class="nav bd-sidenav">
@@ -367,7 +367,7 @@
         <i class="fa-solid fa-home"></i>
       </a>
     </li>
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">DataFusion Query Optimizer</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Query Optimizer</span></li>
   </ul>
 </nav>
 </div>
@@ -402,13 +402,13 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="datafusion-query-optimizer">
-<h1>DataFusion Query Optimizer<a class="headerlink" href="#datafusion-query-optimizer" title="Link to this heading">#</a></h1>
+<section id="query-optimizer">
+<h1>Query Optimizer<a class="headerlink" href="#query-optimizer" title="Link to this heading">#</a></h1>
 <p><a class="reference external" href="https://crates.io/crates/datafusion">DataFusion</a> is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
 format.</p>
 <p>DataFusion has modular design, allowing individual crates to be re-used in other projects.</p>
 <p>This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
-contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so
+contains an extensive set of <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code></a>s and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRules</span></code></a> that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.</p>
 <section id="running-the-optimizer">
 <h2>Running the Optimizer<a class="headerlink" href="#running-the-optimizer" title="Link to this heading">#</a></h2>
