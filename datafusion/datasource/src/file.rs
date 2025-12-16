@@ -206,7 +206,10 @@ pub trait FileSource: Send + Sync {
     /// This allows the file source to know how the files are sorted,
     /// enabling it to make informed decisions about sort pushdown.
     ///
-    /// Default implementation returns self (no-op for sources that don't need ordering info)
+    /// # Default Implementation
+    ///
+    /// Returns `not_impl_err!`. FileSource implementations that support
+    /// sort optimization should override this method.
     fn with_file_ordering_info(
         &self,
         _ordering: Option<LexOrdering>,
