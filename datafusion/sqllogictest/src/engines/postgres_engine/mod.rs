@@ -332,7 +332,7 @@ impl sqllogictest::AsyncDB for Postgres {
         } else {
             Ok(DBOutput::Rows {
                 types: convert_types(types),
-                rows: convert_rows(rows),
+                rows: convert_rows(&rows),
             })
         }
     }
