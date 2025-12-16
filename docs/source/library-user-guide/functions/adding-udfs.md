@@ -1492,7 +1492,9 @@ async fn main() -> Result<()> {
 
 ## Custom Expression Planning
 
-DataFusion provides native support for common SQL operators by default such as `+`, `-`, `||`. However it does not provide support for other operators such as `@>`. To override DataFusion's default handling or support unsupported operators, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion
+DataFusion provides native support for common SQL operators and constructs by default such as `+`, `-`, `||`. However it does not provide support for other operators such as `@>` or constructs like `TABLESAMPLE` which are less common or vary more between SQL dialects. To override DataFusion's default handling or support these unsupported features, developers can extend DataFusion by implementing custom expression planning, a core feature of DataFusion.
+
+For a comprehensive guide on extending SQL syntax including `ExprPlanner`, `TypePlanner`, and `RelationPlanner`, see [Extending DataFusion's SQL Syntax](../extending-sql.md)
 
 ### Implementing Custom Expression Planning
 

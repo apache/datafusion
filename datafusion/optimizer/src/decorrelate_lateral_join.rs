@@ -37,7 +37,7 @@ use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 pub struct DecorrelateLateralJoin {}
 
 impl DecorrelateLateralJoin {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self::default()
     }
