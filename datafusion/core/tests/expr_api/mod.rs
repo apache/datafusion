@@ -16,17 +16,17 @@
 // under the License.
 
 use arrow::array::{
-    builder::{ListBuilder, StringBuilder},
     ArrayRef, Int64Array, RecordBatch, StringArray, StructArray,
+    builder::{ListBuilder, StringBuilder},
 };
 use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::ExprFunctionExt;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::NullTreatment;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::ExprFunctionExt;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;

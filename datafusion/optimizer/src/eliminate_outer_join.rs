@@ -52,7 +52,7 @@ use std::sync::Arc;
 pub struct EliminateOuterJoin;
 
 impl EliminateOuterJoin {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -304,15 +304,15 @@ fn extract_non_nullable_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
-    use crate::OptimizerContext;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
+        Operator::{And, Or},
         binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
         try_cast,
-        Operator::{And, Or},
     };
 
     macro_rules! assert_optimized_plan_equal {

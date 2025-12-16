@@ -26,19 +26,19 @@ use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::format_as_file_type;
 use crate::datasource::file_format::json::JsonFormatFactory;
 use crate::datasource::{
-    provider_as_source, DefaultTableSource, MemTable, TableProvider,
+    DefaultTableSource, MemTable, TableProvider, provider_as_source,
 };
 use crate::error::Result;
-use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
+use crate::execution::context::{SessionState, TaskContext};
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, ident, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning, TableType,
+    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
+    Partitioning, TableType, col, ident,
 };
 use crate::physical_plan::{
-    collect, collect_partitioned, execute_stream, execute_stream_partitioned,
-    ExecutionPlan, SendableRecordBatchStream,
+    ExecutionPlan, SendableRecordBatchStream, collect, collect_partitioned,
+    execute_stream, execute_stream_partitioned,
 };
 use crate::prelude::SessionContext;
 use std::any::Any;
@@ -52,18 +52,17 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    unqualified_field_not_found, Column, DFSchema, DataFusionError, ParamValues,
-    ScalarValue, SchemaError, TableReference, UnnestOptions,
+    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
+    TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
+    plan_datafusion_err, plan_err, unqualified_field_not_found,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    case,
+    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
     dml::InsertOp,
     expr::{Alias, ScalarFunction},
     is_null, lit,
     utils::COUNT_STAR_EXPANSION,
-    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{

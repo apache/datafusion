@@ -31,15 +31,15 @@ use arrow::datatypes::{DataType, Field, Fields, Schema};
 use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use datafusion_common::{config::Dialect, ScalarValue};
+use datafusion_common::{ScalarValue, config::Dialect};
 use datafusion_expr::col;
 use rand_distr::num_traits::NumCast;
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
+use test_utils::TableDef;
 use test_utils::tpcds::tpcds_schemas;
 use test_utils::tpch::tpch_schemas;
-use test_utils::TableDef;
 use tokio::runtime::Runtime;
 
 const BENCHMARKS_PATH_1: &str = "../../benchmarks/";
@@ -242,8 +242,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     if !PathBuf::from(format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")).exists()
         && !PathBuf::from(format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")).exists()
     {
-        panic!("benchmarks/data/hits_partitioned/ could not be loaded. Please run \
-         'benchmarks/bench.sh data clickbench_partitioned' prior to running this benchmark")
+        panic!(
+            "benchmarks/data/hits_partitioned/ could not be loaded. Please run \
+         'benchmarks/bench.sh data clickbench_partitioned' prior to running this benchmark"
+        )
     }
 
     let ctx = create_context();

@@ -404,10 +404,9 @@ logical_plan
 02)--TableScan: t1000 projection=[i]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=1
-04)------AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
-05)--------DataSourceExec: partitions=1
+02)--RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
+04)------DataSourceExec: partitions=1
 
 statement ok
 set datafusion.explain.show_sizes = true;
@@ -635,11 +634,10 @@ physical_plan
 02)--SortPreservingMergeExec: [b@0 DESC], fetch=3
 03)----SortExec: TopK(fetch=3), expr=[b@0 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(ordered_table.a)]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], file_type=csv, has_header=true
+05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
+06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(ordered_table.a)]
+07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], file_type=csv, has_header=true
 
 # Applying offset & limit when multiple streams from union
 # the plan must still have a global limit to apply the offset

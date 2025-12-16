@@ -752,6 +752,7 @@ message PhysicalPlanNode {
     GenerateSeriesNode generate_series = 33;
     SortMergeJoinExecNode sort_merge_join = 34;
     MemoryScanExecNode memory_scan = 35;
+    AsyncFuncExecNode async_func = 36;
   }
 }
 
@@ -1226,6 +1227,7 @@ message AggregateExecNode {
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
   AggLimit limit = 11;
+  bool has_grouping_set = 12;
 }
 
 message GlobalLimitExecNode {
@@ -1396,4 +1398,10 @@ message SortMergeJoinExecNode {
   JoinFilter filter = 5;
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
+}
+
+message AsyncFuncExecNode {
+  PhysicalPlanNode input = 1;
+  repeated PhysicalExprNode async_exprs = 2;
+  repeated string async_expr_names = 3;
 }
