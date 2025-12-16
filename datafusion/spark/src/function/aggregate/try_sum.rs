@@ -151,28 +151,25 @@ fn update_int64<T: ArrowNumericType>(
     acc: &mut TrySumAccumulator<T>,
     array: &PrimitiveArray<T>,
 ) -> Result<()> {
-    for val_opt in array.iter() {
-        if let Some(v) = val_opt {
-            // Cast to i64 for checked_add
-            let v_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&v) };
-            let sum_i64 = acc
-                .sum
-                .map(|s| unsafe { std::mem::transmute_copy::<T::Native, i64>(&s) });
+    for v in array.iter().flatten() {
+        // Cast to i64 for checked_add
+        let v_i64 = unsafe { std::mem::transmute_copy::<T::Native, i64>(&v) };
+        let sum_i64 = acc
+            .sum
+            .map(|s| unsafe { std::mem::transmute_copy::<T::Native, i64>(&s) });
 
-            let new_sum = match sum_i64 {
-                None => v_i64,
-                Some(s) => match s.checked_add(v_i64) {
-                    Some(result) => result,
-                    None => {
-                        acc.failed = true;
-                        return Ok(());
-                    }
-                },
-            };
+        let new_sum = match sum_i64 {
+            None => v_i64,
+            Some(s) => match s.checked_add(v_i64) {
+                Some(result) => result,
+                None => {
+                    acc.failed = true;
+                    return Ok(());
+                }
+            },
+        };
 
-            acc.sum =
-                Some(unsafe { std::mem::transmute_copy::<i64, T::Native>(&new_sum) });
-        }
+        acc.sum = Some(unsafe { std::mem::transmute_copy::<i64, T::Native>(&new_sum) });
     }
     Ok(())
 }
@@ -181,17 +178,14 @@ fn update_float64<T: ArrowNumericType>(
     acc: &mut TrySumAccumulator<T>,
     array: &PrimitiveArray<T>,
 ) -> Result<()> {
-    for val_opt in array.iter() {
-        if let Some(v) = val_opt {
-            let v_f64 = unsafe { std::mem::transmute_copy::<T::Native, f64>(&v) };
-            let sum_f64 = acc
-                .sum
-                .map(|s| unsafe { std::mem::transmute_copy::<T::Native, f64>(&s) })
-                .unwrap_or(0.0);
-            let new_sum = sum_f64 + v_f64;
-            acc.sum =
-                Some(unsafe { std::mem::transmute_copy::<f64, T::Native>(&new_sum) });
-        }
+    for v in array.iter().flatten() {
+        let v_f64 = unsafe { std::mem::transmute_copy::<T::Native, f64>(&v) };
+        let sum_f64 = acc
+            .sum
+            .map(|s| unsafe { std::mem::transmute_copy::<T::Native, f64>(&s) })
+            .unwrap_or(0.0);
+        let new_sum = sum_f64 + v_f64;
+        acc.sum = Some(unsafe { std::mem::transmute_copy::<f64, T::Native>(&new_sum) });
     }
     Ok(())
 }
@@ -202,32 +196,29 @@ fn update_decimal128<T: ArrowNumericType>(
 ) -> Result<()> {
     let precision = acc.dec_precision.unwrap_or(38);
 
-    for val_opt in array.iter() {
-        if let Some(v) = val_opt {
-            let v_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&v) };
-            let sum_i128 = acc
-                .sum
-                .map(|s| unsafe { std::mem::transmute_copy::<T::Native, i128>(&s) });
+    for v in array.iter().flatten() {
+        let v_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&v) };
+        let sum_i128 = acc
+            .sum
+            .map(|s| unsafe { std::mem::transmute_copy::<T::Native, i128>(&s) });
 
-            let new_sum = match sum_i128 {
-                None => v_i128,
-                Some(s) => match s.checked_add(v_i128) {
-                    Some(result) => result,
-                    None => {
-                        acc.failed = true;
-                        return Ok(());
-                    }
-                },
-            };
+        let new_sum = match sum_i128 {
+            None => v_i128,
+            Some(s) => match s.checked_add(v_i128) {
+                Some(result) => result,
+                None => {
+                    acc.failed = true;
+                    return Ok(());
+                }
+            },
+        };
 
-            if exceeds_decimal128_precision(new_sum, precision) {
-                acc.failed = true;
-                return Ok(());
-            }
-
-            acc.sum =
-                Some(unsafe { std::mem::transmute_copy::<i128, T::Native>(&new_sum) });
+        if exceeds_decimal128_precision(new_sum, precision) {
+            acc.failed = true;
+            return Ok(());
         }
+
+        acc.sum = Some(unsafe { std::mem::transmute_copy::<i128, T::Native>(&new_sum) });
     }
     Ok(())
 }
