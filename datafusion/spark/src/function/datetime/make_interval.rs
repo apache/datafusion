@@ -287,7 +287,7 @@ mod tests {
     use arrow::datatypes::{Field, FieldRef};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
-        assert_eq_or_internal_err, internal_datafusion_err, internal_err, Result,
+        Result, assert_eq_or_internal_err, internal_datafusion_err, internal_err,
     };
     use datafusion_expr::ReturnFieldArgs;
 

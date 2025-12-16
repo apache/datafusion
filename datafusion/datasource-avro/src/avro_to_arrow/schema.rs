@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use apache_avro::Schema as AvroSchema;
 use apache_avro::schema::{
     Alias, DecimalSchema, EnumSchema, FixedSchema, Name, RecordSchema,
 };
 use apache_avro::types::Value;
-use apache_avro::Schema as AvroSchema;
 use arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit, UnionMode};
 use arrow::datatypes::{Field, UnionFields};
 use datafusion_common::error::Result;
@@ -248,15 +248,9 @@ fn default_field_name(dt: &DataType) -> &str {
 fn external_props(schema: &AvroSchema) -> HashMap<String, String> {
     let mut props = HashMap::new();
     match &schema {
-        AvroSchema::Record(RecordSchema {
-            doc: Some(ref doc), ..
-        })
-        | AvroSchema::Enum(EnumSchema {
-            doc: Some(ref doc), ..
-        })
-        | AvroSchema::Fixed(FixedSchema {
-            doc: Some(ref doc), ..
-        }) => {
+        AvroSchema::Record(RecordSchema { doc: Some(doc), .. })
+        | AvroSchema::Enum(EnumSchema { doc: Some(doc), .. })
+        | AvroSchema::Fixed(FixedSchema { doc: Some(doc), .. }) => {
             props.insert("avro::doc".to_string(), doc.clone());
         }
         _ => {}
@@ -312,8 +306,8 @@ pub fn aliased(
 #[cfg(test)]
 mod test {
     use super::{aliased, external_props, to_arrow_schema};
-    use apache_avro::schema::{Alias, EnumSchema, FixedSchema, Name, RecordSchema};
     use apache_avro::Schema as AvroSchema;
+    use apache_avro::schema::{Alias, EnumSchema, FixedSchema, Name, RecordSchema};
     use arrow::datatypes::DataType::{Binary, Float32, Float64, Timestamp, Utf8};
     use arrow::datatypes::DataType::{Boolean, Int32, Int64};
     use arrow::datatypes::TimeUnit::Microsecond;

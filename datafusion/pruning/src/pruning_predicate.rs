@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow::{
-    array::{new_null_array, ArrayRef, BooleanArray},
+    array::{ArrayRef, BooleanArray, new_null_array},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -36,16 +36,15 @@ use log::{debug, trace};
 
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{TransformedResult, TreeNodeRecursion};
-use datafusion_common::{assert_eq_or_internal_err, Column, DFSchema};
+use datafusion_common::{Column, DFSchema, assert_eq_or_internal_err};
 use datafusion_common::{
-    internal_datafusion_err, plan_datafusion_err, plan_err,
+    ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
-    ScalarValue,
 };
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::expressions::CastColumnExpr;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{expressions as phys_expr, PhysicalExprRef};
+use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
@@ -999,14 +998,14 @@ impl<'a> PruningExpressionBuilder<'a> {
             (ColumnReferenceCount::One(_), ColumnReferenceCount::One(_)) => {
                 // both sides have one column - not supported
                 return plan_err!(
-                        "Expression not supported for pruning: left has 1 column, right has 1 column"
-                    );
+                    "Expression not supported for pruning: left has 1 column, right has 1 column"
+                );
             }
             (ColumnReferenceCount::Zero, ColumnReferenceCount::Zero) => {
                 // both sides are literals - should be handled before calling try_new
                 return plan_err!(
-                        "Pruning literal expressions is not supported, please call PhysicalExprSimplifier first"
-                    );
+                    "Pruning literal expressions is not supported, please call PhysicalExprSimplifier first"
+                );
             }
             (ColumnReferenceCount::Many, _) | (_, ColumnReferenceCount::Many) => {
                 return plan_err!(
@@ -1226,13 +1225,13 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
     // Dictionary casts are always supported as long as the value types are supported
     let from_type = match from_type {
         DataType::Dictionary(_, t) => {
-            return verify_support_type_for_prune(t.as_ref(), to_type)
+            return verify_support_type_for_prune(t.as_ref(), to_type);
         }
         _ => from_type,
     };
     let to_type = match to_type {
         DataType::Dictionary(_, t) => {
-            return verify_support_type_for_prune(from_type, t.as_ref())
+            return verify_support_type_for_prune(from_type, t.as_ref());
         }
         _ => to_type,
     };
@@ -1255,10 +1254,10 @@ fn rewrite_column_expr(
     column_new: &phys_expr::Column,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     e.transform(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>() {
-            if column == column_old {
-                return Ok(Transformed::yes(Arc::new(column_new.clone())));
-            }
+        if let Some(column) = expr.as_any().downcast_ref::<phys_expr::Column>()
+            && column == column_old
+        {
+            return Ok(Transformed::yes(Arc::new(column_new.clone())));
         }
 
         Ok(Transformed::no(expr))
@@ -1904,13 +1903,13 @@ fn increment_utf8(data: &str) -> Option<String> {
         let original = code_points[idx] as u32;
 
         // Try incrementing the code point
-        if let Some(next_char) = char::from_u32(original + 1) {
-            if is_valid_unicode(next_char) {
-                code_points[idx] = next_char;
-                // truncate the string to the current index
-                code_points.truncate(idx + 1);
-                return Some(code_points.into_iter().collect());
-            }
+        if let Some(next_char) = char::from_u32(original + 1)
+            && is_valid_unicode(next_char)
+        {
+            code_points[idx] = next_char;
+            // truncate the string to the current index
+            code_points.truncate(idx + 1);
+            return Some(code_points.into_iter().collect());
         }
     }
 
@@ -1981,7 +1980,7 @@ mod tests {
         datatypes::TimeUnit,
     };
     use datafusion_expr::expr::InList;
-    use datafusion_expr::{cast, is_null, try_cast, Expr};
+    use datafusion_expr::{Expr, cast, is_null, try_cast};
     use datafusion_functions_nested::expr_fn::{array_has, make_array};
     use datafusion_physical_expr::expressions::{
         self as phys_expr, DynamicFilterPhysicalExpr,
@@ -3055,7 +3054,7 @@ mod tests {
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
         assert_eq!(predicate_expr.to_string(), expected_expr);
         println!("required_columns: {required_columns:#?}"); // for debugging assertions below
-                                                             // c1 < 1 should add c1_min
+        // c1 < 1 should add c1_min
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[0],

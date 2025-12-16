@@ -24,10 +24,10 @@ mod data_utils;
 use crate::criterion::Criterion;
 use data_utils::{create_table_provider, make_data};
 use datafusion::execution::context::SessionContext;
-use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::{datasource::MemTable, error::Result};
-use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
+use datafusion_execution::config::SessionConfig;
 
 use parking_lot::Mutex;
 use std::hint::black_box;

@@ -29,18 +29,18 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{col, lit};
-use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::ExecutionPlan;
 
 /// Runs the CombinePartialFinalAggregate optimizer and asserts the plan against the expected
 macro_rules! assert_optimized {

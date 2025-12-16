@@ -164,11 +164,113 @@ SELECT to_date('21311111');
 statement error DataFusion error: Arrow error:
 SELECT to_date('213111111');
 
+# verify date cast with tinyint input
+query DDDDDD
+SELECT to_date(null::tinyint), to_date(0::tinyint), to_date(19::tinyint), to_date(1::tinyint), to_date(-1::tinyint), to_date((0-1)::tinyint)
+----
+NULL 1970-01-01 1970-01-20 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with smallint input
+query DDDDDD
+SELECT to_date(null::smallint), to_date(0::smallint), to_date(19234::smallint), to_date(1::smallint), to_date(-1::smallint), to_date((0-1)::smallint)
+----
+NULL 1970-01-01 2022-08-30 1970-01-02 1969-12-31 1969-12-31
+
 # verify date cast with integer input
 query DDDDDD
 SELECT to_date(null), to_date(0), to_date(19266320), to_date(1), to_date(-1), to_date(0-1)
 ----
 NULL 1970-01-01 +54719-05-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with bigint input
+query DDDDDD
+SELECT to_date(null::bigint), to_date(0::bigint), to_date(191234::bigint), to_date(1::bigint), to_date(-1::bigint), to_date((0-1)::bigint)
+----
+NULL 1970-01-01 2493-07-31 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with unsigned tinyint input
+query DDDD
+SELECT to_date(null::tinyint unsigned), to_date(0::tinyint unsigned), to_date(192::tinyint unsigned), to_date(1::tinyint unsigned)
+----
+NULL 1970-01-01 1970-07-12 1970-01-02
+
+# verify date cast with unsigned smallint input
+query DDDD
+SELECT to_date(null::smallint unsigned), to_date(0::smallint unsigned), to_date(19260::smallint unsigned), to_date(1::smallint unsigned)
+----
+NULL 1970-01-01 2022-09-25 1970-01-02
+
+# verify date cast with unsigned int input
+query DDDD
+SELECT to_date(null::int unsigned), to_date(0::int unsigned), to_date(19260::int unsigned), to_date(1::int unsigned)
+----
+NULL 1970-01-01 2022-09-25 1970-01-02
+
+# verify date cast with unsigned bigint input
+query DDDD
+SELECT to_date(null::bigint unsigned), to_date(0::bigint unsigned), to_date(19260000::bigint unsigned), to_date(1::bigint unsigned)
+----
+NULL 1970-01-01 +54702-02-03 1970-01-02
+
+# verify date cast with real input (float32)
+query DDDDDD
+SELECT to_date(null::real), to_date(0.0::real), to_date(19260.1::real), to_date(1.1::real), to_date(-1.1::real), to_date(0-1.1::real)
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with double input (float64)
+query DDDDDD
+SELECT to_date(null::double), to_date(0.0::double), to_date(19260.1::double), to_date(1.1::double), to_date(-1.1::double), to_date(0-1.1::double)
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with decimal32 input (Decimal32)
+query DDDDDD
+SELECT to_date(arrow_cast(null, 'Decimal32(8,2)')), to_date(arrow_cast(0.0, 'Decimal32(8,2)')), to_date(arrow_cast(19260.1, 'Decimal32(8,2)')), to_date(arrow_cast(1.1, 'Decimal32(8,2)')), to_date(arrow_cast(-1.1, 'Decimal32(8,2)')), to_date(0-arrow_cast(1.1, 'Decimal32(8,2)'))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with Decimal64 input
+query DDDDDD
+SELECT to_date(arrow_cast(null, 'Decimal64(8,2)')), to_date(arrow_cast(0.0, 'Decimal64(8,2)')), to_date(arrow_cast(19260.1, 'Decimal64(8,2)')), to_date(arrow_cast(1.1, 'Decimal64(8,2)')), to_date(arrow_cast(-1.1, 'Decimal64(8,2)')), to_date(0-arrow_cast(1.1, 'Decimal64(8,2)'))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with Decimal128 input
+query DDDDDD
+SELECT to_date(arrow_cast(null, 'Decimal128(8,2)')), to_date(arrow_cast(0.0, 'Decimal128(8,2)')), to_date(arrow_cast(19260.1, 'Decimal128(8,2)')), to_date(arrow_cast(1.1, 'Decimal128(8,2)')), to_date(arrow_cast(-1.1, 'Decimal128(8,2)')), to_date(0-arrow_cast(1.1, 'Decimal128(8,2)'))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with decimal input (Decimal128)
+query DDDDDD
+SELECT to_date(null::decimal(10,2)), to_date(0.0::decimal(10,2)), to_date(19260.1::decimal(10,2)), to_date(1.1::decimal(10,2)), to_date(-1.1::decimal(10,2)), to_date(0-1.1::decimal(10,2))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with Decimal256 input
+query DDDDDD
+SELECT to_date(arrow_cast(null, 'Decimal256(8,2)')), to_date(arrow_cast(0.0, 'Decimal256(8,2)')), to_date(arrow_cast(19260.1, 'Decimal256(8,2)')), to_date(arrow_cast(1.1, 'Decimal256(8,2)')), to_date(arrow_cast(-1.1, 'Decimal256(8,2)')), to_date(0-arrow_cast(1.1, 'Decimal256(8,2)'))
+----
+NULL 1970-01-01 2022-09-25 1970-01-02 1969-12-31 1969-12-31
+
+# verify date cast with date input
+query DDDD
+SELECT to_date('2024-12-1'::date), to_date('1920-01-12'::date), to_date('1970-01-01'::date), to_date('-0200-07-22'::date)
+----
+2024-12-01 1920-01-12 1970-01-01 -0200-07-22
+
+# verify date cast with date64 input
+query DDDD
+SELECT to_date(arrow_cast('2024-12-1', 'Date64')), to_date(arrow_cast('1920-01-12', 'Date64')), to_date(arrow_cast('1970-01-01', 'Date64')), to_date(arrow_cast(-863999913600000, 'Date64'))
+----
+2024-12-01 1920-01-12 1970-01-01 -25410-12-07
+
+# verify date cast with timestamp input
+query DD
+SELECT to_date('2024-12-01T00:32:45'::timestamp), to_date('1677-12-01T00:32:45'::timestamp)
+----
+2024-12-01 1677-12-01
 
 # verify date output types
 query TTT
