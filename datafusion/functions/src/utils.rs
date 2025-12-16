@@ -19,9 +19,9 @@ use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray}
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
-use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::function::Hint;
+use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::function::Hint;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
