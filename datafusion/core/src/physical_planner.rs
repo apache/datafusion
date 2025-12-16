@@ -1582,6 +1582,7 @@ impl DefaultPhysicalPlanner {
             }
         } else if group_expr.is_empty() {
             // No GROUP BY clause - create empty PhysicalGroupBy
+            // no expressions, no null expressions and no grouping expressions
             Ok(PhysicalGroupBy::new(vec![], vec![], vec![], false))
         } else {
             Ok(PhysicalGroupBy::new_single(
