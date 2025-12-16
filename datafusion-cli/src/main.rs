@@ -38,11 +38,10 @@ use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
 };
 use datafusion_cli::{
-    exec,
+    DATAFUSION_CLI_VERSION, exec,
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
-    DATAFUSION_CLI_VERSION,
 };
 
 use clap::Parser;
@@ -504,8 +503,7 @@ mod tests {
         ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
         // input with single quote
-        let sql =
-            "SELECT * FROM parquet_metadata('../datafusion/core/tests/data/fixed_size_list_array.parquet')";
+        let sql = "SELECT * FROM parquet_metadata('../datafusion/core/tests/data/fixed_size_list_array.parquet')";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 
@@ -518,8 +516,7 @@ mod tests {
         "#);
 
         // input with double quote
-        let sql =
-            "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
+        let sql = "SELECT * FROM parquet_metadata(\"../datafusion/core/tests/data/fixed_size_list_array.parquet\")";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
         assert_snapshot!(batches_to_string(&rbs), @r#"
@@ -539,8 +536,7 @@ mod tests {
         ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
         // input with string columns
-        let sql =
-            "SELECT * FROM parquet_metadata('../parquet-testing/data/data_index_bloom_encoding_stats.parquet')";
+        let sql = "SELECT * FROM parquet_metadata('../parquet-testing/data/data_index_bloom_encoding_stats.parquet')";
         let df = ctx.sql(sql).await?;
         let rbs = df.collect().await?;
 

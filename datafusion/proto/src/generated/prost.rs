@@ -1839,6 +1839,8 @@ pub struct AggregateExecNode {
     pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
     #[prost(message, optional, tag = "11")]
     pub limit: ::core::option::Option<AggLimit>,
+    #[prost(bool, tag = "12")]
+    pub has_grouping_set: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {

@@ -17,8 +17,10 @@
 
 use arrow::array::Array;
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::ReturnFieldArgs;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -71,10 +73,6 @@ impl ScalarUDFImpl for SparkConcat {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
-    }
-
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_concat(args)
     }
@@ -82,6 +80,17 @@ impl ScalarUDFImpl for SparkConcat {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         // Accept any string types, including zero arguments
         Ok(arg_types.to_vec())
+    }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion_common::internal_err!(
+            "return_type should not be called for Spark concat"
+        )
+    }
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        // Spark semantics: concat returns NULL if ANY input is NULL
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+
+        Ok(Arc::new(Field::new("concat", DataType::Utf8, nullable)))
     }
 }
 
@@ -231,8 +240,10 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::StringArray;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
+    use datafusion_expr::ReturnFieldArgs;
+    use std::sync::Arc;
 
     #[test]
     fn test_concat_basic() -> Result<()> {
@@ -264,6 +275,52 @@ mod tests {
             DataType::Utf8,
             StringArray
         );
+        Ok(())
+    }
+    #[test]
+    fn test_spark_concat_return_field_non_nullable() -> Result<()> {
+        let func = SparkConcat::new();
+
+        let fields = vec![
+            Arc::new(Field::new("a", DataType::Utf8, false)),
+            Arc::new(Field::new("b", DataType::Utf8, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &fields,
+            scalar_arguments: &[],
+        };
+
+        let field = func.return_field_from_args(args)?;
+
+        assert!(
+            !field.is_nullable(),
+            "Expected concat result to be non-nullable when all inputs are non-nullable"
+        );
+
+        Ok(())
+    }
+    #[test]
+    fn test_spark_concat_return_field_nullable() -> Result<()> {
+        let func = SparkConcat::new();
+
+        let fields = vec![
+            Arc::new(Field::new("a", DataType::Utf8, false)),
+            Arc::new(Field::new("b", DataType::Utf8, true)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &fields,
+            scalar_arguments: &[],
+        };
+
+        let field = func.return_field_from_args(args)?;
+
+        assert!(
+            field.is_nullable(),
+            "Expected concat result to be nullable when any input is nullable"
+        );
+
         Ok(())
     }
 }

@@ -16,10 +16,10 @@
 // under the License.
 
 use datafusion::execution::SessionStateDefaults;
-use datafusion_common::{not_impl_err, HashSet, Result};
+use datafusion_common::{HashSet, Result, not_impl_err};
 use datafusion_expr::{
-    aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
-    DocSection, Documentation, ScalarUDF, WindowUDF,
+    AggregateUDF, DocSection, Documentation, ScalarUDF, WindowUDF,
+    aggregate_doc_sections, scalar_doc_sections, window_doc_sections,
 };
 use itertools::Itertools;
 use std::env::args;
@@ -255,7 +255,9 @@ fn print_docs(
         for f in &providers_with_no_docs {
             eprintln!("  - {f}");
         }
-        not_impl_err!("Some functions do not have documentation. Please implement `documentation` for: {providers_with_no_docs:?}")
+        not_impl_err!(
+            "Some functions do not have documentation. Please implement `documentation` for: {providers_with_no_docs:?}"
+        )
     } else {
         Ok(docs)
     }

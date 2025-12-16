@@ -134,6 +134,9 @@ impl serde::Serialize for AggregateExecNode {
         if self.limit.is_some() {
             len += 1;
         }
+        if self.has_grouping_set {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateExecNode", len)?;
         if !self.group_expr.is_empty() {
             struct_ser.serialize_field("groupExpr", &self.group_expr)?;
@@ -170,6 +173,9 @@ impl serde::Serialize for AggregateExecNode {
         if let Some(v) = self.limit.as_ref() {
             struct_ser.serialize_field("limit", v)?;
         }
+        if self.has_grouping_set {
+            struct_ser.serialize_field("hasGroupingSet", &self.has_grouping_set)?;
+        }
         struct_ser.end()
     }
 }
@@ -198,6 +204,8 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             "filter_expr",
             "filterExpr",
             "limit",
+            "has_grouping_set",
+            "hasGroupingSet",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -213,6 +221,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             Groups,
             FilterExpr,
             Limit,
+            HasGroupingSet,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -245,6 +254,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             "groups" => Ok(GeneratedField::Groups),
                             "filterExpr" | "filter_expr" => Ok(GeneratedField::FilterExpr),
                             "limit" => Ok(GeneratedField::Limit),
+                            "hasGroupingSet" | "has_grouping_set" => Ok(GeneratedField::HasGroupingSet),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -275,6 +285,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                 let mut groups__ = None;
                 let mut filter_expr__ = None;
                 let mut limit__ = None;
+                let mut has_grouping_set__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::GroupExpr => {
@@ -343,6 +354,12 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             }
                             limit__ = map_.next_value()?;
                         }
+                        GeneratedField::HasGroupingSet => {
+                            if has_grouping_set__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hasGroupingSet"));
+                            }
+                            has_grouping_set__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(AggregateExecNode {
@@ -357,6 +374,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                     groups: groups__.unwrap_or_default(),
                     filter_expr: filter_expr__.unwrap_or_default(),
                     limit: limit__,
+                    has_grouping_set: has_grouping_set__.unwrap_or_default(),
                 })
             }
         }

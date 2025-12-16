@@ -113,8 +113,8 @@ mod tests {
     use crate::prelude::*;
     use crate::{
         datasource::{
-            file_format::csv::CsvFormat, file_format::json::JsonFormat,
-            provider_as_source, DefaultTableSource, MemTable,
+            DefaultTableSource, MemTable, file_format::csv::CsvFormat,
+            file_format::json::JsonFormat, provider_as_source,
         },
         execution::options::ArrowReadOptions,
         test::{
@@ -129,21 +129,20 @@ mod tests {
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
     };
     use datafusion_common::{
-        assert_contains,
+        DataFusionError, Result, ScalarValue, assert_contains,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
-        DataFusionError, Result, ScalarValue,
     };
+    use datafusion_datasource::ListingTableUrl;
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::ListingTableUrl;
     use datafusion_expr::dml::InsertOp;
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
-    use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::{collect, ExecutionPlanProperties};
+    use datafusion_physical_plan::{ExecutionPlanProperties, collect};
     use std::collections::HashMap;
     use std::io::Write;
     use std::sync::Arc;
@@ -283,32 +282,36 @@ mod tests {
             // sort expr, but non column
             (
                 vec![vec![col("int_col").add(lit(1)).sort(true, true)]],
-                Ok(vec![[PhysicalSortExpr {
-                    expr: binary(
-                        physical_col("int_col", &schema).unwrap(),
-                        Operator::Plus,
-                        physical_lit(1),
-                        &schema,
-                    )
-                    .unwrap(),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: true,
-                    },
-                }]
-                .into()]),
+                Ok(vec![
+                    [PhysicalSortExpr {
+                        expr: binary(
+                            physical_col("int_col", &schema).unwrap(),
+                            Operator::Plus,
+                            physical_lit(1),
+                            &schema,
+                        )
+                        .unwrap(),
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: true,
+                        },
+                    }]
+                    .into(),
+                ]),
             ),
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![[PhysicalSortExpr {
-                    expr: physical_col("string_col", &schema).unwrap(),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                }]
-                .into()]),
+                Ok(vec![
+                    [PhysicalSortExpr {
+                        expr: physical_col("string_col", &schema).unwrap(),
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: false,
+                        },
+                    }]
+                    .into(),
+                ]),
             ),
             // ok with two columns, different options
             (
@@ -316,19 +319,21 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![[
-                    PhysicalSortExpr::new_default(
-                        physical_col("string_col", &schema).unwrap(),
-                    )
-                    .asc()
-                    .nulls_last(),
-                    PhysicalSortExpr::new_default(
-                        physical_col("int_col", &schema).unwrap(),
-                    )
-                    .desc()
-                    .nulls_first(),
-                ]
-                .into()]),
+                Ok(vec![
+                    [
+                        PhysicalSortExpr::new_default(
+                            physical_col("string_col", &schema).unwrap(),
+                        )
+                        .asc()
+                        .nulls_last(),
+                        PhysicalSortExpr::new_default(
+                            physical_col("int_col", &schema).unwrap(),
+                        )
+                        .desc()
+                        .nulls_first(),
+                    ]
+                    .into(),
+                ]),
             ),
         ];
 
@@ -725,8 +730,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_into_append_new_parquet_files_invalid_session_fails(
-    ) -> Result<()> {
+    async fn test_insert_into_append_new_parquet_files_invalid_session_fails()
+    -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
         config_map.insert(
             "datafusion.execution.parquet.compression".into(),
@@ -740,7 +745,10 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
-        assert_eq!(e.strip_backtrace(), "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)");
+        assert_eq!(
+            e.strip_backtrace(),
+            "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)"
+        );
 
         Ok(())
     }
@@ -1410,7 +1418,9 @@ mod tests {
         ];
 
         for (format, batch_size, soft_max_rows, expected_files) in test_cases {
-            println!("Testing insert with format: {format}, batch_size: {batch_size}, expected files: {expected_files}");
+            println!(
+                "Testing insert with format: {format}, batch_size: {batch_size}, expected files: {expected_files}"
+            );
 
             let mut config_map = HashMap::new();
             config_map.insert(

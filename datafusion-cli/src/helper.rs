@@ -67,7 +67,7 @@ impl CliHelper {
                     return Ok(ValidationResult::Invalid(Some(format!(
                         "  🤔 Invalid dialect: {}",
                         self.dialect
-                    ))))
+                    ))));
                 }
             };
             let lines = split_from_semicolon(sql);
@@ -121,10 +121,10 @@ impl Hinter for CliHelper {
 fn is_open_quote_for_location(line: &str, pos: usize) -> bool {
     let mut sql = line[..pos].to_string();
     sql.push('\'');
-    if let Ok(stmts) = DFParser::parse_sql(&sql) {
-        if let Some(Statement::CreateExternalTable(_)) = stmts.back() {
-            return true;
-        }
+    if let Ok(stmts) = DFParser::parse_sql(&sql)
+        && let Some(Statement::CreateExternalTable(_)) = stmts.back()
+    {
+        return true;
     }
     false
 }

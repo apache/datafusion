@@ -45,8 +45,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
-use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -63,10 +63,10 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec};
+use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
-    displayable, DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode,
-    Partitioning, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
+    PlanProperties, displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -462,10 +462,11 @@ impl ExecutionPlan for RequirementsTestExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
-        vec![self
-            .required_input_ordering
-            .as_ref()
-            .map(|ordering| OrderingRequirements::from(ordering.clone()))]
+        vec![
+            self.required_input_ordering
+                .as_ref()
+                .map(|ordering| OrderingRequirements::from(ordering.clone())),
+        ]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
