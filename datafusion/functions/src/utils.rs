@@ -472,7 +472,7 @@ pub mod test {
             (
                 123,
                 i8::MAX,
-                Either::Right("scale 127 is greater than precision 18".into()),
+                Either::Right("Cannot get a power of 127".into()),
             ),
             (
                 999999999999999999i64,
