@@ -228,7 +228,12 @@ fn hash_array_primitive<T>(
 /// HAS_NULLS: do we have to check in the inner loop
 /// HAS_BUFFERS: if true, array has external buffers; if false, all strings are inlined/ less then 12 bytes
 /// REHASH: if true, combining with existing hash, otherwise initializing
-fn hash_string_view_array_inner<const HAS_NULLS: bool, const HAS_BUFFERS: bool, const REHASH: bool> (
+#[inline(never)]
+fn hash_string_view_array_inner<
+    const HAS_NULLS: bool,
+    const HAS_BUFFERS: bool,
+    const REHASH: bool,
+>(
     array: &StringViewArray,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
@@ -257,10 +262,15 @@ fn hash_string_view_array_inner<const HAS_NULLS: bool, const HAS_BUFFERS: bool, 
         }
         // view is not inlined, so we need to hash the bytes as well
         let view = ByteView::from(v);
-        let data = unsafe { array.data_buffers().get_unchecked(view.buffer_index as usize) };
+        let data = unsafe {
+            array
+                .data_buffers()
+                .get_unchecked(view.buffer_index as usize)
+        };
         let offset = view.offset as usize;
         // SAFETY: view is a valid view as it came from the array
-        let view_bytes = unsafe { data.get_unchecked(offset..offset + view_len as usize) };
+        let view_bytes =
+            unsafe { data.get_unchecked(offset..offset + view_len as usize) };
         if REHASH {
             *hash = combine_hashes(view_bytes.hash_one(random_state), *hash);
         } else {
@@ -280,18 +290,53 @@ fn hash_string_view_array(
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
     rehash: bool,
-)
-{
+) {
     // instantiate the correct version based on presence of nulls and external buffers
-    match (array.null_count() != 0, !array.data_buffers().is_empty(), rehash) {
-        (false, false, false) => hash_string_view_array_inner::<false, false, false>(array, random_state, hashes_buffer),
-        (false, false, true) => hash_string_view_array_inner::<false, false, true>(array, random_state, hashes_buffer),
-        (false, true, false) => hash_string_view_array_inner::<false, true, false>(array, random_state, hashes_buffer),
-        (false, true, true) => hash_string_view_array_inner::<false, true, true>(array, random_state, hashes_buffer),
-        (true, false, false) => hash_string_view_array_inner::<true, false, false>(array, random_state, hashes_buffer),
-        (true, false, true) => hash_string_view_array_inner::<true, false, true>(array, random_state, hashes_buffer),
-        (true, true, false) => hash_string_view_array_inner::<true, true, false>(array, random_state, hashes_buffer),
-        (true, true, true) => hash_string_view_array_inner::<true, true, true>(array, random_state, hashes_buffer),
+    match (
+        array.null_count() != 0,
+        !array.data_buffers().is_empty(),
+        rehash,
+    ) {
+        (false, false, false) => hash_string_view_array_inner::<false, false, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, false, true) => hash_string_view_array_inner::<false, false, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, true, false) => hash_string_view_array_inner::<false, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, true, true) => hash_string_view_array_inner::<false, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, false) => hash_string_view_array_inner::<true, false, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, true) => hash_string_view_array_inner::<true, false, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, false) => hash_string_view_array_inner::<true, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, true) => hash_string_view_array_inner::<true, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
     }
 }
 
