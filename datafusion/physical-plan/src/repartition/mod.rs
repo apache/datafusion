@@ -34,7 +34,7 @@ use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
-use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
+use crate::projection::{ProjectionExec, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
@@ -1042,18 +1042,6 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If the projection does not narrow the schema, we should not try to push it down.
-        if projection.expr().len() >= projection.input().schema().fields().len() {
-            return Ok(None);
-        }
-
-        // If pushdown is not beneficial or applicable, break it.
-        if projection.benefits_from_input_partitioning()[0]
-            || !all_columns(projection.expr())
-        {
-            return Ok(None);
-        }
-
         let new_projection = make_with_child(projection, self.input())?;
 
         let new_partitioning = match self.partitioning() {
