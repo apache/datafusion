@@ -106,12 +106,7 @@ impl LogFunc {
 
 /// Binary function to calculate logarithm of Decimal32 `value` using `base` base
 /// Returns error if base is invalid
-fn log_decimal32(
-    value: i32,
-    precision: u8,
-    scale: i8,
-    base: f64,
-) -> Result<f64, ArrowError> {
+fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
     if !base.is_finite() || base.trunc() != base {
         return Err(ArrowError::ComputeError(format!(
             "Log cannot use non-integer base: {base}"
@@ -123,7 +118,7 @@ fn log_decimal32(
         )));
     }
 
-    let unscaled_value = decimal32_to_i32(value, precision, scale)?;
+    let unscaled_value = decimal32_to_i32(value, scale)?;
     if unscaled_value > 0 {
         let log_value: u32 = unscaled_value.ilog(base as i32);
         Ok(log_value as f64)
@@ -135,12 +130,7 @@ fn log_decimal32(
 
 /// Binary function to calculate logarithm of Decimal64 `value` using `base` base
 /// Returns error if base is invalid
-fn log_decimal64(
-    value: i64,
-    precision: u8,
-    scale: i8,
-    base: f64,
-) -> Result<f64, ArrowError> {
+fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
     if !base.is_finite() || base.trunc() != base {
         return Err(ArrowError::ComputeError(format!(
             "Log cannot use non-integer base: {base}"
@@ -152,7 +142,7 @@ fn log_decimal64(
         )));
     }
 
-    let unscaled_value = decimal64_to_i64(value, precision, scale)?;
+    let unscaled_value = decimal64_to_i64(value, scale)?;
     if unscaled_value > 0 {
         let log_value: u32 = unscaled_value.ilog(base as i64);
         Ok(log_value as f64)
@@ -283,18 +273,18 @@ impl ScalarUDFImpl for LogFunc {
                     |value, base| Ok(value.log(base)),
                 )?
             }
-            DataType::Decimal32(precision, scale) => {
+            DataType::Decimal32(_, scale) => {
                 calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
-                    |value, base| log_decimal32(value, *precision, *scale, base),
+                    |value, base| log_decimal32(value, *scale, base),
                 )?
             }
-            DataType::Decimal64(precision, scale) => {
+            DataType::Decimal64(_, scale) => {
                 calculate_binary_math::<Decimal64Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
-                    |value, base| log_decimal64(value, *precision, *scale, base),
+                    |value, base| log_decimal64(value, *scale, base),
                 )?
             }
             DataType::Decimal128(_, scale) => {

@@ -17,9 +17,7 @@
 
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::{
-    validate_decimal32_precision, validate_decimal64_precision, DataType, DecimalType,
-};
+use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
 use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
@@ -221,20 +219,14 @@ pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
     }
 }
 
-pub fn decimal32_to_i32(value: i32, precision: u8, scale: i8) -> Result<i32, ArrowError> {
+pub fn decimal32_to_i32(value: i32, scale: i8) -> Result<i32, ArrowError> {
     if scale < 0 {
         Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
         ))
-    } else if scale as u8 > precision {
-        Err(ArrowError::ComputeError(format!(
-            "scale {scale} is greater than precision {precision}"
-        )))
     } else if scale == 0 {
         Ok(value)
     } else {
-        validate_decimal32_precision(value, precision, scale)?;
-
         match 10_i32.checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
@@ -244,20 +236,14 @@ pub fn decimal32_to_i32(value: i32, precision: u8, scale: i8) -> Result<i32, Arr
     }
 }
 
-pub fn decimal64_to_i64(value: i64, precision: u8, scale: i8) -> Result<i64, ArrowError> {
+pub fn decimal64_to_i64(value: i64, scale: i8) -> Result<i64, ArrowError> {
     if scale < 0 {
         Err(ArrowError::ComputeError(
             "Negative scale is not supported".into(),
         ))
-    } else if scale as u8 > precision {
-        Err(ArrowError::ComputeError(format!(
-            "scale {scale} is greater than precision {precision}"
-        )))
     } else if scale == 0 {
         Ok(value)
     } else {
-        validate_decimal64_precision(value, precision, scale)?;
-
         match i64::from(10).checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
@@ -428,37 +414,35 @@ pub mod test {
 
     #[test]
     fn test_decimal32_to_i32() {
-        let cases: [(i32, u8, i8, Either<i32, String>); _] = [
-            (123, 7, 0, Either::Left(123)),
-            (1230, 7, 1, Either::Left(123)),
-            (123000, 7, 3, Either::Left(123)),
-            (1234567, 7, 2, Either::Left(12345)),
-            (-1234567, 7, 2, Either::Left(-12345)),
-            (1, 7, 0, Either::Left(1)),
+        let cases: [(i32, i8, Either<i32, String>); _] = [
+            (123, 0, Either::Left(123)),
+            (1230, 1, Either::Left(123)),
+            (123000, 3, Either::Left(123)),
+            (1234567, 2, Either::Left(12345)),
+            (-1234567, 2, Either::Left(-12345)),
+            (1, 0, Either::Left(1)),
             (
                 123,
-                7,
                 -3,
                 Either::Right("Negative scale is not supported".into()),
             ),
             (
                 123,
-                7,
                 i8::MAX,
-                Either::Right("scale 127 is greater than precision 7".into()),
+                Either::Right("Cannot get a power of 127".into()),
             ),
-            (999999999, 9, 0, Either::Left(999999999)),
-            (999999999, 9, 3, Either::Left(999999)),
+            (999999999, 0, Either::Left(999999999)),
+            (999999999, 3, Either::Left(999999)),
         ];
 
-        for (value, precision, scale, expected) in cases {
-            match decimal32_to_i32(value, precision, scale) {
+        for (value, scale, expected) in cases {
+            match decimal32_to_i32(value, scale) {
                 Ok(actual) => {
                     let expected_value =
                         expected.left().expect("Got value but expected none");
                     assert_eq!(
                         actual, expected_value,
-                        "{value} and {precision} {scale} vs {expected_value:?}"
+                        "{value} and {scale} vs {expected_value:?}"
                     );
                 }
                 Err(ArrowError::ComputeError(msg)) => {
@@ -476,50 +460,45 @@ pub mod test {
 
     #[test]
     fn test_decimal64_to_i64() {
-        let cases: [(i64, u8, i8, Either<i64, String>); _] = [
-            (123, 18, 0, Either::Left(123)),
-            (1234567890, 14, 2, Either::Left(12345678)),
-            (-1234567890, 10, 2, Either::Left(-12345678)),
+        let cases: [(i64, i8, Either<i64, String>); _] = [
+            (123, 0, Either::Left(123)),
+            (1234567890, 2, Either::Left(12345678)),
+            (-1234567890, 2, Either::Left(-12345678)),
             (
                 123,
-                18,
                 -3,
                 Either::Right("Negative scale is not supported".into()),
             ),
             (
                 123,
-                18,
                 i8::MAX,
                 Either::Right("scale 127 is greater than precision 18".into()),
             ),
             (
                 999999999999999999i64,
-                18,
                 0,
                 Either::Left(999999999999999999i64),
             ),
             (
                 999999999999999999i64,
-                18,
                 3,
                 Either::Left(999999999999999999i64 / 1000),
             ),
             (
                 -999999999999999999i64,
-                18,
                 3,
                 Either::Left(-999999999999999999i64 / 1000),
             ),
         ];
 
-        for (value, precision, scale, expected) in cases {
-            match decimal64_to_i64(value, precision, scale) {
+        for (value, scale, expected) in cases {
+            match decimal64_to_i64(value, scale) {
                 Ok(actual) => {
                     let expected_value =
                         expected.left().expect("Got value but expected none");
                     assert_eq!(
                         actual, expected_value,
-                        "{value} and {precision} {scale} vs {expected_value:?}"
+                        "{value} and {scale} vs {expected_value:?}"
                     );
                 }
                 Err(ArrowError::ComputeError(msg)) => {
