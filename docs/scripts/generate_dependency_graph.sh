@@ -28,7 +28,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 OUTPUT_DIR="${REPO_DIR}/docs/source/_static/data"
-DOT_OUTPUT="${OUTPUT_DIR}/deps.dot"
 SVG_OUTPUT="${OUTPUT_DIR}/deps.svg"
 
 usage() {
@@ -37,28 +36,18 @@ Generate the workspace dependency graph SVG for the docs.
 
 'deps.svg' is embedded in the DataFusion docs (Contributor Guide → Architecture → Workspace Dependency Graph).
 
-'deps.dot' is the intermediate DOT used to render deps.svg; CI checks it to ensure the graph is up to date with the codebase.
-
-Outputs:
-  DOT: ${DOT_OUTPUT}
+Output:
   SVG: ${SVG_OUTPUT}
 
-Usage: $(basename "$0") [--check]
+Usage: $(basename "$0")
 
 Options:
-  --check     Validate the checked-in graph without modifying files.
   -h, --help  Show this help message.
 EOF
 }
 
-# Default 'generate' mode creates/overrides 'deps.dot' and 'deps.svg', and the 'check'
-# mode verify if the existing 'deps.dot' is up-to-date
-mode="generate"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --check)
-      mode="check"
-      ;;
     -h|--help)
       usage
       exit 0
@@ -82,54 +71,25 @@ if ! command -v cargo-depgraph > /dev/null 2>&1; then
   exit 1
 fi
 
-if [[ "${mode}" != "check" ]] && ! command -v dot >/dev/null 2>&1; then
+if ! command -v dot >/dev/null 2>&1; then
   echo "Graphviz 'dot' is required to render the SVG." >&2
   exit 1
 fi
 
 mkdir -p "${OUTPUT_DIR}"
 
-generate_dot() {
-  local output_file="$1"
-  (
-    cd "${REPO_DIR}"
-    cargo depgraph \
-      --workspace-only \
-      --all-deps \
-      --dedup-transitive-deps \
-      > "${output_file}"
-  )
-}
+(
+  cd "${REPO_DIR}"
+  cargo depgraph \
+    --workspace-only \
+    --all-deps \
+    --dedup-transitive-deps \
+    | dot \
+      -Grankdir=TB \
+      -Gconcentrate=true \
+      -Goverlap=false \
+      -Tsvg \
+      > "${SVG_OUTPUT}"
+)
 
-if [[ "${mode}" == "check" ]]; then
-  if [[ ! -f "${DOT_OUTPUT}" ]]; then
-    echo "Expected graph ${DOT_OUTPUT} is missing; regenerate it with $(basename "$0")." >&2
-    exit 1
-  fi
-
-  temp_dot="$(mktemp)"
-  cleanup() { rm -f "${temp_dot}"; }
-  trap cleanup EXIT
-
-  generate_dot "${temp_dot}"
-
-  if ! cmp -s "${temp_dot}" "${DOT_OUTPUT}"; then
-    echo "Dependency graph is out of date. Re-run $(basename "$0") to refresh ${DOT_OUTPUT} and ${SVG_OUTPUT}." >&2
-    exit 1
-  fi
-
-  echo "Dependency graph is up to date."
-  exit 0
-fi
-
-generate_dot "${DOT_OUTPUT}"
-
-dot \
-  -Grankdir=TB \
-  -Gconcentrate=true \
-  -Goverlap=false \
-  -Tsvg "${DOT_OUTPUT}" \
-  > "${SVG_OUTPUT}"
-
-echo "Wrote dependency graph DOT to ${DOT_OUTPUT}"
 echo "Wrote dependency graph SVG to ${SVG_OUTPUT}"
