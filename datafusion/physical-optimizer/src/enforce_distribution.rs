@@ -881,7 +881,7 @@ fn add_roundrobin_on_top(
 /// * `hash_exprs`: Stores Physical Exprs that are used during hashing.
 /// * `n_target`: desired target partition number, if partition number of the
 ///   current executor is less than this value. Partition number will be increased.
-/// * `allow_subset`: Whether to allow subset partitioning logic in satisfaction checks.
+/// * `allow_subset_satisfy_partitioning`: Whether to allow subset partitioning logic in satisfaction checks.
 ///   Set to `false` for partitioned hash joins to ensure exact hash matching.
 ///
 /// # Returns
