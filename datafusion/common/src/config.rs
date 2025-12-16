@@ -1004,7 +1004,7 @@ config_namespace! {
         ///
         /// When the current partition count is >= this threshold, DataFusion will
         /// skip repartitioning if the required partitioning expression is a subset
-        /// of the current partition expression such as Hash([a]) satisfies Hash([a, b]).
+        /// of the current partition expression such as Hash(a) satisfies Hash(a, b).
         ///
         /// When the current partition count is < this threshold, DataFusion will
         /// repartition to increase parallelism even when subset satisfaction applies.
@@ -1014,17 +1014,17 @@ config_namespace! {
         ///
         /// Example (subset_satisfaction_partition_threshold = 4):
         /// ```text
-        ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a]))
+        ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a])
         ///
-        /// If current partitions (3) < threshold (4), repartition to increase parallelism:
-        /// AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
-        ///   RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
-        ///     AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
-        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)
+        ///     If current partitions (3) < threshold (4), repartition to increase parallelism:
+        ///     AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
+        ///         AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
+        ///           DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)
         ///
-        /// If current partitions (8) >= threshold (4), use subset satisfaction (no repartition):
-        /// AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
-        ///   DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
+        ///     If current partitions (8) >= threshold (4), use subset satisfaction (no repartition):
+        ///     AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
         /// ```
         pub subset_satisfaction_partition_threshold: usize, default = 4
 

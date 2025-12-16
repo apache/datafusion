@@ -171,7 +171,7 @@ impl Partitioning {
     }
 
     /// Returns true if `subset_exprs` is a subset of `exprs`.
-    /// For example: Hash([a, b]) is subset of Hash([a]) since a partition with all occurrences of
+    /// For example: Hash(a, b) is subset of Hash(a) since a partition with all occurrences of
     /// a distinct (a) must also contain all occurrences of a distinct (a, b) with the same (a).
     fn is_subset_partitioning(
         subset_exprs: &[Arc<dyn PhysicalExpr>],
