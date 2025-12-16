@@ -18,12 +18,12 @@
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
 use arrow::datatypes::{
-    DataType, DecimalType, validate_decimal32_precision, validate_decimal64_precision,
+    validate_decimal32_precision, validate_decimal64_precision, DataType, DecimalType,
 };
 use arrow::error::ArrowError;
-use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
-use datafusion_expr::ColumnarValue;
+use datafusion_common::{not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::Hint;
+use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -382,6 +382,7 @@ pub mod test {
     }
 
     use arrow::datatypes::DataType;
+    use itertools::Either;
     pub(crate) use test_function;
 
     use super::*;
@@ -427,66 +428,109 @@ pub mod test {
 
     #[test]
     fn test_decimal32_to_i32() {
-        let cases = [
-            (123, 7, 0, Some(123)),
-            (1230, 7, 1, Some(123)),
-            (123000, 7, 3, Some(123)),
-            (1234567, 7, 2, Some(12345)),
-            (-1234567, 7, 2, Some(-12345)),
-            (1, 7, 0, Some(1)),
-            (123, 7, -3, None),
-            (123, 7, i8::MAX, None),
-            (999999999, 9, 0, Some(999999999)),
-            (999999999, 9, 3, Some(999999)),
+        let cases: [(i32, u8, i8, Either<i32, String>); _] = [
+            (123, 7, 0, Either::Left(123)),
+            (1230, 7, 1, Either::Left(123)),
+            (123000, 7, 3, Either::Left(123)),
+            (1234567, 7, 2, Either::Left(12345)),
+            (-1234567, 7, 2, Either::Left(-12345)),
+            (1, 7, 0, Either::Left(1)),
+            (
+                123,
+                7,
+                -3,
+                Either::Right("Negative scale is not supported".into()),
+            ),
+            (
+                123,
+                7,
+                i8::MAX,
+                Either::Right("scale 127 is greater than precision 7".into()),
+            ),
+            (999999999, 9, 0, Either::Left(999999999)),
+            (999999999, 9, 3, Either::Left(999999)),
         ];
 
         for (value, precision, scale, expected) in cases {
             match decimal32_to_i32(value, precision, scale) {
                 Ok(actual) => {
+                    let expected_value =
+                        expected.left().expect("Got value but expected none");
                     assert_eq!(
-                        actual,
-                        expected.expect("Got value but expected none"),
-                        "{value} and {precision} {scale} vs {expected:?}"
+                        actual, expected_value,
+                        "{value} and {precision} {scale} vs {expected_value:?}"
                     );
                 }
-                Err(_) => assert!(expected.is_none()),
+                Err(ArrowError::ComputeError(msg)) => {
+                    assert_eq!(
+                        msg,
+                        expected.right().expect("Got error but expected value")
+                    );
+                }
+                Err(_) => {
+                    assert!(expected.is_right())
+                }
             }
         }
     }
 
     #[test]
     fn test_decimal64_to_i64() {
-        let cases = [
-            (123, 18, 0, Some(123)),
-            (1234567890, 14, 2, Some(12345678)),
-            (-1234567890, 10, 2, Some(-12345678)),
-            (123, 18, -3, None),
-            (123, 18, i8::MAX, None),
-            (999999999999999999i64, 18, 0, Some(999999999999999999i64)),
+        let cases: [(i64, u8, i8, Either<i64, String>); _] = [
+            (123, 18, 0, Either::Left(123)),
+            (1234567890, 14, 2, Either::Left(12345678)),
+            (-1234567890, 10, 2, Either::Left(-12345678)),
+            (
+                123,
+                18,
+                -3,
+                Either::Right("Negative scale is not supported".into()),
+            ),
+            (
+                123,
+                18,
+                i8::MAX,
+                Either::Right("scale 127 is greater than precision 18".into()),
+            ),
+            (
+                999999999999999999i64,
+                18,
+                0,
+                Either::Left(999999999999999999i64),
+            ),
             (
                 999999999999999999i64,
                 18,
                 3,
-                Some(999999999999999999i64 / 1000),
+                Either::Left(999999999999999999i64 / 1000),
             ),
             (
                 -999999999999999999i64,
                 18,
                 3,
-                Some(-999999999999999999i64 / 1000),
+                Either::Left(-999999999999999999i64 / 1000),
             ),
         ];
 
         for (value, precision, scale, expected) in cases {
             match decimal64_to_i64(value, precision, scale) {
                 Ok(actual) => {
+                    let expected_value =
+                        expected.left().expect("Got value but expected none");
                     assert_eq!(
-                        actual,
-                        expected.expect("Got value but expected none"),
-                        "{value} and {scale} vs {expected:?}"
+                        actual, expected_value,
+                        "{value} and {precision} {scale} vs {expected_value:?}"
                     );
                 }
-                Err(_) => assert!(expected.is_none()),
+                Err(ArrowError::ComputeError(msg)) => {
+                    assert_eq!(
+                        msg,
+                        expected.right().expect("Got error but expected value")
+                    );
+                }
+                Err(_) => {
+                    assert!(expected.is_right())
+                }
             }
         }
     }
