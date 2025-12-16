@@ -90,10 +90,15 @@ version = "51.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-apache-avro = { version = "0.21", default-features = false }
 arrow = { version = "57.1.0", features = [
     "prettyprint",
     "chrono-tz",
+] }
+arrow-avro = { version = "57.1.0", default-features = false, features = [
+    "deflate",
+    "snappy",
+    "zstd",
+    "bzip2",
 ] }
 arrow-buffer = { version = "57.1.0", default-features = false }
 arrow-flight = { version = "57.1.0", features = [

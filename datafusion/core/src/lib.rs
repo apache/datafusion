@@ -787,7 +787,7 @@ pub use object_store;
 pub use parquet;
 
 #[cfg(feature = "avro")]
-pub use datafusion_datasource_avro::apache_avro;
+pub use datafusion_datasource_avro::arrow_avro;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
