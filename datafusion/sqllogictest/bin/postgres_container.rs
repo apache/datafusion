@@ -86,7 +86,9 @@ pub async fn initialize_postgres_container(options: &Options) -> Result<()> {
         let pg_uri = format!("postgresql://postgres:postgres@{db_host}:{db_port}/test");
         info!("Postgres uri is {pg_uri}");
 
-        set_var("PG_URI", pg_uri);
+        unsafe {
+            set_var("PG_URI", pg_uri);
+        }
     } else {
         // close receiver
         POSTGRES_IN.rx.lock().await.close();
