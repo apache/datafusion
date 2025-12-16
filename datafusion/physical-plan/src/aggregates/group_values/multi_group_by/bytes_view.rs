@@ -155,14 +155,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             equal_to_results.iter_mut(),
         );
 
-            for (&lhs_row, &rhs_row, equal_to_result) in iter {
-                // Has found not equal to, don't need to check
-                if !*equal_to_result {
-                    continue;
-                }
-
-                *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+        for (&lhs_row, &rhs_row, equal_to_result) in iter {
+            // Has found not equal to, don't need to check
+            if !*equal_to_result {
+                continue;
             }
+
+            *equal_to_result = self.do_equal_to_inner(lhs_row, array, rhs_row);
+        }
     }
 
     fn vectorized_append_inner(&mut self, array: &ArrayRef, rows: &[usize]) {
@@ -534,9 +534,19 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     ) {
         let array = array.as_byte_view::<B>();
         if array.null_count() == 0 {
-            self.vectorized_equal_to_inner_no_nulls(group_indices, array, rows, equal_to_results);
+            self.vectorized_equal_to_inner_no_nulls(
+                group_indices,
+                array,
+                rows,
+                equal_to_results,
+            );
         } else {
-            self.vectorized_equal_to_inner_nulls(group_indices, array, rows, equal_to_results);
+            self.vectorized_equal_to_inner_nulls(
+                group_indices,
+                array,
+                rows,
+                equal_to_results,
+            );
         }
     }
 
