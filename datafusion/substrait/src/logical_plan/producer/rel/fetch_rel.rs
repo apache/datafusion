@@ -20,7 +20,7 @@ use datafusion::common::DFSchema;
 use datafusion::logical_expr::Limit;
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
-use substrait::proto::{fetch_rel, FetchRel, Rel};
+use substrait::proto::{FetchRel, Rel, fetch_rel};
 
 pub fn from_limit(
     producer: &mut impl SubstraitProducer,

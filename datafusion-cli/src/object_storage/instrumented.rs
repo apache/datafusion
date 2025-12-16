@@ -20,8 +20,8 @@ use std::{
     ops::AddAssign,
     str::FromStr,
     sync::{
-        atomic::{AtomicU8, Ordering},
         Arc,
+        atomic::{AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -31,14 +31,15 @@ use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::{
-    common::{instant::Instant, HashMap},
+    common::{HashMap, instant::Instant},
     error::DataFusionError,
     execution::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
 use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    path::Path,
 };
 use parking_lot::{Mutex, RwLock};
 use url::Url;
@@ -782,9 +783,11 @@ mod tests {
             "TRaCe".parse().unwrap(),
             InstrumentedObjectStoreMode::Trace
         ));
-        assert!("does_not_exist"
-            .parse::<InstrumentedObjectStoreMode>()
-            .is_err());
+        assert!(
+            "does_not_exist"
+                .parse::<InstrumentedObjectStoreMode>()
+                .is_err()
+        );
 
         assert!(matches!(0.into(), InstrumentedObjectStoreMode::Disabled));
         assert!(matches!(1.into(), InstrumentedObjectStoreMode::Summary));

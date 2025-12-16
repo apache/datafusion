@@ -16,17 +16,17 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    to_substrait_literal, to_substrait_named_struct, SubstraitProducer,
+    SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
-use datafusion::common::{substrait_datafusion_err, DFSchema, ToDFSchema};
+use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
+use substrait::proto::expression::MaskExpression;
 use substrait::proto::expression::literal::Struct as LiteralStruct;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
-use substrait::proto::expression::MaskExpression;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
 use substrait::proto::{ReadRel, Rel};

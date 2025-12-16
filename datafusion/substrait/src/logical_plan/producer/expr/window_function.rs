@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::utils::substrait_sort_field;
 use crate::logical_plan::producer::SubstraitProducer;
-use datafusion::common::{not_impl_err, DFSchemaRef, ScalarValue};
+use crate::logical_plan::producer::utils::substrait_sort_field;
+use datafusion::common::{DFSchemaRef, ScalarValue, not_impl_err};
 use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use substrait::proto::expression::RexType;
+use substrait::proto::expression::WindowFunction as SubstraitWindowFunction;
 use substrait::proto::expression::window_function::bound as SubstraitBound;
 use substrait::proto::expression::window_function::bound::Kind as BoundKind;
 use substrait::proto::expression::window_function::{Bound, BoundsType};
-use substrait::proto::expression::RexType;
-use substrait::proto::expression::WindowFunction as SubstraitWindowFunction;
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument, SortField};
 

@@ -19,9 +19,9 @@ use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, MapArray, MapBuilder, StringBuilder,
 };
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Int32Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields,
-    UnionMode, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_PRECISION, DataType, Field, FieldRef, Fields, Int32Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
+    TimeUnit, UnionFields, UnionMode,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
@@ -29,8 +29,8 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::execution::options::ArrowReadOptions;
-use datafusion::optimizer::optimize_unions::OptimizeUnions;
 use datafusion::optimizer::Optimizer;
+use datafusion::optimizer::optimize_unions::OptimizeUnions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
@@ -42,13 +42,13 @@ use std::sync::Arc;
 use std::vec;
 
 use datafusion::catalog::{TableProvider, TableProviderFactory};
+use datafusion::datasource::DefaultTableSource;
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
-use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
-use datafusion::datasource::DefaultTableSource;
-use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::datasource::file_format::{DefaultFileType, format_as_file_type};
 use datafusion::execution::FunctionRegistry;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
     approx_median, approx_percentile_cont, approx_percentile_cont_with_weight, count,
@@ -68,8 +68,8 @@ use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef,
-    DataFusionError, Result, ScalarValue, TableReference,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -102,7 +102,7 @@ use datafusion_proto::logical_plan::file_formats::{
 };
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::logical_plan::{
-    from_proto, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec, from_proto,
 };
 use datafusion_proto::protobuf;
 
@@ -1088,11 +1088,13 @@ async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()>
     let prepared = LogicalPlanBuilder::new(plan)
         .prepare(
             "".to_string(),
-            vec![Field::new("", DataType::Int32, true)
-                .with_metadata(
-                    [("some_key".to_string(), "some_value".to_string())].into(),
-                )
-                .into()],
+            vec![
+                Field::new("", DataType::Int32, true)
+                    .with_metadata(
+                        [("some_key".to_string(), "some_value".to_string())].into(),
+                    )
+                    .into(),
+            ],
         )
         .unwrap()
         .plan()
