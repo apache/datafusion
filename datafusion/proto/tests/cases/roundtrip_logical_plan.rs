@@ -45,7 +45,9 @@ use datafusion::catalog::{TableProvider, TableProviderFactory};
 use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
-use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
+use datafusion::datasource::file_format::{
+    format_as_file_type, DefaultFileType, FileFormatFactory,
+};
 use datafusion::datasource::DefaultTableSource;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::execution::FunctionRegistry;
@@ -2835,6 +2837,153 @@ async fn roundtrip_arrow_scan() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
+#[test]
+fn test_default_codec_encode_decode_all_formats() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let table_options =
+        TableOptions::default_from_session_config(ctx.state().config_options());
+
+    // Test CSV with custom options
+    let mut csv_format = table_options.csv.clone();
+    csv_format.delimiter = b'|';
+    csv_format.has_header = Some(true);
+    let csv_factory: Arc<dyn FileFormatFactory> =
+        Arc::new(CsvFormatFactory::new_with_options(csv_format.clone()));
+
+    // Test JSON with custom options
+    let mut json_format = table_options.json.clone();
+    json_format.compression = CompressionTypeVariant::GZIP;
+    let json_factory: Arc<dyn FileFormatFactory> =
+        Arc::new(JsonFormatFactory::new_with_options(json_format.clone()));
+
+    // Test Parquet with custom options
+    let mut parquet_format = table_options.parquet.clone();
+    parquet_format.global.bloom_filter_on_read = true;
+    let parquet_factory: Arc<dyn FileFormatFactory> = Arc::new(
+        ParquetFormatFactory::new_with_options(parquet_format.clone()),
+    );
+
+    // Test Arrow (no options)
+    let arrow_factory: Arc<dyn FileFormatFactory> = Arc::new(ArrowFormatFactory::new());
+
+    for factory in [csv_factory, json_factory, parquet_factory, arrow_factory] {
+        // Encode and decode
+        let mut encoded = Vec::new();
+        codec.try_encode_file_format(&mut encoded, factory.clone())?;
+        let decoded = codec.try_decode_file_format(&encoded, ctx.task_ctx().as_ref())?;
+
+        // Verify type preservation
+        assert_eq!(
+            factory.get_ext(),
+            decoded.get_ext(),
+            "Format extension should match after roundtrip"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_default_codec_legacy_empty_buffer() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+
+    let empty_buf: &[u8] = &[];
+    let decoded = codec.try_decode_file_format(empty_buf, ctx.task_ctx().as_ref())?;
+
+    assert_eq!(
+        decoded.get_ext(),
+        "arrow",
+        "Empty buffer should decode to ArrowFormatFactory (extension should be 'arrow')"
+    );
+
+    // Also verify we can re-encode it and it encodes as Arrow format
+    let mut re_encoded = Vec::new();
+    codec.try_encode_file_format(&mut re_encoded, decoded.clone())?;
+
+    // Re-encoded Arrow format should decode back to Arrow
+    let re_decoded =
+        codec.try_decode_file_format(&re_encoded, ctx.task_ctx().as_ref())?;
+    assert_eq!(
+        re_decoded.get_ext(),
+        "arrow",
+        "Re-encoded Arrow format should decode back to Arrow"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_default_codec_legacy_raw_bytes_roundtrip() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+
+    // Test CSV raw bytes
+    let csv_codec = CsvLogicalExtensionCodec {};
+    let csv_factory = Arc::new(CsvFormatFactory::new());
+    let mut csv_raw = Vec::new();
+    csv_codec.try_encode_file_format(&mut csv_raw, csv_factory.clone())?;
+
+    // DefaultLogicalExtensionCodec should decode raw CSV bytes via roundtrip
+    let decoded_csv = codec.try_decode_file_format(&csv_raw, ctx.task_ctx().as_ref())?;
+    decoded_csv
+        .as_ref()
+        .as_any()
+        .downcast_ref::<CsvFormatFactory>()
+        .expect("Should decode raw CSV bytes");
+
+    // Test JSON raw bytes
+    let json_codec = JsonLogicalExtensionCodec {};
+    let json_factory = Arc::new(JsonFormatFactory::new());
+    let mut json_raw = Vec::new();
+    json_codec.try_encode_file_format(&mut json_raw, json_factory.clone())?;
+
+    // DefaultLogicalExtensionCodec should decode raw JSON bytes via roundtrip
+    let decoded_json =
+        codec.try_decode_file_format(&json_raw, ctx.task_ctx().as_ref())?;
+    decoded_json
+        .as_ref()
+        .as_any()
+        .downcast_ref::<JsonFormatFactory>()
+        .expect("Should decode raw JSON bytes");
+
+    // Test Parquet raw bytes
+    let parquet_codec = ParquetLogicalExtensionCodec {};
+    let parquet_factory = Arc::new(ParquetFormatFactory::new());
+    let mut parquet_raw = Vec::new();
+    parquet_codec.try_encode_file_format(&mut parquet_raw, parquet_factory.clone())?;
+
+    // DefaultLogicalExtensionCodec should decode raw Parquet bytes via roundtrip
+    let decoded_parquet =
+        codec.try_decode_file_format(&parquet_raw, ctx.task_ctx().as_ref())?;
+    decoded_parquet
+        .as_ref()
+        .as_any()
+        .downcast_ref::<ParquetFormatFactory>()
+        .expect("Should decode raw Parquet bytes");
+
+    Ok(())
+}
+
+#[test]
+fn test_default_codec_error_invalid_bytes() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+
+    let invalid_bytes = b"not a valid file format";
+    let result = codec.try_decode_file_format(invalid_bytes, ctx.task_ctx().as_ref());
+
+    assert!(result.is_err(), "Should error on invalid bytes");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Unsupported FileFormatFactory bytes"),
+        "Error message should mention unsupported bytes, got: {}",
+        err_msg
+    );
     Ok(())
 }
 
