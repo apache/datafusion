@@ -546,6 +546,8 @@ async fn is_object_in_arrow_ipc_file_format(
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::RecordBatch;
+    use arrow::datatypes::{DataType, Field};
     use super::*;
 
     use chrono::DateTime;

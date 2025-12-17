@@ -1529,4 +1529,52 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_write_empty_csv_from_sql() -> Result<()> {
+        let ctx = SessionContext::new();
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_sql.csv", tmp_dir.path().to_string_lossy());
+        let df = ctx.sql("SELECT CAST(1 AS BIGINT) AS id LIMIT 0").await?;
+        df.write_csv(
+            &path,
+            crate::dataframe::DataFrameWriteOptions::new(),
+            None,
+        )
+        .await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_csv_from_record_batch() -> Result<()> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let empty_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int64Array::from(Vec::<i64>::new())),
+                Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
+            ],
+        )?;
+
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_batch.csv", tmp_dir.path().to_string_lossy());
+
+        // Write empty RecordBatch
+        let df = ctx.read_batch(empty_batch.clone())?;
+        df.write_csv(
+            &path,
+            crate::dataframe::DataFrameWriteOptions::new(),
+            None,
+        )
+        .await?;
+        // Expected the file to exist
+        assert!(std::path::Path::new(&path).exists());
+        Ok(())
+    }
 }
