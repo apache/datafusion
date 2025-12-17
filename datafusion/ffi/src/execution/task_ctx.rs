@@ -18,12 +18,12 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
+use abi_stable::StableAbi;
 use abi_stable::pmr::ROption;
 use abi_stable::std_types::{RHashMap, RString};
-use abi_stable::StableAbi;
+use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF, WindowUDFImpl,
 };
@@ -76,66 +76,84 @@ struct TaskContextPrivateData {
 
 impl FFI_TaskContext {
     unsafe fn inner(&self) -> &Arc<TaskContext> {
-        let private_data = self.private_data as *const TaskContextPrivateData;
-        &(*private_data).ctx
+        unsafe {
+            let private_data = self.private_data as *const TaskContextPrivateData;
+            &(*private_data).ctx
+        }
     }
 }
 
 unsafe extern "C" fn session_id_fn_wrapper(ctx: &FFI_TaskContext) -> RString {
-    let ctx = ctx.inner();
-    ctx.session_id().into()
+    unsafe {
+        let ctx = ctx.inner();
+        ctx.session_id().into()
+    }
 }
 
 unsafe extern "C" fn task_id_fn_wrapper(ctx: &FFI_TaskContext) -> ROption<RString> {
-    let ctx = ctx.inner();
-    ctx.task_id().map(|s| s.as_str().into()).into()
+    unsafe {
+        let ctx = ctx.inner();
+        ctx.task_id().map(|s| s.as_str().into()).into()
+    }
 }
 
 unsafe extern "C" fn session_config_fn_wrapper(
     ctx: &FFI_TaskContext,
 ) -> FFI_SessionConfig {
-    let ctx = ctx.inner();
-    ctx.session_config().into()
+    unsafe {
+        let ctx = ctx.inner();
+        ctx.session_config().into()
+    }
 }
 
 unsafe extern "C" fn scalar_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
 ) -> RHashMap<RString, FFI_ScalarUDF> {
-    let ctx = ctx.inner();
-    ctx.scalar_functions()
-        .iter()
-        .map(|(name, udf)| (name.to_owned().into(), Arc::clone(udf).into()))
-        .collect()
+    unsafe {
+        let ctx = ctx.inner();
+        ctx.scalar_functions()
+            .iter()
+            .map(|(name, udf)| (name.to_owned().into(), Arc::clone(udf).into()))
+            .collect()
+    }
 }
 
 unsafe extern "C" fn aggregate_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
 ) -> RHashMap<RString, FFI_AggregateUDF> {
-    let ctx = ctx.inner();
-    ctx.aggregate_functions()
-        .iter()
-        .map(|(name, udaf)| {
-            (
-                name.to_owned().into(),
-                FFI_AggregateUDF::from(Arc::clone(udaf)),
-            )
-        })
-        .collect()
+    unsafe {
+        let ctx = ctx.inner();
+        ctx.aggregate_functions()
+            .iter()
+            .map(|(name, udaf)| {
+                (
+                    name.to_owned().into(),
+                    FFI_AggregateUDF::from(Arc::clone(udaf)),
+                )
+            })
+            .collect()
+    }
 }
 
 unsafe extern "C" fn window_functions_fn_wrapper(
     ctx: &FFI_TaskContext,
 ) -> RHashMap<RString, FFI_WindowUDF> {
-    let ctx = ctx.inner();
-    ctx.window_functions()
-        .iter()
-        .map(|(name, udf)| (name.to_owned().into(), FFI_WindowUDF::from(Arc::clone(udf))))
-        .collect()
+    unsafe {
+        let ctx = ctx.inner();
+        ctx.window_functions()
+            .iter()
+            .map(|(name, udf)| {
+                (name.to_owned().into(), FFI_WindowUDF::from(Arc::clone(udf)))
+            })
+            .collect()
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(ctx: &mut FFI_TaskContext) {
-    let private_data = Box::from_raw(ctx.private_data as *mut TaskContextPrivateData);
-    drop(private_data);
+    unsafe {
+        let private_data = Box::from_raw(ctx.private_data as *mut TaskContextPrivateData);
+        drop(private_data);
+    }
 }
 
 impl Drop for FFI_TaskContext {

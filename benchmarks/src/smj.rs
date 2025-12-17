@@ -19,7 +19,7 @@ use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 use datafusion::physical_plan::execute_stream;
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::instant::Instant;
-use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError};
+use datafusion_common::{DataFusionError, exec_datafusion_err, exec_err};
 use structopt::StructOpt;
 
 use futures::StreamExt;

@@ -18,8 +18,8 @@
 use std::{any::Any, ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
     StableAbi,
+    std_types::{ROption, RResult, RString, RVec},
 };
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
@@ -97,40 +97,48 @@ struct ProviderPrivateData {
 
 impl FFI_SchemaProvider {
     unsafe fn inner(&self) -> &Arc<dyn SchemaProvider + Send> {
-        let private_data = self.private_data as *const ProviderPrivateData;
-        &(*private_data).provider
+        unsafe {
+            let private_data = self.private_data as *const ProviderPrivateData;
+            &(*private_data).provider
+        }
     }
 
     unsafe fn runtime(&self) -> Option<Handle> {
-        let private_data = self.private_data as *const ProviderPrivateData;
-        (*private_data).runtime.clone()
+        unsafe {
+            let private_data = self.private_data as *const ProviderPrivateData;
+            (*private_data).runtime.clone()
+        }
     }
 }
 
 unsafe extern "C" fn table_names_fn_wrapper(
     provider: &FFI_SchemaProvider,
 ) -> RVec<RString> {
-    let provider = provider.inner();
+    unsafe {
+        let provider = provider.inner();
 
-    let table_names = provider.table_names();
-    table_names.into_iter().map(|s| s.into()).collect()
+        let table_names = provider.table_names();
+        table_names.into_iter().map(|s| s.into()).collect()
+    }
 }
 
 unsafe extern "C" fn table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
 ) -> FfiFuture<FFIResult<ROption<FFI_TableProvider>>> {
-    let runtime = provider.runtime();
-    let provider = Arc::clone(provider.inner());
+    unsafe {
+        let runtime = provider.runtime();
+        let provider = Arc::clone(provider.inner());
 
-    async move {
-        let table = rresult_return!(provider.table(name.as_str()).await)
-            .map(|t| FFI_TableProvider::new(t, true, runtime))
-            .into();
+        async move {
+            let table = rresult_return!(provider.table(name.as_str()).await)
+                .map(|t| FFI_TableProvider::new(t, true, runtime))
+                .into();
 
-        RResult::ROk(table)
+            RResult::ROk(table)
+        }
+        .into_ffi()
     }
-    .into_ffi()
 }
 
 unsafe extern "C" fn register_table_fn_wrapper(
@@ -138,67 +146,76 @@ unsafe extern "C" fn register_table_fn_wrapper(
     name: RString,
     table: FFI_TableProvider,
 ) -> FFIResult<ROption<FFI_TableProvider>> {
-    let runtime = provider.runtime();
-    let provider = provider.inner();
+    unsafe {
+        let runtime = provider.runtime();
+        let provider = provider.inner();
 
-    let table = Arc::new(ForeignTableProvider(table));
+        let table = Arc::new(ForeignTableProvider(table));
 
-    let returned_table = rresult_return!(provider.register_table(name.into(), table))
-        .map(|t| FFI_TableProvider::new(t, true, runtime));
+        let returned_table = rresult_return!(provider.register_table(name.into(), table))
+            .map(|t| FFI_TableProvider::new(t, true, runtime));
 
-    RResult::ROk(returned_table.into())
+        RResult::ROk(returned_table.into())
+    }
 }
 
 unsafe extern "C" fn deregister_table_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
 ) -> FFIResult<ROption<FFI_TableProvider>> {
-    let runtime = provider.runtime();
-    let provider = provider.inner();
+    unsafe {
+        let runtime = provider.runtime();
+        let provider = provider.inner();
 
-    let returned_table = rresult_return!(provider.deregister_table(name.as_str()))
-        .map(|t| FFI_TableProvider::new(t, true, runtime));
+        let returned_table = rresult_return!(provider.deregister_table(name.as_str()))
+            .map(|t| FFI_TableProvider::new(t, true, runtime));
 
-    RResult::ROk(returned_table.into())
+        RResult::ROk(returned_table.into())
+    }
 }
 
 unsafe extern "C" fn table_exist_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: RString,
 ) -> bool {
-    provider.inner().table_exist(name.as_str())
+    unsafe { provider.inner().table_exist(name.as_str()) }
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SchemaProvider) {
-    debug_assert!(!provider.private_data.is_null());
-    let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
-    drop(private_data);
-    provider.private_data = std::ptr::null_mut();
+    unsafe {
+        debug_assert!(!provider.private_data.is_null());
+        let private_data =
+            Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+        drop(private_data);
+        provider.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
     provider: &FFI_SchemaProvider,
 ) -> FFI_SchemaProvider {
-    let old_private_data = provider.private_data as *const ProviderPrivateData;
-    let runtime = (*old_private_data).runtime.clone();
+    unsafe {
+        let old_private_data = provider.private_data as *const ProviderPrivateData;
+        let runtime = (*old_private_data).runtime.clone();
 
-    let private_data = Box::into_raw(Box::new(ProviderPrivateData {
-        provider: Arc::clone(&(*old_private_data).provider),
-        runtime,
-    })) as *mut c_void;
+        let private_data = Box::into_raw(Box::new(ProviderPrivateData {
+            provider: Arc::clone(&(*old_private_data).provider),
+            runtime,
+        })) as *mut c_void;
 
-    FFI_SchemaProvider {
-        owner_name: provider.owner_name.clone(),
-        table_names: table_names_fn_wrapper,
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-        version: super::version,
-        private_data,
-        table: table_fn_wrapper,
-        register_table: register_table_fn_wrapper,
-        deregister_table: deregister_table_fn_wrapper,
-        table_exist: table_exist_fn_wrapper,
-        library_marker_id: crate::get_library_marker_id,
+        FFI_SchemaProvider {
+            owner_name: provider.owner_name.clone(),
+            table_names: table_names_fn_wrapper,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data,
+            table: table_fn_wrapper,
+            register_table: register_table_fn_wrapper,
+            deregister_table: deregister_table_fn_wrapper,
+            table_exist: table_exist_fn_wrapper,
+            library_marker_id: crate::get_library_marker_id,
+        }
     }
 }
 
@@ -342,11 +359,13 @@ mod tests {
     #[tokio::test]
     async fn test_round_trip_ffi_schema_provider() {
         let schema_provider = Arc::new(MemorySchemaProvider::new());
-        assert!(schema_provider
-            .as_ref()
-            .register_table("prior_table".to_string(), empty_table())
-            .unwrap()
-            .is_none());
+        assert!(
+            schema_provider
+                .as_ref()
+                .register_table("prior_table".to_string(), empty_table())
+                .unwrap()
+                .is_none()
+        );
 
         let mut ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
         ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
@@ -403,17 +422,21 @@ mod tests {
 
         // Verify local libraries can be downcast to their original
         let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();
-        assert!(foreign_schema
-            .as_any()
-            .downcast_ref::<MemorySchemaProvider>()
-            .is_some());
+        assert!(
+            foreign_schema
+                .as_any()
+                .downcast_ref::<MemorySchemaProvider>()
+                .is_some()
+        );
 
         // Verify different library markers generate foreign providers
         ffi_schema.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();
-        assert!(foreign_schema
-            .as_any()
-            .downcast_ref::<ForeignSchemaProvider>()
-            .is_some());
+        assert!(
+            foreign_schema
+                .as_any()
+                .downcast_ref::<ForeignSchemaProvider>()
+                .is_some()
+        );
     }
 }

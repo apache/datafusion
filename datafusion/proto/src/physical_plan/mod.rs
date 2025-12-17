@@ -155,11 +155,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             PhysicalPlanType::JsonScan(scan) => {
                 self.try_into_json_scan_physical_plan(scan, ctx, extension_codec)
             }
-            #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
                 self.try_into_parquet_scan_physical_plan(scan, ctx, extension_codec)
             }
-            #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
             PhysicalPlanType::AvroScan(scan) => {
                 self.try_into_avro_scan_physical_plan(scan, ctx, extension_codec)
             }
@@ -672,7 +670,7 @@ impl protobuf::PhysicalPlanNode {
         Ok(DataSourceExec::from_data_source(scan_conf))
     }
 
-    #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
     fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
@@ -740,7 +738,7 @@ impl protobuf::PhysicalPlanNode {
         )
     }
 
-    #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
     fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
@@ -759,6 +757,7 @@ impl protobuf::PhysicalPlanNode {
             )?;
             Ok(DataSourceExec::from_data_source(conf))
         }
+
         #[cfg(not(feature = "avro"))]
         panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
     }

@@ -40,10 +40,10 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::{lit, SessionConfig};
+use datafusion::prelude::{SessionConfig, lit};
 use datafusion_physical_expr_adapter::{
-    replace_columns_with_literals, DefaultPhysicalExprAdapterFactory,
-    PhysicalExprAdapter, PhysicalExprAdapterFactory,
+    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
+    replace_columns_with_literals,
 };
 use futures::StreamExt;
 use object_store::memory::InMemory;
@@ -136,8 +136,12 @@ pub async fn default_column_values() -> Result<()> {
     println!("\n=== Key Insight ===");
     println!("This example demonstrates how PhysicalExprAdapter works:");
     println!("1. Physical schema only has 'id' and 'name' columns");
-    println!("2. Logical schema has 'id', 'name', 'status', and 'priority' columns with defaults");
-    println!("3. Our custom adapter uses replace_columns_with_literals to inject default values");
+    println!(
+        "2. Logical schema has 'id', 'name', 'status', and 'priority' columns with defaults"
+    );
+    println!(
+        "3. Our custom adapter uses replace_columns_with_literals to inject default values"
+    );
     println!("4. Default values from metadata are cast to proper types at planning time");
     println!("5. The DefaultPhysicalExprAdapter handles other schema adaptations");
     println!("\nNote: PhysicalExprAdapter is specifically for filter predicates.");
