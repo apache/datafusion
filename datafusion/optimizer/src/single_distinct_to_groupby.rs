@@ -55,7 +55,7 @@ pub struct SingleDistinctToGroupBy {}
 const SINGLE_DISTINCT_ALIAS: &str = "alias1";
 
 impl SingleDistinctToGroupBy {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

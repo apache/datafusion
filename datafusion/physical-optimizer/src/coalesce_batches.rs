@@ -25,10 +25,8 @@ use std::sync::Arc;
 use datafusion_common::assert_eq_or_internal_err;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
     ExecutionPlan, async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
-    repartition::RepartitionExec,
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -57,23 +55,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         let target_batch_size = config.execution.batch_size;
         plan.transform_up(|plan| {
             let plan_any = plan.as_any();
-            let wrap_in_coalesce = plan_any
-                // Don't need to add CoalesceBatchesExec after a round robin RepartitionExec
-                .downcast_ref::<RepartitionExec>()
-                .map(|repart_exec| {
-                    !matches!(
-                        repart_exec.partitioning().clone(),
-                        Partitioning::RoundRobinBatch(_)
-                    )
-                })
-                .unwrap_or(false);
-
-            if wrap_in_coalesce {
-                Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(
-                    plan,
-                    target_batch_size,
-                ))))
-            } else if let Some(async_exec) = plan_any.downcast_ref::<AsyncFuncExec>() {
+            if let Some(async_exec) = plan_any.downcast_ref::<AsyncFuncExec>() {
                 // Coalesce inputs to async functions to reduce number of async function invocations
                 let children = async_exec.children();
                 assert_eq_or_internal_err!(

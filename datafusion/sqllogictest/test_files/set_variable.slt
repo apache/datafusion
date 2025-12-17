@@ -351,6 +351,18 @@ RESET datafusion.runtime.memory_limit
 statement ok
 EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
 
+statement ok
+SET datafusion.runtime.list_files_cache_limit = '1K'
+
+statement ok
+RESET datafusion.runtime.list_files_cache_limit
+
+statement ok
+SET datafusion.runtime.list_files_cache_ttl = '1m'
+
+statement ok
+RESET datafusion.runtime.list_files_cache_ttl
+
 # reset invalid variable - typo in namespace
 statement error DataFusion error: Invalid or Unsupported Configuration: Could not find config namespace "dataexplosion"
 RESET dataexplosion.execution.batch_size
@@ -411,6 +423,8 @@ datafusion.runtime.metadata_cache_limit 200M
 query T
 SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.runtime.%' ORDER BY name
 ----
+datafusion.runtime.list_files_cache_limit
+datafusion.runtime.list_files_cache_ttl
 datafusion.runtime.max_temp_directory_size
 datafusion.runtime.memory_limit
 datafusion.runtime.metadata_cache_limit

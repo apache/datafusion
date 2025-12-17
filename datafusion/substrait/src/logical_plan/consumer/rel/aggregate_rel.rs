@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
-use datafusion::common::{not_impl_err, DFSchemaRef};
+use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
+use datafusion::common::{DFSchemaRef, not_impl_err};
 use datafusion::logical_expr::{Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder};
+use substrait::proto::AggregateRel;
 use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::aggregate_rel::Grouping;
-use substrait::proto::AggregateRel;
 
 pub async fn from_aggregate_rel(
     consumer: &impl SubstraitConsumer,

@@ -23,7 +23,7 @@ mod tests {
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::{ScalarUDF, ScalarUDFImpl};
-    use datafusion::prelude::{col, SessionContext};
+    use datafusion::prelude::{SessionContext, col};
     use std::sync::Arc;
 
     use datafusion_ffi::tests::create_record_batch;

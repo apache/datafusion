@@ -34,9 +34,9 @@ mod tests {
     use crate::execution::SessionState;
     use crate::prelude::{CsvReadOptions, NdJsonReadOptions, SessionContext};
     use crate::test::partitioned_file_groups;
+    use datafusion_common::Result;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::Result;
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource_json::JsonFormat;
@@ -51,9 +51,9 @@ mod tests {
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
     use insta::assert_snapshot;
+    use object_store::ObjectStore;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
-    use object_store::ObjectStore;
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
@@ -499,7 +499,10 @@ mod tests {
             .write_json(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'");
+        assert_eq!(
+            e.strip_backtrace(),
+            "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'"
+        );
         Ok(())
     }
 

@@ -36,7 +36,7 @@ mod tests {
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field};
@@ -187,11 +187,11 @@ mod tests {
 
         let re = Regex::new(r"file_groups=\{(\d+) group").unwrap();
 
-        if let Some(captures) = re.captures(&plan) {
-            if let Some(match_) = captures.get(1) {
-                let count = match_.as_str().parse::<usize>().unwrap();
-                return Ok(count);
-            }
+        if let Some(captures) = re.captures(&plan)
+            && let Some(match_) = captures.get(1)
+        {
+            let count = match_.as_str().parse::<usize>().unwrap();
+            return Ok(count);
         }
 
         internal_err!("Query contains no Exec: file_groups")

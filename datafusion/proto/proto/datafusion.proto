@@ -1223,6 +1223,7 @@ message AggregateExecNode {
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
   AggLimit limit = 11;
+  bool has_grouping_set = 12;
 }
 
 message GlobalLimitExecNode {

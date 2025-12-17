@@ -103,14 +103,6 @@ async fn explain_analyze_baseline_metrics() {
             "output_bytes=",
             expected_batch_count_after_repartition
         );
-
-        assert_metrics!(
-            &formatted,
-            "CoalesceBatchesExec: target_batch_size=4096",
-            "metrics=[output_rows=5, elapsed_compute",
-            "output_bytes=",
-            expected_batch_count_after_repartition
-        );
     }
 
     assert_metrics!(
@@ -771,12 +763,11 @@ async fn test_physical_plan_display_indent() {
       SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]
         ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
           AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
-            CoalesceBatchesExec: target_batch_size=4096
-              RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
-                AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
-                  FilterExec: c12@1 < 10
-                    RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
-                      DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true
+            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
+              AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
+                FilterExec: c12@1 < 10
+                  RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
+                    DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true
     "
     );
 }
@@ -813,12 +804,10 @@ async fn test_physical_plan_display_indent_multi_children() {
         actual,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]
-      CoalesceBatchesExec: target_batch_size=4096
-        RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
-      CoalesceBatchesExec: target_batch_size=4096
-        RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1@0 as c2], file_type=csv, has_header=true
+      RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+      RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1@0 as c2], file_type=csv, has_header=true
     "
     );
 }
@@ -858,8 +847,7 @@ async fn csv_explain_analyze_order_by() {
 
     // Ensure that the ordering is not optimized away from the plan
     // https://github.com/apache/datafusion/issues/6379
-    let needle =
-        "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
+    let needle = "SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=100, elapsed_compute";
     assert_contains!(&formatted, needle);
 }
 
@@ -899,7 +887,7 @@ async fn parquet_explain_analyze() {
         (i_file < i_rowgroup_stat)
             && (i_rowgroup_stat < i_rowgroup_bloomfilter)
             && (i_rowgroup_bloomfilter < i_page),
-            "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
+        "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
     );
 }
 

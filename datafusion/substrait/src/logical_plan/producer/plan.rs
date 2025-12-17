@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    to_substrait_named_struct, DefaultSubstraitProducer, SubstraitProducer,
+    DefaultSubstraitProducer, SubstraitProducer, to_substrait_named_struct,
 };
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{LogicalPlan, SubqueryAlias};
-use substrait::proto::{plan_rel, Plan, PlanRel, Rel, RelRoot};
+use substrait::proto::{Plan, PlanRel, Rel, RelRoot, plan_rel};
 use substrait::version;
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
