@@ -46,8 +46,8 @@ pub(crate) fn string_to_timestamp_nanos_with_timezone(
     timezone: &Option<Tz>,
     s: &str,
 ) -> Result<i64> {
-    let tz = timezone.unwrap_or(*UTC);
-    let dt = string_to_datetime(&tz, s)?;
+    let tz = timezone.as_ref().unwrap_or(&UTC);
+    let dt = string_to_datetime(tz, s)?;
     let parsed = dt
         .timestamp_nanos_opt()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
@@ -202,7 +202,7 @@ pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
-    let dt = string_to_datetime_formatted(&timezone.unwrap_or(*UTC), s, format)?;
+    let dt = string_to_datetime_formatted(timezone.as_ref().unwrap_or(&UTC), s, format)?;
     let parsed = dt
         .timestamp_nanos_opt()
         .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;

@@ -114,7 +114,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true).into();
     let arg_field = Field::new("a", DataType::Utf8, false).into();
     let arg_fields = vec![arg_field];
-    let config_options = Arc::new(ConfigOptions::default());
+    let mut options = ConfigOptions::default();
+    options.execution.time_zone = Some("UTC".into());
+    let config_options = Arc::new(options);
+
     let to_timestamp_udf = to_timestamp(config_options.as_ref());
 
     c.bench_function("to_timestamp_no_formats_utf8", |b| {
