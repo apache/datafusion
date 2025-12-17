@@ -900,6 +900,11 @@ pub mod test;
 mod schema_equivalence;
 pub mod test_util;
 
+/// Documentation generation helpers
+pub mod doc {
+    include!(concat!(env!("OUT_DIR"), "/link_metrics.rs"));
+}
+
 #[cfg(doctest)]
 doc_comment::doctest!("../../../README.md", readme_example_test);
 

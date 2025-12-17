@@ -36,9 +36,11 @@ use datafusion_physical_plan::{
 use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
+use crate::file_stream::FileStreamMetrics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
@@ -229,6 +231,7 @@ pub trait DataSource: Send + Sync + Debug {
 /// the [`FileSource`] trait.
 ///
 /// [`FileSource`]: crate::file::FileSource
+#[metric_doc(FileStreamMetrics)]
 #[derive(Clone, Debug)]
 pub struct DataSourceExec {
     /// The source of the data -- for example, `FileScanConfig` or `MemorySourceConfig`

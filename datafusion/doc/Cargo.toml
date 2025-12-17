@@ -39,3 +39,6 @@ workspace = true
 
 [lib]
 name = "datafusion_doc"
+
+[dependencies]
+inventory = "0.3"

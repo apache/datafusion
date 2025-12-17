@@ -41,6 +41,7 @@ use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::{
     PhysicalExpr,
     expressions::{BinaryExpr, DynamicFilterPhysicalExpr, is_not_null, is_null, lit},
@@ -634,7 +635,8 @@ impl TopK {
     }
 }
 
-struct TopKMetrics {
+#[metric_doc]
+pub(crate) struct TopKMetrics {
     /// metrics
     pub baseline: BaselineMetrics,
 

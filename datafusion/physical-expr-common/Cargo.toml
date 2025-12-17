@@ -45,7 +45,9 @@ ahash = { workspace = true }
 arrow = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-doc = { workspace = true }
 datafusion-expr-common = { workspace = true }
+datafusion-macros = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }

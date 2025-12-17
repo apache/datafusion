@@ -45,6 +45,7 @@ pub mod registry {
     };
 }
 
+pub use datafusion_doc::metric_doc_sections;
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
