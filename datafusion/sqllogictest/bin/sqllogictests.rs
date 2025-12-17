@@ -18,11 +18,11 @@
 use clap::Parser;
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
-use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
 use datafusion_sqllogictest::{
-    df_value_validator, read_dir_recursive, setup_scratch_dir, should_skip_file,
-    should_skip_record, value_normalizer, CurrentlyExecutingSqlTracker, DataFusion,
-    DataFusionSubstraitRoundTrip, Filter, TestContext,
+    CurrentlyExecutingSqlTracker, DataFusion, DataFusionSubstraitRoundTrip, Filter,
+    TestContext, df_value_validator, read_dir_recursive, setup_scratch_dir,
+    should_skip_file, should_skip_record, value_normalizer,
 };
 use futures::stream::StreamExt;
 use indicatif::{
@@ -32,8 +32,8 @@ use itertools::Itertools;
 use log::Level::Info;
 use log::{info, log_enabled};
 use sqllogictest::{
-    parse_file, strict_column_validator, AsyncDB, Condition, MakeConnection, Normalizer,
-    Record, Validator,
+    AsyncDB, Condition, MakeConnection, Normalizer, Record, Validator, parse_file,
+    strict_column_validator,
 };
 
 #[cfg(feature = "postgres")]
@@ -135,7 +135,9 @@ async fn run_tests() -> Result<()> {
             eprintln!("  {error}");
         }
 
-        eprintln!("\nTemporary file check failed. Please ensure that within each test file, any scratch file created is placed under a folder with the same name as the test file (without extension).\nExample: inside `join.slt`, temporary files must be created under `.../scratch/join/`\n");
+        eprintln!(
+            "\nTemporary file check failed. Please ensure that within each test file, any scratch file created is placed under a folder with the same name as the test file (without extension).\nExample: inside `join.slt`, temporary files must be created under `.../scratch/join/`\n"
+        );
 
         return exec_err!("sqllogictests scratch file check failed");
     }
@@ -857,18 +859,18 @@ fn scratch_file_check(test_files: &[TestFile]) -> Result<Vec<String>> {
         let lines: Vec<&str> = content.lines().collect();
 
         for (line_num, line) in lines.iter().enumerate() {
-            if let Some(captures) = scratch_pattern.captures(line) {
-                if let Some(found_target) = captures.get(1) {
-                    let found_target = found_target.as_str();
-                    if found_target != expected_target {
-                        errors.push(format!(
-                            "File {}:{}: scratch target '{}' does not match file name '{}'",
-                            test_file.path.display(),
-                            line_num + 1,
-                            found_target,
-                            expected_target
-                        ));
-                    }
+            if let Some(captures) = scratch_pattern.captures(line)
+                && let Some(found_target) = captures.get(1)
+            {
+                let found_target = found_target.as_str();
+                if found_target != expected_target {
+                    errors.push(format!(
+                        "File {}:{}: scratch target '{}' does not match file name '{}'",
+                        test_file.path.display(),
+                        line_num + 1,
+                        found_target,
+                        expected_target
+                    ));
                 }
             }
         }

@@ -38,7 +38,7 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
-        ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        ArrayRef, AsArray, Date64Array, Int8Array, Int32Array, Int64Array, StringArray,
         StringViewArray, StructArray, TimestampNanosecondArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
@@ -48,7 +48,7 @@ mod tests {
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{assert_contains, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, assert_contains};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
@@ -60,7 +60,7 @@ mod tests {
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
-    use datafusion_expr::{col, lit, when, Expr};
+    use datafusion_expr::{Expr, col, lit, when};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::analyze::AnalyzeExec;
     use datafusion_physical_plan::collect;
@@ -1271,8 +1271,10 @@ mod tests {
             .with_table_schema(Arc::new(table_schema))
             .round_trip_to_batches(vec![batch1, batch2])
             .await;
-        assert_contains!(read.unwrap_err().to_string(),
-            "Cannot cast column 'c3' from 'Date64' (physical data type) to 'Int8' (logical data type)");
+        assert_contains!(
+            read.unwrap_err().to_string(),
+            "Cannot cast column 'c3' from 'Date64' (physical data type) to 'Int8' (logical data type)"
+        );
     }
 
     #[tokio::test]
