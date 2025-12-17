@@ -95,11 +95,11 @@ fn reorder_named_arguments(
     args: Vec<Expr>,
     arg_names: Vec<Option<String>>,
 ) -> Result<Vec<Expr>> {
-    // Build HashMap for O(1) parameter name lookups
-    let param_index_map: HashMap<&str, usize> = param_names
+    // Build HashMap for O(1) parameter name lookups (case-insensitive)
+    let param_index_map: HashMap<String, usize> = param_names
         .iter()
         .enumerate()
-        .map(|(idx, name)| (name.as_str(), idx))
+        .map(|(idx, name)| (name.to_ascii_lowercase(), idx))
         .collect();
 
     let positional_count = arg_names.iter().filter(|n| n.is_none()).count();
@@ -121,9 +121,11 @@ fn reorder_named_arguments(
 
     for (i, (arg, arg_name)) in args.into_iter().zip(arg_names).enumerate() {
         if let Some(name) = arg_name {
-            // Named argument - O(1) lookup in HashMap
-            let param_index =
-                param_index_map.get(name.as_str()).copied().ok_or_else(|| {
+            // Named argument - O(1) lookup in HashMap (case-insensitive)
+            let param_index = param_index_map
+                .get(&name.to_ascii_lowercase())
+                .copied()
+                .ok_or_else(|| {
                     datafusion_common::plan_datafusion_err!(
                         "Unknown parameter name '{}'. Valid parameters are: [{}]",
                         name,
@@ -179,6 +181,31 @@ mod tests {
 
         let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_case_insensitive_parameter_matching() {
+        // Parameter names with mixed case
+        let param_names = vec!["StartPos".to_string(), "Length".to_string()];
+
+        // Arguments with different casing should match
+        let args = vec![lit(1), lit(10)];
+        let arg_names = vec![Some("startpos".to_string()), Some("LENGTH".to_string())];
+
+        let result = resolve_function_arguments(&param_names, args, arg_names).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], lit(1));
+        assert_eq!(result[1], lit(10));
+
+        // Test with reordering and different cases
+        let args2 = vec![lit(20), lit(5)];
+        let arg_names2 = vec![Some("length".to_string()), Some("STARTPOS".to_string())];
+
+        let result2 =
+            resolve_function_arguments(&param_names, args2, arg_names2).unwrap();
+        assert_eq!(result2.len(), 2);
+        assert_eq!(result2[0], lit(5)); // startpos
+        assert_eq!(result2[1], lit(20)); // length
     }
 
     #[test]
