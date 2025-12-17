@@ -90,10 +90,7 @@ impl MakeTimeFunc {
             NativeType::Int32,
         );
         Self {
-            signature: Signature::coercible(
-                vec![int.clone(), int.clone(), int.clone()],
-                Volatility::Immutable,
-            ),
+            signature: Signature::coercible(vec![int; 3], Volatility::Immutable),
         }
     }
 }

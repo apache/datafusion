@@ -21,7 +21,7 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_sink_config::FileSink;
@@ -32,8 +32,8 @@ use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_expr::WindowFrame;
-use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr::ScalarFunctionExpr;
+use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::expressions::LikeExpr;
@@ -47,8 +47,8 @@ use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr}
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 
 use crate::protobuf::{
-    self, physical_aggregate_expr_node, physical_window_expr_node, PhysicalSortExprNode,
-    PhysicalSortExprNodeCollection,
+    self, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    physical_aggregate_expr_node, physical_window_expr_node,
 };
 
 use super::PhysicalExtensionCodec;

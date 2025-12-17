@@ -24,7 +24,7 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::{human_readable_size, instant::Instant, Result};
+use datafusion_common::{Result, human_readable_size, instant::Instant};
 use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
 use datafusion_expr::display_schema;
@@ -32,14 +32,14 @@ use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use std::time::Duration;
 
 use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
-use rand::prelude::IndexedRandom;
 use rand::Rng;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::prelude::IndexedRandom;
+use rand::{SeedableRng, rngs::StdRng};
 
 use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 
 use super::aggregation_fuzzer::ColumnDescr;
-use super::record_batch_generator::{get_supported_types_columns, RecordBatchGenerator};
+use super::record_batch_generator::{RecordBatchGenerator, get_supported_types_columns};
 
 /// Entry point for executing the sort query fuzzer.
 ///
@@ -175,16 +175,16 @@ impl SortQueryFuzzer {
         n_round: usize,
         n_query: usize,
     ) -> bool {
-        if let Some(time_limit) = self.time_limit {
-            if Instant::now().duration_since(start_time) > time_limit {
-                println!(
-                    "[SortQueryFuzzer] Time limit reached: {} queries ({} random configs each) in {} rounds",
-                    n_round * self.queries_per_round + n_query,
-                    self.config_variations_per_query,
-                    n_round
-                );
-                return true;
-            }
+        if let Some(time_limit) = self.time_limit
+            && Instant::now().duration_since(start_time) > time_limit
+        {
+            println!(
+                "[SortQueryFuzzer] Time limit reached: {} queries ({} random configs each) in {} rounds",
+                n_round * self.queries_per_round + n_query,
+                self.config_variations_per_query,
+                n_round
+            );
+            return true;
         }
         false
     }

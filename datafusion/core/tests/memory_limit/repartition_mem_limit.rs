@@ -25,7 +25,7 @@ use datafusion::{
 use datafusion_catalog::MemTable;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-use datafusion_physical_plan::{repartition::RepartitionExec, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlanProperties, repartition::RepartitionExec};
 use futures::TryStreamExt;
 use itertools::Itertools;
 
@@ -45,11 +45,14 @@ async fn test_repartition_memory_limit() {
         .with_batch_size(32)
         .with_target_partitions(2);
     let ctx = SessionContext::new_with_config_rt(config, Arc::new(runtime));
-    let batches = vec![RecordBatch::try_from_iter(vec![(
-        "c1",
-        Arc::new(Int32Array::from_iter_values((0..10).cycle().take(100_000))) as ArrayRef,
-    )])
-    .unwrap()];
+    let batches = vec![
+        RecordBatch::try_from_iter(vec![(
+            "c1",
+            Arc::new(Int32Array::from_iter_values((0..10).cycle().take(100_000)))
+                as ArrayRef,
+        )])
+        .unwrap(),
+    ];
     let table = Arc::new(MemTable::try_new(batches[0].schema(), vec![batches]).unwrap());
     ctx.register_table("t", table).unwrap();
     let plan = ctx

@@ -32,18 +32,18 @@ use datafusion::datasource::physical_plan::{
 use datafusion::logical_expr::{col, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_common::ColumnStatistics;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::record_batch;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::ColumnStatistics;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::schema_adapter::{
     SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
 };
 
 use datafusion::assert_batches_eq;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::TableSchema;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::expressions::Column;
@@ -51,7 +51,7 @@ use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use object_store::{memory::InMemory, path::Path, ObjectStore};
+use object_store::{ObjectStore, memory::InMemory, path::Path};
 use parquet::arrow::ArrowWriter;
 
 async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &str) {

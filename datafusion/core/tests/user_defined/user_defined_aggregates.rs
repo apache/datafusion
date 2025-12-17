@@ -23,13 +23,13 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use arrow::array::{
-    record_batch, types::UInt64Type, Array, AsArray, Int32Array, PrimitiveArray,
-    StringArray, StructArray, UInt64Array,
+    Array, AsArray, Int32Array, PrimitiveArray, StringArray, StructArray, UInt64Array,
+    record_batch, types::UInt64Type,
 };
 use arrow::datatypes::{Fields, Schema};
 use arrow_schema::FieldRef;
@@ -56,8 +56,8 @@ use datafusion_common::{cast::as_primitive_array, exec_err};
 
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
-    col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, Expr,
-    GroupsAccumulator, LogicalPlanBuilder, SimpleAggregateUDF, WindowFunctionDefinition,
+    AggregateUDFImpl, Expr, GroupsAccumulator, LogicalPlanBuilder, SimpleAggregateUDF,
+    WindowFunctionDefinition, col, create_udaf, function::AccumulatorArgs,
 };
 use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -164,7 +164,10 @@ async fn test_udaf_as_window_with_frame_without_retract_batch() {
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
     // Note if this query ever does start working
     let err = execute(&ctx, sql).await.unwrap_err();
-    assert_contains!(err.to_string(), "This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented: time_sum(t.time) ORDER BY [t.time ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING");
+    assert_contains!(
+        err.to_string(),
+        "This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented: time_sum(t.time) ORDER BY [t.time ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING"
+    );
 }
 
 /// Basic query for with a udaf returning a structure
@@ -329,9 +332,10 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
 
     // doesn't work as it was registered as non lowercase
     let err = ctx.sql("SELECT MY_AVG(i) FROM t").await.unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Error during planning: Invalid function \'my_avg\'"));
+    assert!(
+        err.to_string()
+            .contains("Error during planning: Invalid function \'my_avg\'")
+    );
 
     // Can call it if you put quotes
     let result = ctx
@@ -761,11 +765,11 @@ impl Accumulator for FirstSelector {
 
         // Update the actual values
         for (value, time) in v.iter().zip(t.iter()) {
-            if let (Some(time), Some(value)) = (time, value) {
-                if time < self.time {
-                    self.value = value;
-                    self.time = time;
-                }
+            if let (Some(time), Some(value)) = (time, value)
+                && time < self.time
+            {
+                self.value = value;
+                self.time = time;
             }
         }
 

@@ -27,7 +27,7 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{
-    exec_err, internal_err, utils::take_function_args, Result, ScalarValue,
+    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl,
@@ -35,7 +35,7 @@ use datafusion_expr::{
 };
 use rand::rng;
 use rand::rngs::StdRng;
-use rand::{seq::SliceRandom, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, seq::SliceRandom};
 use std::any::Any;
 use std::sync::Arc;
 

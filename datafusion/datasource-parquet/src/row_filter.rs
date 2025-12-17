@@ -67,16 +67,16 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
 
+use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
 
@@ -287,10 +287,10 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        if let Some(column) = node.as_any().downcast_ref::<Column>() {
-            if let Some(recursion) = self.check_single_column(column.name()) {
-                return Ok(recursion);
-            }
+        if let Some(column) = node.as_any().downcast_ref::<Column>()
+            && let Some(recursion) = self.check_single_column(column.name())
+        {
+            return Ok(recursion);
         }
 
         Ok(TreeNodeRecursion::Continue)
@@ -465,7 +465,7 @@ mod test {
     use datafusion_common::ScalarValue;
 
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
-    use datafusion_expr::{col, Expr};
+    use datafusion_expr::{Expr, col};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,

@@ -35,7 +35,7 @@ use datafusion_expr::{FetchType, SkipType, lit};
 pub struct PushDownLimit {}
 
 impl PushDownLimit {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -50,8 +50,9 @@ impl OptimizerRule for PushDownLimit {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        let _ = config.options();
         let LogicalPlan::Limit(mut limit) = plan else {
             return Ok(Transformed::no(plan));
         };
@@ -81,8 +82,7 @@ impl OptimizerRule for PushDownLimit {
             });
 
             // recursively reapply the rule on the new plan
-            #[allow(clippy::used_underscore_binding)]
-            return self.rewrite(plan, _config);
+            return self.rewrite(plan, config);
         }
 
         // no fetch to push, so return the original plan

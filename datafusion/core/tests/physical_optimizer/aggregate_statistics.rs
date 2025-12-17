@@ -24,14 +24,15 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion_common::Result;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast};
-use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::aggregates::AggregateMode;
 use datafusion_physical_plan::aggregates::PhysicalGroupBy;
@@ -39,7 +40,6 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::common;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::ExecutionPlan;
 
 /// Mock data using a MemorySourceConfig which has an exact count statistic
 fn mock_data() -> Result<Arc<DataSourceExec>> {

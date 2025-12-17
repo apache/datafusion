@@ -20,8 +20,8 @@ use std::sync::Arc;
 use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, not_impl_err, parsers::CompressionTypeVariant,
-    TableReference,
+    TableReference, exec_datafusion_err, exec_err, not_impl_err,
+    parsers::CompressionTypeVariant,
 };
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
@@ -345,10 +345,10 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        parquet_column_options, parquet_options,
         ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
         ParquetOptions as ParquetOptionsProto,
-        TableParquetOptions as TableParquetOptionsProto,
+        TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
+        parquet_options,
     };
     use datafusion_common::config::{
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,

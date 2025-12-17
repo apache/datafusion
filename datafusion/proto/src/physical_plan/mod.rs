@@ -35,8 +35,8 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{
-    self, proto_error, window_agg_exec_node, ListUnnest as ProtoListUnnest, SortExprNode,
-    SortMergeJoinExecNode,
+    self, ListUnnest as ProtoListUnnest, SortExprNode, SortMergeJoinExecNode,
+    proto_error, window_agg_exec_node,
 };
 use crate::{convert_required, into_required};
 
@@ -45,7 +45,7 @@ use arrow::datatypes::{IntervalMonthDayNanoType, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 #[cfg(feature = "parquet")]
 use datafusion_datasource::file::FileSource;
@@ -102,8 +102,8 @@ use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, Wind
 
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
-use prost::bytes::BufMut;
 use prost::Message;
+use prost::bytes::BufMut;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -365,13 +365,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
-        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
-            if let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
+            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
                 data_source_exec,
                 extension_codec,
-            )? {
-                return Ok(node);
-            }
+            )?
+        {
+            return Ok(node);
         }
 
         if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {
@@ -434,13 +434,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSinkExec>() {
-            if let Some(node) = protobuf::PhysicalPlanNode::try_from_data_sink_exec(
+        if let Some(exec) = plan.downcast_ref::<DataSinkExec>()
+            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_sink_exec(
                 exec,
                 extension_codec,
-            )? {
-                return Ok(node);
-            }
+            )?
+        {
+            return Ok(node);
         }
 
         if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
@@ -457,12 +457,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
-        if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>() {
-            if let Some(node) =
+        if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
+            && let Some(node) =
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
-            {
-                return Ok(node);
-            }
+        {
+            return Ok(node);
         }
 
         if let Some(exec) = plan.downcast_ref::<AsyncFuncExec>() {
@@ -734,7 +733,9 @@ impl protobuf::PhysicalPlanNode {
             Ok(DataSourceExec::from_data_source(base_config))
         }
         #[cfg(not(feature = "parquet"))]
-        panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
+        panic!(
+            "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+        )
     }
 
     #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
@@ -1009,6 +1010,8 @@ impl protobuf::PhysicalPlanNode {
             vec![]
         };
 
+        let has_grouping_set = hash_agg.has_grouping_set;
+
         let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
             internal_datafusion_err!("input_schema in AggregateNode is missing.")
         })?;
@@ -1106,7 +1109,7 @@ impl protobuf::PhysicalPlanNode {
 
         let agg = AggregateExec::try_new(
             agg_mode,
-            PhysicalGroupBy::new(group_expr, null_expr, groups),
+            PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
             physical_aggr_expr,
             physical_filter_expr,
             input,
@@ -2539,6 +2542,7 @@ impl protobuf::PhysicalPlanNode {
                     null_expr,
                     groups,
                     limit,
+                    has_grouping_set: exec.group_expr().has_grouping_set(),
                 },
             ))),
         })

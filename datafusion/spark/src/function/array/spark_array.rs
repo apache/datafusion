@@ -17,10 +17,10 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::array::{new_null_array, Array, ArrayRef};
+use arrow::array::{Array, ArrayRef, new_null_array};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,

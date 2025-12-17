@@ -918,18 +918,16 @@ physical_plan
 03)----InterleaveExec
 04)------ProjectionExec: expr=[0 as m, t@0 as t]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
-09)----------------ProjectionExec: expr=[column1@0 as t]
-10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
-11)------ProjectionExec: expr=[1 as m, t@0 as t]
-12)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
-13)----------CoalesceBatchesExec: target_batch_size=8192
-14)------------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
-15)--------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
-16)----------------ProjectionExec: expr=[column1@0 as t]
-17)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+08)--------------ProjectionExec: expr=[column1@0 as t]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)------ProjectionExec: expr=[1 as m, t@0 as t]
+11)--------AggregateExec: mode=FinalPartitioned, gby=[t@0 as t], aggr=[]
+12)----------RepartitionExec: partitioning=Hash([t@0], 2), input_partitions=1
+13)------------AggregateExec: mode=Partial, gby=[t@0 as t], aggr=[]
+14)--------------ProjectionExec: expr=[column1@0 as t]
+15)----------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 #####
 # Multi column sorting with lists
