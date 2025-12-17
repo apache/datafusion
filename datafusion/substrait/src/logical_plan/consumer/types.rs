@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::{from_substrait_precision, next_struct_field_name, DEFAULT_TIMEZONE};
 use super::SubstraitConsumer;
-#[allow(deprecated)]
+use super::utils::{DEFAULT_TIMEZONE, from_substrait_precision, next_struct_field_name};
+#[expect(deprecated)]
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
@@ -26,10 +26,10 @@ use crate::variation_const::{
     DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
-    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
@@ -37,10 +37,10 @@ use datafusion::arrow::datatypes::{
     DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::{
-    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
+    DFSchema, not_impl_err, substrait_datafusion_err, substrait_err,
 };
 use std::sync::Arc;
-use substrait::proto::{r#type, NamedStruct, Type};
+use substrait::proto::{NamedStruct, Type, r#type};
 
 pub(crate) fn from_substrait_type_without_names(
     consumer: &impl SubstraitConsumer,
@@ -90,7 +90,7 @@ pub fn from_substrait_type(
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
             r#type::Kind::Timestamp(ts) => {
                 // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 match ts.type_variation_reference {
                     TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
                         Ok(DataType::Timestamp(TimeUnit::Second, None))
@@ -248,20 +248,22 @@ pub fn from_substrait_type(
                 // TODO: remove the code below once the producer has been updated
                 if let Some(name) = consumer.get_extensions().types.get(&u.type_reference)
                 {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     match name.as_ref() {
                         // Kept for backwards compatibility, producers should use IntervalCompound instead
-                        INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+                        INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
+                            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+                        }
                         FLOAT_16_TYPE_NAME => Ok(DataType::Float16),
                         NULL_TYPE_NAME => Ok(DataType::Null),
                         _ => not_impl_err!(
-                                "Unsupported Substrait user defined type with ref {} and variation {}",
-                                u.type_reference,
-                                u.type_variation_reference
-                            ),
+                            "Unsupported Substrait user defined type with ref {} and variation {}",
+                            u.type_reference,
+                            u.type_variation_reference
+                        ),
                     }
                 } else {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     match u.type_reference {
                         // Kept for backwards compatibility, producers should use IntervalYear instead
                         INTERVAL_YEAR_MONTH_TYPE_REF => {
@@ -276,10 +278,10 @@ pub fn from_substrait_type(
                             Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                         }
                         _ => not_impl_err!(
-                        "Unsupported Substrait user defined type with ref {} and variation {}",
-                        u.type_reference,
-                        u.type_variation_reference
-                    ),
+                            "Unsupported Substrait user defined type with ref {} and variation {}",
+                            u.type_reference,
+                            u.type_variation_reference
+                        ),
                     }
                 }
             }

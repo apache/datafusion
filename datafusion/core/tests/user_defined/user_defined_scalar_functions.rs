@@ -20,11 +20,11 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::{as_string_array, create_array, record_batch, Int8Array, UInt64Array};
 use arrow::array::{
-    builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
-    Int32Array, RecordBatch, StringArray,
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+    builder::BooleanBuilder, cast::AsArray,
 };
+use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
@@ -38,14 +38,15 @@ use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_datafusion_err,
-    exec_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    DFSchema, DataFusionError, Result, ScalarValue, assert_batches_eq,
+    assert_batches_sorted_eq, assert_contains, exec_datafusion_err, exec_err,
+    not_impl_err, plan_err,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
-    LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
+    OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility, lit_with_metadata,
 };
 use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
@@ -426,9 +427,10 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
         .await
         .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Error during planning: Invalid function \'my_func\'"));
+    assert!(
+        err.to_string()
+            .contains("Error during planning: Invalid function \'my_func\'")
+    );
 
     // Can call it if you put quotes
     let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
@@ -1094,10 +1096,11 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     // Create the `better_add` function dynamically via CREATE FUNCTION statement
     assert!(ctx.sql(sql).await.is_ok());
     // try to `drop function` when sql options have allow ddl disabled
-    assert!(ctx
-        .sql_with_options("drop function better_add", options)
-        .await
-        .is_err());
+    assert!(
+        ctx.sql_with_options("drop function better_add", options)
+            .await
+            .is_err()
+    );
 
     let result = ctx
         .sql("select better_add(2.0, 2.0)")

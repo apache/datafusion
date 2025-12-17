@@ -3235,6 +3235,7 @@ impl PartialOrd for Analyze {
 // TODO(clippy): This clippy `allow` should be removed if
 // the manual `PartialEq` is removed in favor of a derive.
 // (see `PartialEq` the impl for details.)
+#[allow(clippy::allow_attributes)]
 #[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Debug, Clone, Eq, Hash)]
 pub struct Extension {

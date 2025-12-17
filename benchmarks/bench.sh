@@ -132,6 +132,7 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
+smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -324,6 +325,10 @@ main() {
                     # hj uses range() function, no data generation needed
                     echo "HJ benchmark does not require data generation"
                     ;;
+                smj)
+                    # smj uses range() function, no data generation needed
+                    echo "SMJ benchmark does not require data generation"
+                    ;;
                 compile_profile)
                     data_tpch "1" "parquet"
                     ;;
@@ -401,6 +406,7 @@ main() {
                     run_nlj
                     run_hj
                     run_tpcds
+                    run_smj
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -514,6 +520,9 @@ main() {
                 hj)
                     run_hj
                     ;;
+                smj)
+                    run_smj
+                    ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
                     ;;
@@ -620,22 +629,24 @@ data_tpch() {
     exit 1
 }
 
-# Points to TPCDS data generation instructions
+# Downloads TPC-DS data
 data_tpcds() {
-    TPCDS_DIR="${DATA_DIR}"
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
-    # Check if TPCDS data directory exists
-    if [ ! -d "${TPCDS_DIR}" ]; then
-        echo ""
-        echo "For TPC-DS data generation, please clone the datafusion-benchmarks repository:"
-        echo "  git clone https://github.com/apache/datafusion-benchmarks"
-        echo ""
-        return 1
+    # Check if `web_site.parquet` exists in the TPCDS data directory to verify data presence
+    echo "Checking TPC-DS data directory: ${TPCDS_DIR}"
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
+        mkdir -p "${TPCDS_DIR}"
+        # Download the DataFusion benchmarks repository zip if it is not already downloaded
+        if [ ! -f "${DATA_DIR}/datafusion-benchmarks.zip" ]; then
+          echo "Downloading DataFusion benchmarks repository zip to: ${DATA_DIR}/datafusion-benchmarks.zip"
+          wget --timeout=30 --tries=3 -O "${DATA_DIR}/datafusion-benchmarks.zip" https://github.com/apache/datafusion-benchmarks/archive/refs/heads/main.zip
+        fi
+        echo "Extracting TPC-DS parquet data to ${TPCDS_DIR}..."
+        unzip -o -j -d "${TPCDS_DIR}" "${DATA_DIR}/datafusion-benchmarks.zip" datafusion-benchmarks-main/tpcds/data/sf1/*
+        echo "TPC-DS data extracted."
     fi
-
-    echo ""
-    echo "TPC-DS data already exists in ${TPCDS_DIR}"
-    echo ""
+    echo "Done."
 }
 
 # Runs the tpch benchmark
@@ -673,21 +684,10 @@ run_tpch_mem() {
 
 # Runs the tpcds benchmark
 run_tpcds() {
-    TPCDS_DIR="${DATA_DIR}"
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
-    # Check if TPCDS data directory exists
-    if [ ! -d "${TPCDS_DIR}" ]; then
-        echo "Error: TPC-DS data directory does not exist: ${TPCDS_DIR}" >&2
-        echo "" >&2
-        echo "Please prepare TPC-DS data first by following instructions:" >&2
-        echo "  ./bench.sh data tpcds" >&2
-        echo "" >&2
-        exit 1
-    fi
-
-    # Check if directory contains parquet files
-    if ! find "${TPCDS_DIR}" -name "*.parquet" -print -quit | grep -q .; then
-        echo "Error: TPC-DS data directory exists but contains no parquet files: ${TPCDS_DIR}" >&2
+    # Check if TPCDS data directory and representative file exists
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
         echo "" >&2
         echo "Please prepare TPC-DS data first by following instructions:" >&2
         echo "  ./bench.sh data tpcds" >&2
@@ -1232,6 +1232,14 @@ run_hj() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running hj benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the smj benchmark
+run_smj() {
+    RESULTS_FILE="${RESULTS_DIR}/smj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running smj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 

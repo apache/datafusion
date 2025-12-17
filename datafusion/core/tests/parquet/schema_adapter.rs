@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use arrow::array::{record_batch, RecordBatch};
-use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::array::{RecordBatch, record_batch};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
 use datafusion::assert_batches_eq;
 use datafusion::common::Result;
@@ -26,18 +26,18 @@ use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_common::ScalarValue;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_expr::expressions::{self, Column};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{self, Column};
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
 };
-use object_store::{memory::InMemory, path::Path, ObjectStore};
+use object_store::{ObjectStore, memory::InMemory, path::Path};
 use parquet::arrow::ArrowWriter;
 
 async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &str) {
@@ -122,17 +122,6 @@ impl PhysicalExprAdapter for CustomPhysicalExprAdapter {
             })
             .data()?;
         self.inner.rewrite(expr)
-    }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        assert!(
-            partition_values.is_empty(),
-            "Partition values are not supported in this test"
-        );
-        Arc::new(self.clone())
     }
 }
 

@@ -47,8 +47,8 @@ mod non_windows {
     use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use std::time::Duration;
 
@@ -59,9 +59,9 @@ mod non_windows {
     use tempfile::TempDir;
     use tokio::task::JoinSet;
 
-    use datafusion::common::{exec_err, Result};
-    use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
+    use datafusion::common::{Result, exec_err};
     use datafusion::datasource::TableProvider;
+    use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
     use datafusion::logical_expr::SortExpr;
     use datafusion::prelude::{SessionConfig, SessionContext};
 

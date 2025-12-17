@@ -426,6 +426,62 @@ impl LexOrdering {
         self.exprs.truncate(len);
         true
     }
+
+    /// Check if reversing this ordering would satisfy another ordering requirement.
+    ///
+    /// This supports **prefix matching**: if this ordering is `[A DESC, B ASC]`
+    /// and `other` is `[A ASC]`, reversing this gives `[A ASC, B DESC]`, which
+    /// satisfies `other` since `[A ASC]` is a prefix.
+    ///
+    /// # Arguments
+    /// * `other` - The ordering requirement to check against
+    ///
+    /// # Returns
+    /// `true` if reversing this ordering would satisfy `other`
+    ///
+    /// # Example
+    /// ```text
+    /// self:  [number DESC, letter ASC]
+    /// other: [number ASC]
+    /// After reversing self: [number ASC, letter DESC]  ✓ Prefix match!
+    /// ```
+    pub fn is_reverse(&self, other: &LexOrdering) -> bool {
+        let self_exprs = self.as_ref();
+        let other_exprs = other.as_ref();
+
+        if other_exprs.len() > self_exprs.len() {
+            return false;
+        }
+
+        other_exprs.iter().zip(self_exprs.iter()).all(|(req, cur)| {
+            req.expr.eq(&cur.expr) && is_reversed_sort_options(&req.options, &cur.options)
+        })
+    }
+}
+
+/// Check if two SortOptions represent reversed orderings.
+///
+/// Returns `true` if both `descending` and `nulls_first` are opposite.
+///
+/// # Example
+/// ```
+/// use arrow::compute::SortOptions;
+/// # use datafusion_physical_expr_common::sort_expr::is_reversed_sort_options;
+///
+/// let asc_nulls_last = SortOptions {
+///     descending: false,
+///     nulls_first: false,
+/// };
+/// let desc_nulls_first = SortOptions {
+///     descending: true,
+///     nulls_first: true,
+/// };
+///
+/// assert!(is_reversed_sort_options(&asc_nulls_last, &desc_nulls_first));
+/// assert!(is_reversed_sort_options(&desc_nulls_first, &asc_nulls_last));
+/// ```
+pub fn is_reversed_sort_options(lhs: &SortOptions, rhs: &SortOptions) -> bool {
+    lhs.descending != rhs.descending && lhs.nulls_first != rhs.nulls_first
 }
 
 impl PartialEq for LexOrdering {
@@ -730,5 +786,52 @@ impl DerefMut for OrderingRequirements {
         match self {
             Self::Hard(alts) | Self::Soft(alts) => alts.as_mut_slice(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_reversed_sort_options() {
+        // Test basic reversal: ASC NULLS LAST ↔ DESC NULLS FIRST
+        let asc_nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let desc_nulls_first = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        assert!(is_reversed_sort_options(&asc_nulls_last, &desc_nulls_first));
+        assert!(is_reversed_sort_options(&desc_nulls_first, &asc_nulls_last));
+
+        // Test another reversal: ASC NULLS FIRST ↔ DESC NULLS LAST
+        let asc_nulls_first = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let desc_nulls_last = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        assert!(is_reversed_sort_options(&asc_nulls_first, &desc_nulls_last));
+        assert!(is_reversed_sort_options(&desc_nulls_last, &asc_nulls_first));
+
+        // Test non-reversal: same options
+        assert!(!is_reversed_sort_options(&asc_nulls_last, &asc_nulls_last));
+        assert!(!is_reversed_sort_options(
+            &desc_nulls_first,
+            &desc_nulls_first
+        ));
+
+        // Test non-reversal: only descending differs
+        assert!(!is_reversed_sort_options(&asc_nulls_last, &desc_nulls_last));
+        assert!(!is_reversed_sort_options(&desc_nulls_last, &asc_nulls_last));
+
+        // Test non-reversal: only nulls_first differs
+        assert!(!is_reversed_sort_options(&asc_nulls_last, &asc_nulls_first));
+        assert!(!is_reversed_sort_options(&asc_nulls_first, &asc_nulls_last));
     }
 }

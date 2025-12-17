@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use crate::arrow_wrappers::WrappedSchema;
 use abi_stable::{
-    std_types::{RString, RVec},
     StableAbi,
+    std_types::{RString, RVec},
 };
 use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
@@ -33,9 +33,9 @@ use datafusion::{
 use datafusion_common::ffi_datafusion_err;
 use datafusion_proto::{
     physical_plan::{
+        DefaultPhysicalExtensionCodec,
         from_proto::{parse_physical_exprs, parse_physical_sort_exprs},
         to_proto::{serialize_physical_exprs, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
     },
     protobuf::PhysicalAggregateExprNode,
 };
