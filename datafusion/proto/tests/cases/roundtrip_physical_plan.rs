@@ -52,8 +52,8 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup,
-    FileScanConfigBuilder, FileSinkConfig, ParquetSource,
+    FileGroup, FileScanConfigBuilder, FileSinkConfig, ParquetSource,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::DataSourceExec;
@@ -62,7 +62,7 @@ use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion::logical_expr::{create_udf, JoinType, Operator, Volatility};
+use datafusion::logical_expr::{JoinType, Operator, Volatility, create_udf};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
@@ -75,7 +75,7 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
-    binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
+    BinaryExpr, Column, NotExpr, PhysicalSortExpr, binary, cast, col, in_list, like, lit,
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
@@ -90,11 +90,11 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{
-    create_udwf_window_expr, BoundedWindowAggExec, PlainAggregateWindowExpr,
-    WindowAggExec,
+    BoundedWindowAggExec, PlainAggregateWindowExpr, WindowAggExec,
+    create_udwf_window_expr,
 };
 use datafusion::physical_plan::{
-    displayable, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
+    ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics, displayable,
 };
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
@@ -104,8 +104,8 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, NullEquality,
-    Result, UnnestOptions,
+    DataFusionError, NullEquality, Result, UnnestOptions, internal_datafusion_err,
+    internal_err, not_impl_err,
 };
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
@@ -599,14 +599,13 @@ fn roundtrip_aggregate_with_limit() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates =
-        vec![
-            AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("AVG(b)")
-                .build()
-                .map(Arc::new)?,
-        ];
+    let aggregates = vec![
+        AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("AVG(b)")
+            .build()
+            .map(Arc::new)?,
+    ];
 
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
@@ -629,14 +628,16 @@ fn roundtrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates = vec![AggregateExprBuilder::new(
-        approx_percentile_cont_udaf(),
-        vec![col("b", &schema)?, lit(0.5)],
-    )
-    .schema(Arc::clone(&schema))
-    .alias("APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY b)")
-    .build()
-    .map(Arc::new)?];
+    let aggregates = vec![
+        AggregateExprBuilder::new(
+            approx_percentile_cont_udaf(),
+            vec![col("b", &schema)?, lit(0.5)],
+        )
+        .schema(Arc::clone(&schema))
+        .alias("APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY b)")
+        .build()
+        .map(Arc::new)?,
+    ];
 
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
@@ -665,15 +666,14 @@ fn roundtrip_aggregate_with_sort() -> Result<()> {
         },
     }];
 
-    let aggregates =
-        vec![
-            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("ARRAY_AGG(b)")
-                .order_by(sort_exprs)
-                .build()
-                .map(Arc::new)?,
-        ];
+    let aggregates = vec![
+        AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("ARRAY_AGG(b)")
+            .order_by(sort_exprs)
+            .build()
+            .map(Arc::new)?,
+    ];
 
     let agg = AggregateExec::try_new(
         AggregateMode::Final,
@@ -733,14 +733,13 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("a", &schema)?, "unused".to_string())];
 
-    let aggregates =
-        vec![
-            AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("example_agg")
-                .build()
-                .map(Arc::new)?,
-        ];
+    let aggregates = vec![
+        AggregateExprBuilder::new(Arc::new(udaf), vec![col("b", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("example_agg")
+            .build()
+            .map(Arc::new)?,
+    ];
 
     roundtrip_test_with_context(
         Arc::new(AggregateExec::try_new(

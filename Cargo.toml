@@ -71,7 +71,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
-edition = "2021"
+edition = "2024"
 homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"

@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
 
-use abi_stable::std_types::{RHashMap, RString};
 use abi_stable::StableAbi;
+use abi_stable::std_types::{RHashMap, RString};
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_execution::config::SessionConfig;
 
@@ -84,25 +84,29 @@ unsafe extern "C" fn config_options_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
-    debug_assert!(!config.private_data.is_null());
-    let private_data =
-        Box::from_raw(config.private_data as *mut SessionConfigPrivateData);
-    drop(private_data);
-    config.private_data = std::ptr::null_mut();
+    unsafe {
+        debug_assert!(!config.private_data.is_null());
+        let private_data =
+            Box::from_raw(config.private_data as *mut SessionConfigPrivateData);
+        drop(private_data);
+        config.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig {
-    let old_private_data = config.private_data as *mut SessionConfigPrivateData;
-    let old_config = (*old_private_data).config.clone();
+    unsafe {
+        let old_private_data = config.private_data as *mut SessionConfigPrivateData;
+        let old_config = (*old_private_data).config.clone();
 
-    let private_data = Box::new(SessionConfigPrivateData { config: old_config });
+        let private_data = Box::new(SessionConfigPrivateData { config: old_config });
 
-    FFI_SessionConfig {
-        config_options: config_options_fn_wrapper,
-        private_data: Box::into_raw(private_data) as *mut c_void,
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-        library_marker_id: crate::get_library_marker_id,
+        FFI_SessionConfig {
+            config_options: config_options_fn_wrapper,
+            private_data: Box::into_raw(private_data) as *mut c_void,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            library_marker_id: crate::get_library_marker_id,
+        }
     }
 }
 

@@ -17,13 +17,13 @@
 
 //! See `main.rs` for how to run it.
 
-use datafusion::arrow::array::{UInt64Array, UInt8Array};
+use datafusion::arrow::array::{UInt8Array, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::{assert_batches_eq, exec_datafusion_err};
+use datafusion::datasource::MemTable;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
-use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::*;
 use object_store::local::LocalFileSystem;
@@ -153,7 +153,8 @@ async fn query_parquet() -> Result<()> {
             "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
         ],
-        &results);
+        &results
+    );
 
     // Second example were we temporarily move into the test data's parent directory and
     // simulate a relative path, this requires registering an ObjectStore.
@@ -202,7 +203,8 @@ async fn query_parquet() -> Result<()> {
             "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
         ],
-        &results);
+        &results
+    );
 
     // Reset the current directory
     std::env::set_current_dir(cur_dir)?;
