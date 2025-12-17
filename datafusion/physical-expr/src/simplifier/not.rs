@@ -32,11 +32,11 @@
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{tree_node::Transformed, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 
-use crate::expressions::{in_list, lit, BinaryExpr, InListExpr, Literal, NotExpr};
 use crate::PhysicalExpr;
+use crate::expressions::{BinaryExpr, InListExpr, Literal, NotExpr, in_list, lit};
 
 /// Attempts to simplify NOT expressions by applying one level of transformation
 ///

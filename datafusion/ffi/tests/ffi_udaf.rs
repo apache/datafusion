@@ -23,7 +23,7 @@ mod tests {
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl};
-    use datafusion::prelude::{col, SessionContext};
+    use datafusion::prelude::{SessionContext, col};
     use std::sync::Arc;
 
     use datafusion_ffi::tests::utils::get_module;
@@ -38,7 +38,7 @@ mod tests {
                 .ok_or(DataFusionError::NotImplemented(
                     "External table provider failed to implement create_udaf".to_string(),
                 ))?();
-        let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).try_into()?;
+        let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
 
         let udaf = AggregateUDF::new_from_shared_impl(foreign_sum_func);
 
@@ -80,8 +80,7 @@ mod tests {
                 .ok_or(DataFusionError::NotImplemented(
                     "External table provider failed to implement create_udaf".to_string(),
                 ))?();
-        let foreign_stddev_func: Arc<dyn AggregateUDFImpl> =
-            (&ffi_stddev_func).try_into()?;
+        let foreign_stddev_func: Arc<dyn AggregateUDFImpl> = (&ffi_stddev_func).into();
 
         let udaf = AggregateUDF::new_from_shared_impl(foreign_stddev_func);
 

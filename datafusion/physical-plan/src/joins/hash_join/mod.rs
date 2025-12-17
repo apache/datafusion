@@ -18,8 +18,10 @@
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
 pub use exec::HashJoinExec;
+pub use partitioned_hash_eval::HashTableLookupExpr;
 
 mod exec;
+mod inlist_builder;
 mod partitioned_hash_eval;
 mod shared_bounds;
 mod stream;

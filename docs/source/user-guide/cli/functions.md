@@ -138,5 +138,37 @@ The columns of the returned table are:
 | hits                | UInt64    | Number of times the cached metadata has been accessed                                     |
 | extra               | Utf8      | Extra information about the cached metadata (e.g., if page index information is included) |
 
+## `statistics_cache`
+
+Similarly to the `metadata_cache`, the `statistics_cache` function can be used to show information
+about the File Statistics Cache that is used by the [`ListingTable`] implementation in DataFusion.
+For the statistics to be collected, the config `datafusion.execution.collect_statistics` must be
+enabled.
+
+You can inspect the statistics cache by querying the `statistics_cache` function. For example:
+
+```sql
+> select * from statistics_cache();
++------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+
+| path             | file_modified       | file_size_bytes | e_tag                  | version | num_rows        | num_columns | table_size_bytes   | statistics_size_bytes |
++------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+
+| .../hits.parquet | 2022-06-25T22:22:22 | 14779976446     | 0-5e24d1ee16380-370f48 | NULL    | Exact(99997497) | 105         | Exact(36445943240) | 0                     |
++------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+
+```
+
+The columns of the returned table are:
+
+| column_name           | data_type | Description                                                                  |
+| --------------------- | --------- | ---------------------------------------------------------------------------- |
+| path                  | Utf8      | File path relative to the object store / filesystem root                     |
+| file_modified         | Timestamp | Last modified time of the file                                               |
+| file_size_bytes       | UInt64    | Size of the file in bytes                                                    |
+| e_tag                 | Utf8      | [Entity Tag] (ETag) of the file if available                                 |
+| version               | Utf8      | Version of the file if available (for object stores that support versioning) |
+| num_rows              | Utf8      | Number of rows in the table                                                  |
+| num_columns           | UInt64    | Number of columns in the table                                               |
+| table_size_bytes      | Utf8      | Size of the table, in bytes                                                  |
+| statistics_size_bytes | UInt64    | Size of the cached statistics in memory                                      |
+
 [`listingtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 [entity tag]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/ETag

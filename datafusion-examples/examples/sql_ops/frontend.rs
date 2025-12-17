@@ -18,7 +18,7 @@
 //! See `main.rs` for how to run it.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::common::{plan_err, TableReference};
+use datafusion::common::{TableReference, plan_err};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::logical_expr::{

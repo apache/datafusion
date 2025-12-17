@@ -26,33 +26,33 @@ use crate::physical_optimizer::test_utils::{
     sort_preserving_merge_exec, union_exec,
 };
 
-use arrow::array::{RecordBatch, UInt64Array, UInt8Array};
+use arrow::array::{RecordBatch, UInt8Array, UInt64Array};
 use arrow::compute::SortOptions;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::config::ConfigOptions;
+use datafusion::datasource::MemTable;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::ScalarValue;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::expressions::{binary, lit, BinaryExpr, Column, Literal};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, binary, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -67,8 +67,8 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    displayable, DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties,
-    Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, Statistics,
+    displayable,
 };
 use insta::Settings;
 
@@ -489,9 +489,7 @@ impl TestConfig {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Add the ancillary output requirements operator at the start:
         let optimizer = OutputRequirements::new_add_mode();
-        let session_config = SessionConfig::from(self.config.clone());
-        let optimizer_context = OptimizerContext::new(session_config.clone());
-        let mut optimized = optimizer.optimize_plan(plan.clone(), &optimizer_context)?;
+        let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
 
         // This file has 2 rules that use tree node, apply these rules to original plan consecutively
         // After these operations tree nodes should be in a consistent state.
@@ -527,25 +525,21 @@ impl TestConfig {
         }
 
         for run in optimizers_to_run {
-            let session_config = SessionConfig::from(self.config.clone());
-            let optimizer_context = OptimizerContext::new(session_config.clone());
             optimized = match run {
                 Run::Distribution => {
                     let optimizer = EnforceDistribution::new();
-                    optimizer.optimize_plan(optimized, &optimizer_context)?
+                    optimizer.optimize(optimized, &self.config)?
                 }
                 Run::Sorting => {
                     let optimizer = EnforceSorting::new();
-                    optimizer.optimize_plan(optimized, &optimizer_context)?
+                    optimizer.optimize(optimized, &self.config)?
                 }
             };
         }
 
         // Remove the ancillary output requirements operator when done:
         let optimizer = OutputRequirements::new_remove_mode();
-        let session_config = SessionConfig::from(self.config.clone());
-        let optimizer_context = OptimizerContext::new(session_config.clone());
-        let optimized = optimizer.optimize_plan(optimized, &optimizer_context)?;
+        let optimized = optimizer.optimize(optimized, &self.config)?;
 
         Ok(optimized)
     }
@@ -3378,10 +3372,7 @@ SortRequiredExec: [a@0 ASC]
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
-    let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new(session_config.clone());
-    let dist_plan =
-        EnforceDistribution::new().optimize_plan(physical_plan, &optimizer_context)?;
+    let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
     // Since at the start of the rule ordering requirement is not satisfied
     // EnforceDistribution rule doesn't satisfy this requirement either.
     assert_plan!(dist_plan, @r"
@@ -3417,10 +3408,7 @@ SortRequiredExec: [a@0 ASC]
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.prefer_existing_sort = false;
-    let session_config = SessionConfig::from(config);
-    let optimizer_context = OptimizerContext::new(session_config.clone());
-    let dist_plan =
-        EnforceDistribution::new().optimize_plan(physical_plan, &optimizer_context)?;
+    let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
     // Since at the start of the rule ordering requirement is satisfied
     // EnforceDistribution rule satisfy this requirement also.
     assert_plan!(dist_plan, @r"

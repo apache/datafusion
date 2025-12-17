@@ -16,8 +16,8 @@
 // under the License.
 
 use abi_stable::{
-    std_types::{RResult, RVec},
     StableAbi,
+    std_types::{RResult, RVec},
 };
 use arrow::{array::ArrayRef, error::ArrowError};
 use datafusion::{
@@ -86,14 +86,18 @@ pub struct AccumulatorPrivateData {
 impl FFI_Accumulator {
     #[inline]
     unsafe fn inner_mut(&mut self) -> &mut Box<dyn Accumulator> {
-        let private_data = self.private_data as *mut AccumulatorPrivateData;
-        &mut (*private_data).accumulator
+        unsafe {
+            let private_data = self.private_data as *mut AccumulatorPrivateData;
+            &mut (*private_data).accumulator
+        }
     }
 
     #[inline]
     unsafe fn inner(&self) -> &dyn Accumulator {
-        let private_data = self.private_data as *const AccumulatorPrivateData;
-        (*private_data).accumulator.deref()
+        unsafe {
+            let private_data = self.private_data as *const AccumulatorPrivateData;
+            (*private_data).accumulator.deref()
+        }
     }
 }
 
@@ -101,87 +105,101 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
 ) -> FFIResult<()> {
-    let accumulator = accumulator.inner_mut();
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
+        let values_arrays = values
+            .into_iter()
+            .map(|v| v.try_into().map_err(DataFusionError::from))
+            .collect::<Result<Vec<ArrayRef>>>();
+        let values_arrays = rresult_return!(values_arrays);
 
-    rresult!(accumulator.update_batch(&values_arrays))
+        rresult!(accumulator.update_batch(&values_arrays))
+    }
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
 ) -> FFIResult<RVec<u8>> {
-    let accumulator = accumulator.inner_mut();
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let scalar_result = rresult_return!(accumulator.evaluate());
-    let proto_result: datafusion_proto::protobuf::ScalarValue =
-        rresult_return!((&scalar_result).try_into());
+        let scalar_result = rresult_return!(accumulator.evaluate());
+        let proto_result: datafusion_proto::protobuf::ScalarValue =
+            rresult_return!((&scalar_result).try_into());
 
-    RResult::ROk(proto_result.encode_to_vec().into())
+        RResult::ROk(proto_result.encode_to_vec().into())
+    }
 }
 
 unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_Accumulator) -> usize {
-    accumulator.inner().size()
+    unsafe { accumulator.inner().size() }
 }
 
 unsafe extern "C" fn state_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
 ) -> FFIResult<RVec<RVec<u8>>> {
-    let accumulator = accumulator.inner_mut();
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let state = rresult_return!(accumulator.state());
-    let state = state
-        .into_iter()
-        .map(|state_val| {
-            datafusion_proto::protobuf::ScalarValue::try_from(&state_val)
-                .map_err(DataFusionError::from)
-                .map(|v| RVec::from(v.encode_to_vec()))
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(|state_vec| state_vec.into());
+        let state = rresult_return!(accumulator.state());
+        let state = state
+            .into_iter()
+            .map(|state_val| {
+                datafusion_proto::protobuf::ScalarValue::try_from(&state_val)
+                    .map_err(DataFusionError::from)
+                    .map(|v| RVec::from(v.encode_to_vec()))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|state_vec| state_vec.into());
 
-    rresult!(state)
+        rresult!(state)
+    }
 }
 
 unsafe extern "C" fn merge_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     states: RVec<WrappedArray>,
 ) -> FFIResult<()> {
-    let accumulator = accumulator.inner_mut();
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let states = rresult_return!(states
-        .into_iter()
-        .map(|state| ArrayRef::try_from(state).map_err(DataFusionError::from))
-        .collect::<Result<Vec<_>>>());
+        let states = rresult_return!(
+            states
+                .into_iter()
+                .map(|state| ArrayRef::try_from(state).map_err(DataFusionError::from))
+                .collect::<Result<Vec<_>>>()
+        );
 
-    rresult!(accumulator.merge_batch(&states))
+        rresult!(accumulator.merge_batch(&states))
+    }
 }
 
 unsafe extern "C" fn retract_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
 ) -> FFIResult<()> {
-    let accumulator = accumulator.inner_mut();
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
+        let values_arrays = values
+            .into_iter()
+            .map(|v| v.try_into().map_err(DataFusionError::from))
+            .collect::<Result<Vec<ArrayRef>>>();
+        let values_arrays = rresult_return!(values_arrays);
 
-    rresult!(accumulator.retract_batch(&values_arrays))
+        rresult!(accumulator.retract_batch(&values_arrays))
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
-    if !accumulator.private_data.is_null() {
-        let private_data =
-            Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
-        drop(private_data);
-        accumulator.private_data = null_mut();
+    unsafe {
+        if !accumulator.private_data.is_null() {
+            let private_data =
+                Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
+            drop(private_data);
+            accumulator.private_data = null_mut();
+        }
     }
 }
 
@@ -323,7 +341,7 @@ impl Accumulator for ForeignAccumulator {
 #[cfg(test)]
 mod tests {
     use super::{FFI_Accumulator, ForeignAccumulator};
-    use arrow::array::{make_array, Array};
+    use arrow::array::{Array, make_array};
     use datafusion::{
         common::create_array, error::Result,
         functions_aggregate::average::AvgAccumulator, logical_expr::Accumulator,

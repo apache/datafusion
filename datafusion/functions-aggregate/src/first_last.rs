@@ -30,20 +30,21 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
 use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
+    DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
     Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err,
+    not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
     GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
@@ -133,8 +134,20 @@ impl AggregateUDFImpl for FirstValue {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        not_impl_err!("Not called because the return_field_from_args is implemented")
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        // Preserve metadata from the first argument field
+        Ok(Arc::new(
+            Field::new(
+                self.name(),
+                arg_fields[0].data_type().clone(),
+                true, // always nullable, there may be no rows
+            )
+            .with_metadata(arg_fields[0].metadata().clone()),
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -159,12 +172,14 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let mut fields = vec![Field::new(
-            format_state_name(args.name, "first_value"),
-            args.return_type().clone(),
-            true,
-        )
-        .into()];
+        let mut fields = vec![
+            Field::new(
+                format_state_name(args.name, "first_value"),
+                args.return_type().clone(),
+                true,
+            )
+            .into(),
+        ];
         fields.extend(args.ordering_fields.iter().cloned());
         fields.push(
             Field::new(
@@ -825,11 +840,11 @@ impl Accumulator for TrivialFirstValueAccumulator {
 
             let filtered_states =
                 filter_states_according_to_is_set(&states[0..1], flags)?;
-            if let Some(first) = filtered_states.first() {
-                if !first.is_empty() {
-                    self.first = ScalarValue::try_from_array(first, 0)?;
-                    self.is_set = true;
-                }
+            if let Some(first) = filtered_states.first()
+                && !first.is_empty()
+            {
+                self.first = ScalarValue::try_from_array(first, 0)?;
+                self.is_set = true;
             }
         }
         Ok(())
@@ -1069,8 +1084,20 @@ impl AggregateUDFImpl for LastValue {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        not_impl_err!("Not called because the return_field_from_args is implemented")
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        // Preserve metadata from the first argument field
+        Ok(Arc::new(
+            Field::new(
+                self.name(),
+                arg_fields[0].data_type().clone(),
+                true, // always nullable, there may be no rows
+            )
+            .with_metadata(arg_fields[0].metadata().clone()),
+        ))
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -1095,12 +1122,14 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let mut fields = vec![Field::new(
-            format_state_name(args.name, "last_value"),
-            args.return_field.data_type().clone(),
-            true,
-        )
-        .into()];
+        let mut fields = vec![
+            Field::new(
+                format_state_name(args.name, "last_value"),
+                args.return_field.data_type().clone(),
+                true,
+            )
+            .into(),
+        ];
         fields.extend(args.ordering_fields.iter().cloned());
         fields.push(
             Field::new(
@@ -1314,11 +1343,11 @@ impl Accumulator for TrivialLastValueAccumulator {
         validate_is_set_flags(flags, "last_value")?;
 
         let filtered_states = filter_states_according_to_is_set(&states[0..1], flags)?;
-        if let Some(last) = filtered_states.last() {
-            if !last.is_empty() {
-                self.last = ScalarValue::try_from_array(last, 0)?;
-                self.is_set = true;
-            }
+        if let Some(last) = filtered_states.last()
+            && !last.is_empty()
+        {
+            self.last = ScalarValue::try_from_array(last, 0)?;
+            self.is_set = true;
         }
         Ok(())
     }
@@ -1545,7 +1574,7 @@ mod tests {
         compute::SortOptions,
         datatypes::Schema,
     };
-    use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
+    use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
 
     use super::*;
 
@@ -1967,10 +1996,12 @@ mod tests {
         let trivial_states = vec![Arc::clone(&value), Arc::clone(&corrupted_flag)];
         let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is_set flags contain nulls")
+        );
 
         // Test FirstValueAccumulator (with ordering)
         let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
@@ -1990,10 +2021,12 @@ mod tests {
         let ordered_states = vec![value, ordering, corrupted_flag];
         let result = ordered_accumulator.merge_batch(&ordered_states);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is_set flags contain nulls")
+        );
 
         Ok(())
     }
@@ -2010,10 +2043,12 @@ mod tests {
         let trivial_states = vec![Arc::clone(&value), Arc::clone(&corrupted_flag)];
         let result = trivial_accumulator.merge_batch(&trivial_states);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is_set flags contain nulls")
+        );
 
         // Test LastValueAccumulator (with ordering)
         let schema = Schema::new(vec![Field::new("ordering", DataType::Int64, false)]);
@@ -2033,10 +2068,12 @@ mod tests {
         let ordered_states = vec![value, ordering, corrupted_flag];
         let result = ordered_accumulator.merge_batch(&ordered_states);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("is_set flags contain nulls"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is_set flags contain nulls")
+        );
 
         Ok(())
     }

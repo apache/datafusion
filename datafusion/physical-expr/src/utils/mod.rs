@@ -21,10 +21,10 @@ pub use guarantee::{Guarantee, LiteralGuarantee};
 use std::borrow::Borrow;
 use std::sync::Arc;
 
-use crate::expressions::{BinaryExpr, Column};
-use crate::tree_node::ExprContext;
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
+use crate::expressions::{BinaryExpr, Column};
+use crate::tree_node::ExprContext;
 
 use arrow::datatypes::Schema;
 use datafusion_common::tree_node::{
@@ -271,11 +271,11 @@ pub(crate) mod tests {
     use std::fmt::{Display, Formatter};
 
     use super::*;
-    use crate::expressions::{binary, cast, col, in_list, lit, Literal};
+    use crate::expressions::{Literal, binary, cast, col, in_list, lit};
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, internal_datafusion_err, ScalarValue};
+    use datafusion_common::{ScalarValue, exec_err, internal_datafusion_err};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,

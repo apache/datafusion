@@ -29,14 +29,14 @@ use std::mem::size_of_val;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
+use datafusion::common::{DFSchema, DFSchemaRef, not_impl_err, plan_err};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
-    Extension, InvariantLevel, LogicalPlan, PartitionEvaluator, Repartition,
-    UserDefinedLogicalNode, Values, Volatility,
+    EmptyRelation, Extension, InvariantLevel, LogicalPlan, PartitionEvaluator,
+    Repartition, UserDefinedLogicalNode, Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -45,7 +45,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
-use substrait::proto::{plan_rel, Plan, Rel};
+use substrait::proto::{Plan, Rel, plan_rel};
 
 #[derive(Debug)]
 struct MockSerializerRegistry;
@@ -186,6 +186,46 @@ impl MockUserDefinedLogicalPlan {
 #[tokio::test]
 async fn simple_select() -> Result<()> {
     roundtrip("SELECT a, b FROM data").await
+}
+
+#[tokio::test]
+async fn roundtrip_literal_without_from() -> Result<()> {
+    roundtrip("SELECT 1 AS one").await
+}
+
+#[tokio::test]
+async fn roundtrip_empty_relation_with_schema() -> Result<()> {
+    // Test produce_one_row=true with multiple typed columns
+    roundtrip("SELECT 1::int as a, 'hello'::text as b, 3.14::double as c").await
+}
+
+#[tokio::test]
+async fn roundtrip_empty_relation_no_rows() -> Result<()> {
+    // Test produce_one_row=false
+    let ctx = create_context().await?;
+    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: false,
+        schema: DFSchemaRef::new(DFSchema::empty()),
+    });
+    roundtrip_logical_plan_with_ctx(plan, ctx).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_subquery_with_empty_relation() -> Result<()> {
+    // Test EmptyRelation in the context of scalar subqueries.
+    // The optimizer may simplify the subquery away, but we're testing that
+    // the EmptyRelation round-trips correctly when it appears in the plan.
+    let ctx = create_context().await?;
+    let df = ctx.sql("SELECT (SELECT 1) as nested").await?;
+    let plan = df.into_optimized_plan()?;
+
+    // Just verify the round-trip succeeds and produces valid results
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let df2 = DataFrame::new(ctx.state(), plan2);
+    df2.show().await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -940,8 +980,9 @@ async fn aggregate_wo_projection_consume() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
-    let proto_plan =
-        read_json("tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json");
+    let proto_plan = read_json(
+        "tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json",
+    );
 
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
@@ -972,8 +1013,9 @@ async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_identical_grouping_expressions() -> Result<()> {
-    let proto_plan =
-        read_json("tests/testdata/test_plans/aggregate_identical_grouping_expressions.substrait.json");
+    let proto_plan = read_json(
+        "tests/testdata/test_plans/aggregate_identical_grouping_expressions.substrait.json",
+    );
 
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
@@ -1120,6 +1162,96 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn self_referential_intersect() -> Result<()> {
+    // Test INTERSECT with the same table on both sides
+    // This previously failed with "Schema contains duplicate qualified field name"
+    // The fix ensures requalify_sides_if_needed is called in intersect_or_except
+    // After roundtrip through Substrait, SubqueryAlias is lost and requalification
+    // produces "left" and "right" aliases
+    // Note: INTERSECT (without ALL) includes DISTINCT, but the outer Aggregate
+    // is optimized away, resulting in just the **LeftSemi** join
+    // (LeftSemi returns rows from left that exist in right)
+    assert_expected_plan(
+        "SELECT a FROM data WHERE a > 0 INTERSECT SELECT a FROM data WHERE a < 5",
+        "LeftSemi Join: left.a = right.a\
+        \n  SubqueryAlias: left\
+        \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n      Filter: data.a > Int64(0)\
+        \n        TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n  SubqueryAlias: right\
+        \n    Filter: data.a < Int64(5)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn self_referential_except() -> Result<()> {
+    // Test EXCEPT with the same table on both sides
+    // This previously failed with "Schema contains duplicate qualified field name"
+    // The fix ensures requalify_sides_if_needed is called in intersect_or_except
+    // After roundtrip through Substrait, SubqueryAlias is lost and requalification
+    // produces "left" and "right" aliases
+    // Note: EXCEPT (without ALL) includes DISTINCT, but the outer Aggregate
+    // is optimized away, resulting in just the **LeftAnti** join
+    // (LeftAnti returns rows from left that don't exist in right)
+    assert_expected_plan(
+        "SELECT a FROM data WHERE a > 0 EXCEPT SELECT a FROM data WHERE a < 5",
+        "LeftAnti Join: left.a = right.a\
+        \n  SubqueryAlias: left\
+        \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n      Filter: data.a > Int64(0)\
+        \n        TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n  SubqueryAlias: right\
+        \n    Filter: data.a < Int64(5)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn self_referential_intersect_all() -> Result<()> {
+    // Test INTERSECT ALL with the same table on both sides
+    // INTERSECT ALL preserves duplicates and does not include DISTINCT
+    // Uses **LeftSemi** join (returns rows from left that exist in right)
+    // The requalification ensures no duplicate field name errors
+    assert_expected_plan(
+        "SELECT a FROM data WHERE a > 0 INTERSECT ALL SELECT a FROM data WHERE a < 5",
+        "LeftSemi Join: left.a = right.a\
+        \n  SubqueryAlias: left\
+        \n    Filter: data.a > Int64(0)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n  SubqueryAlias: right\
+        \n    Filter: data.a < Int64(5)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn self_referential_except_all() -> Result<()> {
+    // Test EXCEPT ALL with the same table on both sides
+    // EXCEPT ALL preserves duplicates and does not include DISTINCT
+    // Uses **LeftAnti** join (returns rows from left that don't exist in right)
+    // The requalification ensures no duplicate field name errors
+    assert_expected_plan(
+        "SELECT a FROM data WHERE a > 0 EXCEPT ALL SELECT a FROM data WHERE a < 5",
+        "LeftAnti Join: left.a = right.a\
+        \n  SubqueryAlias: left\
+        \n    Filter: data.a > Int64(0)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n  SubqueryAlias: right\
+        \n    Filter: data.a < Int64(5)\
+        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        true,
+    )
+    .await
 }
 
 #[tokio::test]

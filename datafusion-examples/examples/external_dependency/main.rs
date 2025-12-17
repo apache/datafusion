@@ -21,53 +21,48 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example external_dependency -- [dataframe_to_s3|query_aws_s3]
+//! cargo run --example external_dependency -- [all|dataframe_to_s3|query_aws_s3]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `dataframe_to_s3` — run a query using a DataFrame against a parquet file from AWS S3 and writing back to AWS S3
 //! - `query_aws_s3` — configure `object_store` and run a query against files stored in AWS S3
 
 mod dataframe_to_s3;
 mod query_aws_s3;
 
-use std::str::FromStr;
-
 use datafusion::error::{DataFusionError, Result};
+use strum::{IntoEnumIterator, VariantNames};
+use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
+#[derive(EnumIter, EnumString, Display, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 enum ExampleKind {
+    All,
     DataframeToS3,
     QueryAwsS3,
 }
 
-impl AsRef<str> for ExampleKind {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::DataframeToS3 => "dataframe_to_s3",
-            Self::QueryAwsS3 => "query_aws_s3",
-        }
-    }
-}
-
-impl FromStr for ExampleKind {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "dataframe_to_s3" => Ok(Self::DataframeToS3),
-            "query_aws_s3" => Ok(Self::QueryAwsS3),
-            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
-        }
-    }
-}
-
 impl ExampleKind {
-    const ALL: [Self; 2] = [Self::DataframeToS3, Self::QueryAwsS3];
-
     const EXAMPLE_NAME: &str = "external_dependency";
 
-    fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+    fn runnable() -> impl Iterator<Item = ExampleKind> {
+        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::All => {
+                for example in ExampleKind::runnable() {
+                    println!("Running example: {example}");
+                    Box::pin(example.run()).await?;
+                }
+            }
+            ExampleKind::DataframeToS3 => dataframe_to_s3::dataframe_to_s3().await?,
+            ExampleKind::QueryAwsS3 => query_aws_s3::query_aws_s3().await?,
+        }
+        Ok(())
     }
 }
 
@@ -76,18 +71,14 @@ async fn main() -> Result<()> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::variants().join("|")
+        ExampleKind::VARIANTS.join("|")
     );
 
-    let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{usage}");
-        DataFusionError::Execution("Missing argument".to_string())
-    })?;
+    let example: ExampleKind = std::env::args()
+        .nth(1)
+        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .parse()
+        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::DataframeToS3 => dataframe_to_s3::dataframe_to_s3().await?,
-        ExampleKind::QueryAwsS3 => query_aws_s3::query_aws_s3().await?,
-    }
-
-    Ok(())
+    example.run().await
 }

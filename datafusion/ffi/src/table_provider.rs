@@ -18,8 +18,8 @@
 use std::{any::Any, ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{ROption, RResult, RVec},
     StableAbi,
+    std_types::{ROption, RResult, RVec},
 };
 use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
@@ -28,14 +28,14 @@ use datafusion::{
     catalog::{Session, TableProvider},
     datasource::TableType,
     error::DataFusionError,
-    execution::{session_state::SessionStateBuilder, TaskContext},
-    logical_expr::{logical_plan::dml::InsertOp, TableProviderFilterPushDown},
+    execution::{TaskContext, session_state::SessionStateBuilder},
+    logical_expr::{TableProviderFilterPushDown, logical_plan::dml::InsertOp},
     physical_plan::ExecutionPlan,
     prelude::{Expr, SessionContext},
 };
 use datafusion_proto::{
     logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
+        DefaultLogicalExtensionCodec, from_proto::parse_exprs, to_proto::serialize_exprs,
     },
     protobuf::LogicalExprList,
 };
@@ -45,16 +45,16 @@ use tokio::runtime::Handle;
 use crate::{
     arrow_wrappers::WrappedSchema,
     df_result, rresult_return,
-    session_config::ForeignSessionConfig,
     table_source::{FFI_TableProviderFilterPushDown, FFI_TableType},
 };
 
 use super::{
     execution_plan::FFI_ExecutionPlan, insert_op::FFI_InsertOp,
-    session_config::FFI_SessionConfig,
+    session::config::FFI_SessionConfig,
 };
 use crate::util::FFIResult;
 use datafusion::error::Result;
+use datafusion_execution::config::SessionConfig;
 
 /// A stable struct for sharing [`TableProvider`] across FFI boundaries.
 ///
@@ -239,10 +239,10 @@ unsafe extern "C" fn scan_fn_wrapper(
     let session_config = session_config.clone();
 
     async move {
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
+        let config = rresult_return!(SessionConfig::try_from(&session_config));
         let session = SessionStateBuilder::new()
             .with_default_features()
-            .with_config(config.0)
+            .with_config(config)
             .build();
         let ctx = SessionContext::new_with_state(session);
 
@@ -292,10 +292,10 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     let input = input.clone();
 
     async move {
-        let config = rresult_return!(ForeignSessionConfig::try_from(&session_config));
+        let config = rresult_return!(SessionConfig::try_from(&session_config));
         let session = SessionStateBuilder::new()
             .with_default_features()
-            .with_config(config.0)
+            .with_config(config)
             .build();
         let ctx = SessionContext::new_with_state(session);
 
@@ -319,10 +319,13 @@ unsafe extern "C" fn insert_into_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
-    debug_assert!(!provider.private_data.is_null());
-    let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
-    drop(private_data);
-    provider.private_data = std::ptr::null_mut();
+    unsafe {
+        debug_assert!(!provider.private_data.is_null());
+        let private_data =
+            Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+        drop(private_data);
+        provider.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_TableProvider {
@@ -469,7 +472,7 @@ impl TableProvider for ForeignTableProvider {
                     return Ok(vec![
                         TableProviderFilterPushDown::Unsupported;
                         filters.len()
-                    ])
+                    ]);
                 }
             };
 
@@ -647,18 +650,22 @@ mod tests {
 
         // Verify local libraries can be downcast to their original
         let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
-        assert!(foreign_table
-            .as_any()
-            .downcast_ref::<datafusion::datasource::MemTable>()
-            .is_some());
+        assert!(
+            foreign_table
+                .as_any()
+                .downcast_ref::<datafusion::datasource::MemTable>()
+                .is_some()
+        );
 
         // Verify different library markers generate foreign providers
         ffi_table.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
-        assert!(foreign_table
-            .as_any()
-            .downcast_ref::<ForeignTableProvider>()
-            .is_some());
+        assert!(
+            foreign_table
+                .as_any()
+                .downcast_ref::<ForeignTableProvider>()
+                .is_some()
+        );
 
         Ok(())
     }
