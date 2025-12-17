@@ -108,9 +108,9 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
     // Note that %+ handles 'Z' at the end of the string without a space. This code doesn't
     // handle named timezones with no preceding space since that would require writing a
     // custom parser (or switching to Jiff)
-    let tz: Option<chrono_tz::Tz> = if format.ends_with(" %Z") {
+    let tz: Option<chrono_tz::Tz> = if format.trim_end().ends_with(" %Z") {
         // grab the string after the last space as the named timezone
-        if let Some((dt_str, timezone_name)) = datetime_str.rsplit_once(' ') {
+        if let Some((dt_str, timezone_name)) = datetime_str.trim_end().rsplit_once(' ') {
             datetime_str = dt_str;
 
             // attempt to parse the timezone name
