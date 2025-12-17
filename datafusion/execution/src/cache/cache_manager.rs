@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cache::cache_unit::DefaultFilesMetadataCache;
+use crate::cache::list_files_cache::ListFilesEntry;
 use crate::cache::{CacheAccessor, DefaultListFilesCache};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
@@ -93,6 +94,9 @@ pub trait ListFilesCache:
 
     /// Updates the cache with a new TTL (time-to-live).
     fn update_cache_ttl(&self, ttl: Option<Duration>);
+
+    /// Retrieves the information about the entries currently cached.
+    fn list_entries(&self) -> HashMap<Path, ListFilesEntry>;
 }
 
 /// Generic file-embedded metadata used with [`FileMetadataCache`].
