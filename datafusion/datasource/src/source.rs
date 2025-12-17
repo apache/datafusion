@@ -40,7 +40,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
@@ -189,6 +190,25 @@ pub trait DataSource: Send + Sync + Debug {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to create a new DataSource that produces data in the specified sort order.
+    ///
+    /// # Arguments
+    /// * `order` - The desired output ordering
+    ///
+    /// # Returns
+    /// * `Ok(SortOrderPushdownResult::Exact { .. })` - Created a source that guarantees exact ordering
+    /// * `Ok(SortOrderPushdownResult::Inexact { .. })` - Created a source optimized for the ordering
+    /// * `Ok(SortOrderPushdownResult::Unsupported)` - Cannot optimize for this ordering
+    /// * `Err(e)` - Error occurred
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
     }
 }
 
@@ -359,6 +379,19 @@ impl ExecutionPlan for DataSourceExec {
                 updated_node: None,
             }),
         }
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // Delegate to the data source and wrap result with DataSourceExec
+        self.data_source
+            .try_pushdown_sort(order)?
+            .try_map(|new_data_source| {
+                let new_exec = self.clone().with_data_source(new_data_source);
+                Ok(Arc::new(new_exec) as Arc<dyn ExecutionPlan>)
+            })
     }
 }
 

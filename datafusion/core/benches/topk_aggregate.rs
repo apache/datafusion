@@ -18,13 +18,13 @@
 mod data_utils;
 
 use arrow::util::pretty::pretty_format_batches;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::make_data;
-use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
-use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
+use datafusion_execution::config::SessionConfig;
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -46,7 +46,9 @@ async fn create_context(
     opts.optimizer.enable_topk_aggregation = use_topk;
     let ctx = SessionContext::new_with_config(cfg);
     let _ = ctx.register_table("traces", mem_table)?;
-    let sql = format!("select max(timestamp_ms) from traces group by trace_id order by max(timestamp_ms) desc limit {limit};");
+    let sql = format!(
+        "select max(timestamp_ms) from traces group by trace_id order by max(timestamp_ms) desc limit {limit};"
+    );
     let df = ctx.sql(sql.as_str()).await?;
     let physical_plan = df.create_physical_plan().await?;
     let actual_phys_plan = displayable(physical_plan.as_ref()).indent(true).to_string();

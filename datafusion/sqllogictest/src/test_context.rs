@@ -32,7 +32,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
 };
-use datafusion::common::{not_impl_err, DataFusionError, Result};
+use datafusion::common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::{
@@ -398,6 +398,58 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
     .unwrap();
 
     ctx.register_batch("table_with_metadata", batch).unwrap();
+
+    // Register the get_metadata UDF for testing metadata preservation
+    ctx.register_udf(ScalarUDF::from(GetMetadataUdf::new()));
+}
+
+/// UDF to extract metadata from a field for testing purposes
+/// Usage: get_metadata(expr, 'key') -> returns the metadata value or NULL
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct GetMetadataUdf {
+    signature: Signature,
+}
+
+impl GetMetadataUdf {
+    fn new() -> Self {
+        Self {
+            signature: Signature::any(2, Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for GetMetadataUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "get_metadata"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Get the metadata key from the second argument (must be a string literal)
+        let key = match &args.args[1] {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(k))) => k.clone(),
+            _ => {
+                return exec_err!("get_metadata second argument must be a string literal")
+            }
+        };
+
+        // Get metadata from the first argument's field
+        let metadata_value = args.arg_fields[0].metadata().get(&key).cloned();
+
+        // Return as a scalar (same value for all rows)
+        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(metadata_value)))
+    }
 }
 
 /// Create a UDF function named "example". See the `sample_udf.rs` example

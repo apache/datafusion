@@ -151,8 +151,9 @@ mod tests {
 
         // File generated with substrait-java's Isthmus:
         // ./isthmus-cli/build/graal/isthmus --create "create table A (a int); create table B (a int, c int); create table C (a int, d int)" "select t.*, C.d, CAST(NULL AS VARCHAR) as e from (select a, CAST(NULL AS VARCHAR) as c from A UNION ALL select a, c from B) t LEFT JOIN C ON t.a = C.a"
-        let proto_plan =
-            read_json("tests/testdata/test_plans/disambiguate_literals_with_same_name.substrait.json");
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/disambiguate_literals_with_same_name.substrait.json",
+        );
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 

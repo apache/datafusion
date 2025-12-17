@@ -1542,8 +1542,8 @@ logical_plan
 06)----------TableScan: aggregate_test_100 projection=[c1, c2]
 physical_plan
 01)ProjectionExec: expr=[c2@0 as c2, count(Int64(1))@1 as count(*)]
-02)--AggregateExec: mode=Final, gby=[c2@0 as c2], aggr=[count(Int64(1))]
-03)----CoalescePartitionsExec
+02)--AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(Int64(1))]
+03)----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
 04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(Int64(1))]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------ProjectionExec: expr=[c2@0 as c2]

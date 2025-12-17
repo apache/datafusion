@@ -43,8 +43,10 @@ logical_plan
 01)Aggregate: groupBy=[[parquet_table.column1]], aggr=[[sum(CAST(parquet_table.column2 AS Int64))]]
 02)--TableScan: parquet_table projection=[column1, column2]
 physical_plan
-01)AggregateExec: mode=Single, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2], file_type=parquet
+01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+02)--RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2], file_type=parquet
 
 # disable round robin repartitioning
 statement ok
@@ -57,8 +59,10 @@ logical_plan
 01)Aggregate: groupBy=[[parquet_table.column1]], aggr=[[sum(CAST(parquet_table.column2 AS Int64))]]
 02)--TableScan: parquet_table projection=[column1, column2]
 physical_plan
-01)AggregateExec: mode=Single, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2], file_type=parquet
+01)AggregateExec: mode=FinalPartitioned, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+02)--RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2], file_type=parquet
 
 
 # Cleanup

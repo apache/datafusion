@@ -31,21 +31,21 @@ mod tests {
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::datatypes::{DataType, Field, SchemaBuilder};
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{test_util, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, test_util};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::{PartitionedFile, TableSchema};
-    use datafusion_datasource_avro::source::AvroSource;
     use datafusion_datasource_avro::AvroFormat;
+    use datafusion_datasource_avro::source::AvroSource;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::ExecutionPlan;
 
     use datafusion_datasource::source::DataSourceExec;
     use futures::StreamExt;
     use insta::assert_snapshot;
+    use object_store::ObjectStore;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
-    use object_store::ObjectStore;
     use rstest::*;
     use url::Url;
 

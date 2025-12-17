@@ -19,8 +19,8 @@
 //! user defined window functions
 
 use arrow::array::{
-    record_batch, Array, ArrayRef, AsArray, Int64Array, RecordBatch, StringArray,
-    UInt64Array,
+    Array, ArrayRef, AsArray, Int64Array, RecordBatch, StringArray, UInt64Array,
+    record_batch,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::FieldRef;
@@ -38,8 +38,8 @@ use datafusion_functions_window_common::{
     expr::ExpressionArgs, field::WindowUDFFieldArgs,
 };
 use datafusion_physical_expr::{
-    expressions::{col, lit},
     PhysicalExpr,
+    expressions::{col, lit},
 };
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -47,8 +47,8 @@ use std::{
     any::Any,
     ops::Range,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -62,8 +62,7 @@ const UNBOUNDED_WINDOW_QUERY_WITH_ALIAS: &str = "SELECT x, y, val, \
      from t ORDER BY x, y";
 
 /// A query with a window function evaluated over a moving window
-const BOUNDED_WINDOW_QUERY:  &str  =
-    "SELECT x, y, val, \
+const BOUNDED_WINDOW_QUERY: &str = "SELECT x, y, val, \
      odd_counter(val) OVER (PARTITION BY x ORDER BY y ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
      from t ORDER BY x, y";
 
@@ -616,7 +615,9 @@ impl PartitionEvaluator for OddCounter {
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         self.test_state.inc_evaluate_all_with_rank_called();
-        println!("evaluate_all_with_rank, values: {num_rows:#?}, ranks_in_partitions: {ranks_in_partition:?}");
+        println!(
+            "evaluate_all_with_rank, values: {num_rows:#?}, ranks_in_partitions: {ranks_in_partition:?}"
+        );
         // when evaluating with ranks, just return the inverse rank instead
         let array: Int64Array = ranks_in_partition
             .iter()

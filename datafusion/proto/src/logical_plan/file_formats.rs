@@ -20,8 +20,8 @@ use std::sync::Arc;
 use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, not_impl_err, parsers::CompressionTypeVariant,
-    TableReference,
+    TableReference, exec_datafusion_err, exec_err, not_impl_err,
+    parsers::CompressionTypeVariant,
 };
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
@@ -345,10 +345,10 @@ mod parquet {
     use super::*;
 
     use crate::protobuf::{
-        parquet_column_options, parquet_options,
         ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
         ParquetOptions as ParquetOptionsProto,
-        TableParquetOptions as TableParquetOptionsProto,
+        TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
+        parquet_options,
     };
     use datafusion_common::config::{
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,
@@ -364,8 +364,7 @@ mod parquet {
             };
 
             let column_specific_options = global_options.column_specific_options;
-            #[allow(deprecated)] // max_statistics_size
-        TableParquetOptionsProto {
+            TableParquetOptionsProto {
             global: Some(ParquetOptionsProto {
                 enable_page_index: global_options.global.enable_page_index,
                 pruning: global_options.global.pruning,
@@ -462,8 +461,7 @@ mod parquet {
 
     impl From<&ParquetOptionsProto> for ParquetOptions {
         fn from(proto: &ParquetOptionsProto) -> Self {
-            #[allow(deprecated)] // max_statistics_size
-        ParquetOptions {
+            ParquetOptions {
             enable_page_index: proto.enable_page_index,
             pruning: proto.pruning,
             skip_metadata: proto.skip_metadata,
@@ -524,8 +522,7 @@ mod parquet {
 
     impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
         fn from(proto: ParquetColumnOptionsProto) -> Self {
-            #[allow(deprecated)] // max_statistics_size
-        ParquetColumnOptions {
+            ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,
             ),

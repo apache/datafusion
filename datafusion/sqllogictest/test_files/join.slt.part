@@ -1422,12 +1422,14 @@ logical_plan
 06)--------TableScan: t1 projection=[v0, v1]
 physical_plan
 01)ProjectionExec: expr=[v0@1 as v0, v1@2 as v1, sum(t1.v1)@0 as sum(t1.v1)]
-02)--CoalesceBatchesExec: target_batch_size=8192
-03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(v0@1, v0@0)], projection=[sum(t1.v1)@0, v0@2, v1@3]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(v0@1, v0@0)], projection=[sum(t1.v1)@0, v0@2, v1@3]
+03)----CoalescePartitionsExec
 04)------ProjectionExec: expr=[sum(t1.v1)@1 as sum(t1.v1), v0@0 as v0]
-05)--------AggregateExec: mode=Single, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+06)----------RepartitionExec: partitioning=Hash([v0@0], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[v0@0 as v0], aggr=[sum(t1.v1)]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query III
 SELECT *

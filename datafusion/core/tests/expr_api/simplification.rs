@@ -24,15 +24,15 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
-use datafusion_common::cast::as_int32_array;
 use datafusion_common::ScalarValue;
+use datafusion_common::cast::as_int32_array;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    ScalarUDF, Volatility,
+    Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    Volatility, table_scan,
 };
 use datafusion_functions::math;
 use datafusion_optimizer::optimizer::Optimizer;
