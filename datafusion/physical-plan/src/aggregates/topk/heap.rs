@@ -36,7 +36,9 @@ use datafusion_common::exec_datafusion_err;
 
 use half::f16;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// A custom version of `Ord` that only exists to we can implement it for the Values in our heap
@@ -54,6 +56,13 @@ impl Comparable for String {
     /// Lexicographic string comparison used in heap ordering.
     fn comp(&self, other: &Self) -> Ordering {
         self.cmp(other)
+    }
+}
+
+impl Comparable for Arc<str> {
+    /// Lexicographic string comparison used in heap ordering.
+    fn comp(&self, other: &Self) -> Ordering {
+        self.as_ref().cmp(other.as_ref())
     }
 }
 
@@ -181,11 +190,18 @@ where
 /// String values are compared lexicographically. Null values are not explicitly handled
 /// and should not appear in the input; the aggregation layer ensures nulls are managed
 /// appropriately before calling this heap.
+///
+/// Uses string interning to avoid repeated allocations for duplicate strings within a batch.
+/// The `string_cache` maps string hashes to `Arc<str>` values, amortizing allocation costs
+/// when the same string appears multiple times (common in trace IDs, user IDs, etc.).
 pub struct StringHeap {
     batch: ArrayRef,
-    heap: TopKHeap<String>,
+    heap: TopKHeap<Arc<str>>,
     desc: bool,
     data_type: DataType,
+    /// Cache of interned strings for the current batch, mapping hash to Arc<str>.
+    /// Cleared on each `set_batch` call to prevent memory leaks from old batches.
+    string_cache: HashMap<u64, Arc<str>>,
 }
 
 impl StringHeap {
@@ -196,6 +212,7 @@ impl StringHeap {
             heap: TopKHeap::new(limit, desc),
             desc,
             data_type,
+            string_cache: HashMap::new(),
         }
     }
 
@@ -208,6 +225,33 @@ impl StringHeap {
     /// ensures nulls are filtered before reaching this code.
     fn value(&self, row_idx: usize) -> &str {
         extract_string_value(&self.batch, &self.data_type, row_idx)
+    }
+
+    /// Interns a string value, returning a cached `Arc<str>` if available.
+    ///
+    /// This method implements string interning to reduce allocations for duplicate strings.
+    /// It computes a hash of the input string and checks the cache. If found, returns the
+    /// cached `Arc<str>`. Otherwise, allocates a new `Arc<str>`, caches it, and returns it.
+    ///
+    /// This is particularly effective for workloads with repeated string values like trace IDs.
+    fn intern_string(&mut self, s: &str) -> Arc<str> {
+        // Compute hash of the string
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        s.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        // Check cache and return if found
+        if let Some(cached) = self.string_cache.get(&hash) {
+            // Verify it's actually the same string (handle hash collisions)
+            if cached.as_ref() == s {
+                return Arc::clone(cached);
+            }
+        }
+
+        // Not in cache, allocate and cache it
+        let arc_str: Arc<str> = Arc::from(s);
+        self.string_cache.insert(hash, Arc::clone(&arc_str));
+        arc_str
     }
 }
 
@@ -234,6 +278,8 @@ fn extract_string_value<'a>(
 impl ArrowHeap for StringHeap {
     fn set_batch(&mut self, vals: ArrayRef) {
         self.batch = vals;
+        // Clear the cache to avoid retaining references to old batch strings
+        self.string_cache.clear();
     }
 
     fn is_worse(&self, row_idx: usize) -> bool {
@@ -242,8 +288,8 @@ impl ArrowHeap for StringHeap {
         }
         let new_val = self.value(row_idx);
         let worst_val = self.heap.worst_val().expect("Missing root");
-        (!self.desc && new_val > worst_val.as_str())
-            || (self.desc && new_val < worst_val.as_str())
+        (!self.desc && new_val > worst_val.as_ref())
+            || (self.desc && new_val < worst_val.as_ref())
     }
 
     fn worst_map_idx(&self) -> usize {
@@ -255,7 +301,9 @@ impl ArrowHeap for StringHeap {
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        let new_val = self.value(row_idx).to_string();
+        // Copy the string to avoid borrow checker issues
+        let new_str = self.value(row_idx).to_string();
+        let new_val = self.intern_string(&new_str);
         self.heap.append_or_replace(new_val, map_idx, map);
     }
 
@@ -273,24 +321,27 @@ impl ArrowHeap for StringHeap {
             .expect("Missing heap item");
 
         // Early exit if new value doesn't improve existing value
-        if (!self.desc && new_str.cmp(existing.val.as_str()) != Ordering::Less)
-            || (self.desc && new_str.cmp(existing.val.as_str()) != Ordering::Greater)
+        if (!self.desc && new_str.cmp(existing.val.as_ref()) != Ordering::Less)
+            || (self.desc && new_str.cmp(existing.val.as_ref()) != Ordering::Greater)
         {
             return;
         }
 
-        // Only allocate when we know we'll update the heap
-        let new_val = new_str.to_string();
+        // Copy and intern only when we know we'll update the heap
+        let new_str_owned = new_str.to_string();
+        let new_val = self.intern_string(&new_str_owned);
         self.heap.replace_if_better(heap_idx, new_val, map);
     }
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
         let (vals, map_idxs) = self.heap.drain();
-        // Convert owned strings to appropriate Arrow array type
+        // Convert Arc<str> to appropriate Arrow array type
+        // We need to convert Arc<str> to &str for the array builders
+        let string_refs: Vec<&str> = vals.iter().map(|s| s.as_ref()).collect();
         let arr: ArrayRef = match self.data_type {
-            DataType::Utf8 => Arc::new(StringArray::from(vals)),
-            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(vals)),
-            DataType::Utf8View => Arc::new(StringViewArray::from(vals)),
+            DataType::Utf8 => Arc::new(StringArray::from(string_refs)),
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(string_refs)),
+            DataType::Utf8View => Arc::new(StringViewArray::from(string_refs)),
             _ => unreachable!("Unsupported string type: {:?}", self.data_type),
         };
         (arr, map_idxs)
