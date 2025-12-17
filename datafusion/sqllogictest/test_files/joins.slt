@@ -1338,8 +1338,8 @@ logical_plan
 04)------TableScan: join_t1 projection=[t1_id]
 05)------TableScan: join_t2 projection=[t2_id]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[]
-02)--RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+01)AggregateExec: mode=Final, gby=[t1_id@0 as t1_id], aggr=[]
+02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[]
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1393,8 +1393,8 @@ logical_plan
 06)--------TableScan: join_t2 projection=[t2_id]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@1 as count(*)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
-03)----RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
+02)--AggregateExec: mode=Final, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
 05)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1420,13 +1420,14 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(alias1)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------RepartitionExec: partitioning=Hash([alias1@0], 2), input_partitions=2
-07)------------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
-08)--------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
-10)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-11)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------AggregateExec: mode=Final, gby=[alias1@0 as alias1], aggr=[]
+07)------------CoalescePartitionsExec
+08)--------------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
+09)----------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+11)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+12)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.explain.logical_plan_only = true;

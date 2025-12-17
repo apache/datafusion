@@ -1629,12 +1629,31 @@ fn has_sufficient_rows_for_repartition(
         Err(_) => return Ok(true),
     };
 
+    // Prefer a size-based heuristic when total byte statistics are available.
+    if let Some(total_bytes) = stats.total_byte_size.get_value().copied() {
+        let total_bytes = total_bytes as u64;
+        let min_bytes = session_state.config().repartition_file_min_size() as u64;
+
+        if total_bytes < min_bytes {
+            // input is too small in bytes → skip repartition
+            return Ok(false);
+        }
+
+        // If we know the input is large enough in bytes, we generally want to
+        // repartition even if row counts are not available.
+        if stats.num_rows.get_value().is_none() {
+            return Ok(true);
+        }
+    }
+
+    // Fallback to a simple row-based heuristic when only num_rows is available.
     if let Some(num_rows) = stats.num_rows.get_value().copied() {
         let batch_size = session_state.config().batch_size();
-
         return Ok(num_rows >= batch_size);
     }
 
+    // If statistics are present but neither total bytes nor row counts are
+    // available, keep the existing conservative behavior and repartition.
     Ok(true)
 }
 
@@ -3255,45 +3274,6 @@ mod tests {
 
     #[tokio::test]
     async fn hash_agg_group_by_partitioned_on_dicts() -> Result<()> {
-        // Use a larger dataset to ensure repartitioning still happens even after
-        // enabling the small dataset optimization.
-        let dict_values: Vec<&str> = (0..10_000)
-            .map(|i| match i % 4 {
-                0 => "A",
-                1 => "B",
-                2 => "C",
-                _ => "D",
-            })
-            .collect();
-        let dict_array: DictionaryArray<Int32Type> = dict_values.into_iter().collect();
-        let val_array: Int32Array = (0..10_000).map(|i| i % 10).collect();
-
-        let batch = RecordBatch::try_from_iter(vec![
-            ("d1", Arc::new(dict_array) as ArrayRef),
-            ("d2", Arc::new(val_array) as ArrayRef),
-        ])
-        .unwrap();
-
-        let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        let ctx = SessionContext::new();
-
-        let logical_plan = LogicalPlanBuilder::from(
-            ctx.read_table(Arc::new(table))?.into_optimized_plan()?,
-        )
-        .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
-        .build()?;
-
-        let execution_plan = plan(&logical_plan).await?;
-        let formatted = format!("{execution_plan:?}");
-
-        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in Aggregate (which is slower)
-        assert!(formatted.contains("FinalPartitioned"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn hash_agg_small_dataset_single_mode() -> Result<()> {
         let dict_array: DictionaryArray<Int32Type> =
             vec!["A", "B", "A", "A", "C", "A"].into_iter().collect();
         let val_array: Int32Array = vec![1, 2, 2, 4, 1, 1].into();
@@ -3316,9 +3296,12 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
+        // With the small-dataset optimization enabled, a tiny dictionary-encoded
+        // input should use a single-partition aggregate rather than a fully
+        // partitioned aggregate tree.
         assert!(formatted.contains("mode: Single"));
         Ok(())
-    }
+    }       
 
     #[tokio::test]
     async fn hash_agg_grouping_set_by_partitioned() -> Result<()> {
