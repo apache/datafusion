@@ -832,7 +832,7 @@ impl DefaultPhysicalPlanner {
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
                     && session_state.config().repartition_aggregations()
-                    && has_sufficient_rows_for_repartition(
+                    && has_sufficient_size_for_repartition(
                         initial_aggr.input(),
                         session_state,
                     )?;
@@ -1619,7 +1619,7 @@ impl DefaultPhysicalPlanner {
     }
 }
 
-fn has_sufficient_rows_for_repartition(
+fn has_sufficient_size_for_repartition(
     input: &Arc<dyn ExecutionPlan>,
     session_state: &SessionState,
 ) -> Result<bool> {
@@ -3301,7 +3301,7 @@ mod tests {
         // partitioned aggregate tree.
         assert!(formatted.contains("mode: Single"));
         Ok(())
-    }       
+    }
 
     #[tokio::test]
     async fn hash_agg_grouping_set_by_partitioned() -> Result<()> {
