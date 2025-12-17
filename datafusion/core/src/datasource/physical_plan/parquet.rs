@@ -306,7 +306,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(file_schema.clone(), vec![c1]).unwrap();
 
-        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // Since c2 is missing from the file and we didn't supply a custom `PhysicalExprAdapterFactory`,
         // the default behavior is to fill in missing columns with nulls.
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit(1_i32));
@@ -364,7 +364,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(file_schema.clone(), vec![c1]).unwrap();
 
-        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // Since c2 is missing from the file and we didn't supply a custom `PhysicalExprAdapterFactory`,
         // the default behavior is to fill in missing columns with nulls.
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
@@ -426,7 +426,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(file_schema.clone(), vec![c1, c3]).unwrap();
 
-        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // Since c2 is missing from the file and we didn't supply a custom `PhysicalExprAdapterFactory`,
         // the default behavior is to fill in missing columns with nulls.
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
@@ -488,7 +488,7 @@ mod tests {
         let batch =
             RecordBatch::try_new(file_schema.clone(), vec![c3.clone(), c3]).unwrap();
 
-        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // Since c2 is missing from the file and we didn't supply a custom `PhysicalExprAdapterFactory`,
         // the default behavior is to fill in missing columns with nulls.
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
@@ -1324,7 +1324,7 @@ mod tests {
     async fn parquet_exec_with_int96_from_spark() -> Result<()> {
         // arrow-rs relies on the chrono library to convert between timestamps and strings, so
         // instead compare as Int64. The underlying type should be a PrimitiveArray of Int64
-        // anyway, so this should be a zero-copy non-modifying cast at the SchemaAdapter.
+        // anyway, so this should be a zero-copy non-modifying cast.
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
         let testdata = datafusion_common::test_util::parquet_test_data();

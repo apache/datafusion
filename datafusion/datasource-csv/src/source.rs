@@ -18,7 +18,6 @@
 //! Execution plan for reading CSV files
 
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_plan::projection::ProjectionExprs;
 use std::any::Any;
 use std::fmt;
@@ -92,7 +91,6 @@ pub struct CsvSource {
     table_schema: TableSchema,
     projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl CsvSource {
@@ -105,7 +103,6 @@ impl CsvSource {
             table_schema,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
         }
     }
 
@@ -304,20 +301,6 @@ impl FileSource for CsvSource {
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
-    }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
     }
 }
 

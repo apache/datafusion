@@ -490,6 +490,24 @@ If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., d
 
 See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
 
+### `SchemaAdapter` and `SchemaAdapterFactory` completely removed
+
+The following symbols have been completely removed from DataFusion:
+
+- `SchemaAdapter` trait
+- `SchemaAdapterFactory` trait
+- `SchemaMapper` trait
+- `SchemaMapping` struct
+- `DefaultSchemaAdapterFactory` struct
+
+These types were previously used to adapt record batch schemas during file reading.
+This functionality has been replaced by `PhysicalExprAdapterFactory`, which rewrites expressions at planning time rather than transforming batches at runtime.
+
+**Migration guide:**
+
+If you implemented a custom `SchemaAdapterFactory`, migrate to `PhysicalExprAdapterFactory`.
+See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for a complete implementation.
+
 ## DataFusion `51.0.0`
 
 ### `arrow` / `parquet` updated to 57.0.0

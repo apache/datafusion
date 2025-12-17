@@ -221,11 +221,8 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
 /// Test demonstrating how to implement a custom PhysicalExprAdapterFactory
 /// that fills missing columns with non-null default values.
 ///
-/// This is the recommended migration path for users who previously used
-/// SchemaAdapterFactory to fill missing columns with default values.
-/// Instead of transforming batches after reading (SchemaAdapter::map_batch),
-/// the PhysicalExprAdapterFactory rewrites expressions to use literals for
-/// missing columns, achieving the same result more efficiently.
+/// PhysicalExprAdapterFactory rewrites expressions to use literals for
+/// missing columns, handling schema evolution efficiently at planning time.
 #[tokio::test]
 async fn test_physical_expr_adapter_with_non_null_defaults() {
     // File only has c1 column

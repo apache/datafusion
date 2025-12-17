@@ -1453,11 +1453,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_statistics_mapping_with_default_factory() -> Result<()> {
+    async fn test_basic_table_scan() -> Result<()> {
         let ctx = SessionContext::new();
 
-        // Create a table without providing a custom schema adapter factory
-        // This should fall back to using DefaultSchemaAdapterFactory
+        // Test basic table creation and scanning
         let path = "table/file.json";
         register_test_store(&ctx, &[(path, 10)]);
 
@@ -1469,25 +1468,18 @@ mod tests {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
-        // Note: NOT calling .with_schema_adapter_factory() to test default behavior
 
         let table = ListingTable::try_new(config)?;
 
-        // Verify that no custom schema adapter factory is set
-        assert!(table.schema_adapter_factory().is_none());
-
-        // The scan should work correctly with the default schema adapter
+        // The scan should work correctly
         let scan_result = table.scan(&ctx.state(), None, &[], None).await;
-        assert!(
-            scan_result.is_ok(),
-            "Scan should succeed with default schema adapter"
-        );
+        assert!(scan_result.is_ok(), "Scan should succeed");
 
-        // Verify that the default adapter handles basic schema compatibility
+        // Verify file listing works
         let result = table.list_files_for_scan(&ctx.state(), &[], None).await?;
         assert!(
             !result.file_groups.is_empty(),
-            "Should list files successfully with default adapter"
+            "Should list files successfully"
         );
 
         Ok(())

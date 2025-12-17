@@ -21,7 +21,6 @@ use datafusion_catalog::Session;
 use datafusion_common::{config_err, internal_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -44,15 +43,12 @@ pub enum SchemaSource {
 /// # Schema Evolution Support
 ///
 /// This configuration supports schema evolution through the optional
-/// [`SchemaAdapterFactory`]. You might want to override the default factory when you need:
+/// [`PhysicalExprAdapterFactory`]. You might want to override the default factory when you need:
 ///
 /// - **Type coercion requirements**: When you need custom logic for converting between
 ///   different Arrow data types (e.g., Int32 ↔ Int64, Utf8 ↔ LargeUtf8)
 /// - **Column mapping**: You need to map columns with a legacy name to a new name
 /// - **Custom handling of missing columns**: By default they are filled in with nulls, but you may e.g. want to fill them in with `0` or `""`.
-///
-/// If not specified, a [`datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory`]
-/// will be used, which handles basic schema compatibility cases.
 #[derive(Debug, Clone, Default)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating [`crate::ListingTable`].
@@ -68,8 +64,6 @@ pub struct ListingTableConfig {
     pub options: Option<ListingOptions>,
     /// Tracks the source of the schema information
     pub(crate) schema_source: SchemaSource,
-    /// Optional [`SchemaAdapterFactory`] for creating schema adapters
-    pub(crate) schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
     /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
     pub(crate) expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
@@ -218,8 +212,7 @@ impl ListingTableConfig {
                     file_schema,
                     options: _,
                     schema_source,
-                    schema_adapter_factory,
-                    expr_adapter_factory: physical_expr_adapter_factory,
+                    expr_adapter_factory,
                 } = self;
 
                 let (schema, new_schema_source) = match file_schema {
@@ -241,8 +234,7 @@ impl ListingTableConfig {
                     file_schema: Some(schema),
                     options: Some(options),
                     schema_source: new_schema_source,
-                    schema_adapter_factory,
-                    expr_adapter_factory: physical_expr_adapter_factory,
+                    expr_adapter_factory,
                 })
             }
             None => internal_err!("No `ListingOptions` set for inferring schema"),
@@ -282,7 +274,6 @@ impl ListingTableConfig {
                     file_schema: self.file_schema,
                     options: Some(options),
                     schema_source: self.schema_source,
-                    schema_adapter_factory: self.schema_adapter_factory,
                     expr_adapter_factory: self.expr_adapter_factory,
                 })
             }
@@ -290,63 +281,11 @@ impl ListingTableConfig {
         }
     }
 
-    /// Set the [`SchemaAdapterFactory`] for the [`crate::ListingTable`]
-    ///
-    /// The schema adapter factory is used to create schema adapters that can
-    /// handle schema evolution and type conversions when reading files with
-    /// different schemas than the table schema.
-    ///
-    /// If not provided, a default schema adapter factory will be used.
-    ///
-    /// # Example: Custom Schema Adapter for Type Coercion
-    /// ```rust
-    /// # use std::sync::Arc;
-    /// # use datafusion_catalog_listing::{ListingTableConfig, ListingOptions};
-    /// # use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaAdapter};
-    /// # use datafusion_datasource::ListingTableUrl;
-    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
-    /// # use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
-    /// #
-    /// # #[derive(Debug)]
-    /// # struct MySchemaAdapterFactory;
-    /// # impl SchemaAdapterFactory for MySchemaAdapterFactory {
-    /// #     fn create(&self, _projected_table_schema: SchemaRef, _file_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
-    /// #         unimplemented!()
-    /// #     }
-    /// # }
-    /// # let table_paths = ListingTableUrl::parse("file:///path/to/data").unwrap();
-    /// # let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
-    /// # let table_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    /// let config = ListingTableConfig::new(table_paths)
-    ///     .with_listing_options(listing_options)
-    ///     .with_schema(table_schema)
-    ///     .with_schema_adapter_factory(Arc::new(MySchemaAdapterFactory));
-    /// ```
-    pub fn with_schema_adapter_factory(
-        self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self
-        }
-    }
-
-    /// Get the [`SchemaAdapterFactory`] for this configuration
-    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.as_ref()
-    }
-
     /// Set the [`PhysicalExprAdapterFactory`] for the [`crate::ListingTable`]
     ///
     /// The expression adapter factory is used to create physical expression adapters that can
     /// handle schema evolution and type conversions when evaluating expressions
     /// with different schemas than the table schema.
-    ///
-    /// If not provided, a default physical expression adapter factory will be used unless a custom
-    /// `SchemaAdapterFactory` is set, in which case only the `SchemaAdapterFactory` will be used.
-    ///
-    /// See <https://github.com/apache/datafusion/issues/16800> for details on this transition.
     pub fn with_expr_adapter_factory(
         self,
         expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
