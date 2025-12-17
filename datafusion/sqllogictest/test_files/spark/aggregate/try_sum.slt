@@ -101,9 +101,19 @@ SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
 ----
 NULL
 
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (-0.0), (0.0) AS tab(col);
+----
+0
+
 # need be 0.0
 query R
 SELECT try_sum(col) AS sum_x FROM VALUES (CAST(-0.0 AS DOUBLE)), (CAST(0.0 AS DOUBLE)) AS tab(col);
+----
+0
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST(-5.5 AS DECIMAL(10,2))), (CAST(5.5 AS DECIMAL(10,2))) AS tab(col);
 ----
 0
 
