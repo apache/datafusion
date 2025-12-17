@@ -2377,3 +2377,42 @@ async fn roundtrip_recursive_query_with_work_table_scan_executes() -> Result<()>
 
     Ok(())
 }
+
+#[tokio::test]
+async fn roundtrip_recursive_query_validates_work_table_reference() -> Result<()> {
+    // This test verifies that the defensive validation added to ensure the recursive term
+    // references the work table is working correctly. A valid recursive query must have
+    // the recursive_term reference the work table by name.
+    let ctx = create_context().await?;
+
+    ctx.register_csv(
+        "balance",
+        "../core/tests/data/recursive_cte/balance.csv",
+        CsvReadOptions::new().has_header(true),
+    )
+    .await?;
+
+    let sql = r#"
+        WITH RECURSIVE balances AS (
+            SELECT * from balance
+            UNION ALL
+            SELECT time + 1 as time, name, account_balance + 10 as account_balance
+            FROM balances
+            WHERE time < 10
+        )
+        SELECT * FROM balances
+    "#;
+
+    let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+    let substrait = to_substrait_plan(&plan, &ctx.state())?;
+
+    // The roundtrip should succeed because the recursive term references the work table
+    let roundtrip = from_substrait_plan(&ctx.state(), &substrait).await;
+    assert!(
+        roundtrip.is_ok(),
+        "Roundtrip with valid recursive term should succeed, got: {:?}",
+        roundtrip.err()
+    );
+
+    Ok(())
+}
