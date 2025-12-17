@@ -25,7 +25,7 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
-use datafusion_common::Result;
+use datafusion_common::{Result, not_impl_err};
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
@@ -172,5 +172,23 @@ pub trait FileSource: Send + Sync {
         _projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn FileSource>>> {
         Ok(None)
+    }
+
+    /// Set the file ordering information
+    ///
+    /// This allows the file source to know how the files are sorted,
+    /// enabling it to make informed decisions about sort pushdown.
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns `not_impl_err!`. FileSource implementations that support
+    /// sort optimization should override this method.
+    fn with_file_ordering_info(
+        &self,
+        _ordering: Option<LexOrdering>,
+    ) -> Result<Arc<dyn FileSource>> {
+        // Default: clone self without modification
+        // ParquetSource will override this
+        not_impl_err!("with_file_ordering_info not implemented for this FileSource")
     }
 }
