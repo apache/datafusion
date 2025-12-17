@@ -39,8 +39,7 @@ mod tests {
         let path = format!("{}/empty_sql.arrow", tmp_dir.path().to_string_lossy());
 
         ctx.sql(&format!(
-            "COPY (SELECT CAST(1 AS BIGINT) AS id LIMIT 0) TO '{}' STORED AS ARROW",
-            path
+            "COPY (SELECT CAST(1 AS BIGINT) AS id LIMIT 0) TO '{path}' STORED AS ARROW",
         ))
         .await?
         .collect()
@@ -86,7 +85,7 @@ mod tests {
 
         ctx.register_batch("empty_table", empty_batch)?;
 
-        ctx.sql(&format!("COPY empty_table TO '{}' STORED AS ARROW", path))
+        ctx.sql(&format!("COPY empty_table TO '{path}' STORED AS ARROW"))
             .await?
             .collect()
             .await?;
