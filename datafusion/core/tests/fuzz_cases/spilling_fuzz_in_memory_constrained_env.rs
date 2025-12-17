@@ -27,9 +27,9 @@ use arrow::{array::StringArray, compute::SortOptions, record_batch::RecordBatch}
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::common::Result;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::units::{KB, MB};
 use datafusion_execution::memory_pool::{
@@ -38,7 +38,7 @@ use datafusion_execution::memory_pool::{
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-use datafusion_physical_expr::expressions::{col, Column};
+use datafusion_physical_expr::expressions::{Column, col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -80,9 +80,9 @@ async fn test_sort_with_limited_memory() -> Result<()> {
 
     let total_spill_files_size = spill_count * record_batch_size;
     assert!(
-    total_spill_files_size > pool_size,
-    "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
-  );
+        total_spill_files_size > pool_size,
+        "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
+    );
 
     Ok(())
 }
@@ -126,8 +126,8 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch() -> 
 }
 
 #[tokio::test]
-async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_changing_memory_reservation(
-) -> Result<()> {
+async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_changing_memory_reservation()
+-> Result<()> {
     let record_batch_size = 8192;
     let pool_size = 2 * MB as usize;
     let task_ctx = {
@@ -164,8 +164,8 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_c
 }
 
 #[tokio::test]
-async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_take_all_memory(
-) -> Result<()> {
+async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_take_all_memory()
+-> Result<()> {
     let record_batch_size = 8192;
     let pool_size = 2 * MB as usize;
     let task_ctx = {
@@ -356,16 +356,16 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory() -> Result<()
 
     let total_spill_files_size = spill_count * record_batch_size;
     assert!(
-    total_spill_files_size > pool_size,
-    "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
-  );
+        total_spill_files_size > pool_size,
+        "Total spill files size {total_spill_files_size} should be greater than pool size {pool_size}",
+    );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch(
-) -> Result<()> {
+async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch()
+-> Result<()> {
     let record_batch_size = 8192;
     let pool_size = 2 * MB as usize;
     let task_ctx = {
@@ -398,8 +398,8 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
 }
 
 #[tokio::test]
-async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch_and_changing_memory_reservation(
-) -> Result<()> {
+async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch_and_changing_memory_reservation()
+-> Result<()> {
     let record_batch_size = 8192;
     let pool_size = 2 * MB as usize;
     let task_ctx = {
@@ -432,8 +432,8 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
 }
 
 #[tokio::test]
-async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch_and_take_all_memory(
-) -> Result<()> {
+async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_sizes_of_record_batch_and_take_all_memory()
+-> Result<()> {
     let record_batch_size = 8192;
     let pool_size = 2 * MB as usize;
     let task_ctx = {
@@ -466,8 +466,8 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_different_
 }
 
 #[tokio::test]
-async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_record_batch(
-) -> Result<()> {
+async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_record_batch()
+-> Result<()> {
     let record_batch_size = 8192;
     let pool_size = 2 * MB as usize;
     let task_ctx = {

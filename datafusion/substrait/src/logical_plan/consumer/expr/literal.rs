@@ -15,39 +15,39 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::types::from_substrait_type;
-use crate::logical_plan::consumer::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::types::from_substrait_type;
+use crate::logical_plan::consumer::utils::{DEFAULT_TIMEZONE, next_struct_field_name};
 use crate::variation_const::FLOAT_16_TYPE_NAME;
 #[expect(deprecated)]
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
-    TIMESTAMP_SECOND_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
-    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use datafusion::arrow::array::{new_empty_array, AsArray, MapArray};
+use datafusion::arrow::array::{AsArray, MapArray, new_empty_array};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{Field, IntervalDayTime, IntervalMonthDayNano};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::{
-    not_impl_err, plan_err, substrait_datafusion_err, substrait_err, ScalarValue,
+    ScalarValue, not_impl_err, plan_err, substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::Expr;
 use prost::Message;
 use std::sync::Arc;
 use substrait::proto;
+use substrait::proto::expression::Literal;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
-    interval_day_to_second, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth,
-    LiteralType,
+    IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, LiteralType,
+    interval_day_to_second,
 };
-use substrait::proto::expression::Literal;
 
 pub async fn from_literal(
     consumer: &impl SubstraitConsumer,
@@ -386,19 +386,23 @@ pub(crate) fn from_substrait_literal(
             // DF only supports millisecond precision, so for any more granular type we lose precision
             let milliseconds = match precision_mode {
                 Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
-                None =>
+                None => {
                     if *subseconds != 0 {
-                        return substrait_err!("Cannot set subseconds field of IntervalDayToSecond without setting precision");
+                        return substrait_err!(
+                            "Cannot set subseconds field of IntervalDayToSecond without setting precision"
+                        );
                     } else {
                         0_i32
                     }
+                }
                 Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
                 Some(PrecisionMode::Precision(3)) => *subseconds as i32,
                 Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
                 Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
                 _ => {
                     return not_impl_err!(
-                    "Unsupported Substrait interval day to second precision mode: {precision_mode:?}")
+                        "Unsupported Substrait interval day to second precision mode: {precision_mode:?}"
+                    );
                 }
             };
 
@@ -511,10 +515,10 @@ pub(crate) fn from_substrait_literal(
                     }
                     _ => {
                         return not_impl_err!(
-                        "Unsupported Substrait user defined type with ref {} and name {}",
-                        user_defined.type_reference,
-                        name
-                    )
+                            "Unsupported Substrait user defined type with ref {} and name {}",
+                            user_defined.type_reference,
+                            name
+                        );
                     }
                 }
             } else {
@@ -563,7 +567,7 @@ pub(crate) fn from_substrait_literal(
                         return not_impl_err!(
                             "Unsupported Substrait user defined type literal with ref {}",
                             user_defined.type_reference
-                        )
+                        );
                     }
                 }
             }

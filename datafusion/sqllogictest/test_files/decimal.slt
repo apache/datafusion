@@ -614,21 +614,10 @@ select a / b from foo;
 ----
 0.2
 
-statement ok
-create table t as values (arrow_cast(123, 'Decimal256(5,2)'));
-
-# make sure query below runs in single partition
-# otherwise error message may not be deterministic
-statement ok
-set datafusion.execution.target_partitions = 1;
-
 query R
-select AVG(column1) from t;
+select AVG(column1) from values (arrow_cast(123, 'Decimal256(5,2)'));
 ----
 123
-
-statement ok
-drop table t;
 
 statement ok
 CREATE EXTERNAL TABLE decimal256_simple (
