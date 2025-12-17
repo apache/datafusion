@@ -29,7 +29,7 @@ use std::mem::size_of_val;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
+use datafusion::common::{DFSchema, DFSchemaRef, not_impl_err, plan_err};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -45,7 +45,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
-use substrait::proto::{plan_rel, Plan, Rel};
+use substrait::proto::{Plan, Rel, plan_rel};
 
 #[derive(Debug)]
 struct MockSerializerRegistry;
@@ -980,8 +980,9 @@ async fn aggregate_wo_projection_consume() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
-    let proto_plan =
-        read_json("tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json");
+    let proto_plan = read_json(
+        "tests/testdata/test_plans/aggregate_no_project_group_expression_ref.substrait.json",
+    );
 
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
@@ -1012,8 +1013,9 @@ async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_identical_grouping_expressions() -> Result<()> {
-    let proto_plan =
-        read_json("tests/testdata/test_plans/aggregate_identical_grouping_expressions.substrait.json");
+    let proto_plan = read_json(
+        "tests/testdata/test_plans/aggregate_identical_grouping_expressions.substrait.json",
+    );
 
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(

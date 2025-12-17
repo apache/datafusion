@@ -18,12 +18,12 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use abi_stable::StableAbi;
+use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use arrow::datatypes::SchemaRef;
 use datafusion_catalog::TableProvider;
 use datafusion_common::error::Result;
-use datafusion_common::{not_impl_err, TableReference};
+use datafusion_common::{TableReference, not_impl_err};
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
@@ -261,9 +261,11 @@ unsafe extern "C" fn try_encode_udwf_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_LogicalExtensionCodec) {
-    let private_data =
-        Box::from_raw(provider.private_data as *mut LogicalExtensionCodecPrivateData);
-    drop(private_data);
+    unsafe {
+        let private_data =
+            Box::from_raw(provider.private_data as *mut LogicalExtensionCodecPrivateData);
+        drop(private_data);
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
@@ -472,7 +474,7 @@ mod tests {
     use arrow::array::record_batch;
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_catalog::{MemTable, TableProvider};
-    use datafusion_common::{exec_err, Result, TableReference};
+    use datafusion_common::{Result, TableReference, exec_err};
     use datafusion_datasource::file_format::FileFormatFactory;
     use datafusion_execution::TaskContext;
     use datafusion_expr::ptr_eq::arc_ptr_eq;

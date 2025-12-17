@@ -23,7 +23,7 @@ use std::{
 };
 
 use datafusion::sql::sqlparser::{
-    dialect::{dialect_from_str, Dialect, GenericDialect},
+    dialect::{Dialect, GenericDialect, dialect_from_str},
     keywords::Keyword,
     tokenizer::{Token, Tokenizer},
 };
@@ -94,8 +94,8 @@ impl Color {
 
 #[cfg(test)]
 mod tests {
-    use super::config::Dialect;
     use super::SyntaxHighlighter;
+    use super::config::Dialect;
     use rustyline::highlight::Highlighter;
 
     #[test]

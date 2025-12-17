@@ -21,7 +21,7 @@ description = "DataFusion SQL Query Planner"
 keywords = ["datafusion", "sql", "parser", "planner"]
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }

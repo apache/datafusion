@@ -25,11 +25,11 @@ use arrow::datatypes::Field;
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -45,8 +45,8 @@ use datafusion_expr::WindowFunctionDefinition;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
+    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -733,8 +733,8 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use datafusion_datasource::PartitionedFile;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     #[test]
     fn partitioned_file_path_roundtrip_percent_encoded() {
