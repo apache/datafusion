@@ -95,3 +95,29 @@ ORDER BY g;
 ----
 bad NULL
 ok 15
+
+query R
+SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
+----
+NULL
+
+# need be 0.0
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST(-0.0 AS DOUBLE)), (CAST(0.0 AS DOUBLE)) AS tab(col);
+----
+0
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('Infinity' AS DOUBLE)) AS tab(col);
+----
+NaN
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('-Infinity' AS DOUBLE)) AS tab(col);
+----
+-Infinity
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('Infinity' AS FLOAT)), (CAST(1.0 AS FLOAT)) AS tab(col);
+----
+Infinity
