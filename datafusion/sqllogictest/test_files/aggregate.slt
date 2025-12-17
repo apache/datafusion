@@ -433,20 +433,21 @@ logical_plan
 15)------------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
-03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
-05)--------UnionExec
-06)----------ProjectionExec: expr=[1 as id, 2 as foo]
-07)------------PlaceholderRowExec
-08)----------ProjectionExec: expr=[1 as id, NULL as foo]
-09)------------PlaceholderRowExec
-10)----------ProjectionExec: expr=[1 as id, NULL as foo]
-11)------------PlaceholderRowExec
-12)----------ProjectionExec: expr=[1 as id, 3 as foo]
-13)------------PlaceholderRowExec
-14)----------ProjectionExec: expr=[1 as id, 2 as foo]
-15)------------PlaceholderRowExec
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----AggregateExec: mode=Final, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+06)----------UnionExec
+07)------------ProjectionExec: expr=[1 as id, 2 as foo]
+08)--------------PlaceholderRowExec
+09)------------ProjectionExec: expr=[1 as id, NULL as foo]
+10)--------------PlaceholderRowExec
+11)------------ProjectionExec: expr=[1 as id, NULL as foo]
+12)--------------PlaceholderRowExec
+13)------------ProjectionExec: expr=[1 as id, 3 as foo]
+14)--------------PlaceholderRowExec
+15)------------ProjectionExec: expr=[1 as id, 2 as foo]
+16)--------------PlaceholderRowExec
 
 
 # FIX: custom absolute values
@@ -1357,10 +1358,9 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[median(alias1)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------AggregateExec: mode=Single, gby=[c@0 as alias1], aggr=[]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -7429,10 +7429,9 @@ logical_plan
 04)------TableScan: having_test projection=[v1, v2]
 physical_plan
 01)FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
-02)--AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-03)----RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=1
-04)------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----AggregateExec: mode=Single, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query error
@@ -7576,8 +7575,8 @@ logical_plan
 15)------------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]@1 as last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
-03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+02)--AggregateExec: mode=Final, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
 05)--------UnionExec
 06)----------ProjectionExec: expr=[1 as id, 2 as foo]

@@ -271,21 +271,20 @@ logical_plan
 15)----------------Projection: Int64(7) AS a, Utf8("bb") AS b
 16)------------------EmptyRelation: rows=1
 physical_plan
-01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
-02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a]
-04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)]
-05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
-07)------------UnionExec
-08)--------------ProjectionExec: expr=[1 as a, aa as b]
-09)----------------PlaceholderRowExec
-10)--------------ProjectionExec: expr=[3 as a, aa as b]
-11)----------------PlaceholderRowExec
-12)--------------ProjectionExec: expr=[5 as a, bb as b]
-13)----------------PlaceholderRowExec
-14)--------------ProjectionExec: expr=[7 as a, bb as b]
-15)----------------PlaceholderRowExec
+01)SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a]
+03)----AggregateExec: mode=Final, gby=[b@0 as b], aggr=[max(d.a)]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
+06)----------UnionExec
+07)------------ProjectionExec: expr=[1 as a, aa as b]
+08)--------------PlaceholderRowExec
+09)------------ProjectionExec: expr=[3 as a, aa as b]
+10)--------------PlaceholderRowExec
+11)------------ProjectionExec: expr=[5 as a, bb as b]
+12)--------------PlaceholderRowExec
+13)------------ProjectionExec: expr=[7 as a, bb as b]
+14)--------------PlaceholderRowExec
 
 # Check actual result:
 query TI
@@ -355,22 +354,24 @@ logical_plan
 17)--------------------Projection: Int64(7) AS a, Utf8("bb") AS b
 18)----------------------EmptyRelation: rows=1
 physical_plan
-01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
+01)SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[b@0 as b, max(d.a)@1 as max_a, max(d.seq)@2 as max(d.seq)]
-03)----AggregateExec: mode=SinglePartitioned, gby=[b@2 as b], aggr=[max(d.a), max(d.seq)], ordering_mode=Sorted
-04)------ProjectionExec: expr=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as seq, a@0 as a, b@1 as b]
-05)--------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-06)----------SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[true]
-07)------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
-08)--------------UnionExec
-09)----------------ProjectionExec: expr=[1 as a, aa as b]
-10)------------------PlaceholderRowExec
-11)----------------ProjectionExec: expr=[3 as a, aa as b]
-12)------------------PlaceholderRowExec
-13)----------------ProjectionExec: expr=[5 as a, bb as b]
-14)------------------PlaceholderRowExec
-15)----------------ProjectionExec: expr=[7 as a, bb as b]
-16)------------------PlaceholderRowExec
+03)----AggregateExec: mode=Final, gby=[b@0 as b], aggr=[max(d.a), max(d.seq)]
+04)------CoalescePartitionsExec
+05)--------AggregateExec: mode=Partial, gby=[b@2 as b], aggr=[max(d.a), max(d.seq)], ordering_mode=Sorted
+06)----------ProjectionExec: expr=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as seq, a@0 as a, b@1 as b]
+07)------------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+08)--------------SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[true]
+09)----------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
+10)------------------UnionExec
+11)--------------------ProjectionExec: expr=[1 as a, aa as b]
+12)----------------------PlaceholderRowExec
+13)--------------------ProjectionExec: expr=[3 as a, aa as b]
+14)----------------------PlaceholderRowExec
+15)--------------------ProjectionExec: expr=[5 as a, bb as b]
+16)----------------------PlaceholderRowExec
+17)--------------------ProjectionExec: expr=[7 as a, bb as b]
+18)----------------------PlaceholderRowExec
 
 
 # check actual result
