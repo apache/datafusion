@@ -192,7 +192,11 @@ impl PhysicalExpr for HashExpr {
 
         // Compute hashes
         let mut hashes_buffer = vec![0; num_rows];
-        create_hashes(&keys_values, self.random_state.random_state(), &mut hashes_buffer)?;
+        create_hashes(
+            &keys_values,
+            self.random_state.random_state(),
+            &mut hashes_buffer,
+        )?;
 
         Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
             hashes_buffer,

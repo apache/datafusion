@@ -26,7 +26,9 @@ use crate::ExecutionPlanProperties;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
-use crate::joins::hash_join::partitioned_hash_eval::{HashExpr, HashTableLookupExpr, SeededRandomState};
+use crate::joins::hash_join::partitioned_hash_eval::{
+    HashExpr, HashTableLookupExpr, SeededRandomState,
+};
 use crate::joins::utils::JoinHashMapType;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
