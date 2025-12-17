@@ -23,10 +23,10 @@ use std::collections::HashSet;
 use datafusion_doc::metric_doc_sections::{
     ExecDoc, MetricDoc, MetricDocPosition, exec_docs, metric_docs,
 };
-use datafusion_execution as _; // Link metrics defined in execution crate.
-use datafusion_physical_plan as _; // Link metrics and execs defined in physical plan.
 
 fn main() -> std::io::Result<()> {
+    datafusion::doc::link_metrics();
+
     let mut content = String::new();
     let mut metrics: Vec<&MetricDoc> = metric_docs().collect();
     metrics.sort_by(|a, b| a.name.cmp(b.name));
