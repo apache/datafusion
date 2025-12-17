@@ -307,8 +307,8 @@ physical_plan
 01)UnionExec
 02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], NullsEqual: true
 03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 07)----AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
 08)------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
@@ -405,12 +405,10 @@ physical_plan
 01)SortPreservingMergeExec: [c9@1 DESC], fetch=5
 02)--SortExec: TopK(fetch=5), expr=[c9@1 DESC], preserve_partitioning=[true]
 03)----UnionExec
-04)------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Decimal128(20, 0)) as c9]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], file_type=csv, has_header=true
-07)------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Decimal128(20, 0)) as c9]
-08)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, CAST(c9@8 AS Decimal128(20, 0)) as c9], file_type=csv, has_header=true
+06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, CAST(c3@2 AS Decimal128(20, 0)) as c9], file_type=csv, has_header=true
 
 query TR
 SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
@@ -896,8 +894,8 @@ physical_plan
 01)SortPreservingMergeExec: [y@0 ASC NULLS LAST]
 02)--UnionExec
 03)----SortExec: expr=[y@0 ASC NULLS LAST], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[CAST(y@0 AS Int64) as y]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[CAST(y@0 AS Int64) as y]
 06)----------DataSourceExec: partitions=1, partition_sizes=[2]
 07)----SortExec: expr=[y@0 ASC NULLS LAST], preserve_partitioning=[false]
 08)------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -923,8 +921,8 @@ logical_plan
 05)----TableScan: u2 projection=[y]
 physical_plan
 01)UnionExec
-02)--ProjectionExec: expr=[CAST(y@0 AS Int64) as y]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----ProjectionExec: expr=[CAST(y@0 AS Int64) as y]
 04)------DataSourceExec: partitions=1, partition_sizes=[2]
 05)--DataSourceExec: partitions=1, partition_sizes=[1]
 
