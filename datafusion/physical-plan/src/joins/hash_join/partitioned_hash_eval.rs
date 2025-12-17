@@ -132,12 +132,15 @@ impl Hash for HashExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.on_columns.dyn_hash(state);
         self.description.hash(state);
+        self.seeds().hash(state);
     }
 }
 
 impl PartialEq for HashExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.on_columns == other.on_columns && self.description == other.description
+        self.on_columns == other.on_columns
+            && self.description == other.description
+            && self.seeds() == other.seeds()
     }
 }
 
