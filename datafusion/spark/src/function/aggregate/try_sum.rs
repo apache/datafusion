@@ -18,7 +18,7 @@
 use arrow::array::{ArrayRef, ArrowNumericType, AsArray, BooleanArray, PrimitiveArray};
 use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DataType, Decimal128Type, Field, FieldRef, Float64Type,
-    Int64Type, UInt64Type,
+    Int64Type,
 };
 use datafusion_common::{Result, ScalarValue, downcast_value, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -269,7 +269,7 @@ impl AggregateUDFImpl for SparkTrySum {
                 let new_precision = DECIMAL128_MAX_PRECISION.min(p + 10);
                 Decimal128(new_precision, *s)
             }
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
+            Int8 | Int16 | Int32 | Int64 => Int64,
             Float16 | Float32 | Float64 => Float64,
 
             other => return exec_err!("try_sum: unsupported type: {other:?}"),
@@ -287,7 +287,6 @@ impl AggregateUDFImpl for SparkTrySum {
 
         match acc_args.return_field.data_type() {
             DataType::Int64 => helper!(Int64Type, acc_args.return_field.data_type()),
-            DataType::UInt64 => helper!(UInt64Type, acc_args.return_field.data_type()),
             DataType::Float64 => helper!(Float64Type, acc_args.return_field.data_type()),
             DataType::Decimal128(_, _) => {
                 helper!(Decimal128Type, acc_args.return_field.data_type())
@@ -325,7 +324,7 @@ impl AggregateUDFImpl for SparkTrySum {
         let coerced = match dt {
             Null => Float64,
             Decimal128(p, s) => Decimal128(*p, *s),
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
+            Int8 | Int16 | Int32 | Int64 => Int64,
             Float16 | Float32 | Float64 => Float64,
             other => return exec_err!("try_sum: unsupported type: {other:?}"),
         };
