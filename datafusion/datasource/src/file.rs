@@ -25,8 +25,10 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
-use datafusion_common::{Result, not_impl_err};
+#[allow(deprecated)]
+use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
@@ -190,5 +192,36 @@ pub trait FileSource: Send + Sync {
         // Default: clone self without modification
         // ParquetSource will override this
         not_impl_err!("with_file_ordering_info not implemented for this FileSource")
+    }
+
+    /// Deprecated: Set optional schema adapter factory.
+    ///
+    /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
+    /// See `upgrading.md` for more details.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[allow(deprecated)]
+    fn with_schema_adapter_factory(
+        &self,
+        _factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Result<Arc<dyn FileSource>> {
+        not_impl_err!(
+            "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+        )
+    }
+
+    /// Deprecated: Returns the current schema adapter factory if set.
+    ///
+    /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
+    /// See `upgrading.md` for more details.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[allow(deprecated)]
+    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        None
     }
 }

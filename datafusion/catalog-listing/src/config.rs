@@ -21,6 +21,8 @@ use datafusion_catalog::Session;
 use datafusion_common::{config_err, internal_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_compression_type::FileCompressionType;
+#[allow(deprecated)]
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -294,5 +296,24 @@ impl ListingTableConfig {
             expr_adapter_factory: Some(expr_adapter_factory),
             ..self
         }
+    }
+
+    /// Deprecated: Set the [`SchemaAdapterFactory`] for the [`crate::ListingTable`]
+    ///
+    /// `SchemaAdapterFactory` has been removed. Use [`Self::with_expr_adapter_factory`]
+    /// and `PhysicalExprAdapterFactory` instead. See `upgrading.md` for more details.
+    ///
+    /// This method is a no-op and returns `self` unchanged.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use with_expr_adapter_factory and PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[allow(deprecated)]
+    pub fn with_schema_adapter_factory(
+        self,
+        _schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        // No-op - just return self unchanged
+        self
     }
 }

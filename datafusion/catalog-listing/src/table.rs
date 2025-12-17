@@ -29,6 +29,8 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
+#[allow(deprecated)]
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
@@ -284,6 +286,40 @@ impl ListingTable {
     /// Get the schema source
     pub fn schema_source(&self) -> SchemaSource {
         self.schema_source
+    }
+
+    /// Deprecated: Set the [`SchemaAdapterFactory`] for this [`ListingTable`]
+    ///
+    /// `SchemaAdapterFactory` has been removed. Use [`ListingTableConfig::with_expr_adapter_factory`]
+    /// and `PhysicalExprAdapterFactory` instead. See `upgrading.md` for more details.
+    ///
+    /// This method is a no-op and returns `self` unchanged.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use ListingTableConfig::with_expr_adapter_factory and PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[allow(deprecated)]
+    pub fn with_schema_adapter_factory(
+        self,
+        _schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    ) -> Self {
+        // No-op - just return self unchanged
+        self
+    }
+
+    /// Deprecated: Returns the [`SchemaAdapterFactory`] used by this [`ListingTable`].
+    ///
+    /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
+    /// See `upgrading.md` for more details.
+    ///
+    /// Always returns `None`.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[allow(deprecated)]
+    pub fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        None
     }
 
     /// Creates a file source for this table

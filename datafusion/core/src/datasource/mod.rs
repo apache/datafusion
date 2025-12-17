@@ -42,6 +42,7 @@ pub use datafusion_catalog::default_table_source;
 pub use datafusion_catalog::memory;
 pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
+pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::sink;
 pub use datafusion_datasource::source;
 pub use datafusion_datasource::table_schema;
@@ -64,8 +65,7 @@ mod tests {
         tree_node::{Transformed, TransformedResult, TreeNode},
     };
     use datafusion_datasource::{
-        PartitionedFile, file_scan_config::FileScanConfigBuilder,
-        source::DataSourceExec,
+        PartitionedFile, file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
     };
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_physical_expr::expressions::{Column, Literal};
