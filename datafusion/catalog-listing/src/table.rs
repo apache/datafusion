@@ -29,7 +29,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
-#[allow(deprecated)]
+#[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
@@ -298,7 +298,7 @@ impl ListingTable {
         since = "52.0.0",
         note = "SchemaAdapterFactory has been removed. Use ListingTableConfig::with_expr_adapter_factory and PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     pub fn with_schema_adapter_factory(
         self,
         _schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
@@ -317,7 +317,7 @@ impl ListingTable {
         since = "52.0.0",
         note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     pub fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }

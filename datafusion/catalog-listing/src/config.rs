@@ -21,7 +21,7 @@ use datafusion_catalog::Session;
 use datafusion_common::{config_err, internal_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_compression_type::FileCompressionType;
-#[allow(deprecated)]
+#[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use std::str::FromStr;
@@ -308,7 +308,7 @@ impl ListingTableConfig {
         since = "52.0.0",
         note = "SchemaAdapterFactory has been removed. Use with_expr_adapter_factory and PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     pub fn with_schema_adapter_factory(
         self,
         _schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,

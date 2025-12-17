@@ -25,7 +25,7 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
-#[allow(deprecated)]
+#[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, not_impl_err};
@@ -202,7 +202,7 @@ pub trait FileSource: Send + Sync {
         since = "52.0.0",
         note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn with_schema_adapter_factory(
         &self,
         _factory: Arc<dyn SchemaAdapterFactory>,
@@ -220,7 +220,7 @@ pub trait FileSource: Send + Sync {
         since = "52.0.0",
         note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
     )]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }
