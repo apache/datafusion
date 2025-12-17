@@ -698,7 +698,7 @@ fn date_bin_impl(
                     }
                     let array = array.as_primitive::<Time64MicrosecondType>();
                     let apply_stride_fn = move |x: i64| {
-                        let binned_nanos = stride_fn(stride, x, origin);
+                        let binned_nanos = stride_fn(stride, x * NANOS_PER_MICRO, origin);
                         let nanos = binned_nanos % (NANOSECONDS_IN_DAY);
                         nanos / NANOS_PER_MICRO
                     };
