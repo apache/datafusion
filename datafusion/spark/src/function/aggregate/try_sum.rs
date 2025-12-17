@@ -130,20 +130,16 @@ fn update_batch_internal<T: ArrowNumericType>(
         return Ok(());
     }
 
-    let array = values[0].as_primitive::<T>();
+    let array: &PrimitiveArray<T> = values[0].as_primitive::<T>();
 
-    // Specialize based on the type
-    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Int64Type>() {
-        update_int64(acc, array)
-    } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Float64Type>() {
-        update_float64(acc, array)
-    } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Decimal128Type>() {
-        update_decimal128(acc, array)
-    } else {
-        exec_err!(
+    match acc.data_type {
+        DataType::Int64 => update_int64(acc, array),
+        DataType::Float64 => update_float64(acc, array),
+        DataType::Decimal128(_, _) => update_decimal128(acc, array),
+        _ => exec_err!(
             "try_sum: unsupported type in update_batch: {:?}",
             acc.data_type
-        )
+        ),
     }
 }
 
