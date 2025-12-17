@@ -20,17 +20,17 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::std_types::{RHashMap, RResult, RStr, RString, RVec};
 use abi_stable::StableAbi;
-use arrow_schema::ffi::FFI_ArrowSchema;
+use abi_stable::std_types::{RHashMap, RResult, RStr, RString, RVec};
 use arrow_schema::SchemaRef;
+use arrow_schema::ffi::FFI_ArrowSchema;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, DataFusionError};
+use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{
     AggregateUDF, AggregateUDFImpl, Expr, LogicalPlan, ScalarUDF, ScalarUDFImpl,
@@ -39,9 +39,9 @@ use datafusion_expr::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::Session;
 use prost::Message;
@@ -142,8 +142,10 @@ impl FFI_SessionRef {
     }
 
     unsafe fn runtime(&self) -> &Option<Handle> {
-        let private_data = self.private_data as *const SessionPrivateData;
-        &(*private_data).runtime
+        unsafe {
+            let private_data = self.private_data as *const SessionPrivateData;
+            &(*private_data).runtime
+        }
     }
 }
 
@@ -161,22 +163,26 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
     session: &FFI_SessionRef,
     logical_plan_serialized: RVec<u8>,
 ) -> FfiFuture<FFIResult<FFI_ExecutionPlan>> {
-    let runtime = session.runtime().clone();
-    let session = session.clone();
-    async move {
-        let session = session.inner();
-        let task_ctx = session.task_ctx();
+    unsafe {
+        let runtime = session.runtime().clone();
+        let session = session.clone();
+        async move {
+            let session = session.inner();
+            let task_ctx = session.task_ctx();
 
-        let logical_plan = rresult_return!(logical_plan_from_bytes(
-            logical_plan_serialized.as_slice(),
-            task_ctx.as_ref(),
-        ));
+            let logical_plan = rresult_return!(logical_plan_from_bytes(
+                logical_plan_serialized.as_slice(),
+                task_ctx.as_ref(),
+            ));
 
-        let physical_plan = session.create_physical_plan(&logical_plan).await;
+            let physical_plan = session.create_physical_plan(&logical_plan).await;
 
-        rresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, task_ctx, runtime)))
+            rresult!(
+                physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, task_ctx, runtime))
+            )
+        }
+        .into_ffi()
     }
-    .into_ffi()
 }
 
 unsafe extern "C" fn create_physical_expr_fn_wrapper(
@@ -267,36 +273,41 @@ unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskCo
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
-    let private_data = Box::from_raw(provider.private_data as *mut SessionPrivateData);
-    drop(private_data);
+    unsafe {
+        let private_data =
+            Box::from_raw(provider.private_data as *mut SessionPrivateData);
+        drop(private_data);
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionRef {
-    let old_private_data = provider.private_data as *const SessionPrivateData;
+    unsafe {
+        let old_private_data = provider.private_data as *const SessionPrivateData;
 
-    let private_data = Box::into_raw(Box::new(SessionPrivateData {
-        session: (*old_private_data).session,
-        runtime: (*old_private_data).runtime.clone(),
-    })) as *mut c_void;
+        let private_data = Box::into_raw(Box::new(SessionPrivateData {
+            session: (*old_private_data).session,
+            runtime: (*old_private_data).runtime.clone(),
+        })) as *mut c_void;
 
-    FFI_SessionRef {
-        session_id: session_id_fn_wrapper,
-        config: config_fn_wrapper,
-        create_physical_plan: create_physical_plan_fn_wrapper,
-        create_physical_expr: create_physical_expr_fn_wrapper,
-        scalar_functions: scalar_functions_fn_wrapper,
-        aggregate_functions: aggregate_functions_fn_wrapper,
-        window_functions: window_functions_fn_wrapper,
-        table_options: table_options_fn_wrapper,
-        default_table_options: default_table_options_fn_wrapper,
-        task_ctx: task_ctx_fn_wrapper,
-        logical_codec: provider.logical_codec.clone(),
+        FFI_SessionRef {
+            session_id: session_id_fn_wrapper,
+            config: config_fn_wrapper,
+            create_physical_plan: create_physical_plan_fn_wrapper,
+            create_physical_expr: create_physical_expr_fn_wrapper,
+            scalar_functions: scalar_functions_fn_wrapper,
+            aggregate_functions: aggregate_functions_fn_wrapper,
+            window_functions: window_functions_fn_wrapper,
+            table_options: table_options_fn_wrapper,
+            default_table_options: default_table_options_fn_wrapper,
+            task_ctx: task_ctx_fn_wrapper,
+            logical_codec: provider.logical_codec.clone(),
 
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-        version: super::version,
-        private_data,
-        library_marker_id: crate::get_library_marker_id,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data,
+            library_marker_id: crate::get_library_marker_id,
+        }
     }
 }
 
@@ -532,7 +543,9 @@ impl Session for ForeignSession {
     }
 
     fn table_options_mut(&mut self) -> &mut TableOptions {
-        log::warn!("Mutating table options is not supported via FFI. Changes will not have an effect.");
+        log::warn!(
+            "Mutating table options is not supported via FFI. Changes will not have an effect."
+        );
         &mut self.table_options
     }
 
@@ -577,7 +590,10 @@ mod tests {
 
         let logical_plan = LogicalPlan::default();
         let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
-        assert_eq!(format!("{physical_plan:?}"), "EmptyExec { schema: Schema { fields: [], metadata: {} }, partitions: 1, cache: PlanProperties { eq_properties: EquivalenceProperties { eq_group: EquivalenceGroup { map: {}, classes: [] }, oeq_class: OrderingEquivalenceClass { orderings: [] }, oeq_cache: OrderingEquivalenceCache { normal_cls: OrderingEquivalenceClass { orderings: [] }, leading_map: {} }, constraints: Constraints { inner: [] }, schema: Schema { fields: [], metadata: {} } }, partitioning: UnknownPartitioning(1), emission_type: Incremental, boundedness: Bounded, evaluation_type: Lazy, scheduling_type: Cooperative, output_ordering: None } }");
+        assert_eq!(
+            format!("{physical_plan:?}"),
+            "EmptyExec { schema: Schema { fields: [], metadata: {} }, partitions: 1, cache: PlanProperties { eq_properties: EquivalenceProperties { eq_group: EquivalenceGroup { map: {}, classes: [] }, oeq_class: OrderingEquivalenceClass { orderings: [] }, oeq_cache: OrderingEquivalenceCache { normal_cls: OrderingEquivalenceClass { orderings: [] }, leading_map: {} }, constraints: Constraints { inner: [] }, schema: Schema { fields: [], metadata: {} } }, partitioning: UnknownPartitioning(1), emission_type: Incremental, boundedness: Bounded, evaluation_type: Lazy, scheduling_type: Cooperative, output_ordering: None } }"
+        );
 
         assert_eq!(
             format!("{:?}", foreign_session.default_table_options()),
