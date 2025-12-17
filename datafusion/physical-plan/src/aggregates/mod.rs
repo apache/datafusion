@@ -3467,6 +3467,7 @@ mod tests {
             ],
             vec![],
             vec![vec![false, false]],
+            false,
         );
 
         // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
@@ -3649,11 +3650,15 @@ mod tests {
         ])?;
 
         let aggr = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
+            AggregateMode::Single,
             PhysicalGroupBy::new(
-                vec![(col("b", schema.as_ref())?, "b".to_string())],
+                vec![
+                    (col("b", schema.as_ref())?, "b".to_string()),
+                    (col("c", schema.as_ref())?, "c".to_string()),
+                ],
                 vec![],
-                vec![vec![false]],
+                vec![vec![false, false]],
+                false,
             ),
             vec![Arc::new(
                 AggregateExprBuilder::new(sum_udaf(), vec![col("c", schema.as_ref())?])
@@ -3666,19 +3671,19 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        let task_ctx = new_spill_ctx(1, 80);
+        let task_ctx = new_spill_ctx(1, 600);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
         assert_spill_count_metric(true, aggr);
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-            +---+-------------+
-            | b | SUM(c)[sum] |
-            +---+-------------+
-            | 2 | 1           |
-            | 1 | 1           |
-            | 0 | 1           |
-            +---+-------------+
+            +---+---+--------+
+            | b | c | SUM(c) |
+            +---+---+--------+
+            | 2 | 1 | 1      |
+            | 1 | 1 | 1      |
+            | 0 | 1 | 1      |
+            +---+---+--------+
         ");
         }
         Ok(())
