@@ -440,7 +440,9 @@ impl ScalarUDFImpl for GetMetadataUdf {
         let key = match &args.args[1] {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(k))) => k.clone(),
             _ => {
-                return exec_err!("get_metadata second argument must be a string literal");
+                return exec_err!(
+                    "get_metadata second argument must be a string literal"
+                );
             }
         };
 
