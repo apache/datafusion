@@ -131,13 +131,26 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             equal_to_results.iter_mut(),
         );
 
-        for (&lhs_row, &rhs_row, equal_to_result) in iter {
-            if !*equal_to_result {
-                continue; // short circuit on first column mismatch
+        // No buffers, means all views are inlined so just compare views directly
+        if array.data_buffers().is_empty() {
+            for (&lhs_row, &rhs_row, equal_to_result) in iter {
+                if !*equal_to_result {
+                    continue; // short circuit on first column mismatch
+                }
+                // SAFETY: the row indexes passed to vectorized_equal are in bounds
+                let exist_view = unsafe { *self.views.get_unchecked(lhs_row) };
+                let input_view = unsafe { *array.views().get_unchecked(rhs_row) };
+                *equal_to_result = exist_view == input_view;
             }
+        } else {
+            for (&lhs_row, &rhs_row, equal_to_result) in iter {
+                if !*equal_to_result {
+                    continue; // short circuit on first column mismatch
+                }
 
-            *equal_to_result =
-                self.do_equal_to_inner_values_only(lhs_row, array, rhs_row);
+                *equal_to_result =
+                    self.do_equal_to_inner_values_only(lhs_row, array, rhs_row);
+            }
         }
     }
 
@@ -154,6 +167,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             rhs_rows.iter(),
             equal_to_results.iter_mut(),
         );
+
+        // TODO also add the no buffers case for optimization
 
         for (&lhs_row, &rhs_row, equal_to_result) in iter {
             if !*equal_to_result {
