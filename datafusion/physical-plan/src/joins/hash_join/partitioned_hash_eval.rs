@@ -263,8 +263,7 @@ impl Hash for HashTableLookupExpr {
 
 impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.hash_expr, &other.hash_expr)
-            && self.description == other.description
+        self.hash_expr.dyn_eq(&other.hash_expr) && self.description == other.description
     }
 }
 
