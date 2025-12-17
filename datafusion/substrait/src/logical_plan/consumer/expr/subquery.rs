@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{substrait_err, DFSchema, Spans};
+use datafusion::common::{DFSchema, Spans, substrait_err};
 use datafusion::logical_expr::expr::{Exists, InSubquery};
 use datafusion::logical_expr::{Expr, Subquery};
 use std::sync::Arc;
 use substrait::proto::expression as substrait_expression;
-use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 use substrait::proto::expression::subquery::SubqueryType;
+use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 
 pub async fn from_subquery(
     consumer: &impl SubstraitConsumer,
@@ -33,7 +33,9 @@ pub async fn from_subquery(
         Some(subquery_type) => match subquery_type {
             SubqueryType::InPredicate(in_predicate) => {
                 if in_predicate.needles.len() != 1 {
-                    substrait_err!("InPredicate Subquery type must have exactly one Needle expression")
+                    substrait_err!(
+                        "InPredicate Subquery type must have exactly one Needle expression"
+                    )
                 } else {
                     let needle_expr = &in_predicate.needles[0];
                     let haystack_expr = &in_predicate.haystack;

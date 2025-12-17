@@ -17,6 +17,7 @@
 
 use crate::cache::CacheAccessor;
 use crate::cache::cache_unit::DefaultFilesMetadataCache;
+use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 use object_store::ObjectMeta;
 use object_store::path::Path;
@@ -26,7 +27,9 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::list_files_cache::DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT;
+pub use super::list_files_cache::{
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
+};
 
 /// A cache for [`Statistics`].
 ///
@@ -35,8 +38,27 @@ use super::list_files_cache::DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT;
 /// session lifetime.
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
-pub type FileStatisticsCache =
-    Arc<dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>>;
+pub trait FileStatisticsCache:
+    CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>
+{
+    /// Retrieves the information about the entries currently cached.
+    fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry>;
+}
+
+/// Represents information about a cached statistics entry.
+/// This is used to expose the statistics cache contents to outside modules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStatisticsCacheEntry {
+    pub object_meta: ObjectMeta,
+    /// Number of table rows.
+    pub num_rows: Precision<usize>,
+    /// Number of table columns.
+    pub num_columns: usize,
+    /// Total table size, in bytes.
+    pub table_size_bytes: Precision<usize>,
+    /// Size of the statistics entry, in bytes.
+    pub statistics_size_bytes: usize,
+}
 
 /// Cache for storing the [`ObjectMeta`]s that result from listing a path
 ///
@@ -56,6 +78,9 @@ pub trait ListFilesCache:
 
     /// Updates the cache with a new memory limit in bytes.
     fn update_cache_limit(&self, limit: usize);
+
+    /// Updates the cache with a new TTL (time-to-live).
+    fn update_cache_ttl(&self, ttl: Option<Duration>);
 }
 
 /// Generic file-embedded metadata used with [`FileMetadataCache`].
@@ -116,7 +141,7 @@ pub struct FileMetadataCacheEntry {
     pub extra: HashMap<String, String>,
 }
 
-impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
+impl Debug for dyn FileStatisticsCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
     }
@@ -143,7 +168,7 @@ impl Debug for dyn FileMetadataCache {
 /// See [`CacheManagerConfig`] for configuration options.
 #[derive(Debug)]
 pub struct CacheManager {
-    file_statistic_cache: Option<FileStatisticsCache>,
+    file_statistic_cache: Option<Arc<dyn FileStatisticsCache>>,
     list_files_cache: Option<Arc<dyn ListFilesCache>>,
     file_metadata_cache: Arc<dyn FileMetadataCache>,
 }
@@ -153,7 +178,15 @@ impl CacheManager {
         let file_statistic_cache =
             config.table_files_statistics_cache.as_ref().map(Arc::clone);
 
-        let list_files_cache = config.list_files_cache.as_ref().map(Arc::clone);
+        let list_files_cache = config
+            .list_files_cache
+            .as_ref()
+            .inspect(|c| {
+                // the cache memory limit or ttl might have changed, ensure they are updated
+                c.update_cache_limit(config.list_files_cache_limit);
+                c.update_cache_ttl(config.list_files_cache_ttl);
+            })
+            .map(Arc::clone);
 
         let file_metadata_cache = config
             .file_metadata_cache
@@ -174,7 +207,7 @@ impl CacheManager {
     }
 
     /// Get the cache of listing files statistics.
-    pub fn get_file_statistic_cache(&self) -> Option<FileStatisticsCache> {
+    pub fn get_file_statistic_cache(&self) -> Option<Arc<dyn FileStatisticsCache>> {
         self.file_statistic_cache.clone()
     }
 
@@ -213,7 +246,7 @@ pub struct CacheManagerConfig {
     /// Enable caching of file statistics when listing files.
     /// Enabling the cache avoids repeatedly reading file statistics in a DataFusion session.
     /// Default is disabled. Currently only Parquet files are supported.
-    pub table_files_statistics_cache: Option<FileStatisticsCache>,
+    pub table_files_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
     /// Enable caching of file metadata when listing files.
     /// Enabling the cache avoids repeat list and object metadata fetch operations, which may be
     /// expensive in certain situations (e.g. remote object storage), for objects under paths that
@@ -242,7 +275,7 @@ impl Default for CacheManagerConfig {
             table_files_statistics_cache: Default::default(),
             list_files_cache: Default::default(),
             list_files_cache_limit: DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
-            list_files_cache_ttl: None,
+            list_files_cache_ttl: DEFAULT_LIST_FILES_CACHE_TTL,
             file_metadata_cache: Default::default(),
             metadata_cache_limit: DEFAULT_METADATA_CACHE_LIMIT,
         }
@@ -255,7 +288,7 @@ impl CacheManagerConfig {
     /// Default is `None` (disabled).
     pub fn with_files_statistics_cache(
         mut self,
-        cache: Option<FileStatisticsCache>,
+        cache: Option<Arc<dyn FileStatisticsCache>>,
     ) -> Self {
         self.table_files_statistics_cache = cache;
         self
@@ -283,8 +316,8 @@ impl CacheManagerConfig {
     /// Sets the TTL (time-to-live) for entries in the list files cache.
     ///
     /// Default: None (infinite).
-    pub fn with_list_files_cache_ttl(mut self, ttl: Duration) -> Self {
-        self.list_files_cache_ttl = Some(ttl);
+    pub fn with_list_files_cache_ttl(mut self, ttl: Option<Duration>) -> Self {
+        self.list_files_cache_ttl = ttl;
         self
     }
 

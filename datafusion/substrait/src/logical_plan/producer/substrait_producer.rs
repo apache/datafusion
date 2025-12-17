@@ -25,14 +25,14 @@ use crate::logical_plan::producer::{
     from_union, from_values, from_window, from_window_function, to_substrait_rel,
     to_substrait_rex,
 };
-use datafusion::common::{substrait_err, Column, DFSchemaRef, ScalarValue};
-use datafusion::execution::registry::SerializerRegistry;
+use datafusion::common::{Column, DFSchemaRef, ScalarValue, substrait_err};
 use datafusion::execution::SessionState;
+use datafusion::execution::registry::SerializerRegistry;
 use datafusion::logical_expr::expr::{Alias, InList, InSubquery, WindowFunction};
 use datafusion::logical_expr::{
-    expr, Aggregate, Between, BinaryExpr, Case, Cast, Distinct, EmptyRelation, Expr,
-    Extension, Filter, Join, Like, Limit, LogicalPlan, Projection, RecursiveQuery,
-    Repartition, Sort, SubqueryAlias, TableScan, TryCast, Union, Values, Window,
+    Aggregate, Between, BinaryExpr, Case, Cast, Distinct, EmptyRelation, Expr, Extension,
+    Filter, Join, Like, Limit, LogicalPlan, Projection, RecursiveQuery, Repartition,
+    Sort, SubqueryAlias, TableScan, TryCast, Union, Values, Window, expr,
 };
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::aggregate_rel::Measure;
@@ -232,7 +232,9 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         &mut self,
         _plan: &Extension,
     ) -> datafusion::common::Result<Box<Rel>> {
-        substrait_err!("Specify handling for LogicalPlan::Extension by implementing the SubstraitProducer trait")
+        substrait_err!(
+            "Specify handling for LogicalPlan::Extension by implementing the SubstraitProducer trait"
+        )
     }
 
     // Expression Methods

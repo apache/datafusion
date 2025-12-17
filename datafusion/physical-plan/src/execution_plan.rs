@@ -22,16 +22,17 @@ use crate::filter_pushdown::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, Distribution, Partitioning, PhysicalExpr,
+    Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 use std::any::Any;
@@ -48,13 +49,15 @@ use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, exec_err, Constraints,
-    DataFusionError, Result,
+    Constraints, DataFusionError, Result, assert_eq_or_internal_err,
+    assert_or_internal_err, exec_err,
 };
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
+};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -682,6 +685,29 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
     }
+
+    /// Try to push down sort ordering requirements to this node.
+    ///
+    /// This method is called during sort pushdown optimization to determine if this
+    /// node can optimize for a requested sort ordering. Implementations should:
+    ///
+    /// - Return [`SortOrderPushdownResult::Exact`] if the node can guarantee the exact
+    ///   ordering (allowing the Sort operator to be removed)
+    /// - Return [`SortOrderPushdownResult::Inexact`] if the node can optimize for the
+    ///   ordering but cannot guarantee perfect sorting (Sort operator is kept)
+    /// - Return [`SortOrderPushdownResult::Unsupported`] if the node cannot optimize
+    ///   for the ordering
+    ///
+    /// For transparent nodes (that preserve ordering), implement this to delegate to
+    /// children and wrap the result with a new instance of this node.
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
 }
 
 /// [`ExecutionPlan`] Invariant Level
@@ -921,7 +947,7 @@ pub(crate) fn boundedness_from_children<'a>(
             } => {
                 return Boundedness::Unbounded {
                     requires_infinite_memory: true,
-                }
+                };
             }
             Boundedness::Unbounded {
                 requires_infinite_memory: false,

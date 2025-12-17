@@ -31,7 +31,7 @@ mod view_test;
 
 // backwards compatibility
 pub use self::default_table_source::{
-    provider_as_source, source_as_provider, DefaultTableSource,
+    DefaultTableSource, provider_as_source, source_as_provider,
 };
 pub use self::memory::MemTable;
 pub use self::view::ViewTable;
@@ -53,22 +53,20 @@ pub use datafusion_physical_expr::create_ordering;
 mod tests {
 
     use crate::prelude::SessionContext;
-    use ::object_store::{path::Path, ObjectMeta};
+    use ::object_store::{ObjectMeta, path::Path};
     use arrow::{
         array::Int32Array,
-        datatypes::{DataType, Field, FieldRef, Schema, SchemaRef},
+        datatypes::{DataType, Field, Schema, SchemaRef},
         record_batch::RecordBatch,
     };
     use datafusion_common::{
-        record_batch,
+        Result, ScalarValue, record_batch,
         test_util::batches_to_sort_string,
         tree_node::{Transformed, TransformedResult, TreeNode},
-        Result, ScalarValue,
     };
     use datafusion_datasource::{
-        file_scan_config::FileScanConfigBuilder,
+        PartitionedFile, file_scan_config::FileScanConfigBuilder,
         schema_adapter::DefaultSchemaAdapterFactory, source::DataSourceExec,
-        PartitionedFile,
     };
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_physical_expr::expressions::{Column, Literal};
@@ -209,11 +207,10 @@ mod tests {
     impl PhysicalExprAdapterFactory for TestPhysicalExprAdapterFactory {
         fn create(
             &self,
-            logical_file_schema: SchemaRef,
+            _logical_file_schema: SchemaRef,
             physical_file_schema: SchemaRef,
         ) -> Arc<dyn PhysicalExprAdapter> {
             Arc::new(TestPhysicalExprAdapter {
-                logical_file_schema,
                 physical_file_schema,
             })
         }
@@ -221,7 +218,6 @@ mod tests {
 
     #[derive(Debug)]
     struct TestPhysicalExprAdapter {
-        logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     }
 
@@ -242,16 +238,6 @@ mod tests {
                 Ok(Transformed::no(e))
             })
             .data()
-        }
-
-        fn with_partition_values(
-            &self,
-            _partition_values: Vec<(FieldRef, ScalarValue)>,
-        ) -> Arc<dyn PhysicalExprAdapter> {
-            Arc::new(TestPhysicalExprAdapter {
-                logical_file_schema: self.logical_file_schema.clone(),
-                physical_file_schema: self.physical_file_schema.clone(),
-            })
         }
     }
 }

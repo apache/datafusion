@@ -22,7 +22,7 @@ keywords = ["arrow", "query", "sql"]
 include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml", "LICENSE.txt", "NOTICE.txt"]
 readme = "../../README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -157,7 +157,7 @@ sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.18", features = ["v4", "js"] }
+uuid = { version = "1.19", features = ["v4", "js"] }
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -270,3 +270,8 @@ name = "dataframe"
 [[bench]]
 harness = false
 name = "spm"
+
+[[bench]]
+harness = false
+name = "preserve_file_partitioning"
+required-features = ["parquet"]

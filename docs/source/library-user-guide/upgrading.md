@@ -165,6 +165,116 @@ Statistics are now accessed through `FileScanConfig` instead of `FileSource`:
 
 Note that `FileScanConfig::statistics()` automatically marks statistics as inexact when filters are present, ensuring correctness when filters are pushed down.
 
+### Partition column handling moved out of `PhysicalExprAdapter`
+
+Partition column replacement is now a separate preprocessing step performed before expression rewriting via `PhysicalExprAdapter`. This change provides better separation of concerns and makes the adapter more focused on schema differences rather than partition value substitution.
+
+**Who is affected:**
+
+- Users who have custom implementations of `PhysicalExprAdapterFactory` that handle partition columns
+- Users who directly use the `FilePruner` API
+
+**Breaking changes:**
+
+1. `FilePruner::try_new()` signature changed: the `partition_fields` parameter has been removed since partition column handling is now done separately
+2. Partition column replacement must now be done via `replace_columns_with_literals()` before expressions are passed to the adapter
+
+**Migration guide:**
+
+If you have code that creates a `FilePruner` with partition fields:
+
+**Before:**
+
+```rust,ignore
+use datafusion_pruning::FilePruner;
+
+let pruner = FilePruner::try_new(
+    predicate,
+    file_schema,
+    partition_fields,  // This parameter is removed
+    file_stats,
+)?;
+```
+
+**After:**
+
+```rust,ignore
+use datafusion_pruning::FilePruner;
+
+// Partition fields are no longer needed
+let pruner = FilePruner::try_new(
+    predicate,
+    file_schema,
+    file_stats,
+)?;
+```
+
+If you have custom code that relies on `PhysicalExprAdapter` to handle partition columns, you must now call `replace_columns_with_literals()` separately:
+
+**Before:**
+
+```rust,ignore
+// Adapter handled partition column replacement internally
+let adapted_expr = adapter.rewrite(expr)?;
+```
+
+**After:**
+
+```rust,ignore
+use datafusion_physical_expr_adapter::replace_columns_with_literals;
+
+// Replace partition columns first
+let expr_with_literals = replace_columns_with_literals(expr, &partition_values)?;
+// Then apply the adapter
+let adapted_expr = adapter.rewrite(expr_with_literals)?;
+```
+
+### `build_row_filter` signature simplified
+
+The `build_row_filter` function in `datafusion-datasource-parquet` has been simplified to take a single schema parameter instead of two.
+The expectation is now that the filter has been adapted to the physical file schema (the arrow representation of the parquet file's schema) before being passed to this function
+using a `PhysicalExprAdapter` for example.
+
+**Who is affected:**
+
+- Users who call `build_row_filter` directly
+
+**Breaking changes:**
+
+The function signature changed from:
+
+```rust,ignore
+pub fn build_row_filter(
+    expr: &Arc<dyn PhysicalExpr>,
+    physical_file_schema: &SchemaRef,
+    predicate_file_schema: &SchemaRef,  // removed
+    metadata: &ParquetMetaData,
+    reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
+) -> Result<Option<RowFilter>>
+```
+
+To:
+
+```rust,ignore
+pub fn build_row_filter(
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    metadata: &ParquetMetaData,
+    reorder_predicates: bool,
+    file_metrics: &ParquetFileMetrics,
+) -> Result<Option<RowFilter>>
+```
+
+**Migration guide:**
+
+Remove the duplicate schema parameter from your call:
+
+```diff
+- build_row_filter(&predicate, &file_schema, &file_schema, metadata, reorder, metrics)
++ build_row_filter(&predicate, &file_schema, metadata, reorder, metrics)
+```
+
 ### Planner now requires explicit opt-in for WITHIN GROUP syntax
 
 The SQL planner now enforces the aggregate UDF contract more strictly: the
@@ -379,102 +489,6 @@ Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaad
 If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
 
 See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
-
-### `PhysicalOptimizerRule::optimize` deprecated in favor of `optimize_plan`
-
-The `PhysicalOptimizerRule` trait has been updated to provide optimizer rules with access to broader session context. A new method `optimize_plan` has been added that accepts an `OptimizerContext` parameter, and the existing `optimize` method has been deprecated.
-
-**Who is affected:**
-
-- Users who have implemented custom `PhysicalOptimizerRule` implementations
-
-**Breaking changes:**
-
-1. **New `optimize_plan` method**: This is the preferred method for implementing optimization rules. It provides access to the full `SessionConfig` through `OptimizerContext`, rather than just `ConfigOptions`.
-
-2. **`optimize` method deprecated**: The old `optimize` method that takes `&ConfigOptions` is now deprecated and will be removed in DataFusion 58.0.0.
-
-**Migration guide:**
-
-If you have a custom `PhysicalOptimizerRule` implementation, update it to implement `optimize_plan` instead of `optimize`:
-
-**Before:**
-
-```rust
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
-use datafusion_physical_plan::ExecutionPlan;
-use std::sync::Arc;
-
-#[derive(Debug)]
-struct MyOptimizerRule;
-
-#[allow(deprecated)]
-impl PhysicalOptimizerRule for MyOptimizerRule {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Use config.optimizer, config.execution, etc.
-        // ... optimization logic ...
-        Ok(plan)
-    }
-
-    fn name(&self) -> &str {
-        "my_optimizer_rule"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-```
-
-**After:**
-
-```rust
-use datafusion::physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
-use datafusion_common::Result;
-use datafusion_physical_plan::ExecutionPlan;
-use std::sync::Arc;
-
-#[derive(Debug)]
-struct MyOptimizerRule;
-
-impl PhysicalOptimizerRule for MyOptimizerRule {
-    fn optimize_plan(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Access ConfigOptions through session_config
-        let _config = context.session_config().options();
-        // Or access extensions through session_config
-        let _extensions = context.session_config().extensions();
-        // ... optimization logic ...
-        Ok(plan)
-    }
-
-    fn name(&self) -> &str {
-        "my_optimizer_rule"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
-}
-```
-
-**What is `OptimizerContext`?**
-
-`OptimizerContext` is a new struct that provides context during physical plan optimization, similar to how `TaskContext` provides context during execution. It wraps `SessionConfig`, giving optimizer rules access to:
-
-- Configuration options via `context.session_config().options()`
-- Session extensions via `context.session_config().extensions()`
-
-This enables optimizer rules to access custom extensions registered with the session, which was not possible with the old `&ConfigOptions` parameter.
 
 ## DataFusion `51.0.0`
 

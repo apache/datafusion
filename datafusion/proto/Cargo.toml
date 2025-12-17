@@ -21,7 +21,7 @@ description = "Protobuf serialization of DataFusion logical plan expressions"
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -73,6 +73,7 @@ serde = { version = "1.0", optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = [
     "sql",
     "datetime_expressions",

@@ -20,12 +20,12 @@
 use std::sync::Arc;
 
 use arrow::array::{record_batch, RecordBatch};
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion::assert_batches_eq;
 use datafusion::common::not_impl_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{Result, ScalarValue};
+use datafusion::common::Result;
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
@@ -208,15 +208,5 @@ impl PhysicalExprAdapter for CustomCastsPhysicalExprAdapter {
             Ok(Transformed::no(expr))
         })
         .data()
-    }
-
-    fn with_partition_values(
-        &self,
-        partition_values: Vec<(FieldRef, ScalarValue)>,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        Arc::new(Self {
-            inner: self.inner.with_partition_values(partition_values),
-            ..self.clone()
-        })
     }
 }

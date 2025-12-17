@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::TableProvider;
 use datafusion::common::{
-    not_impl_err, substrait_err, DFSchema, ScalarValue, TableReference,
+    DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
@@ -39,9 +39,9 @@ use substrait::proto::expression::{
     SingularOrList, SwitchExpression, WindowFunction,
 };
 use substrait::proto::{
-    r#type, AggregateRel, ConsistentPartitionWindowRel, CrossRel, DynamicParameter,
-    ExchangeRel, Expression, ExtensionLeafRel, ExtensionMultiRel, ExtensionSingleRel,
-    FetchRel, FilterRel, JoinRel, ProjectRel, ReadRel, Rel, SetRel, SortRel,
+    AggregateRel, ConsistentPartitionWindowRel, CrossRel, DynamicParameter, ExchangeRel,
+    Expression, ExtensionLeafRel, ExtensionMultiRel, ExtensionSingleRel, FetchRel,
+    FilterRel, JoinRel, ProjectRel, ReadRel, Rel, SetRel, SortRel, r#type,
 };
 
 #[async_trait]
@@ -492,8 +492,8 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
             .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
         let Some(input_rel) = &rel.input else {
             return substrait_err!(
-                    "ExtensionSingleRel missing input rel, try using ExtensionLeafRel instead"
-                );
+                "ExtensionSingleRel missing input rel, try using ExtensionLeafRel instead"
+            );
         };
         let input_plan = self.consume_rel(input_rel).await?;
         let plan = plan.with_exprs_and_inputs(plan.expressions(), vec![input_plan])?;

@@ -18,7 +18,7 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
-use std::task::{ready, Poll};
+use std::task::{Poll, ready};
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{
@@ -32,8 +32,8 @@ use crate::{
 };
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray,
-    Int64Array, LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray,
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
+    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray, new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -43,13 +43,13 @@ use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, Constraints, HashMap, HashSet, Result,
-    UnnestOptions,
+    Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
+    internal_err,
 };
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::PhysicalExpr;
 use futures::{Stream, StreamExt};
 use log::trace;
 

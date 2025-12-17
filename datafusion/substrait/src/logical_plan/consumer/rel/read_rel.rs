@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::recursive::{
-    decode_recursive_scan_detail, RECURSIVE_SCAN_TYPE_URL,
+    RECURSIVE_SCAN_TYPE_URL, decode_recursive_scan_detail,
 };
 use datafusion::catalog::cte_worktable::CteWorkTable;
 use datafusion::common::{
-    not_impl_err, plan_err, substrait_datafusion_err, substrait_err, DFSchema,
-    DFSchemaRef, TableReference,
+    DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
+    substrait_datafusion_err, substrait_err,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::utils::split_conjunction_owned;
@@ -34,12 +34,12 @@ use datafusion::logical_expr::{
 };
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
-use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::read_rel::ReadType;
+use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{Expression, ReadRel};
 use url::Url;
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
@@ -194,10 +194,10 @@ pub async fn from_read_rel(
                     // For expressions, validate against top-level schema fields, not nested names
                     if row_exprs.len() != substrait_schema.fields().len() {
                         return substrait_err!(
-                                "Field count mismatch: expected {} fields but found {} in virtual table row",
-                                substrait_schema.fields().len(),
-                                row_exprs.len()
-                            );
+                            "Field count mismatch: expected {} fields but found {} in virtual table row",
+                            substrait_schema.fields().len(),
+                            row_exprs.len()
+                        );
                     }
                     exprs.push(row_exprs);
                 }
@@ -274,7 +274,7 @@ fn convert_literal_rows(
     vt: &substrait::proto::read_rel::VirtualTable,
     named_struct: &substrait::proto::NamedStruct,
 ) -> datafusion::common::Result<Vec<Vec<Expr>>> {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     vt.values
         .iter()
         .map(|row| {
