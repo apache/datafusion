@@ -356,12 +356,8 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new()?;
         let path = format!("{}/empty_sql.json", tmp_dir.path().to_string_lossy());
         let df = ctx.sql("SELECT CAST(1 AS BIGINT) AS id LIMIT 0").await?;
-        df.write_json(
-            &path,
-            crate::dataframe::DataFrameWriteOptions::new(),
-            None,
-        )
-        .await?;
+        df.write_json(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
         // Expected the file to exist
         assert!(std::path::Path::new(&path).exists());
         Ok(())
@@ -385,12 +381,8 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new()?;
         let path = format!("{}/empty_batch.json", tmp_dir.path().to_string_lossy());
         let df = ctx.read_batch(empty_batch.clone())?;
-        df.write_json(
-            &path,
-            crate::dataframe::DataFrameWriteOptions::new(),
-            None,
-        )
-        .await?;
+        df.write_json(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
         // Expected the file to exist
         assert!(std::path::Path::new(&path).exists());
         Ok(())

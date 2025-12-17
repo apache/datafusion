@@ -1377,9 +1377,7 @@ mod tests {
             .await?;
         // Expected the file to exist
         assert!(std::path::Path::new(&path).exists());
-        let read_df = ctx
-            .read_parquet(&path, ParquetReadOptions::new())
-            .await?;
+        let read_df = ctx.read_parquet(&path, ParquetReadOptions::new()).await?;
         let stream = read_df.execute_stream().await?;
         assert_eq!(stream.schema().fields().len(), 1);
         assert_eq!(stream.schema().field(0).name(), "id");
