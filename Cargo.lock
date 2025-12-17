@@ -2070,6 +2070,9 @@ dependencies = [
 [[package]]
 name = "datafusion-doc"
 version = "51.0.0"
+dependencies = [
+ "inventory",
+]
 
 [[package]]
 name = "datafusion-examples"
@@ -2119,7 +2122,9 @@ dependencies = [
  "chrono",
  "dashmap",
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-expr",
+ "datafusion-macros",
  "datafusion-physical-expr-common",
  "futures",
  "insta",
@@ -2334,6 +2339,7 @@ name = "datafusion-macros"
 version = "51.0.0"
 dependencies = [
  "datafusion-doc",
+ "proc-macro2",
  "quote",
  "syn 2.0.114",
 ]
@@ -2413,7 +2419,9 @@ dependencies = [
  "arrow",
  "chrono",
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-expr-common",
+ "datafusion-macros",
  "hashbrown 0.16.1",
  "indexmap 2.12.1",
  "itertools 0.14.0",
@@ -2452,6 +2460,7 @@ dependencies = [
  "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
@@ -2459,6 +2468,7 @@ dependencies = [
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window",
  "datafusion-functions-window-common",
+ "datafusion-macros",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "futures",
@@ -3691,6 +3701,15 @@ name = "integer-encoding"
 version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
+
+[[package]]
+name = "inventory"
+version = "0.3.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc61209c082fbeb19919bee74b176221b27223e27b65d781eb91af24eb1fb46e"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "ipnet"
