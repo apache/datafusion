@@ -54,10 +54,13 @@ those changes until the `ListingTableProvider` instance is dropped and recreated
 
 You can configure the maximum cache size and cache entry expiration time via configuration options:
 
-`datafusion.runtime.list_files_cache_limit`
-`datafusion.runtime.list_files_cache_ttl`
+- `datafusion.runtime.list_files_cache_limit` - Limits the size of the cache in bytes
+- `datafusion.runtime.list_files_cache_ttl` - Limits the TTL (time-to-live) of an entry in seconds
 
-Caching can be disable by setting the limit to 0:
+Detailed configuration information can be found in the [DataFusion Runtime
+Configuration](https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings) user's guide.
+
+Caching can be disabled by setting the limit to 0:
 
 ```sql
 SET datafusion.runtime.list_files_cache_limit TO "0K";

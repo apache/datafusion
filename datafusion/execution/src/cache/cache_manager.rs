@@ -226,7 +226,7 @@ impl CacheManager {
     pub fn get_list_files_cache_limit(&self) -> usize {
         self.list_files_cache
             .as_ref()
-            .map_or(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, |c| c.cache_limit())
+            .map_or(0, |c| c.cache_limit())
     }
 
     /// Get the TTL (time-to-live) of the list files cache.
