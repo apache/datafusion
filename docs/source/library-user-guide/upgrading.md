@@ -479,20 +479,11 @@ let config = FileScanConfigBuilder::new(url, source)
     .build();
 ```
 
-### `SchemaAdapterFactory` Fully Removed from Parquet
+### `SchemaAdapter` and `SchemaAdapterFactory` completely removed
 
 Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaadapterfactory-and-schemaadapter), `SchemaAdapterFactory` has been fully removed from Parquet scanning. This applies to both:
 
-- **Predicate pushdown / row filtering** (deprecated in 49.0.0)
-- **Projections** (newly removed in 52.0.0)
-
-If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
-
-See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
-
-### `SchemaAdapter` and `SchemaAdapterFactory` completely removed
-
-The following symbols have been completely removed from DataFusion:
+The following symbols have been deprecated and will be removed in the next release:
 
 - `SchemaAdapter` trait
 - `SchemaAdapterFactory` trait
@@ -502,6 +493,8 @@ The following symbols have been completely removed from DataFusion:
 
 These types were previously used to adapt record batch schemas during file reading.
 This functionality has been replaced by `PhysicalExprAdapterFactory`, which rewrites expressions at planning time rather than transforming batches at runtime.
+If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
+See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
 
 **Migration guide:**
 
