@@ -40,7 +40,7 @@ if ! command -v npx >/dev/null 2>&1; then
 fi
  
 # Ignore subproject CHANGELOG.md because it is machine generated
-npx prettier@2.7.1 $MODE \
+npx prettier@3.7.4 $MODE \
   '{datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md' \
   '!datafusion/CHANGELOG.md' \
   README.md \

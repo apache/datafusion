@@ -114,7 +114,7 @@ echo "Running CLI and inserting aggregate function docs table"
 $PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
 echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+npx prettier@3.7.4 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
@@ -158,7 +158,7 @@ echo "Running CLI and inserting scalar function docs table"
 $PRINT_SCALAR_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
 echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+npx prettier@3.7.4 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
@@ -336,6 +336,6 @@ echo "Running CLI and inserting window function docs table"
 $PRINT_WINDOW_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
 echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+npx prettier@3.7.4 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
