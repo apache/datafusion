@@ -86,9 +86,11 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 
+use super::partitioned_hash_eval::SeededRandomState;
+
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
-pub(crate) const HASH_JOIN_SEED: RandomState =
-    RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+pub(crate) const HASH_JOIN_SEED: SeededRandomState =
+    SeededRandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
@@ -334,8 +336,8 @@ pub struct HashJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
     left_fut: Arc<OnceAsync<JoinLeftData>>,
-    /// Shared the `RandomState` for the hashing algorithm
-    random_state: RandomState,
+    /// Shared the `SeededRandomState` for the hashing algorithm (seeds preserved for serialization)
+    random_state: SeededRandomState,
     /// Partitioning mode to use
     pub mode: PartitionMode,
     /// Execution metrics
@@ -930,7 +932,7 @@ impl ExecutionPlan for HashJoinExec {
                     MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
 
                 Ok(collect_left_input(
-                    self.random_state.clone(),
+                    self.random_state.random_state().clone(),
                     left_stream,
                     on_left.clone(),
                     join_metrics.clone(),
@@ -958,7 +960,7 @@ impl ExecutionPlan for HashJoinExec {
                         .register(context.memory_pool());
 
                 OnceFut::new(collect_left_input(
-                    self.random_state.clone(),
+                    self.random_state.random_state().clone(),
                     left_stream,
                     on_left.clone(),
                     join_metrics.clone(),
@@ -1041,7 +1043,7 @@ impl ExecutionPlan for HashJoinExec {
             self.filter.clone(),
             self.join_type,
             right_stream,
-            self.random_state.clone(),
+            self.random_state.random_state().clone(),
             join_metrics,
             column_indices_after_projection,
             self.null_equality,

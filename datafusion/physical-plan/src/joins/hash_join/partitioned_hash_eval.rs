@@ -34,6 +34,36 @@ use datafusion_physical_expr_common::physical_expr::{
 
 use crate::{hash_utils::create_hashes, joins::utils::JoinHashMapType};
 
+/// RandomState wrapper that preserves the seeds used to create it.
+///
+/// This is needed because ahash's `RandomState` doesn't expose its seeds after creation,
+/// but we need them for serialization (e.g., protobuf serde).
+#[derive(Clone, Debug)]
+pub struct SeededRandomState {
+    random_state: RandomState,
+    seeds: (u64, u64, u64, u64),
+}
+
+impl SeededRandomState {
+    /// Create a new SeededRandomState with the given seeds.
+    pub const fn with_seeds(k0: u64, k1: u64, k2: u64, k3: u64) -> Self {
+        Self {
+            random_state: RandomState::with_seeds(k0, k1, k2, k3),
+            seeds: (k0, k1, k2, k3),
+        }
+    }
+
+    /// Get the inner RandomState.
+    pub fn random_state(&self) -> &RandomState {
+        &self.random_state
+    }
+
+    /// Get the seeds used to create this RandomState.
+    pub fn seeds(&self) -> (u64, u64, u64, u64) {
+        self.seeds
+    }
+}
+
 /// Physical expression that computes hash values for a set of columns
 ///
 /// This expression computes the hash of join key columns using a specific RandomState.
@@ -45,8 +75,8 @@ use crate::{hash_utils::create_hashes, joins::utils::JoinHashMapType};
 pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
-    /// Random state for hashing
-    random_state: RandomState,
+    /// Random state for hashing (with seeds preserved for serialization)
+    random_state: SeededRandomState,
     /// Description for display
     description: String,
 }
@@ -56,11 +86,11 @@ impl HashExpr {
     ///
     /// # Arguments
     /// * `on_columns` - Columns to hash
-    /// * `random_state` - RandomState for hashing
+    /// * `random_state` - SeededRandomState for hashing
     /// * `description` - Description for debugging (e.g., "hash_repartition", "hash_join")
-    pub(super) fn new(
+    pub fn new(
         on_columns: Vec<PhysicalExprRef>,
-        random_state: RandomState,
+        random_state: SeededRandomState,
         description: String,
     ) -> Self {
         Self {
@@ -68,6 +98,21 @@ impl HashExpr {
             random_state,
             description,
         }
+    }
+
+    /// Get the columns being hashed.
+    pub fn on_columns(&self) -> &[PhysicalExprRef] {
+        &self.on_columns
+    }
+
+    /// Get the seeds used for hashing.
+    pub fn seeds(&self) -> (u64, u64, u64, u64) {
+        self.random_state.seeds()
+    }
+
+    /// Get the description.
+    pub fn description(&self) -> &str {
+        &self.description
     }
 }
 
@@ -147,7 +192,7 @@ impl PhysicalExpr for HashExpr {
 
         // Compute hashes
         let mut hashes_buffer = vec![0; num_rows];
-        create_hashes(&keys_values, &self.random_state, &mut hashes_buffer)?;
+        create_hashes(&keys_values, self.random_state.random_state(), &mut hashes_buffer)?;
 
         Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
             hashes_buffer,
