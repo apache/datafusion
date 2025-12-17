@@ -34,9 +34,9 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
-    col, lit, EmptyRelation, Extension, InvariantLevel, LogicalPlan, LogicalPlanBuilder,
+    EmptyRelation, Extension, InvariantLevel, LogicalPlan, LogicalPlanBuilder,
     PartitionEvaluator, RecursiveQuery, Repartition, UserDefinedLogicalNode, Values,
-    Volatility,
+    Volatility, col, lit,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -2177,10 +2177,12 @@ async fn serialize_recursive_query_with_empty_name_errors() -> Result<()> {
 
     let result = to_substrait_plan(&plan, &ctx.state());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("RecursiveQuery name cannot be empty"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("RecursiveQuery name cannot be empty")
+    );
 
     Ok(())
 }

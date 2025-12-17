@@ -17,13 +17,13 @@
 
 use crate::logical_plan::{
     producer::SubstraitProducer,
-    recursive::{encode_recursive_query_detail, RECURSIVE_QUERY_TYPE_URL},
+    recursive::{RECURSIVE_QUERY_TYPE_URL, encode_recursive_query_detail},
 };
 use datafusion::logical_expr::RecursiveQuery;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::{
-    rel_common::{self, EmitKind},
     ExtensionMultiRel, Rel, RelCommon,
+    rel_common::{self, EmitKind},
 };
 /// Serializes DataFusion RecursiveQuery into Substrait ExtensionMultiRel.
 ///
