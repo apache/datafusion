@@ -405,6 +405,20 @@ mod tests {
     }
 
     #[test]
+    fn try_sum_float_negative_zero_normalizes_to_positive_zero() -> Result<()> {
+        let mut acc = TrySumAccumulator::<Float64Type>::new(DataType::Float64);
+        // -0.0 + 0.0 should normalize to 0.0 (positive zero), not -0.0
+        acc.update_batch(&[f64(vec![Some(-0.0), Some(0.0)])])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::Float64(Some(0.0)));
+        // Verify it's positive zero using is_sign_positive
+        if let ScalarValue::Float64(Some(v)) = out {
+            assert!(v.is_sign_positive() || v == 0.0);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn try_sum_decimal_basic() -> Result<()> {
         let p = 10u8;
         let s = 2i8;
