@@ -25,13 +25,13 @@
 //! 5. Prefix matching works correctly
 
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
 
 use crate::physical_optimizer::test_utils::{
-    coalesce_batches_exec, coalesce_partitions_exec, parquet_exec,
+    OptimizationTest, coalesce_batches_exec, coalesce_partitions_exec, parquet_exec,
     parquet_exec_with_sort, repartition_exec, schema, sort_exec, sort_exec_with_fetch,
-    sort_expr, OptimizationTest,
+    sort_expr,
 };
 
 #[test]

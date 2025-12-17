@@ -34,7 +34,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
-    internal_err, ColumnStatistics, JoinType, NullEquality, Result, Statistics,
+    ColumnStatistics, JoinType, NullEquality, Result, Statistics, internal_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
