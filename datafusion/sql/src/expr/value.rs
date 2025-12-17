@@ -186,7 +186,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Convert a SQL interval expression to a DataFusion logical plan
     /// expression
-    #[expect(clippy::only_used_in_recursion)]
     pub(super) fn sql_interval_to_expr(
         &self,
         negative: bool,

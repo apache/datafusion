@@ -77,11 +77,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
 use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::{
+    Expr, UserDefinedLogicalNode,
     logical_plan::{Extension, InvariantLevel, LogicalPlan},
     planner::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
-    Expr, UserDefinedLogicalNode,
 };
 use datafusion_sql::sqlparser::ast::TableFactor;
 use insta::assert_snapshot;

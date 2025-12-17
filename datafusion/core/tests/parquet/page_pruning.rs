@@ -21,25 +21,25 @@ use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
 
 use arrow::array::RecordBatch;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{col, lit, Expr};
+use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_expr::create_physical_expr;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use futures::StreamExt;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 async fn get_parquet_exec(
     state: &SessionState,

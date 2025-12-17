@@ -34,25 +34,26 @@ use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
 };
 use datafusion_expr::Operator;
+
+use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::coop::cooperative;
+use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
     display::{ProjectSchemaDisplay, display_orderings},
     filter_pushdown::FilterPushdownPropagation,
     metrics::ExecutionPlanMetricsSet,
 };
-use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
-
-use datafusion_physical_expr::equivalence::project_orderings;
-use datafusion_physical_plan::coop::cooperative;
-use datafusion_physical_plan::execution_plan::SchedulingType;
 use log::{debug, warn};
+use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -845,6 +846,45 @@ impl DataSource for FileScanConfig {
             }
         }
     }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        let file_ordering = self.output_ordering.first().cloned();
+
+        if file_ordering.is_none() {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        // Use the trait method instead of downcasting
+        // Try to provide file ordering info to the source
+        // If not supported (e.g., CsvSource), fall back to original source
+        let file_source_with_ordering = self
+            .file_source
+            .with_file_ordering_info(file_ordering)
+            .unwrap_or_else(|_| Arc::clone(&self.file_source));
+
+        // Try to reverse the datasource with ordering info,
+        // and currently only ParquetSource supports it with inexact reverse with row groups.
+        let pushdown_result = file_source_with_ordering.try_reverse_output(order)?;
+
+        match pushdown_result {
+            SortOrderPushdownResult::Exact { inner } => {
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: self.rebuild_with_source(inner, true)?,
+                })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                Ok(SortOrderPushdownResult::Inexact {
+                    inner: self.rebuild_with_source(inner, false)?,
+                })
+            }
+            SortOrderPushdownResult::Unsupported => {
+                Ok(SortOrderPushdownResult::Unsupported)
+            }
+        }
+    }
 }
 
 impl FileScanConfig {
@@ -1106,6 +1146,36 @@ impl FileScanConfig {
     /// Returns the file_source
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.file_source
+    }
+
+    /// Helper: Rebuild FileScanConfig with new file source
+    fn rebuild_with_source(
+        &self,
+        new_file_source: Arc<dyn FileSource>,
+        is_exact: bool,
+    ) -> Result<Arc<dyn DataSource>> {
+        let mut new_config = self.clone();
+
+        // Reverse file groups (FileScanConfig's responsibility)
+        new_config.file_groups = new_config
+            .file_groups
+            .into_iter()
+            .map(|group| {
+                let mut files = group.into_inner();
+                files.reverse();
+                files.into()
+            })
+            .collect();
+
+        new_config.file_source = new_file_source;
+
+        // Phase 1: Clear output_ordering for Inexact
+        // (we're only reversing row groups, not guaranteeing perfect ordering)
+        if !is_exact {
+            new_config.output_ordering = vec![];
+        }
+
+        Ok(Arc::new(new_config))
     }
 }
 

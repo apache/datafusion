@@ -93,19 +93,19 @@ pub async fn async_udf() -> Result<()> {
 
     assert_batches_eq!(
         [
-    "+---------------+------------------------------------------------------------------------------------------------------------------------------+",
-    "| plan_type     | plan                                                                                                                         |",
-    "+---------------+------------------------------------------------------------------------------------------------------------------------------+",
-    "| logical_plan  | SubqueryAlias: a                                                                                                             |",
-    "|               |   Filter: ask_llm(CAST(animal.name AS Utf8View), Utf8View(\"Is this animal furry?\"))                                          |",
-    "|               |     TableScan: animal projection=[id, name]                                                                                  |",
-    "| physical_plan | FilterExec: __async_fn_0@2, projection=[id@0, name@1]                                                                        |",
-    "|               |   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                                       |",
-    "|               |     AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=ask_llm(CAST(name@1 AS Utf8View), Is this animal furry?))] |",
-    "|               |       CoalesceBatchesExec: target_batch_size=8192                                                                            |",
-    "|               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                    |",
-    "|               |                                                                                                                              |",
-    "+---------------+------------------------------------------------------------------------------------------------------------------------------+",
+            "+---------------+------------------------------------------------------------------------------------------------------------------------------+",
+            "| plan_type     | plan                                                                                                                         |",
+            "+---------------+------------------------------------------------------------------------------------------------------------------------------+",
+            "| logical_plan  | SubqueryAlias: a                                                                                                             |",
+            "|               |   Filter: ask_llm(CAST(animal.name AS Utf8View), Utf8View(\"Is this animal furry?\"))                                          |",
+            "|               |     TableScan: animal projection=[id, name]                                                                                  |",
+            "| physical_plan | FilterExec: __async_fn_0@2, projection=[id@0, name@1]                                                                        |",
+            "|               |   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                                                       |",
+            "|               |     AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=ask_llm(CAST(name@1 AS Utf8View), Is this animal furry?))] |",
+            "|               |       CoalesceBatchesExec: target_batch_size=8192                                                                            |",
+            "|               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                    |",
+            "|               |                                                                                                                              |",
+            "+---------------+------------------------------------------------------------------------------------------------------------------------------+",
         ],
         &results
     );

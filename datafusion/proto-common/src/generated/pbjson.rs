@@ -1111,7 +1111,7 @@ impl serde::Serialize for ColumnStats {
             struct_ser.serialize_field("distinctCount", v)?;
         }
         if let Some(v) = self.byte_size.as_ref() {
-            struct_ser.serialize_field("ByteSize", v)?;
+            struct_ser.serialize_field("byteSize", v)?;
         }
         struct_ser.end()
     }
@@ -1134,7 +1134,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             "distinct_count",
             "distinctCount",
             "byte_size",
-            "ByteSize",
+            "byteSize",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1144,7 +1144,6 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             SumValue,
             NullCount,
             DistinctCount,
-            
             ByteSize,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1172,7 +1171,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             "sumValue" | "sum_value" => Ok(GeneratedField::SumValue),
                             "nullCount" | "null_count" => Ok(GeneratedField::NullCount),
                             "distinctCount" | "distinct_count" => Ok(GeneratedField::DistinctCount),
-                            "ByteSize" | "byte_size" => Ok(GeneratedField::ByteSize),
+                            "byteSize" | "byte_size" => Ok(GeneratedField::ByteSize),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1232,7 +1231,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                         }
                         GeneratedField::ByteSize => {
                             if byte_size__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("ByteSize"));
+                                return Err(serde::de::Error::duplicate_field("byteSize"));
                             }
                             byte_size__ = map_.next_value()?;
                         }

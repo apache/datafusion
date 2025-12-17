@@ -21,7 +21,7 @@ use std::{path::PathBuf, time::Duration};
 use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::datafusion_engine::Result;
 use crate::engines::output::{DFColumnType, DFOutput};
-use crate::{convert_batches, convert_schema_to_types, DFSqlLogicTestError};
+use crate::{DFSqlLogicTestError, convert_batches, convert_schema_to_types};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::logical_expr::LogicalPlan;
