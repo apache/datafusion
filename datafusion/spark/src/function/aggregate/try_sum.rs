@@ -99,12 +99,13 @@ impl<T: ArrowNumericType> Accumulator for TrySumAccumulator<T> {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // Check if any partition has failed
-        let failed_arr = downcast_value!(states[1], BooleanArray);
-        for failed in failed_arr.iter().flatten() {
-            if failed {
-                self.failed = true;
-                return Ok(());
-            }
+        if downcast_value!(states[1], BooleanArray)
+            .iter()
+            .flatten()
+            .any(|f| f)
+        {
+            self.failed = true;
+            return Ok(());
         }
 
         // Merge the sum values using the same logic as update_batch
