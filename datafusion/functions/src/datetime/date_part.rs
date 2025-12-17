@@ -33,7 +33,7 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::types::{logical_date, NativeType};
+use datafusion_common::types::{NativeType, logical_date};
 
 use super::adjust_to_local_time;
 use datafusion_common::{
@@ -271,7 +271,7 @@ impl ScalarUDFImpl for DatePartFunc {
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow
         let arr = if let Ok(interval_unit) = IntervalUnit::from_str(part_trim) {
-            let extracted = match interval_unit {
+            match interval_unit {
                 IntervalUnit::Year => date_part(array.as_ref(), DatePart::Year)?,
                 IntervalUnit::Month => date_part(array.as_ref(), DatePart::Month)?,
                 IntervalUnit::Week => date_part(array.as_ref(), DatePart::Week)?,
@@ -283,9 +283,7 @@ impl ScalarUDFImpl for DatePartFunc {
                 IntervalUnit::Microsecond => seconds_as_i32(array.as_ref(), Microsecond)?,
                 IntervalUnit::Nanosecond => seconds_as_i32(array.as_ref(), Nanosecond)?,
                 _ => return exec_err!("Date part '{part}' not supported"),
-            };
-
-            extracted
+            }
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
             match part_trim.to_lowercase().as_str() {
