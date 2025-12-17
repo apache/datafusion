@@ -63,6 +63,6 @@ echo "Running CLI and inserting metric docs table"
 $PRINT_METRIC_DOCS_COMMAND >> "$TARGET_FILE"
 
 echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+npx prettier@3.7.4 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
