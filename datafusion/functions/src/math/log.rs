@@ -122,7 +122,7 @@ fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> 
     }
 
     if scale < 0 {
-        let actual_value = (value as f64) * 10.0_f64.powi(-scale as i32);
+        let actual_value = (value as f64) * 10.0_f64.powi(-(scale as i32));
         Ok(actual_value.log(base))
     } else {
         let unscaled_value = decimal128_to_i128(value, scale)?;
