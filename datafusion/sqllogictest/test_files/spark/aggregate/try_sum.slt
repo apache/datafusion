@@ -101,6 +101,22 @@ SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
 ----
 NULL
 
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('Infinity' AS DOUBLE)) AS tab(col);
+----
+NaN
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('-Infinity' AS DOUBLE)) AS tab(col);
+----
+-Infinity
+
+query R
+SELECT try_sum(col) AS sum_x FROM VALUES (CAST('Infinity' AS FLOAT)), (CAST(1.0 AS FLOAT)) AS tab(col);
+----
+Infinity
+
 query R
 SELECT try_sum(col) AS sum_x FROM VALUES (-0.0), (0.0) AS tab(col);
 ----
@@ -117,17 +133,8 @@ SELECT try_sum(col) AS sum_x FROM VALUES (CAST(-5.5 AS DECIMAL(10,2))), (CAST(5.
 ----
 0
 
-query R
-SELECT try_sum(col) AS sum_x FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('Infinity' AS DOUBLE)) AS tab(col);
+# Compare double 0.0 vs decimal 0.00
+query RR
+SELECT 0.0 AS double_zero, CAST(0.0 AS DECIMAL(10,2)) AS decimal_zero;
 ----
-NaN
-
-query R
-SELECT try_sum(col) AS sum_x FROM VALUES (CAST('-Infinity' AS DOUBLE)), (CAST('-Infinity' AS DOUBLE)) AS tab(col);
-----
--Infinity
-
-query R
-SELECT try_sum(col) AS sum_x FROM VALUES (CAST('Infinity' AS FLOAT)), (CAST(1.0 AS FLOAT)) AS tab(col);
-----
-Infinity
+0 0
