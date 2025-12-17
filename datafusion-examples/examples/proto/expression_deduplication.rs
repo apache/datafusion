@@ -42,7 +42,7 @@ use datafusion::execution::TaskContext;
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::expressions::{BinaryExpr, col, lit};
+use datafusion::physical_plan::expressions::{BinaryExpr, col};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::prelude::SessionContext;
@@ -60,46 +60,35 @@ use prost::Message;
 /// 1. Creating a CachingCodec that caches expressions by their protobuf bytes
 /// 2. Intercepting deserialization to return cached Arcs for duplicate expressions
 /// 3. Verifying that duplicate expressions share the same Arc after deserialization
+///
+/// Deduplication is keyed by the protobuf bytes representing the expression,
+/// in reality deduplication could be done based on e.g. the pointer address of the
+/// serialized expression in memory, but this is simpler to demonstrate.
+///
+/// In this case our expression is trivial and just for demonstration purposes.
+/// In real scenarios, expressions can be much more complex, e.g. a large InList
+/// expression could be megabytes in size, so deduplication can save significant memory
+/// in addition to more correctly representing the original plan structure.
 pub async fn expression_deduplication() -> Result<()> {
     println!("=== Expression Deduplication Example ===\n");
 
     // Create a schema for our test expressions
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, false),
-        Field::new("b", DataType::Int32, false),
-    ]));
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
 
     // Step 1: Create expressions with duplicates
     println!("Step 1: Creating expressions with duplicates...");
 
-    // Create expression: (a + b)
-    let a_plus_b = Arc::new(BinaryExpr::new(
-        col("a", &schema)?,
-        Operator::Plus,
-        col("b", &schema)?,
-    )) as Arc<dyn PhysicalExpr>;
+    // Create expression: col("a")
+    let a = col("a", &schema)?;
 
-    // Create expression: (a + b) > 10 AND (a + b) < 100
-    // Note: We create (a + b) twice to simulate duplicate expressions
-    let expr1 = Arc::new(BinaryExpr::new(
-        Arc::clone(&a_plus_b),
-        Operator::Gt,
-        lit(10i32),
-    )) as Arc<dyn PhysicalExpr>;
+    // Create a clone to show duplicates
+    let a_clone = Arc::clone(&a);
 
-    // Create a clone of (a + b) to simulate a duplicate
-    let a_plus_b_2 = Arc::clone(&a_plus_b);
-
-    let expr2 = Arc::new(BinaryExpr::new(a_plus_b_2, Operator::Lt, lit(100i32)))
-        as Arc<dyn PhysicalExpr>;
-
-    // Combine: expr1 AND expr2
+    // Combine: a OR a_clone
     let combined_expr =
-        Arc::new(BinaryExpr::new(expr1, Operator::And, expr2)) as Arc<dyn PhysicalExpr>;
-
-    println!("  Created expression: (a + b) > 10 AND (a + b) < 100");
-    println!("  Note: (a + b) appears twice in the expression tree\n");
-
+        Arc::new(BinaryExpr::new(a, Operator::Or, a_clone)) as Arc<dyn PhysicalExpr>;
+    println!("  Created expression: a OR a with duplicates");
+    println!("  Note: a appears twice in the expression tree\n");
     // Step 2: Create a filter plan with this expression
     println!("Step 2: Creating physical plan with the expression...");
 
@@ -127,43 +116,34 @@ pub async fn expression_deduplication() -> Result<()> {
     println!("Step 4: Deserializing plan with CachingCodec...");
 
     let ctx = SessionContext::new();
-    let _deserialized_plan =
+    let deserialized_plan =
         proto.try_into_physical_plan(&ctx.task_ctx(), &caching_codec)?;
 
-    // Print statistics
-    let stats = caching_codec.stats.read().unwrap();
-    println!("  Cache statistics:");
-    println!("    - Cache hits:   {}", stats.cache_hits);
-    println!("    - Cache misses: {}", stats.cache_misses);
-    if stats.cache_hits + stats.cache_misses > 0 {
+    // Step 5: check that we deduplicated expressions
+    println!("Step 5: Checking for deduplicated expressions...");
+    let Some(filter_exec) = deserialized_plan.as_any().downcast_ref::<FilterExec>()
+    else {
+        panic!("Deserialized plan is not a FilterExec");
+    };
+    let predicate = Arc::clone(&filter_exec.predicate());
+    let binary_expr = predicate
+        .as_any()
+        .downcast_ref::<BinaryExpr>()
+        .expect("Predicate is not a BinaryExpr");
+    let left = &binary_expr.left();
+    let right = &binary_expr.right();
+    // Check if left and right point to the same Arc
+    let deduplicated = Arc::ptr_eq(left, right);
+    if deduplicated {
+        println!("  Success: Duplicate expressions were deduplicated!");
         println!(
-            "    - Hit ratio:    {:.1}%\n",
-            100.0 * stats.cache_hits as f64
-                / (stats.cache_hits + stats.cache_misses) as f64
+            "  Cache Stats: hits={}, misses={}",
+            caching_codec.stats.read().unwrap().cache_hits,
+            caching_codec.stats.read().unwrap().cache_misses,
         );
+    } else {
+        println!("  Failure: Duplicate expressions were NOT deduplicated.");
     }
-
-    // Step 5: Demonstrate cache effectiveness
-    println!("Step 5: Demonstrating cache effectiveness...");
-
-    // Show the cache contents
-    let cache = caching_codec.expr_cache.read().unwrap();
-    println!("  Cached {} unique expression structures", cache.len());
-
-    // Explain the deduplication
-    println!("\n  Analysis:");
-    println!("    - The expression tree has duplicate sub-expressions");
-    println!("    - Column 'a' appears twice, Column 'b' appears twice");
-    println!("    - BinaryExpr(a + b) appears twice");
-    println!("    - With caching, identical proto bytes map to the same Arc");
-    println!("    - Cache hits indicate expressions that were deduplicated");
-
-    println!("\n=== Example Complete! ===");
-    println!("Key takeaways:");
-    println!("  1. PhysicalExtensionCodec intercepts ALL expression deserialization");
-    println!("  2. Caching by protobuf bytes enables automatic deduplication");
-    println!("  3. Identical sub-expressions share the same Arc after deserialization");
-    println!("  4. This reduces memory usage and enables pointer-equality optimizations");
 
     Ok(())
 }

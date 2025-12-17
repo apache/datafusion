@@ -37,16 +37,16 @@ use std::sync::Arc;
 use arrow::array::record_batch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::assert_batches_eq;
-use datafusion::common::not_impl_err;
 use datafusion::common::Result;
+use datafusion::common::not_impl_err;
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::execution::TaskContext;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::execution::TaskContext;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
@@ -59,12 +59,12 @@ use datafusion_proto::bytes::{
     physical_plan_to_bytes_with_extension_codec,
 };
 use datafusion_proto::physical_plan::{
-    default_deserialize_physical_expr, default_deserialize_physical_plan,
-    default_serialize_physical_expr, default_serialize_physical_plan,
-    PhysicalExtensionCodec,
+    PhysicalExtensionCodec, default_deserialize_physical_expr,
+    default_deserialize_physical_plan, default_serialize_physical_expr,
+    default_serialize_physical_plan,
 };
 use datafusion_proto::protobuf::{
-    physical_plan_node::PhysicalPlanType, PhysicalExtensionNode, PhysicalPlanNode,
+    PhysicalExtensionNode, PhysicalPlanNode, physical_plan_node::PhysicalPlanType,
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -275,27 +275,25 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Try to parse as our extension payload
-        if let Ok(payload) = serde_json::from_slice::<ExtensionPayload>(buf) {
-            if payload.marker == EXTENSION_MARKER {
-                // Decode the inner plan
-                let inner_proto = PhysicalPlanNode::decode(&payload.inner_plan_bytes[..])
-                    .map_err(|e| {
-                        datafusion::error::DataFusionError::Plan(format!(
-                            "Failed to decode inner plan: {e}"
-                        ))
-                    })?;
+        if let Ok(payload) = serde_json::from_slice::<ExtensionPayload>(buf)
+            && payload.marker == EXTENSION_MARKER
+        {
+            // Decode the inner plan
+            let inner_proto = PhysicalPlanNode::decode(&payload.inner_plan_bytes[..])
+                .map_err(|e| {
+                    datafusion::error::DataFusionError::Plan(format!(
+                        "Failed to decode inner plan: {e}"
+                    ))
+                })?;
 
-                // Deserialize the inner plan using default implementation
-                let inner_plan =
-                    default_deserialize_physical_plan(&inner_proto, ctx, self)?;
+            // Deserialize the inner plan using default implementation
+            let inner_plan = default_deserialize_physical_plan(&inner_proto, ctx, self)?;
 
-                // Recreate the adapter factory
-                let adapter_factory =
-                    create_adapter_factory(&payload.adapter_metadata.tag);
+            // Recreate the adapter factory
+            let adapter_factory = create_adapter_factory(&payload.adapter_metadata.tag);
 
-                // Inject adapter into the plan
-                return inject_adapter_into_plan(inner_plan, adapter_factory);
-            }
+            // Inject adapter into the plan
+            return inject_adapter_into_plan(inner_plan, adapter_factory);
         }
 
         not_impl_err!("Unknown extension type")
@@ -319,63 +317,56 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<PhysicalPlanNode> {
         // Check if this is a DataSourceExec with adapter
-        if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            if let Some(config) =
+        if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+            && let Some(config) =
                 exec.data_source().as_any().downcast_ref::<FileScanConfig>()
-            {
-                if let Some(adapter_factory) = &config.expr_adapter_factory {
-                    // Try to extract our MetadataAdapterFactory's tag
-                    if let Some(tag) = extract_adapter_tag(adapter_factory.as_ref()) {
-                        println!(
-                            "    [Serialize] Found DataSourceExec with adapter tag: {tag}"
-                        );
+            && let Some(adapter_factory) = &config.expr_adapter_factory
+            && let Some(tag) = extract_adapter_tag(adapter_factory.as_ref())
+        {
+            // Try to extract our MetadataAdapterFactory's tag
+            println!("    [Serialize] Found DataSourceExec with adapter tag: {tag}");
 
-                        // 1. Create adapter metadata
-                        let adapter_metadata = AdapterMetadata { tag };
+            // 1. Create adapter metadata
+            let adapter_metadata = AdapterMetadata { tag };
 
-                        // 2. Create a copy of the config without the adapter
-                        let config_without_adapter =
-                            rebuild_config_without_adapter(config);
+            // 2. Create a copy of the config without the adapter
+            let config_without_adapter = rebuild_config_without_adapter(config);
 
-                        // 3. Create a new DataSourceExec without adapter
-                        let plan_without_adapter: Arc<dyn ExecutionPlan> =
-                            DataSourceExec::from_data_source(config_without_adapter);
+            // 3. Create a new DataSourceExec without adapter
+            let plan_without_adapter: Arc<dyn ExecutionPlan> =
+                DataSourceExec::from_data_source(config_without_adapter);
 
-                        // 4. Serialize the inner plan to protobuf bytes
-                        let inner_proto =
-                            default_serialize_physical_plan(plan_without_adapter, self)?;
-                        let mut inner_bytes = Vec::new();
-                        inner_proto.encode(&mut inner_bytes).map_err(|e| {
-                            datafusion::error::DataFusionError::Plan(format!(
-                                "Failed to encode inner plan: {e}"
-                            ))
-                        })?;
+            // 4. Serialize the inner plan to protobuf bytes
+            let inner_proto =
+                default_serialize_physical_plan(plan_without_adapter, self)?;
+            let mut inner_bytes = Vec::new();
+            inner_proto.encode(&mut inner_bytes).map_err(|e| {
+                datafusion::error::DataFusionError::Plan(format!(
+                    "Failed to encode inner plan: {e}"
+                ))
+            })?;
 
-                        // 5. Create extension payload
-                        let payload = ExtensionPayload {
-                            marker: EXTENSION_MARKER.to_string(),
-                            adapter_metadata,
-                            inner_plan_bytes: inner_bytes,
-                        };
-                        let payload_bytes =
-                            serde_json::to_vec(&payload).map_err(|e| {
-                                datafusion::error::DataFusionError::Plan(format!(
-                                    "Failed to serialize payload: {e}"
-                                ))
-                            })?;
+            // 5. Create extension payload
+            let payload = ExtensionPayload {
+                marker: EXTENSION_MARKER.to_string(),
+                adapter_metadata,
+                inner_plan_bytes: inner_bytes,
+            };
+            let payload_bytes = serde_json::to_vec(&payload).map_err(|e| {
+                datafusion::error::DataFusionError::Plan(format!(
+                    "Failed to serialize payload: {e}"
+                ))
+            })?;
 
-                        // 6. Return as PhysicalExtensionNode
-                        return Ok(PhysicalPlanNode {
-                            physical_plan_type: Some(PhysicalPlanType::Extension(
-                                PhysicalExtensionNode {
-                                    node: payload_bytes,
-                                    inputs: vec![], // Leaf node
-                                },
-                            )),
-                        });
-                    }
-                }
-            }
+            // 6. Return as PhysicalExtensionNode
+            return Ok(PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Extension(
+                    PhysicalExtensionNode {
+                        node: payload_bytes,
+                        inputs: vec![], // Leaf node
+                    },
+                )),
+            });
         }
 
         // No adapter found - use default serialization
@@ -389,38 +380,32 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check if this is our custom extension wrapper
-        if let Some(PhysicalPlanType::Extension(extension)) = &proto.physical_plan_type {
-            if let Ok(payload) =
+        if let Some(PhysicalPlanType::Extension(extension)) = &proto.physical_plan_type
+            && let Ok(payload) =
                 serde_json::from_slice::<ExtensionPayload>(&extension.node)
-            {
-                if payload.marker == EXTENSION_MARKER {
-                    println!(
-                        "    [Deserialize] Found adapter extension with tag: {}",
-                        payload.adapter_metadata.tag
-                    );
+            && payload.marker == EXTENSION_MARKER
+        {
+            println!(
+                "    [Deserialize] Found adapter extension with tag: {}",
+                payload.adapter_metadata.tag
+            );
 
-                    // Decode the inner plan
-                    let inner_proto = PhysicalPlanNode::decode(
-                        &payload.inner_plan_bytes[..],
-                    )
-                    .map_err(|e| {
-                        datafusion::error::DataFusionError::Plan(format!(
-                            "Failed to decode inner plan: {e}"
-                        ))
-                    })?;
+            // Decode the inner plan
+            let inner_proto = PhysicalPlanNode::decode(&payload.inner_plan_bytes[..])
+                .map_err(|e| {
+                    datafusion::error::DataFusionError::Plan(format!(
+                        "Failed to decode inner plan: {e}"
+                    ))
+                })?;
 
-                    // Deserialize the inner plan using default implementation
-                    let inner_plan =
-                        default_deserialize_physical_plan(&inner_proto, ctx, self)?;
+            // Deserialize the inner plan using default implementation
+            let inner_plan = default_deserialize_physical_plan(&inner_proto, ctx, self)?;
 
-                    // Recreate the adapter factory
-                    let adapter_factory =
-                        create_adapter_factory(&payload.adapter_metadata.tag);
+            // Recreate the adapter factory
+            let adapter_factory = create_adapter_factory(&payload.adapter_metadata.tag);
 
-                    // Inject adapter into the plan
-                    return inject_adapter_into_plan(inner_plan, adapter_factory);
-                }
-            }
+            // Inject adapter into the plan
+            return inject_adapter_into_plan(inner_plan, adapter_factory);
         }
 
         // Not our extension - use default deserialization
@@ -502,14 +487,13 @@ fn inject_adapter_into_plan(
     plan: Arc<dyn ExecutionPlan>,
     adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-        if let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>()
-        {
-            let new_config = FileScanConfigBuilder::from(config.clone())
-                .with_expr_adapter(Some(adapter_factory))
-                .build();
-            return Ok(DataSourceExec::from_data_source(new_config));
-        }
+    if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+        && let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>()
+    {
+        let new_config = FileScanConfigBuilder::from(config.clone())
+            .with_expr_adapter(Some(adapter_factory))
+            .build();
+        return Ok(DataSourceExec::from_data_source(new_config));
     }
     // If not a DataSourceExec with FileScanConfig, return as-is
     Ok(plan)
@@ -519,14 +503,12 @@ fn inject_adapter_into_plan(
 fn verify_adapter_in_plan(plan: &Arc<dyn ExecutionPlan>, label: &str) -> bool {
     // Walk the plan tree to find DataSourceExec with adapter
     fn check_plan(plan: &dyn ExecutionPlan) -> bool {
-        if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            if let Some(config) =
+        if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+            && let Some(config) =
                 exec.data_source().as_any().downcast_ref::<FileScanConfig>()
-            {
-                if config.expr_adapter_factory.is_some() {
-                    return true;
-                }
-            }
+            && config.expr_adapter_factory.is_some()
+        {
+            return true;
         }
         // Check children
         for child in plan.children() {
