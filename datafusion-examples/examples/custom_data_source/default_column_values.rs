@@ -143,8 +143,6 @@ pub async fn default_column_values() -> Result<()> {
     );
     println!("4. Default values from metadata are cast to proper types at planning time");
     println!("5. The DefaultPhysicalExprAdapter handles other schema adaptations");
-    println!("\nNote: PhysicalExprAdapter is specifically for filter predicates.");
-    println!("For projection columns, different mechanisms handle missing columns.");
 
     Ok(())
 }
