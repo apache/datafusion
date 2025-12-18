@@ -2037,8 +2037,10 @@ impl Expr {
                     fn concrete_type(expr: &Expr, schema: &DFSchema) -> Option<DataType> {
                         // Untyped placeholders (`$1`, `$2`, ...) don't contribute to inferring a
                         // common type (they are what we are trying to infer).
-                        if matches!(expr, Expr::Placeholder(Placeholder { field: None, .. }))
-                        {
+                        if matches!(
+                            expr,
+                            Expr::Placeholder(Placeholder { field: None, .. })
+                        ) {
                             return None;
                         }
 
@@ -2108,7 +2110,10 @@ impl Expr {
                     for (when_expr, then_expr) in when_then_expr.iter_mut() {
                         if expr.is_none() {
                             // Searched CASE: WHEN must be Boolean
-                            rewrite_placeholder_type(when_expr.as_mut(), &DataType::Boolean)?;
+                            rewrite_placeholder_type(
+                                when_expr.as_mut(),
+                                &DataType::Boolean,
+                            )?;
                         } else if let Some(ref dt) = case_when_target_type {
                             rewrite_placeholder_type(when_expr.as_mut(), dt)?;
                         }
@@ -2794,7 +2799,14 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
             Ok((_, other_field)) => {
                 // We can't infer the nullability of the future parameter that might
                 // be bound, so ensure this is set to true
-                *field = Some(other_field.as_ref().clone().with_nullable(true).into());
+                //
+                // Also, use an empty field name rather than inheriting `other`'s field name.
+                let placeholder_field = other_field
+                    .as_ref()
+                    .clone()
+                    .with_nullable(true)
+                    .with_name("");
+                *field = Some(Arc::new(placeholder_field));
             }
         }
     };
