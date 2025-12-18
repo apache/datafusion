@@ -78,7 +78,7 @@ async fn query_single_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 2
     - HEAD path=csv_table.csv
-    - GET  (opts) path=csv_table.csv
+    - GET  path=csv_table.csv
     "
     );
 }
@@ -120,9 +120,9 @@ async fn multi_query_multi_file_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
-    - GET  (opts) path=data/file_0.csv
-    - GET  (opts) path=data/file_1.csv
-    - GET  (opts) path=data/file_2.csv
+    - GET  path=data/file_0.csv
+    - GET  path=data/file_1.csv
+    - GET  path=data/file_2.csv
     "
     );
 
@@ -173,9 +173,9 @@ async fn query_multi_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
-    - GET  (opts) path=data/file_0.csv
-    - GET  (opts) path=data/file_1.csv
-    - GET  (opts) path=data/file_2.csv
+    - GET  path=data/file_0.csv
+    - GET  path=data/file_1.csv
+    - GET  path=data/file_2.csv
     "
     );
 }
@@ -201,9 +201,9 @@ async fn query_partitioned_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
-    - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
-    - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
-    - GET  (opts) path=data/a=3/b=30/c=300/file_3.csv
+    - GET  path=data/a=1/b=10/c=100/file_1.csv
+    - GET  path=data/a=2/b=20/c=200/file_2.csv
+    - GET  path=data/a=3/b=30/c=300/file_3.csv
     "
     );
 
@@ -311,7 +311,7 @@ async fn create_single_parquet_file_default() {
     RequestCountingObjectStore()
     Total Requests: 2
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=0-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=0-2994
     "
     );
 }
@@ -330,7 +330,7 @@ async fn create_single_parquet_file_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=1994-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=1994-2994
     "
     );
 }
@@ -359,9 +359,9 @@ async fn create_single_parquet_file_too_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 4
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=2494-2994 path=parquet_table.parquet
-    - GET  (range) range=2264-2986 path=parquet_table.parquet
-    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=2494-2994
+    - GET  (opts) path=parquet_table.parquet range=2264-2986
+    - GET  (opts) path=parquet_table.parquet range=2124-2264
     "
     );
 }
@@ -391,8 +391,8 @@ async fn create_single_parquet_file_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 3
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=2254-2994 path=parquet_table.parquet
-    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=2254-2994
+    - GET  (opts) path=parquet_table.parquet range=2124-2264
     "
     );
 }
@@ -415,7 +415,7 @@ async fn create_single_parquet_file_no_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=0-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=0-2994
     "
     );
 }
