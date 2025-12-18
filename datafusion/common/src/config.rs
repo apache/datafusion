@@ -1725,6 +1725,7 @@ config_field!(bool, value => default_config_transform(value.to_lowercase().as_st
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
+config_field!(u32);
 
 impl ConfigField for u8 {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
@@ -2844,6 +2845,14 @@ config_namespace! {
         /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
         pub date_format: Option<String>, default = None
         pub datetime_format: Option<String>, default = None
@@ -2966,6 +2975,14 @@ impl CsvOptions {
         self
     }
 
+    /// Set the compression level for the output file.
+    /// The valid range depends on the compression algorithm.
+    /// If not specified, the default level for the algorithm is used.
+    pub fn with_compression_level(mut self, level: u32) -> Self {
+        self.compression_level = Some(level);
+        self
+    }
+
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
@@ -2991,6 +3008,14 @@ config_namespace! {
     /// Options controlling JSON format
     pub struct JsonOptions {
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
     }
 }

@@ -1852,7 +1852,7 @@ mod tests {
         // the new projection won't include the filtered column.
         let exprs = ProjectionExprs::new(vec![ProjectionExpr::new(
             col("c1", &file_schema).unwrap(),
-            "c1".to_string(),
+            "c1",
         )]);
         let data_source = config
             .try_swapping_with_projection(&exprs)
