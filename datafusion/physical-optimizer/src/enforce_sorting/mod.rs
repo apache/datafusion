@@ -583,9 +583,14 @@ fn analyze_immediate_sort_removal(
         if let Some(fetch) = sort_exec.fetch() {
             // If the sort has a fetch, we need to add a limit:
             if properties.output_partitioning().partition_count() == 1 {
-                Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
+                let mut global_limit =
+                    GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch));
+                global_limit.set_order_sensitive(true);
+                Arc::new(global_limit)
             } else {
-                Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
+                let mut local_limit = LocalLimitExec::new(Arc::clone(sort_input), fetch);
+                local_limit.set_order_sensitive(true);
+                Arc::new(local_limit)
             }
         } else {
             Arc::clone(sort_input)
