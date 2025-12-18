@@ -932,7 +932,6 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_projection_indices(Some(vec![0, 1]))?
             .with_file_group(FileGroup::new(vec![file_group]))
-            .with_newlines_in_values(false)
             .build();
 
     roundtrip_test(DataSourceExec::from_data_source(scan_config))

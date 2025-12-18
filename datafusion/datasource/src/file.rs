@@ -86,6 +86,21 @@ pub trait FileSource: Send + Sync {
         Ok(())
     }
 
+    /// Returns whether this file source supports repartitioning files by byte ranges.
+    ///
+    /// When this returns `true`, files can be split into multiple partitions
+    /// based on byte offsets for parallel reading.
+    ///
+    /// When this returns `false`, files cannot be repartitioned (e.g., CSV files
+    /// with `newlines_in_values` enabled cannot be split because record boundaries
+    /// cannot be determined by byte offset alone).
+    ///
+    /// The default implementation returns `true`. File sources that cannot support
+    /// repartitioning should override this method.
+    fn supports_repartitioning(&self) -> bool {
+        true
+    }
+
     /// If supported by the [`FileSource`], redistribute files across partitions
     /// according to their size. Allows custom file formats to implement their
     /// own repartitioning logic.
@@ -99,7 +114,8 @@ pub trait FileSource: Send + Sync {
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
-        if config.file_compression_type.is_compressed() || config.new_lines_in_values {
+        if config.file_compression_type.is_compressed() || !self.supports_repartitioning()
+        {
             return Ok(None);
         }
 

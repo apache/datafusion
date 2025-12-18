@@ -460,9 +460,7 @@ impl FileSource for ArrowSource {
                 // Use the default trait implementation logic for file format
                 use datafusion_datasource::file_groups::FileGroupPartitioner;
 
-                if config.file_compression_type.is_compressed()
-                    || config.new_lines_in_values
-                {
+                if config.file_compression_type.is_compressed() {
                     return Ok(None);
                 }
 
