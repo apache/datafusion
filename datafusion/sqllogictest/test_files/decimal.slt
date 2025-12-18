@@ -777,6 +777,13 @@ Float64 133333333333333330000000000000000000000000000
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = true;
 
+# round should keep decimals when parse_float_as_decimal is enabled
+query TR
+select arrow_typeof(round(173975140545.855, 2)),
+       round(173975140545.855, 2);
+----
+Decimal128(15, 3) 173975140545.86
+
 # smoke test for decimal parsing
 query RT
 select 100000000000000000000000000000000000::decimal(38,0), arrow_typeof(100000000000000000000000000000000000::decimal(38,0));
