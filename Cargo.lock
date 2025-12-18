@@ -2427,6 +2427,7 @@ version = "52.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-expr-common",

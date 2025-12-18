@@ -3119,7 +3119,6 @@ mod tests {
             projection,
             source: Arc::new(test_provider),
             fetch: None,
-            preserve_order: false,
         });
 
         Ok(LogicalPlanBuilder::from(table_scan))

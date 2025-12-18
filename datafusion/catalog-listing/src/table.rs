@@ -581,7 +581,6 @@ impl TableProvider for ListingTable {
                     .with_statistics(statistics)
                     .with_projection_indices(projection)?
                     .with_limit(limit)
-                    .with_preserve_order(args.preserve_order())
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())
                     .with_partitioned_by_file_group(partitioned_by_file_group)

@@ -51,6 +51,9 @@ pub struct GlobalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// Whether the limit is order-sensitive
+    /// Such as the child plan is a sort node, then the limit is order-sensitive
+    order_sensitive: bool,
 }
 
 impl GlobalLimitExec {
@@ -63,6 +66,7 @@ impl GlobalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            order_sensitive: false,
         }
     }
 
@@ -90,6 +94,18 @@ impl GlobalLimitExec {
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
         )
+    }
+
+    /// Whether the limit is order-sensitive
+    /// Such as the child plan is a sort node, then the limit is order-sensitive
+    pub fn order_sensitive(&self) -> bool {
+        self.order_sensitive
+    }
+
+    /// Whether the limit is order-sensitive
+    /// Such as the child plan is a sort node, then the limit is order-sensitive
+    pub fn set_order_sensitive(&mut self, order_sensitive: bool) {
+        self.order_sensitive = order_sensitive;
     }
 }
 
@@ -223,6 +239,9 @@ pub struct LocalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// Whether the limit is order-sensitive
+    /// Such as the child plan is a sort node, then the limit is order-sensitive
+    order_sensitive: bool,
 }
 
 impl LocalLimitExec {
@@ -234,6 +253,7 @@ impl LocalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            order_sensitive: false,
         }
     }
 
@@ -256,6 +276,18 @@ impl LocalLimitExec {
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
         )
+    }
+
+    /// Whether the limit is order-sensitive
+    /// Such as the child plan is a sort node, then the limit is order-sensitive
+    pub fn order_sensitive(&self) -> bool {
+        self.order_sensitive
+    }
+
+    /// Whether the limit is order-sensitive
+    /// Such as the child plan is a sort node, then the limit is order-sensitive
+    pub fn set_order_sensitive(&mut self, order_sensitive: bool) {
+        self.order_sensitive = order_sensitive;
     }
 }
 
