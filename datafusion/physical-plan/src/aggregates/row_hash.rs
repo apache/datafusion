@@ -38,7 +38,6 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
-use arrow_schema::SortOptions;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err,
@@ -555,7 +554,7 @@ impl GroupedHashAggregateStream {
                     // This ensures that spilled state is sorted in the required order as well.
                     let sort_options = output_ordering
                         .and_then(|o| o.get_sort_options(&output_expr))
-                        .unwrap_or_else(SortOptions::default);
+                        .unwrap_or_default();
 
                     PhysicalSortExpr::new(Arc::new(output_expr), sort_options)
                 });
@@ -578,7 +577,9 @@ impl GroupedHashAggregateStream {
             // group values will handle memory pressure.
             (_, GroupOrdering::Full(_)) => OutOfMemoryMode::ReportError,
             // For unsorted or partially sorted inputs, use disk spilling
-            (_, GroupOrdering::None | GroupOrdering::Partial(_)) => OutOfMemoryMode::Spill,
+            (_, GroupOrdering::None | GroupOrdering::Partial(_)) => {
+                OutOfMemoryMode::Spill
+            }
         };
 
         let group_values = new_group_values(group_schema, &group_ordering)?;
@@ -1030,12 +1031,11 @@ impl GroupedHashAggregateStream {
                 self.update_memory_reservation()?;
                 Ok(None)
             }
-            OutOfMemoryMode::EmitEarly if self.group_values.len() > 1 =>
-            {
+            OutOfMemoryMode::EmitEarly if self.group_values.len() > 1 => {
                 let n = if self.group_values.len() >= self.batch_size {
                     // Try to emit an integer multiple of batch size if possible
                     self.group_values.len() / self.batch_size * self.batch_size
-                }  else {
+                } else {
                     // Otherwise emit whatever we can
                     self.group_values.len()
                 };
