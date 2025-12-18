@@ -181,15 +181,17 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
         Ok(ColumnarValue::Array(data))
     }
 
-    match (array.data_type(), name) {
-        (DataType::Map(_, _), ScalarValue::List(arr)) => {
+    let string_value = name.try_as_str().flatten().map(|s| s.to_string());
+
+    match (array.data_type(), name, string_value) {
+        (DataType::Map(_, _), ScalarValue::List(arr), _) => {
             let key_array: Arc<dyn Array> = arr;
             process_map_array(&array, key_array)
         }
-        (DataType::Map(_, _), ScalarValue::Struct(arr)) => {
+        (DataType::Map(_, _), ScalarValue::Struct(arr), _) => {
             process_map_array(&array, arr as Arc<dyn Array>)
         }
-        (DataType::Map(_, _), other) => {
+        (DataType::Map(_, _), other, _) => {
             let data_type = other.data_type();
             if data_type.is_nested() {
                 process_map_with_nested_key(&array, &other.to_array()?)
@@ -197,19 +199,19 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
                 process_map_array(&array, other.to_array()?)
             }
         }
-        (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
+        (DataType::Struct(_), _, Some(k)) => {
             let as_struct_array = as_struct_array(&array)?;
             match as_struct_array.column_by_name(&k) {
                 None => exec_err!("get indexed field {k} not found in struct"),
                 Some(col) => Ok(ColumnarValue::Array(Arc::clone(col))),
             }
         }
-        (DataType::Struct(_), name) => exec_err!(
+        (DataType::Struct(_), name, _) => exec_err!(
             "get_field is only possible on struct with utf8 indexes. \
                          Received with {name:?} index"
         ),
-        (DataType::Null, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
-        (dt, name) => exec_err!(
+        (DataType::Null, _, _) => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
+        (dt, name, _) => exec_err!(
             "get_field is only possible on maps or structs. Received {dt} with {name:?} index"
         ),
     }
@@ -414,5 +416,48 @@ impl ScalarUDFImpl for GetFieldFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, Int32Array, StructArray};
+    use arrow::datatypes::Fields;
+
+    #[test]
+    fn test_get_field_utf8view_key() -> Result<()> {
+        // Create a struct array with fields "a" and "b"
+        let a_values = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let b_values = Int32Array::from(vec![Some(10), Some(20), Some(30)]);
+
+        let fields: Fields = vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]
+        .into();
+
+        let struct_array = StructArray::new(
+            fields,
+            vec![
+                Arc::new(a_values) as ArrayRef,
+                Arc::new(b_values) as ArrayRef,
+            ],
+            None,
+        );
+
+        let base = ColumnarValue::Array(Arc::new(struct_array));
+
+        // Use Utf8View key to access field "a"
+        let key = ScalarValue::Utf8View(Some("a".to_string()));
+
+        let result = extract_single_field(base, key)?;
+
+        let result_array = result.into_array(3)?;
+        let expected = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+
+        assert_eq!(result_array.as_ref(), &expected as &dyn Array);
+
+        Ok(())
     }
 }
