@@ -22,9 +22,9 @@ use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray}
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::{DataType, Field, FieldRef, IntervalMonthDayNano};
-use datafusion_common::types::{logical_float64, logical_int32, NativeType};
+use datafusion_common::types::{NativeType, logical_float64, logical_int32};
 use datafusion_common::{
-    internal_err, plan_datafusion_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, internal_err, plan_datafusion_err,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
