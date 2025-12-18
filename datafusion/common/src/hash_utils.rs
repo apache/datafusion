@@ -17,7 +17,8 @@
 
 //! Functionality used both on logical and physical plans
 
-use ahash::RandomState;
+use ahash::{AHasher, RandomState};
+use std::hash::Hasher;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::datatypes::*;
@@ -37,8 +38,10 @@ use std::cell::RefCell;
 // Combines two hashes into one hash
 #[inline]
 pub fn combine_hashes(l: u64, r: u64) -> u64 {
-    let hash = (17 * 37u64).wrapping_add(l);
-    hash.wrapping_mul(37).wrapping_add(r)
+    let mut hasher = AHasher::default();
+    hasher.write_u64(l);
+    hasher.write_u64(r);
+    hasher.finish()
 }
 
 /// Maximum size for the thread-local hash buffer before truncation (4MB = 524,288 u64 elements).
