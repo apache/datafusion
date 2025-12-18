@@ -20,10 +20,13 @@
 //! This module provides type reinterpretation for optimizing filter dispatch.
 //! For equality comparison, only the bit pattern matters, so we can:
 //! - Reinterpret signed integers as unsigned (Int8 → UInt8)
+//! - Reinterpret floats as unsigned integers (Float64 → UInt64)
 //!
-//! This allows using a single filter implementation (e.g., BitmapFilter for UInt8)
-//! to handle multiple types (Int8, UInt8) that share the same byte width.
+//! This allows using a single filter implementation (e.g., for UInt64) to handle
+//! multiple types (Int64, Float64, Timestamp, Duration) that share the same
+//! byte width, reducing code duplication.
 
+use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, BooleanArray, PrimitiveArray};
@@ -32,7 +35,7 @@ use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_common::Result;
 
 use super::array_filter::StaticFilter;
-use super::primitive::{BitmapFilter, BitmapFilterConfig};
+use super::primitive::{BitmapFilter, BitmapFilterConfig, PrimitiveFilter};
 use super::result::handle_dictionary;
 
 // =============================================================================
@@ -54,6 +57,32 @@ impl<C: BitmapFilterConfig> StaticFilter for ReinterpretedBitmap<C> {
 
         let data = v.to_data();
         let values: &[C::Native] = data.buffers()[0].typed_data();
+
+        Ok(self.inner.contains_slice(values, data.nulls(), negated))
+    }
+}
+
+/// Reinterpreting filter for hash-based lookups.
+///
+/// Zero-copy: reinterprets input buffer directly as target type slice.
+struct ReinterpretedPrimitive<D: ArrowPrimitiveType> {
+    inner: PrimitiveFilter<D>,
+}
+
+impl<D> StaticFilter for ReinterpretedPrimitive<D>
+where
+    D: ArrowPrimitiveType + 'static,
+    D::Native: Hash + Eq + Send + Sync + 'static,
+{
+    fn null_count(&self) -> usize {
+        self.inner.null_count()
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        let data = v.to_data();
+        let values: &[D::Native] = data.buffers()[0].typed_data();
 
         Ok(self.inner.contains_slice(values, data.nulls(), negated))
     }
@@ -86,4 +115,21 @@ where
     let reinterpreted = reinterpret_any_primitive_to::<C::ArrowType>(in_array.as_ref());
     let inner = BitmapFilter::<C>::try_new(&reinterpreted)?;
     Ok(Arc::new(ReinterpretedBitmap { inner }))
+}
+
+/// Creates a hash-based filter, reinterpreting types if needed.
+pub(crate) fn make_primitive_filter<D>(
+    in_array: &ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>>
+where
+    D: ArrowPrimitiveType + 'static,
+    D::Native: Hash + Eq + Send + Sync + 'static,
+{
+    if in_array.data_type() == &D::DATA_TYPE {
+        return Ok(Arc::new(PrimitiveFilter::<D>::try_new(in_array)?));
+    }
+
+    let reinterpreted = reinterpret_any_primitive_to::<D>(in_array.as_ref());
+    let inner = PrimitiveFilter::<D>::try_new(&reinterpreted)?;
+    Ok(Arc::new(ReinterpretedPrimitive { inner }))
 }

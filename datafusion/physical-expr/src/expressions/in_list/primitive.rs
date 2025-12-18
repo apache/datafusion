@@ -19,9 +19,11 @@
 //!
 //! This module provides high-performance membership testing for Arrow primitive types.
 
+use std::hash::Hash;
+
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::ArrowPrimitiveType;
-use datafusion_common::{Result, exec_datafusion_err};
+use datafusion_common::{HashSet, Result, exec_datafusion_err};
 
 use super::array_filter::StaticFilter;
 use super::result::{build_in_list_result, handle_dictionary};
@@ -168,6 +170,81 @@ impl<C: BitmapFilterConfig> StaticFilter for BitmapFilter<C> {
             negated,
             #[inline(always)]
             |i| self.check(unsafe { *input_values.get_unchecked(i) }),
+        ))
+    }
+}
+
+// =============================================================================
+// PRIMITIVE FILTER (Hash-based)
+// =============================================================================
+
+/// Hash-based filter for primitive types with larger IN lists.
+pub(crate) struct PrimitiveFilter<T: ArrowPrimitiveType> {
+    null_count: usize,
+    set: HashSet<T::Native>,
+}
+
+impl<T: ArrowPrimitiveType> PrimitiveFilter<T>
+where
+    T::Native: Hash + Eq,
+{
+    pub(crate) fn try_new(in_array: &ArrayRef) -> Result<Self> {
+        let arr = in_array.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "PrimitiveFilter: expected {} array",
+                std::any::type_name::<T>()
+            )
+        })?;
+        Ok(Self {
+            null_count: arr.null_count(),
+            set: arr.iter().flatten().collect(),
+        })
+    }
+
+    /// Check membership using a raw values slice (zero-copy path for type reinterpretation).
+    #[inline]
+    pub(crate) fn contains_slice(
+        &self,
+        values: &[T::Native],
+        nulls: Option<&arrow::buffer::NullBuffer>,
+        negated: bool,
+    ) -> BooleanArray {
+        build_in_list_result(
+            values.len(),
+            nulls,
+            self.null_count > 0,
+            negated,
+            // SAFETY: i is in bounds since we iterate 0..values.len()
+            |i| self.set.contains(unsafe { values.get_unchecked(i) }),
+        )
+    }
+}
+
+impl<T> StaticFilter for PrimitiveFilter<T>
+where
+    T: ArrowPrimitiveType + 'static,
+    T::Native: Hash + Eq + Send + Sync + 'static,
+{
+    fn null_count(&self) -> usize {
+        self.null_count
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+        let v = v.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "PrimitiveFilter: expected {} array",
+                std::any::type_name::<T>()
+            )
+        })?;
+        let values = v.values();
+        Ok(build_in_list_result(
+            v.len(),
+            v.nulls(),
+            self.null_count > 0,
+            negated,
+            // SAFETY: i is in bounds since we iterate 0..v.len()
+            |i| self.set.contains(unsafe { values.get_unchecked(i) }),
         ))
     }
 }
