@@ -933,8 +933,8 @@ impl FileScanConfig {
     /// has been moved to [`CsvSource`] and should be accessed via
     /// [`CsvSource::csv_options()`] instead.
     ///
-    /// [`CsvSource`]: crate::file_format::csv::source::CsvSource
-    /// [`CsvSource::csv_options()`]: crate::file_format::csv::source::CsvSource::csv_options
+    /// [`CsvSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html
+    /// [`CsvSource::csv_options()`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html#method.csv_options
     #[deprecated(
         since = "52.0.0",
         note = "newlines_in_values has moved to CsvSource. Access it via CsvSource::csv_options().newlines_in_values instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
