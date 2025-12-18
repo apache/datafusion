@@ -25,6 +25,7 @@ pub mod csv;
 use futures::Stream;
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -36,16 +37,20 @@ use crate::dataframe::DataFrame;
 use crate::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use crate::datasource::{empty::EmptyTable, provider_as_source};
 use crate::error::Result;
+use crate::execution::session_state::CacheFactory;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{CsvReadOptions, SessionContext};
 
-use crate::execution::SendableRecordBatchStream;
+use crate::execution::{SendableRecordBatchStream, SessionState, SessionStateBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
-use datafusion_common::TableReference;
-use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
+use datafusion_common::{DFSchemaRef, TableReference};
+use datafusion_expr::{
+    CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType,
+    UserDefinedLogicalNodeCore,
+};
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -281,4 +286,68 @@ impl RecordBatchStream for BoundedStream {
     fn schema(&self) -> SchemaRef {
         self.record_batch.schema()
     }
+}
+
+#[derive(Hash, Eq, PartialEq, PartialOrd, Debug)]
+struct CacheNode {
+    input: LogicalPlan,
+}
+
+impl UserDefinedLogicalNodeCore for CacheNode {
+    fn name(&self) -> &str {
+        "CacheNode"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        self.input.schema()
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "CacheNode")
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        _exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        assert_eq!(inputs.len(), 1, "input size inconsistent");
+        Ok(Self {
+            input: inputs[0].clone(),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct TestCacheFactory {}
+
+impl CacheFactory for TestCacheFactory {
+    fn create(
+        &self,
+        plan: LogicalPlan,
+        _session_state: &SessionState,
+    ) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(CacheNode { input: plan }),
+        }))
+    }
+}
+
+/// Create a test table registered to a session context with an associated cache factory
+pub async fn test_table_with_cache_factory() -> Result<DataFrame> {
+    let session_state = SessionStateBuilder::new()
+        .with_cache_factory(Some(Arc::new(TestCacheFactory {})))
+        .build();
+    let ctx = SessionContext::new_with_state(session_state);
+    let name = "aggregate_test_100";
+    register_aggregate_csv(&ctx, name).await?;
+    ctx.table(name).await
 }

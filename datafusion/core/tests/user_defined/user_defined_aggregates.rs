@@ -23,13 +23,13 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use arrow::array::{
-    record_batch, types::UInt64Type, Array, AsArray, Int32Array, PrimitiveArray,
-    StringArray, StructArray, UInt64Array,
+    Array, AsArray, Int32Array, PrimitiveArray, StringArray, StructArray, UInt64Array,
+    record_batch, types::UInt64Type,
 };
 use arrow::datatypes::{Fields, Schema};
 use arrow_schema::FieldRef;
@@ -56,8 +56,8 @@ use datafusion_common::{cast::as_primitive_array, exec_err};
 
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
-    col, create_udaf, function::AccumulatorArgs, AggregateUDFImpl, Expr,
-    GroupsAccumulator, LogicalPlanBuilder, SimpleAggregateUDF, WindowFunctionDefinition,
+    AggregateUDFImpl, Expr, GroupsAccumulator, LogicalPlanBuilder, SimpleAggregateUDF,
+    WindowFunctionDefinition, col, create_udaf, function::AccumulatorArgs,
 };
 use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -69,7 +69,7 @@ async fn test_setup() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +-------+----------------------------+
     | value | time                       |
     +-------+----------------------------+
@@ -79,7 +79,7 @@ async fn test_setup() {
     | 5.0   | 1970-01-01T00:00:00.000005 |
     | 5.0   | 1970-01-01T00:00:00.000005 |
     +-------+----------------------------+
-    "###);
+    ");
 }
 
 /// Basic user defined aggregate
@@ -91,13 +91,13 @@ async fn test_udaf() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +----------------------------+
     | time_sum(t.time)           |
     +----------------------------+
     | 1970-01-01T00:00:00.000019 |
     +----------------------------+
-    "###);
+    ");
 
     // normal aggregates call update_batch
     assert!(test_state.update_batch());
@@ -112,7 +112,7 @@ async fn test_udaf_as_window() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +----------------------------+
     | time_sum                   |
     +----------------------------+
@@ -122,7 +122,7 @@ async fn test_udaf_as_window() {
     | 1970-01-01T00:00:00.000019 |
     | 1970-01-01T00:00:00.000019 |
     +----------------------------+
-    "###);
+    ");
 
     // aggregate over the entire window function call update_batch
     assert!(test_state.update_batch());
@@ -137,7 +137,7 @@ async fn test_udaf_as_window_with_frame() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +----------------------------+
     | time_sum                   |
     +----------------------------+
@@ -147,7 +147,7 @@ async fn test_udaf_as_window_with_frame() {
     | 1970-01-01T00:00:00.000014 |
     | 1970-01-01T00:00:00.000010 |
     +----------------------------+
-    "###);
+    ");
 
     // user defined aggregates with window frame should be calling retract batch
     assert!(test_state.update_batch());
@@ -164,7 +164,10 @@ async fn test_udaf_as_window_with_frame_without_retract_batch() {
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
     // Note if this query ever does start working
     let err = execute(&ctx, sql).await.unwrap_err();
-    assert_contains!(err.to_string(), "This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented: time_sum(t.time) ORDER BY [t.time ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING");
+    assert_contains!(
+        err.to_string(),
+        "This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented: time_sum(t.time) ORDER BY [t.time ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING"
+    );
 }
 
 /// Basic query for with a udaf returning a structure
@@ -175,13 +178,13 @@ async fn test_udaf_returning_struct() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +------------------------------------------------+
     | first(t.value,t.time)                          |
     +------------------------------------------------+
     | {value: 2.0, time: 1970-01-01T00:00:00.000002} |
     +------------------------------------------------+
-    "###);
+    ");
 }
 
 /// Demonstrate extracting the fields from a structure using a subquery
@@ -192,13 +195,13 @@ async fn test_udaf_returning_struct_subquery() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +-----------------+----------------------------+
     | sq.first[value] | sq.first[time]             |
     +-----------------+----------------------------+
     | 2.0             | 1970-01-01T00:00:00.000002 |
     +-----------------+----------------------------+
-    "###);
+    ");
 }
 
 #[tokio::test]
@@ -212,13 +215,13 @@ async fn test_udaf_shadows_builtin_fn() {
     // compute with builtin `sum` aggregator
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r#"
     +---------------------------------------+
     | sum(arrow_cast(t.time,Utf8("Int64"))) |
     +---------------------------------------+
     | 19000                                 |
     +---------------------------------------+
-    "###);
+    "#);
 
     // Register `TimeSum` with name `sum`. This will shadow the builtin one
     TimeSum::register(&mut ctx, test_state.clone(), "sum");
@@ -226,13 +229,13 @@ async fn test_udaf_shadows_builtin_fn() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +----------------------------+
     | sum(t.time)                |
     +----------------------------+
     | 1970-01-01T00:00:00.000019 |
     +----------------------------+
-    "###);
+    ");
 }
 
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
@@ -272,13 +275,13 @@ async fn simple_udaf() -> Result<()> {
 
     let result = ctx.sql("SELECT MY_AVG(a) FROM t").await?.collect().await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-------------+
     | my_avg(t.a) |
     +-------------+
     | 3.0         |
     +-------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -329,9 +332,10 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
 
     // doesn't work as it was registered as non lowercase
     let err = ctx.sql("SELECT MY_AVG(i) FROM t").await.unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Error during planning: Invalid function \'my_avg\'"));
+    assert!(
+        err.to_string()
+            .contains("Error during planning: Invalid function \'my_avg\'")
+    );
 
     // Can call it if you put quotes
     let result = ctx
@@ -340,13 +344,13 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-------------+
     | MY_AVG(t.i) |
     +-------------+
     | 1.0         |
     +-------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -372,13 +376,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +------------+
     | dummy(t.i) |
     +------------+
     | 1.0        |
     +------------+
-    "###);
+    ");
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
 
@@ -449,13 +453,13 @@ async fn test_parameterized_aggregate_udf() -> Result<()> {
 
     let actual = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +------+---+---+
     | text | a | b |
     +------+---+---+
     | foo  | 1 | 2 |
     +------+---+---+
-    "###);
+    ");
 
     ctx.deregister_table("t")?;
     Ok(())
@@ -569,6 +573,7 @@ impl TimeSum {
         Self { sum: 0, test_state }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     fn register(ctx: &mut SessionContext, test_state: Arc<TestState>, name: &str) {
         let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
         let input_type = vec![timestamp_type.clone()];
@@ -760,11 +765,11 @@ impl Accumulator for FirstSelector {
 
         // Update the actual values
         for (value, time) in v.iter().zip(t.iter()) {
-            if let (Some(time), Some(value)) = (time, value) {
-                if time < self.time {
-                    self.value = value;
-                    self.time = time;
-                }
+            if let (Some(time), Some(value)) = (time, value)
+                && time < self.time
+            {
+                self.value = value;
+                self.time = time;
             }
         }
 

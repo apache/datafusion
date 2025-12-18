@@ -50,8 +50,8 @@ use datafusion_physical_plan::{
     collect, displayable, ExecutionPlan, Partitioning,
 };
 
-use object_store::memory::InMemory;
 use object_store::ObjectStore;
+use object_store::memory::InMemory;
 use rstest::rstest;
 use url::Url;
 
@@ -138,7 +138,8 @@ impl ReplaceTest {
             assert!(
                 res.is_ok(),
                 "Some errors occurred while executing the optimized physical plan: {:?}\nPlan: {}",
-                res.unwrap_err(), optimized_plan_string
+                res.unwrap_err(),
+                optimized_plan_string
             );
         }
 
@@ -192,7 +193,7 @@ async fn test_replace_multiple_input_repartition_1(
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
@@ -202,13 +203,13 @@ async fn test_replace_multiple_input_repartition_1(
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
             Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                   StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -218,13 +219,13 @@ async fn test_replace_multiple_input_repartition_1(
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
             Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                   DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -275,21 +276,21 @@ async fn test_with_inter_children_change_only(
               SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                         CoalescePartitionsExec
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                               StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]
 
             Optimized:
             SortPreservingMergeExec: [a@0 ASC]
               FilterExec: c@1 > 3
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     SortPreservingMergeExec: [a@0 ASC]
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                           StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]
             ");
         },
@@ -300,11 +301,11 @@ async fn test_with_inter_children_change_only(
               SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                         CoalescePartitionsExec
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                               DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
             ");
         },
@@ -315,21 +316,21 @@ async fn test_with_inter_children_change_only(
               SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                         CoalescePartitionsExec
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                               DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
 
             Optimized:
             SortPreservingMergeExec: [a@0 ASC]
               FilterExec: c@1 > 3
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     SortPreservingMergeExec: [a@0 ASC]
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC
             ");
         }
@@ -375,14 +376,14 @@ async fn test_replace_multiple_input_repartition_2(
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
             Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -393,7 +394,7 @@ async fn test_replace_multiple_input_repartition_2(
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
@@ -404,14 +405,14 @@ async fn test_replace_multiple_input_repartition_2(
               SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                   FilterExec: c@1 > 3
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
             Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                 FilterExec: c@1 > 3
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -460,7 +461,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
                 CoalesceBatchesExec: target_batch_size=8192
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
             Optimized:
@@ -468,7 +469,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -480,7 +481,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
                 CoalesceBatchesExec: target_batch_size=8192
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
@@ -492,7 +493,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
                 CoalesceBatchesExec: target_batch_size=8192
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
             Optimized:
@@ -500,7 +501,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -551,7 +552,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                       CoalesceBatchesExec: target_batch_size=8192
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                           StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
             Optimized:
@@ -560,7 +561,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                     CoalesceBatchesExec: target_batch_size=8192
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -573,7 +574,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                       CoalesceBatchesExec: target_batch_size=8192
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
@@ -586,7 +587,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
                       CoalesceBatchesExec: target_batch_size=8192
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
             Optimized:
@@ -595,7 +596,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
                     CoalesceBatchesExec: target_batch_size=8192
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -639,7 +640,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -650,7 +651,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
                 // Expected bounded results same with and without flag, because there is no executor  with ordering requirement
@@ -662,7 +663,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
               CoalesceBatchesExec: target_batch_size=8192
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -712,7 +713,7 @@ async fn test_with_multiple_replaceable_repartitions(
                   CoalesceBatchesExec: target_batch_size=8192
                     FilterExec: c@1 > 3
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                           StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
             Optimized:
@@ -721,7 +722,7 @@ async fn test_with_multiple_replaceable_repartitions(
                 CoalesceBatchesExec: target_batch_size=8192
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -734,7 +735,7 @@ async fn test_with_multiple_replaceable_repartitions(
                   CoalesceBatchesExec: target_batch_size=8192
                     FilterExec: c@1 > 3
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
@@ -747,7 +748,7 @@ async fn test_with_multiple_replaceable_repartitions(
                   CoalesceBatchesExec: target_batch_size=8192
                     FilterExec: c@1 > 3
                       RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                           DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
             Optimized:
@@ -756,7 +757,7 @@ async fn test_with_multiple_replaceable_repartitions(
                 CoalesceBatchesExec: target_batch_size=8192
                   FilterExec: c@1 > 3
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -804,7 +805,7 @@ async fn test_not_replace_with_different_orderings(
             SortPreservingMergeExec: [c@1 ASC]
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -814,7 +815,7 @@ async fn test_not_replace_with_different_orderings(
             SortPreservingMergeExec: [c@1 ASC]
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
                 // Expected bounded results same with and without flag, because ordering requirement of the executor is
@@ -826,7 +827,7 @@ async fn test_not_replace_with_different_orderings(
             SortPreservingMergeExec: [c@1 ASC]
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -870,13 +871,13 @@ async fn test_with_lost_ordering(
             SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
               CoalescePartitionsExec
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
             Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                   StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -886,7 +887,7 @@ async fn test_with_lost_ordering(
             SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
               CoalescePartitionsExec
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
@@ -896,13 +897,13 @@ async fn test_with_lost_ordering(
             SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
               CoalescePartitionsExec
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
             Optimized:
             SortPreservingMergeExec: [a@0 ASC NULLS LAST]
               RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
-                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                   DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -956,22 +957,22 @@ async fn test_with_lost_and_kept_ordering(
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
                         CoalescePartitionsExec
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                               StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
 
             Optimized:
             SortPreservingMergeExec: [c@1 ASC]
               FilterExec: c@1 > 3
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
                       CoalescePartitionsExec
                         RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                             StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -982,11 +983,11 @@ async fn test_with_lost_and_kept_ordering(
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
                         CoalescePartitionsExec
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                               DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         },
@@ -997,22 +998,22 @@ async fn test_with_lost_and_kept_ordering(
               SortExec: expr=[c@1 ASC], preserve_partitioning=[true]
                 FilterExec: c@1 > 3
                   RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                       SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
                         CoalescePartitionsExec
                           RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                               DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
 
             Optimized:
             SortPreservingMergeExec: [c@1 ASC]
               FilterExec: c@1 > 3
                 RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC
-                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                  RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                     SortExec: expr=[c@1 ASC], preserve_partitioning=[false]
                       CoalescePartitionsExec
                         RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                             DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
         }
@@ -1077,11 +1078,11 @@ async fn test_with_multiple_child_trees(
                 HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
                   CoalesceBatchesExec: target_batch_size=4096
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
                   CoalesceBatchesExec: target_batch_size=4096
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]
             ");
         },
@@ -1093,11 +1094,11 @@ async fn test_with_multiple_child_trees(
                 HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]
                   CoalesceBatchesExec: target_batch_size=4096
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
                   CoalesceBatchesExec: target_batch_size=4096
                     RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8
-                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+                      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
                         DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
             ");
                 // Expected bounded results same with and without flag, because ordering get lost during intermediate executor anyway.
@@ -1248,7 +1249,10 @@ fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
         )],
     );
     let res = plan_with_order_preserving_variants(requirements, false, true, Some(15));
-    assert_contains!(res.unwrap_err().to_string(), "CoalescePartitionsExec fetch [10] should be greater than or equal to SortExec fetch [15]");
+    assert_contains!(
+        res.unwrap_err().to_string(),
+        "CoalescePartitionsExec fetch [10] should be greater than or equal to SortExec fetch [15]"
+    );
 
     // Test sort is without fetch, expected to get the fetch value from the coalesced
     let requirements = OrderPreservationContext::new(

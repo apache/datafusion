@@ -19,6 +19,8 @@ use datafusion_expr::AggregateUDF;
 use std::sync::Arc;
 
 pub mod avg;
+pub mod try_sum;
+
 pub mod try_avg;
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -29,11 +31,19 @@ pub mod expr_fn {
         "Returns the avg of values for a column, or NULL if overflow occurs",
         arg1
     ));
+    export_functions!((
+        try_sum,
+        "Returns the sum of values for a column, or NULL if overflow occurs",
+        arg1
+    ));
 }
 
 // TODO: try use something like datafusion_functions_aggregate::create_func!()
 pub fn avg() -> Arc<AggregateUDF> {
     Arc::new(AggregateUDF::new_from_impl(avg::SparkAvg::new()))
+}
+pub fn try_sum() -> Arc<AggregateUDF> {
+    Arc::new(AggregateUDF::new_from_impl(try_sum::SparkTrySum::new()))
 }
 
 pub fn try_avg() -> Arc<AggregateUDF> {
@@ -41,5 +51,5 @@ pub fn try_avg() -> Arc<AggregateUDF> {
 }
 
 pub fn functions() -> Vec<Arc<AggregateUDF>> {
-    vec![avg(), try_avg()]
+    vec![avg(), try_avg(), try_sum()]
 }

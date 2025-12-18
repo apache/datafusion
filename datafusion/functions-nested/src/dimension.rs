@@ -28,7 +28,7 @@ use std::any::Any;
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_common::utils::list_ndims;
@@ -189,8 +189,7 @@ impl ScalarUDFImpl for ArrayNdims {
     }
 }
 
-/// Array_dims SQL function
-pub fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_dims", args)?;
     let data: Vec<_> = match array.data_type() {
         List(_) => as_list_array(&array)?
@@ -214,8 +213,7 @@ pub fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result))
 }
 
-/// Array_ndims SQL function
-pub fn array_ndims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_ndims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("array_ndims", args)?;
 
     fn general_list_ndims(array: &ArrayRef) -> Result<ArrayRef> {

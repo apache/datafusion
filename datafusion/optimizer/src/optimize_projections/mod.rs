@@ -25,13 +25,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
-    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    DFSchema, HashMap, JoinType, Result,
+    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Distinct, EmptyRelation, Expr, Projection,
-    TableScan, Unnest, Window,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
+    logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -77,7 +77,7 @@ use datafusion_common::tree_node::{
 pub struct OptimizeProjections {}
 
 impl OptimizeProjections {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -138,7 +138,7 @@ fn optimize_projections(
         LogicalPlan::Projection(proj) => {
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
                 rewrite_projection_given_requirements(proj, config, &indices)
-            })
+            });
         }
         LogicalPlan::Aggregate(aggregate) => {
             // Split parent requirements to GROUP BY and aggregate sections:
@@ -341,11 +341,14 @@ fn optimize_projections(
                 return Ok(Transformed::no(plan));
             };
             let children = extension.node.inputs();
-            if children.len() != necessary_children_indices.len() {
-                return internal_err!("Inconsistent length between children and necessary children indices. \
-                Make sure `.necessary_children_exprs` implementation of the `UserDefinedLogicalNode` is \
-                consistent with actual children length for the node.");
-            }
+            assert_eq_or_internal_err!(
+                children.len(),
+                necessary_children_indices.len(),
+                "Inconsistent length between children and necessary children indices. \
+                Make sure `.necessary_children_exprs` implementation of the \
+                `UserDefinedLogicalNode` is consistent with actual children length \
+                for the node."
+            );
             children
                 .into_iter()
                 .zip(necessary_children_indices)
@@ -432,11 +435,11 @@ fn optimize_projections(
     // Required indices are currently ordered (child0, child1, ...)
     // but the loop pops off the last element, so we need to reverse the order
     child_required_indices.reverse();
-    if child_required_indices.len() != plan.inputs().len() {
-        return internal_err!(
-            "OptimizeProjection: child_required_indices length mismatch with plan inputs"
-        );
-    }
+    assert_eq_or_internal_err!(
+        child_required_indices.len(),
+        plan.inputs().len(),
+        "OptimizeProjection: child_required_indices length mismatch with plan inputs"
+    );
 
     // Rewrite children of the plan
     let transformed_plan = plan.map_children(|child| {
@@ -879,12 +882,11 @@ pub fn is_projection_unnecessary(
 /// subqueries like scalar, EXISTS, or IN. These cases prevent projection
 /// pushdown for now because we cannot safely reason about their column usage.
 fn plan_contains_other_subqueries(plan: &LogicalPlan, cte_name: &str) -> bool {
-    if let LogicalPlan::SubqueryAlias(alias) = plan {
-        if alias.alias.table() != cte_name
-            && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
-        {
-            return true;
-        }
+    if let LogicalPlan::SubqueryAlias(alias) = plan
+        && alias.alias.table() != cte_name
+        && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
+    {
+        return true;
     }
 
     let mut found = false;
@@ -954,14 +956,15 @@ mod tests {
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        binary_expr, build_join_schema,
+        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator, Projection,
+        UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
+        build_join_schema,
         builder::table_scan_with_filters,
         col,
         expr::{self, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
-        not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
-        Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
+        not, try_cast, when,
     };
     use insta::assert_snapshot;
 

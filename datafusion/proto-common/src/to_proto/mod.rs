@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::protobuf_common as protobuf;
 use crate::protobuf_common::{
-    arrow_type::ArrowTypeEnum, scalar_value::Value, EmptyMessage,
+    EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::csv::WriterBuilder;
@@ -32,6 +32,8 @@ use arrow::ipc::writer::{
     CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
 };
 use datafusion_common::{
+    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, JoinSide, ScalarValue, Statistics,
     config::{
         CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
@@ -40,8 +42,6 @@ use datafusion_common::{
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
-    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, JoinSide, ScalarValue, Statistics,
 };
 
 #[derive(Debug)]
@@ -795,6 +795,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
             sum_value: Some(protobuf::Precision::from(&s.sum_value)),
             null_count: Some(protobuf::Precision::from(&s.null_count)),
             distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
+            byte_size: Some(protobuf::Precision::from(&s.byte_size)),
         }
     }
 }
@@ -856,6 +857,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             metadata_size_hint_opt: value.metadata_size_hint.map(|v| protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v as u64)),
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
+            force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.clone(),
@@ -974,6 +976,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             null_regex: opts.null_regex.clone().unwrap_or_default(),
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
             truncated_rows: opts.truncated_rows.map_or_else(Vec::new, |h| vec![h as u8]),
+            compression_level: opts.compression_level,
         })
     }
 }
@@ -986,6 +989,7 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
         Ok(protobuf::JsonOptions {
             compression: compression.into(),
             schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
+            compression_level: opts.compression_level,
         })
     }
 }
@@ -1018,11 +1022,11 @@ fn encode_scalar_nested_value(
         ))
     })?;
 
-    let gen = IpcDataGenerator {};
+    let ipc_gen = IpcDataGenerator {};
     let mut dict_tracker = DictionaryTracker::new(false);
     let write_options = IpcWriteOptions::default();
     let mut compression_context = CompressionContext::default();
-    let (encoded_dictionaries, encoded_message) = gen
+    let (encoded_dictionaries, encoded_message) = ipc_gen
         .encode(
             &batch,
             &mut dict_tracker,

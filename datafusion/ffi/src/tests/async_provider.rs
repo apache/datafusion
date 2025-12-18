@@ -60,7 +60,7 @@ fn async_table_provider_thread(
     mut shutdown: mpsc::Receiver<bool>,
     mut batch_request: mpsc::Receiver<bool>,
     batch_sender: broadcast::Sender<Option<RecordBatch>>,
-    tokio_rt: mpsc::Sender<Handle>,
+    tokio_rt: &mpsc::Sender<Handle>,
 ) {
     let runtime = Arc::new(
         tokio::runtime::Builder::new_current_thread()
@@ -107,7 +107,7 @@ pub fn start_async_provider() -> (AsyncTableProvider, Handle) {
             shutdown_rx,
             batch_request_rx,
             record_batch_tx,
-            tokio_rt_tx,
+            &tokio_rt_tx,
         )
     }));
 

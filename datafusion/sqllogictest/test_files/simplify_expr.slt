@@ -26,9 +26,8 @@ logical_plan
 01)Filter: t.a = Int32(3)
 02)--TableScan: t projection=[a]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: a@0 = 3
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: a@0 = 3
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # test regex exprs
 query TT
@@ -38,9 +37,8 @@ logical_plan
 01)Filter: t.b ~ Utf8View(".*")
 02)--TableScan: t projection=[b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: b@0 ~ .*
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: b@0 ~ .*
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select b from t where b !~ '.*'
@@ -49,9 +47,8 @@ logical_plan
 01)Filter: t.b !~ Utf8View(".*")
 02)--TableScan: t projection=[b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: b@0 !~ .*
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: b@0 !~ .*
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T
 select b from t where b ~ '.*'
@@ -70,9 +67,8 @@ logical_plan
 01)Filter: t.a IS NOT NULL OR Boolean(NULL)
 02)--TableScan: t projection=[a, b]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: a@0 IS NOT NULL OR NULL
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: a@0 IS NOT NULL OR NULL
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -117,4 +113,3 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[[{x:100}] as a]
 02)--PlaceholderRowExec
-

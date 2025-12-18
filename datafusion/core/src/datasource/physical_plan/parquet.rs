@@ -38,7 +38,7 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
-        ArrayRef, AsArray, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        ArrayRef, AsArray, Date64Array, Int8Array, Int32Array, Int64Array, StringArray,
         StringViewArray, StructArray, TimestampNanosecondArray,
     };
     use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
@@ -48,7 +48,7 @@ mod tests {
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{assert_contains, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, assert_contains};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
@@ -60,7 +60,7 @@ mod tests {
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
-    use datafusion_expr::{col, lit, when, Expr};
+    use datafusion_expr::{Expr, col, lit, when};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::analyze::AnalyzeExec;
     use datafusion_physical_plan::collect;
@@ -198,6 +198,7 @@ mod tests {
                 FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
                     .with_file_group(file_group)
                     .with_projection_indices(self.projection.clone())
+                    .unwrap()
                     .build();
             DataSourceExec::from_data_source(base_config)
         }
@@ -336,13 +337,13 @@ mod tests {
             .await;
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+
         | c1 | c2 |
         +----+----+
         | 1  |    |
         +----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -394,13 +395,13 @@ mod tests {
             .await;
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+
         | c1 | c2 |
         +----+----+
         | 1  |    |
         +----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -456,13 +457,13 @@ mod tests {
             .await;
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+----+
         | c1 | c2 | c3 |
         +----+----+----+
         | 1  |    | 7  |
         +----+----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -518,13 +519,13 @@ mod tests {
             .await;
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+----+
         | c1 | c2 | c3 |
         +----+----+----+
         |    |    | 7  |
         +----+----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -567,13 +568,13 @@ mod tests {
 
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+----+
         | c1 | c2 | c3 |
         +----+----+----+
         | 1  |    | 10 |
         +----+----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -597,7 +598,7 @@ mod tests {
 
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+----+
         | c1 | c2 | c3 |
         +----+----+----+
@@ -605,7 +606,7 @@ mod tests {
         | 4  |    | 40 |
         | 5  |    | 50 |
         +----+----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -634,7 +635,7 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&read), @r"
         +-----+----+----+
         | c1  | c2 | c3 |
         +-----+----+----+
@@ -648,7 +649,7 @@ mod tests {
         | bar |    |    |
         | bar |    |    |
         +-----+----+----+
-        "###);
+        ");
     }
 
     #[tokio::test]
@@ -749,18 +750,18 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+----+
-            | c1  | c3 | c2 |
-            +-----+----+----+
-            |     |    |    |
-            |     | 10 | 1  |
-            |     | 20 |    |
-            |     | 20 | 2  |
-            | Foo | 10 |    |
-            | bar |    |    |
-            +-----+----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+----+
+        | c1  | c3 | c2 |
+        +-----+----+----+
+        |     |    |    |
+        |     | 10 | 1  |
+        |     | 20 |    |
+        |     | 20 | 2  |
+        | Foo | 10 |    |
+        | bar |    |    |
+        +-----+----+----+
+        ");
     }
 
     #[tokio::test]
@@ -781,14 +782,14 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r"
         +----+----+----+
         | c1 | c3 | c2 |
         +----+----+----+
         |    | 10 | 1  |
         |    | 20 | 2  |
         +----+----+----+
-        "###);
+        ");
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 4);
@@ -824,7 +825,7 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&read), @r"
         +-----+-----+
         | c1  | c4  |
         +-----+-----+
@@ -835,7 +836,7 @@ mod tests {
         | bar |     |
         | bar |     |
         +-----+-----+
-        "###);
+        ");
     }
 
     #[tokio::test]
@@ -1048,18 +1049,18 @@ mod tests {
         // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `DataSourceExec`,
         // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+
-            | c1  | c2 |
-            +-----+----+
-            |     |    |
-            |     |    |
-            |     | 1  |
-            |     | 2  |
-            | Foo |    |
-            | bar |    |
-            +-----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+
+        | c1  | c2 |
+        +-----+----+
+        |     |    |
+        |     |    |
+        |     | 1  |
+        |     | 2  |
+        | Foo |    |
+        | bar |    |
+        +-----+----+
+        ");
     }
 
     #[tokio::test]
@@ -1084,13 +1085,13 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r"
         +----+----+
         | c1 | c2 |
         +----+----+
         |    | 1  |
         +----+----+
-        "###);
+        ");
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
@@ -1144,7 +1145,7 @@ mod tests {
             .round_trip(vec![batch1, batch2, batch3, batch4])
             .await;
 
-        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r"
         +------+----+
         | c1   | c2 |
         +------+----+
@@ -1161,7 +1162,7 @@ mod tests {
         | Foo2 |    |
         | Foo3 |    |
         +------+----+
-        "###);
+        ");
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // There are 4 rows pruned in each of batch2, batch3, and
@@ -1193,14 +1194,14 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+
-            | c1  | c2 |
-            +-----+----+
-            | Foo | 1  |
-            | bar |    |
-            +-----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+
+        | c1  | c2 |
+        +-----+----+
+        | Foo | 1  |
+        | bar |    |
+        +-----+----+
+        ");
     }
 
     #[tokio::test]
@@ -1223,15 +1224,15 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+
-            | c1  | c2 |
-            +-----+----+
-            |     | 2  |
-            | Foo | 1  |
-            | bar |    |
-            +-----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+
+        | c1  | c2 |
+        +-----+----+
+        |     | 2  |
+        | Foo | 1  |
+        | bar |    |
+        +-----+----+
+        ");
     }
 
     #[tokio::test]
@@ -1256,7 +1257,7 @@ mod tests {
             ("c3", c3.clone()),
         ]);
 
-        // batch2: c3(int8), c2(int64), c1(string), c4(string)
+        // batch2: c3(date64), c2(int64), c1(string)
         let batch2 = create_batch(vec![("c3", c4), ("c2", c2), ("c1", c1)]);
 
         let table_schema = Schema::new(vec![
@@ -1270,8 +1271,10 @@ mod tests {
             .with_table_schema(Arc::new(table_schema))
             .round_trip_to_batches(vec![batch1, batch2])
             .await;
-        assert_contains!(read.unwrap_err().to_string(),
-            "Cannot cast file schema field c3 of type Date64 to table schema field of type Int8");
+        assert_contains!(
+            read.unwrap_err().to_string(),
+            "Cannot cast column 'c3' from 'Date64' (physical data type) to 'Int8' (logical data type)"
+        );
     }
 
     #[tokio::test]
@@ -1664,6 +1667,7 @@ mod tests {
             .with_file(partitioned_file)
             // file has 10 cols so index 12 should be month and 13 should be day
             .with_projection_indices(Some(vec![0, 1, 2, 12, 13]))
+            .unwrap()
             .build();
 
         let parquet_exec = DataSourceExec::from_data_source(config);
@@ -1678,20 +1682,20 @@ mod tests {
         let batch = results.next().await.unwrap()?;
         assert_eq!(batch.schema().as_ref(), &expected_schema);
 
-        assert_snapshot!(batches_to_string(&[batch]),@r###"
-            +----+----------+-------------+-------+-----+
-            | id | bool_col | tinyint_col | month | day |
-            +----+----------+-------------+-------+-----+
-            | 4  | true     | 0           | 10    | 26  |
-            | 5  | false    | 1           | 10    | 26  |
-            | 6  | true     | 0           | 10    | 26  |
-            | 7  | false    | 1           | 10    | 26  |
-            | 2  | true     | 0           | 10    | 26  |
-            | 3  | false    | 1           | 10    | 26  |
-            | 0  | true     | 0           | 10    | 26  |
-            | 1  | false    | 1           | 10    | 26  |
-            +----+----------+-------------+-------+-----+
-        "###);
+        assert_snapshot!(batches_to_string(&[batch]),@r"
+        +----+----------+-------------+-------+-----+
+        | id | bool_col | tinyint_col | month | day |
+        +----+----------+-------------+-------+-----+
+        | 4  | true     | 0           | 10    | 26  |
+        | 5  | false    | 1           | 10    | 26  |
+        | 6  | true     | 0           | 10    | 26  |
+        | 7  | false    | 1           | 10    | 26  |
+        | 2  | true     | 0           | 10    | 26  |
+        | 3  | false    | 1           | 10    | 26  |
+        | 0  | true     | 0           | 10    | 26  |
+        | 1  | false    | 1           | 10    | 26  |
+        +----+----------+-------------+-------+-----+
+        ");
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -1763,14 +1767,14 @@ mod tests {
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
-        assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()),@r###"
-            +-----+
-            | int |
-            +-----+
-            | 4   |
-            | 5   |
-            +-----+
-        "###);
+        assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()),@r"
+        +-----+
+        | int |
+        +-----+
+        | 4   |
+        | 5   |
+        +-----+
+        ");
         let (page_index_pruned, page_index_matched) =
             get_pruning_metric(&metrics, "page_index_rows_pruned");
         assert_eq!(page_index_pruned, 4);
@@ -1816,14 +1820,14 @@ mod tests {
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // assert the batches and some metrics
-        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r###"
-            +-----+
-            | c1  |
-            +-----+
-            | Foo |
-            | zzz |
-            +-----+
-        "###);
+        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r"
+        +-----+
+        | c1  |
+        +-----+
+        | Foo |
+        | zzz |
+        +-----+
+        ");
 
         // pushdown predicates have eliminated all 4 bar rows and the
         // null row for 5 rows total
@@ -1870,6 +1874,100 @@ mod tests {
 
         // check the projection
         assert_contains!(&explain, "projection=[c1]");
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_metrics_with_multiple_predicates() {
+        // Test that metrics are correctly calculated when multiple predicates
+        // are pushed down (connected with AND). This ensures we don't double-count
+        // rows when multiple predicates filter the data sequentially.
+
+        // Create a batch with two columns: c1 (string) and c2 (int32)
+        // Total: 10 rows
+        let c1: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("foo"), // 0 - passes c1 filter, fails c2 filter (5 <= 10)
+            Some("bar"), // 1 - fails c1 filter
+            Some("bar"), // 2 - fails c1 filter
+            Some("baz"), // 3 - passes both filters (20 > 10)
+            Some("foo"), // 4 - passes both filters (12 > 10)
+            Some("bar"), // 5 - fails c1 filter
+            Some("baz"), // 6 - passes both filters (25 > 10)
+            Some("foo"), // 7 - passes c1 filter, fails c2 filter (7 <= 10)
+            Some("bar"), // 8 - fails c1 filter
+            Some("qux"), // 9 - passes both filters (30 > 10)
+        ]));
+
+        let c2: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(5),
+            Some(15),
+            Some(8),
+            Some(20),
+            Some(12),
+            Some(9),
+            Some(25),
+            Some(7),
+            Some(18),
+            Some(30),
+        ]));
+
+        let batch = create_batch(vec![("c1", c1), ("c2", c2)]);
+
+        // Create filter: c1 != 'bar' AND c2 > 10
+        //
+        // First predicate (c1 != 'bar'):
+        //   - Rows passing: 0, 3, 4, 6, 7, 9 (6 rows)
+        //   - Rows pruned: 1, 2, 5, 8 (4 rows)
+        //
+        // Second predicate (c2 > 10) on remaining 6 rows:
+        //   - Rows passing: 3, 4, 6, 9 (4 rows with c2 = 20, 12, 25, 30)
+        //   - Rows pruned: 0, 7 (2 rows with c2 = 5, 7)
+        //
+        // Expected final metrics:
+        //   - pushdown_rows_matched: 4 (final result)
+        //   - pushdown_rows_pruned: 4 + 2 = 6 (cumulative)
+        //   - Total: 4 + 6 = 10
+
+        let filter = col("c1").not_eq(lit("bar")).and(col("c2").gt(lit(10)));
+
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .round_trip(vec![batch])
+            .await;
+
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        // Verify the result rows
+        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r"
+        +-----+----+
+        | c1  | c2 |
+        +-----+----+
+        | baz | 20 |
+        | foo | 12 |
+        | baz | 25 |
+        | qux | 30 |
+        +-----+----+
+        ");
+
+        // Verify metrics - this is the key test
+        let pushdown_rows_matched = get_value(&metrics, "pushdown_rows_matched");
+        let pushdown_rows_pruned = get_value(&metrics, "pushdown_rows_pruned");
+
+        assert_eq!(
+            pushdown_rows_matched, 4,
+            "Expected 4 rows to pass both predicates"
+        );
+        assert_eq!(
+            pushdown_rows_pruned, 6,
+            "Expected 6 rows to be pruned (4 by first predicate + 2 by second predicate)"
+        );
+
+        // The sum should equal the total number of rows
+        assert_eq!(
+            pushdown_rows_matched + pushdown_rows_pruned,
+            10,
+            "matched + pruned should equal total rows"
+        );
     }
 
     #[tokio::test]
@@ -2112,13 +2210,13 @@ mod tests {
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         assert_eq!(batch.len(), 1);
-        insta::assert_snapshot!(batches_to_string(&batch),@r###"
-            +---------------------+----+--------+
-            | struct              | id | name   |
-            +---------------------+----+--------+
-            | {id: 4, name: aaa2} | 2  | test02 |
-            +---------------------+----+--------+
-        "###);
+        insta::assert_snapshot!(batches_to_string(&batch),@r"
+        +---------------------+----+--------+
+        | struct              | id | name   |
+        +---------------------+----+--------+
+        | {id: 4, name: aaa2} | 2  | test02 |
+        +---------------------+----+--------+
+        ");
         Ok(())
     }
 
@@ -2141,13 +2239,13 @@ mod tests {
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         assert_eq!(batch.len(), 1);
-        insta::assert_snapshot!(batches_to_string(&batch),@r###"
-            +---------------------+----+--------+
-            | struct              | id | name   |
-            +---------------------+----+--------+
-            | {id: 4, name: aaa2} | 2  | test02 |
-            +---------------------+----+--------+
-        "###);
+        insta::assert_snapshot!(batches_to_string(&batch),@r"
+        +---------------------+----+--------+
+        | struct              | id | name   |
+        +---------------------+----+--------+
+        | {id: 4, name: aaa2} | 2  | test02 |
+        +---------------------+----+--------+
+        ");
         Ok(())
     }
 

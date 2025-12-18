@@ -31,7 +31,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
 use datafusion::prelude::{
-    col, lit, lit_timestamp_nano, Expr, ParquetReadOptions, SessionContext,
+    Expr, ParquetReadOptions, SessionContext, col, lit, lit_timestamp_nano,
 };
 use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_expr::utils::{conjunction, disjunction, split_conjunction};
@@ -634,6 +634,27 @@ async fn predicate_cache_default() -> datafusion_common::Result<()> {
 async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
+    let ctx = SessionContext::new_with_config(config);
+    // The cache is on by default, and used when filter pushdown is enabled
+    PredicateCacheTest {
+        expected_inner_records: 8,
+        expected_records: 7, // reads more than necessary from the cache as then another bitmap is applied
+    }
+    .run(&ctx)
+    .await
+}
+
+#[tokio::test]
+async fn predicate_cache_pushdown_default_selections_only()
+-> datafusion_common::Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    // forcing filter selections minimizes the number of rows read from the cache
+    config
+        .options_mut()
+        .execution
+        .parquet
+        .force_filter_selections = true;
     let ctx = SessionContext::new_with_config(config);
     // The cache is on by default, and used when filter pushdown is enabled
     PredicateCacheTest {

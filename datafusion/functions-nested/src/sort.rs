@@ -19,7 +19,7 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericListArray, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, GenericListArray, NullBufferBuilder, OffsetSizeTrait, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::SortColumn;
@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, FieldRef};
 use arrow::{compute, compute::SortOptions};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -164,8 +164,7 @@ impl ScalarUDFImpl for ArraySort {
     }
 }
 
-/// Array_sort SQL function
-pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 3 {
         return exec_err!("array_sort expects one to three arguments");
     }
@@ -218,8 +217,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Array_sort SQL function
-pub fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
+fn array_sort_generic<OffsetSize: OffsetSizeTrait>(
     list_array: &GenericListArray<OffsetSize>,
     field: &FieldRef,
     sort_options: Option<SortOptions>,

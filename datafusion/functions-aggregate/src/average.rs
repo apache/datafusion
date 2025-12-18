@@ -24,25 +24,22 @@ use arrow::array::{
 
 use arrow::compute::sum;
 use arrow::datatypes::{
-    i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, DecimalType, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Field, FieldRef, Float64Type, TimeUnit,
-    UInt64Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
-    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
+    DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType,
+    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type, i256,
 };
-use datafusion_common::plan_err;
-use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
-};
+use datafusion_common::types::{NativeType, logical_float64};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::Volatility::Immutable;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
-    ReversedUDAF, Signature,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, Expr,
+    GroupsAccumulator, ReversedUDAF, Signature, TypeSignature, TypeSignatureClass,
+    Volatility,
 };
-
 use datafusion_functions_aggregate_common::aggregate::avg_distinct::{
     DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
 };
@@ -50,7 +47,6 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumu
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
 };
-
 use datafusion_functions_aggregate_common::utils::DecimalAverager;
 use datafusion_macros::user_doc;
 use log::debug;
@@ -101,7 +97,24 @@ pub struct Avg {
 impl Avg {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Immutable),
+            // Supported types smallint, int, bigint, real, double precision, decimal, or interval
+            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Decimal,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Duration,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Integer, TypeSignatureClass::Float],
+                        NativeType::Float64,
+                    )]),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("mean")],
         }
     }
@@ -124,28 +137,6 @@ impl AggregateUDFImpl for Avg {
 
     fn signature(&self) -> &Signature {
         &self.signature
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [args] = take_function_args(self.name(), arg_types)?;
-
-        // Supported types smallint, int, bigint, real, double precision, decimal, or interval
-        // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-        fn coerced_type(data_type: &DataType) -> Result<DataType> {
-            match &data_type {
-                DataType::Decimal32(p, s) => Ok(DataType::Decimal32(*p, *s)),
-                DataType::Decimal64(p, s) => Ok(DataType::Decimal64(*p, *s)),
-                DataType::Decimal128(p, s) => Ok(DataType::Decimal128(*p, *s)),
-                DataType::Decimal256(p, s) => Ok(DataType::Decimal256(*p, *s)),
-                d if d.is_numeric() => Ok(DataType::Float64),
-                DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
-                DataType::Dictionary(_, v) => coerced_type(v.as_ref()),
-                _ => {
-                    plan_err!("Avg does not support inputs of type {data_type}.")
-                }
-            }
-        }
-        Ok(vec![coerced_type(args)?])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -319,12 +310,14 @@ impl AggregateUDFImpl for Avg {
             };
             // Similar to datafusion_functions_aggregate::sum::Sum::state_fields
             // since the accumulator uses DistinctSumAccumulator internally.
-            Ok(vec![Field::new_list(
-                format_state_name(args.name, "avg distinct"),
-                Field::new_list_field(dt, true),
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new_list(
+                    format_state_name(args.name, "avg distinct"),
+                    Field::new_list_field(dt, true),
+                    false,
+                )
+                .into(),
+            ])
         } else {
             Ok(vec![
                 Field::new(

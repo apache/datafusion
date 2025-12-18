@@ -19,7 +19,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{internal_err, DFSchema};
+use datafusion_common::{DFSchema, assert_or_internal_err};
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
@@ -42,7 +42,7 @@ type EquijoinPredicate = (Expr, Expr);
 pub struct ExtractEquijoinPredicate;
 
 impl ExtractEquijoinPredicate {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -223,13 +223,12 @@ fn split_op_and_other_join_predicates(
     right_schema: &DFSchema,
     operator: Operator,
 ) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
-    if !matches!(operator, Operator::Eq | Operator::IsNotDistinctFrom) {
-        return internal_err!(
-            "split_op_and_other_join_predicates only supports 'Eq' or 'IsNotDistinctFrom' operators, \
-            but received: {:?}",
-            operator
-        );
-    }
+    assert_or_internal_err!(
+        matches!(operator, Operator::Eq | Operator::IsNotDistinctFrom),
+        "split_op_and_other_join_predicates only supports 'Eq' or 'IsNotDistinctFrom' operators, \
+        but received: {:?}",
+        operator
+    );
 
     let exprs = split_conjunction_owned(filter);
 
@@ -274,7 +273,7 @@ mod tests {
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
-        col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
+        JoinType, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
     use std::sync::Arc;
 

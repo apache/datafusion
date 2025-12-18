@@ -23,10 +23,75 @@
 
 ## Original Query: SELECT abs(-1);
 ## PySpark 3.5.5 Result: {'abs(-1)': 1, 'typeof(abs(-1))': 'int', 'typeof(-1)': 'int'}
-#query
-#SELECT abs(-1::int);
+
+# abs: signed int and NULL
+query IIIIR
+SELECT abs(-127::TINYINT), abs(-32767::SMALLINT), abs(-2147483647::INT), abs(-9223372036854775807::BIGINT), abs(NULL);
+----
+127 32767 2147483647 9223372036854775807 NULL
+
+
+# See https://github.com/apache/datafusion/issues/18794 for operator precedence
+# abs: signed int minimal values
+query IIII
+select abs((-128)::TINYINT), abs((-32768)::SMALLINT), abs((-2147483648)::INT), abs((-9223372036854775808)::BIGINT)
+----
+-128 -32768 -2147483648 -9223372036854775808
+
+# abs: floats, NULL, NaN, -0, infinity, -infinity
+query RRRRRRRRRRRR
+SELECT abs(-1.0::FLOAT), abs(0.::FLOAT), abs(-0.::FLOAT), abs(-0::FLOAT), abs(NULL::FLOAT), abs('NaN'::FLOAT), abs('inf'::FLOAT), abs('+inf'::FLOAT), abs('-inf'::FLOAT), abs('infinity'::FLOAT), abs('+infinity'::FLOAT), abs('-infinity'::FLOAT)
+----
+1 0 0 0 NULL NaN Infinity Infinity Infinity Infinity Infinity Infinity
+
+# abs: doubles, NULL, NaN, -0, infinity, -infinity
+query RRRRRRRRRRRR
+SELECT abs(-1.0::DOUBLE), abs(0.::DOUBLE), abs(-0.::DOUBLE), abs(-0::DOUBLE), abs(NULL::DOUBLE), abs('NaN'::DOUBLE), abs('inf'::DOUBLE), abs('+inf'::DOUBLE), abs('-inf'::DOUBLE), abs('infinity'::DOUBLE), abs('+infinity'::DOUBLE), abs('-infinity'::DOUBLE)
+----
+1 0 0 0 NULL NaN Infinity Infinity Infinity Infinity Infinity Infinity
+
+# abs: decimal128 and decimal256
+statement ok
+CREATE TABLE test_nullable_decimal(
+    c1 DECIMAL(10, 2),    /* Decimal128 */
+    c2 DECIMAL(38, 10),   /* Decimal128 with max precision */
+    c3 DECIMAL(40, 2),    /* Decimal256 */
+    c4 DECIMAL(76, 10)    /* Decimal256 with max precision */
+ ) AS VALUES
+    (0, 0, 0, 0),
+    (NULL, NULL, NULL, NULL);
+
+query I
+INSERT into test_nullable_decimal values
+    (
+        -99999999.99,
+        '-9999999999999999999999999999.9999999999',
+        '-99999999999999999999999999999999999999.99',
+        '-999999999999999999999999999999999999999999999999999999999999999999.9999999999'
+    ),
+    (
+        99999999.99,
+        '9999999999999999999999999999.9999999999',
+        '99999999999999999999999999999999999999.99',
+        '999999999999999999999999999999999999999999999999999999999999999999.9999999999'
+    )
+----
+2
+
+query RRRR rowsort
+SELECT abs(c1), abs(c2), abs(c3), abs(c4) FROM test_nullable_decimal
+----
+0 0 0 0
+99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
+99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
+NULL NULL NULL NULL
+
+
+statement ok
+drop table test_nullable_decimal
 
 ## Original Query: SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);
 ## PySpark 3.5.5 Result: {"abs(INTERVAL '-1-1' YEAR TO MONTH)": 13, "typeof(abs(INTERVAL '-1-1' YEAR TO MONTH))": 'interval year to month', "typeof(INTERVAL '-1-1' YEAR TO MONTH)": 'interval year to month'}
 #query
 #SELECT abs(INTERVAL '-1-1' YEAR TO MONTH::interval year to month);
+# See GitHub issue for ANSI interval support: https://github.com/apache/datafusion/issues/18793

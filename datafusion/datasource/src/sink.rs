@@ -24,15 +24,15 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequirements};
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream, execute_input_stream,
 };
 
 use async_trait::async_trait;
@@ -226,9 +226,11 @@ impl ExecutionPlan for DataSinkExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("DataSinkExec can only be called on partition 0!");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "DataSinkExec can only be called on partition 0!"
+        );
         let data = execute_input_stream(
             Arc::clone(&self.input),
             Arc::clone(self.sink.schema()),

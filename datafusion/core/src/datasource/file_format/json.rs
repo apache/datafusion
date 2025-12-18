@@ -36,7 +36,7 @@ mod tests {
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field};
@@ -187,11 +187,11 @@ mod tests {
 
         let re = Regex::new(r"file_groups=\{(\d+) group").unwrap();
 
-        if let Some(captures) = re.captures(&plan) {
-            if let Some(match_) = captures.get(1) {
-                let count = match_.as_str().parse::<usize>().unwrap();
-                return Ok(count);
-            }
+        if let Some(captures) = re.captures(&plan)
+            && let Some(match_) = captures.get(1)
+        {
+            let count = match_.as_str().parse::<usize>().unwrap();
+            return Ok(count);
         }
 
         internal_err!("Query contains no Exec: file_groups")
@@ -218,13 +218,13 @@ mod tests {
         let result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_num_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&result),@r###"
-            +----------------------+
-            | sum(json_parallel.a) |
-            +----------------------+
-            | -7                   |
-            +----------------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&result),@r"
+        +----------------------+
+        | sum(json_parallel.a) |
+        +----------------------+
+        | -7                   |
+        +----------------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions);
 
@@ -249,10 +249,10 @@ mod tests {
 
         let result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -284,15 +284,15 @@ mod tests {
         }
         assert_eq!(deserializer.next()?, DeserializerOutput::InputExhausted);
 
-        assert_snapshot!(batches_to_string(&[all_batches]),@r###"
-            +----+----+----+----+----+
-            | c1 | c2 | c3 | c4 | c5 |
-            +----+----+----+----+----+
-            | 1  | 2  | 3  | 4  | 5  |
-            | 6  | 7  | 8  | 9  | 10 |
-            | 11 | 12 | 13 | 14 | 15 |
-            +----+----+----+----+----+
-        "###);
+        assert_snapshot!(batches_to_string(&[all_batches]),@r"
+        +----+----+----+----+----+
+        | c1 | c2 | c3 | c4 | c5 |
+        +----+----+----+----+----+
+        | 1  | 2  | 3  | 4  | 5  |
+        | 6  | 7  | 8  | 9  | 10 |
+        | 11 | 12 | 13 | 14 | 15 |
+        +----+----+----+----+----+
+        ");
 
         Ok(())
     }
@@ -324,14 +324,14 @@ mod tests {
         }
         assert_eq!(deserializer.next()?, DeserializerOutput::RequiresMoreData);
 
-        insta::assert_snapshot!(fmt_batches(&[all_batches]),@r###"
-            +----+----+----+----+----+
-            | c1 | c2 | c3 | c4 | c5 |
-            +----+----+----+----+----+
-            | 1  | 2  | 3  | 4  | 5  |
-            | 6  | 7  | 8  | 9  | 10 |
-            +----+----+----+----+----+
-        "###);
+        insta::assert_snapshot!(fmt_batches(&[all_batches]),@r"
+        +----+----+----+----+----+
+        | c1 | c2 | c3 | c4 | c5 |
+        +----+----+----+----+----+
+        | 1  | 2  | 3  | 4  | 5  |
+        | 6  | 7  | 8  | 9  | 10 |
+        +----+----+----+----+----+
+        ");
 
         Ok(())
     }

@@ -26,19 +26,18 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
     array::{Array, ArrayRef, AsArray},
     datatypes::{
-        ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-        Decimal64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
+        ArrowNativeType, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
     },
 };
 
 use arrow::array::ArrowNativeTypeOp;
 
+use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, DataFusionError, HashSet, Result,
-    ScalarValue,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_datafusion_err, plan_err, utils::take_function_args,
 };
-use datafusion_expr::expr::{AggregateFunction, Sort};
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -46,9 +45,14 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{
+    expr::{AggregateFunction, Cast, Sort},
+    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+    simplify::SimplifyInfo,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
@@ -153,7 +157,7 @@ impl PercentileCont {
         }
     }
 
-    fn create_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn create_accumulator(&self, args: &AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
         let is_descending = args
@@ -173,7 +177,7 @@ impl PercentileCont {
                 if args.is_distinct {
                     Ok(Box::new(DistinctPercentileContAccumulator::<$t> {
                         data_type: $dt.clone(),
-                        distinct_values: HashSet::new(),
+                        distinct_values: GenericDistinctBuffer::new($dt),
                         percentile,
                     }))
                 } else {
@@ -283,16 +287,18 @@ impl AggregateUDFImpl for PercentileCont {
             "percentile_cont"
         };
 
-        Ok(vec![Field::new(
-            format_state_name(args.name, state_name),
-            DataType::List(Arc::new(field)),
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, state_name),
+                DataType::List(Arc::new(field)),
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        self.create_accumulator(acc_args)
+        self.create_accumulator(&acc_args)
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -304,12 +310,12 @@ impl AggregateUDFImpl for PercentileCont {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let num_args = args.exprs.len();
-        if num_args != 2 {
-            return internal_err!(
-                "percentile_cont should have 2 args, but found num args:{}",
-                args.exprs.len()
-            );
-        }
+        assert_eq_or_internal_err!(
+            num_args,
+            2,
+            "percentile_cont should have 2 args, but found num args:{}",
+            num_args
+        );
 
         let percentile = validate_percentile_expr(&args.exprs[1], "PERCENTILE_CONT")?;
 
@@ -358,8 +364,10 @@ impl AggregateUDFImpl for PercentileCont {
         }
     }
 
-    fn supports_null_handling_clause(&self) -> bool {
-        false
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        Some(Box::new(|aggregate_function, info| {
+            simplify_percentile_cont_aggregate(aggregate_function, info)
+        }))
     }
 
     fn supports_within_group_clause(&self) -> bool {
@@ -368,6 +376,88 @@ impl AggregateUDFImpl for PercentileCont {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PercentileRewriteTarget {
+    Min,
+    Max,
+}
+
+#[expect(clippy::needless_pass_by_value)]
+fn simplify_percentile_cont_aggregate(
+    aggregate_function: AggregateFunction,
+    info: &dyn SimplifyInfo,
+) -> Result<Expr> {
+    let original_expr = Expr::AggregateFunction(aggregate_function.clone());
+    let params = &aggregate_function.params;
+
+    let [value, percentile] = take_function_args("percentile_cont", &params.args)?;
+
+    let is_descending = params
+        .order_by
+        .first()
+        .map(|sort| !sort.asc)
+        .unwrap_or(false);
+
+    let rewrite_target = match extract_percentile_literal(percentile) {
+        Some(0.0) => {
+            if is_descending {
+                PercentileRewriteTarget::Max
+            } else {
+                PercentileRewriteTarget::Min
+            }
+        }
+        Some(1.0) => {
+            if is_descending {
+                PercentileRewriteTarget::Min
+            } else {
+                PercentileRewriteTarget::Max
+            }
+        }
+        _ => return Ok(original_expr),
+    };
+
+    let input_type = match info.get_data_type(value) {
+        Ok(data_type) => data_type,
+        Err(_) => return Ok(original_expr),
+    };
+
+    let expected_return_type =
+        match percentile_cont_udaf().return_type(std::slice::from_ref(&input_type)) {
+            Ok(data_type) => data_type,
+            Err(_) => return Ok(original_expr),
+        };
+
+    let mut agg_arg = value.clone();
+    if expected_return_type != input_type {
+        // min/max return the same type as their input. percentile_cont widens
+        // integers to Float64 (and preserves float/decimal types), so ensure the
+        // rewritten aggregate sees an input of the final return type.
+        agg_arg = Expr::Cast(Cast::new(Box::new(agg_arg), expected_return_type.clone()));
+    }
+
+    let udaf = match rewrite_target {
+        PercentileRewriteTarget::Min => min_udaf(),
+        PercentileRewriteTarget::Max => max_udaf(),
+    };
+
+    let rewritten = Expr::AggregateFunction(AggregateFunction::new_udf(
+        udaf,
+        vec![agg_arg],
+        params.distinct,
+        params.filter.clone(),
+        vec![],
+        params.null_treatment,
+    ));
+    Ok(rewritten)
+}
+
+fn extract_percentile_literal(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Literal(ScalarValue::Float64(Some(value)), _) => Some(*value),
+        _ => None,
     }
 }
 
@@ -657,77 +747,28 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
     }
 }
 
-/// The distinct percentile_cont accumulator accumulates the raw input values
-/// using a HashSet to eliminate duplicates.
-///
-/// The intermediate state is represented as a List of scalar values updated by
-/// `merge_batch` and a `Vec` of `ArrayRef` that are converted to scalar values
-/// in the final evaluation step so that we avoid expensive conversions and
-/// allocations during `update_batch`.
+#[derive(Debug)]
 struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
+    distinct_values: GenericDistinctBuffer<T>,
     data_type: DataType,
-    distinct_values: HashSet<Hashable<T::Native>>,
     percentile: f64,
 }
 
-impl<T: ArrowNumericType> Debug for DistinctPercentileContAccumulator<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "DistinctPercentileContAccumulator({}, percentile={})",
-            self.data_type, self.percentile
-        )
-    }
-}
-
-impl<T: ArrowNumericType> Accumulator for DistinctPercentileContAccumulator<T> {
+impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumulator<T> {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let all_values = self
-            .distinct_values
-            .iter()
-            .map(|x| ScalarValue::new_primitive::<T>(Some(x.0), &self.data_type))
-            .collect::<Result<Vec<_>>>()?;
-
-        let arr = ScalarValue::new_list_nullable(&all_values, &self.data_type);
-        Ok(vec![ScalarValue::List(arr)])
+        self.distinct_values.state()
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        // Cast to target type if needed (e.g., integer to Float64)
-        let values = if values[0].data_type() != &self.data_type {
-            arrow::compute::cast(&values[0], &self.data_type)?
-        } else {
-            Arc::clone(&values[0])
-        };
-
-        let array = values.as_primitive::<T>();
-        match array.nulls().filter(|x| x.null_count() > 0) {
-            Some(n) => {
-                for idx in n.valid_indices() {
-                    self.distinct_values.insert(Hashable(array.value(idx)));
-                }
-            }
-            None => array.values().iter().for_each(|x| {
-                self.distinct_values.insert(Hashable(*x));
-            }),
-        }
-        Ok(())
+        self.distinct_values.update_batch(values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let array = states[0].as_list::<i32>();
-        for v in array.iter().flatten() {
-            self.update_batch(&[v])?
-        }
-        Ok(())
+        self.distinct_values.merge_batch(states)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let d = std::mem::take(&mut self.distinct_values)
+        let d = std::mem::take(&mut self.distinct_values.values)
             .into_iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
@@ -736,7 +777,7 @@ impl<T: ArrowNumericType> Accumulator for DistinctPercentileContAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.distinct_values.capacity() * size_of::<T::Native>()
+        size_of_val(self) + self.distinct_values.size()
     }
 }
 

@@ -28,16 +28,17 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
 use datafusion_common::types::NativeType;
-use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use datafusion_expr::{TableType, Volatility};
+use datafusion_physical_plan::SendableRecordBatchStream;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::streaming::PartitionStream;
-use datafusion_physical_plan::SendableRecordBatchStream;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
@@ -137,11 +138,11 @@ impl InformationSchemaConfig {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
             for schema_name in catalog.schema_names() {
-                if schema_name != INFORMATION_SCHEMA {
-                    if let Some(schema) = catalog.schema(&schema_name) {
-                        let schema_owner = schema.owner_name();
-                        builder.add_schemata(&catalog_name, &schema_name, schema_owner);
-                    }
+                if schema_name != INFORMATION_SCHEMA
+                    && let Some(schema) = catalog.schema(&schema_name)
+                {
+                    let schema_owner = schema.owner_name();
+                    builder.add_schemata(&catalog_name, &schema_name, schema_owner);
                 }
             }
         }
@@ -215,9 +216,14 @@ impl InformationSchemaConfig {
     fn make_df_settings(
         &self,
         config_options: &ConfigOptions,
+        runtime_env: &Arc<RuntimeEnv>,
         builder: &mut InformationSchemaDfSettingsBuilder,
     ) {
         for entry in config_options.entries() {
+            builder.add_setting(entry);
+        }
+        // Add runtime configuration entries
+        for entry in runtime_env.config_entries() {
             builder.add_setting(entry);
         }
     }
@@ -245,7 +251,7 @@ impl InformationSchemaConfig {
                     name,
                     "FUNCTION",
                     Self::is_deterministic(udf.signature()),
-                    return_type,
+                    return_type.as_ref(),
                     "SCALAR",
                     udf.documentation().map(|d| d.description.to_string()),
                     udf.documentation().map(|d| d.syntax_example.to_string()),
@@ -265,7 +271,7 @@ impl InformationSchemaConfig {
                     name,
                     "FUNCTION",
                     Self::is_deterministic(udaf.signature()),
-                    return_type,
+                    return_type.as_ref(),
                     "AGGREGATE",
                     udaf.documentation().map(|d| d.description.to_string()),
                     udaf.documentation().map(|d| d.syntax_example.to_string()),
@@ -285,7 +291,7 @@ impl InformationSchemaConfig {
                     name,
                     "FUNCTION",
                     Self::is_deterministic(udwf.signature()),
-                    return_type,
+                    return_type.as_ref(),
                     "WINDOW",
                     udwf.documentation().map(|d| d.description.to_string()),
                     udwf.documentation().map(|d| d.syntax_example.to_string()),
@@ -418,11 +424,11 @@ fn get_udf_args_and_return_types(
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
                 let return_type = udf
                     .return_type(&arg_types)
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .ok();
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, return_type)
             })
@@ -445,10 +451,10 @@ fn get_udaf_args_and_return_types(
                 let return_type = udaf
                     .return_type(&arg_types)
                     .ok()
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)));
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)));
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, return_type)
             })
@@ -470,7 +476,7 @@ fn get_udwf_args_and_return_types(
                 // only handle the function which implemented [`ScalarUDFImpl::return_type`] method
                 let arg_types = arg_types
                     .into_iter()
-                    .map(|t| remove_native_type_prefix(NativeType::from(t)))
+                    .map(|t| remove_native_type_prefix(&NativeType::from(t)))
                     .collect::<Vec<_>>();
                 (arg_types, None)
             })
@@ -479,7 +485,7 @@ fn get_udwf_args_and_return_types(
 }
 
 #[inline]
-fn remove_native_type_prefix(native_type: NativeType) -> String {
+fn remove_native_type_prefix(native_type: &NativeType) -> String {
     format!("{native_type}")
 }
 
@@ -679,7 +685,7 @@ impl InformationSchemaViewBuilder {
         catalog_name: impl AsRef<str>,
         schema_name: impl AsRef<str>,
         table_name: impl AsRef<str>,
-        definition: Option<impl AsRef<str>>,
+        definition: Option<&(impl AsRef<str> + ?Sized)>,
     ) {
         // Note: append_value is actually infallible.
         self.catalog_names.append_value(catalog_name.as_ref());
@@ -1060,7 +1066,12 @@ impl PartitionStream for InformationSchemaDfSettings {
             // TODO: Stream this
             futures::stream::once(async move {
                 // create a mem table with the names of tables
-                config.make_df_settings(ctx.session_config().options(), &mut builder);
+                let runtime_env = ctx.runtime_env();
+                config.make_df_settings(
+                    ctx.session_config().options(),
+                    &runtime_env,
+                    &mut builder,
+                );
                 Ok(builder.finish())
             }),
         ))
@@ -1156,7 +1167,7 @@ struct InformationSchemaRoutinesBuilder {
 }
 
 impl InformationSchemaRoutinesBuilder {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn add_routine(
         &mut self,
         catalog_name: impl AsRef<str>,
@@ -1164,7 +1175,7 @@ impl InformationSchemaRoutinesBuilder {
         routine_name: impl AsRef<str>,
         routine_type: impl AsRef<str>,
         is_deterministic: bool,
-        data_type: Option<impl AsRef<str>>,
+        data_type: Option<&impl AsRef<str>>,
         function_type: impl AsRef<str>,
         description: Option<impl AsRef<str>>,
         syntax_example: Option<impl AsRef<str>>,
@@ -1290,7 +1301,7 @@ struct InformationSchemaParametersBuilder {
 }
 
 impl InformationSchemaParametersBuilder {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn add_parameter(
         &mut self,
         specific_catalog: impl AsRef<str>,
@@ -1298,7 +1309,7 @@ impl InformationSchemaParametersBuilder {
         specific_name: impl AsRef<str>,
         ordinal_position: u64,
         parameter_mode: impl AsRef<str>,
-        parameter_name: Option<impl AsRef<str>>,
+        parameter_name: Option<&(impl AsRef<str> + ?Sized)>,
         data_type: impl AsRef<str>,
         parameter_default: Option<impl AsRef<str>>,
         is_variadic: bool,
@@ -1397,7 +1408,9 @@ mod tests {
         // InformationSchemaConfig::make_tables used this before `table_type`
         // existed but should not, as it may be expensive.
         async fn table(&self, _: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-            panic!("InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type")
+            panic!(
+                "InformationSchemaConfig::make_tables called SchemaProvider::table instead of table_type"
+            )
         }
 
         fn as_any(&self) -> &dyn Any {

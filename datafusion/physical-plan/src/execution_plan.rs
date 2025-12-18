@@ -22,16 +22,17 @@ use crate::filter_pushdown::{
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, Distribution, Partitioning, PhysicalExpr,
+    Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 use std::any::Any;
@@ -47,11 +48,16 @@ use crate::stream::RecordBatchStreamAdapter;
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{exec_err, Constraints, DataFusionError, Result};
+use datafusion_common::{
+    Constraints, DataFusionError, Result, assert_eq_or_internal_err,
+    assert_or_internal_err, exec_err,
+};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
+};
 
 use futures::stream::{StreamExt, TryStreamExt};
 
@@ -82,7 +88,7 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// `ExecutionPlan` with memory tracking and spilling support.
 ///
 /// [`datafusion-examples`]: https://github.com/apache/datafusion/tree/main/datafusion-examples
-/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/memory_pool_execution_plan.rs
+/// [`memory_pool_execution_plan.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/execution_monitoring/memory_pool_execution_plan.rs
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
@@ -484,13 +490,12 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         if let Some(idx) = partition {
             // Validate partition index
             let partition_count = self.properties().partitioning.partition_count();
-            if idx >= partition_count {
-                return internal_err!(
-                    "Invalid partition index: {}, the partition count is {}",
-                    idx,
-                    partition_count
-                );
-            }
+            assert_or_internal_err!(
+                idx < partition_count,
+                "Invalid partition index: {}, the partition count is {}",
+                idx,
+                partition_count
+            );
         }
         Ok(Statistics::new_unknown(&self.schema()))
     }
@@ -679,6 +684,29 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         _state: Arc<dyn Any + Send + Sync>,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
+    }
+
+    /// Try to push down sort ordering requirements to this node.
+    ///
+    /// This method is called during sort pushdown optimization to determine if this
+    /// node can optimize for a requested sort ordering. Implementations should:
+    ///
+    /// - Return [`SortOrderPushdownResult::Exact`] if the node can guarantee the exact
+    ///   ordering (allowing the Sort operator to be removed)
+    /// - Return [`SortOrderPushdownResult::Inexact`] if the node can optimize for the
+    ///   ordering but cannot guarantee perfect sorting (Sort operator is kept)
+    /// - Return [`SortOrderPushdownResult::Unsupported`] if the node cannot optimize
+    ///   for the ordering
+    ///
+    /// For transparent nodes (that preserve ordering), implement this to delegate to
+    /// children and wrap the result with a new instance of this node.
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
     }
 }
 
@@ -919,7 +947,7 @@ pub(crate) fn boundedness_from_children<'a>(
             } => {
                 return Boundedness::Unbounded {
                     requires_infinite_memory: true,
-                }
+                };
             }
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
@@ -1082,15 +1110,15 @@ impl PlanProperties {
 macro_rules! check_len {
     ($target:expr, $func_name:ident, $expected_len:expr) => {
         let actual_len = $target.$func_name().len();
-        if actual_len != $expected_len {
-            return internal_err!(
-                "{}::{} returned Vec with incorrect size: {} != {}",
-                $target.name(),
-                stringify!($func_name),
-                actual_len,
-                $expected_len
-            );
-        }
+        assert_eq_or_internal_err!(
+            actual_len,
+            $expected_len,
+            "{}::{} returned Vec with incorrect size: {} != {}",
+            $target.name(),
+            stringify!($func_name),
+            actual_len,
+            $expected_len
+        );
     };
 }
 
@@ -1116,6 +1144,7 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
 ///     1. RepartitionExec for changing the partition number between two `ExecutionPlan`s
 ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
 ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+#[expect(clippy::needless_pass_by_value)]
 pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
     plan.properties().evaluation_type == EvaluationType::Eager
 }
@@ -1127,9 +1156,12 @@ pub fn with_new_children_if_necessary(
     children: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let old_children = plan.children();
-    if children.len() != old_children.len() {
-        internal_err!("Wrong number of children")
-    } else if children.is_empty()
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "Wrong number of children"
+    );
+    if children.is_empty()
         || children
             .iter()
             .zip(old_children.iter())
@@ -1167,6 +1199,10 @@ pub async fn collect(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1231,6 +1267,10 @@ pub async fn collect_partitioned(
 ///
 /// Dropping the stream will abort the execution of the query, and free up
 /// any allocated resources
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1262,6 +1302,10 @@ pub fn execute_stream_partitioned(
 /// violate the `not null` constraints specified in the `sink_schema`. If there are
 /// such columns, it wraps the resulting stream to enforce the `not null` constraints
 /// by invoking the [`check_not_null_constraints`] function on each batch of the stream.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
 pub fn execute_input_stream(
     input: Arc<dyn ExecutionPlan>,
     sink_schema: SchemaRef,
@@ -1516,7 +1560,7 @@ mod tests {
     /// A compilation test to ensure that the `ExecutionPlan::name()` method can
     /// be called from a trait object.
     /// Related ticket: https://github.com/apache/datafusion/pull/11047
-    #[allow(dead_code)]
+    #[expect(unused)]
     fn use_execution_plan_as_trait_object(plan: &dyn ExecutionPlan) {
         let _ = plan.name();
     }

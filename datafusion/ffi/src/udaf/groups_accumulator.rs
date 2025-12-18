@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, ops::Deref, sync::Arc};
-
+use crate::util::FFIResult;
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
     df_result, rresult, rresult_return,
 };
 use abi_stable::{
-    std_types::{ROption, RResult, RString, RVec},
     StableAbi,
+    std_types::{ROption, RVec},
 };
 use arrow::{
     array::{Array, ArrayRef, BooleanArray},
@@ -34,6 +33,8 @@ use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::{EmitTo, GroupsAccumulator},
 };
+use std::ptr::null_mut;
+use std::{ffi::c_void, ops::Deref, sync::Arc};
 
 /// A stable struct for sharing [`GroupsAccumulator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -48,20 +49,20 @@ pub struct FFI_GroupsAccumulator {
         group_indices: RVec<usize>,
         opt_filter: ROption<WrappedArray>,
         total_num_groups: usize,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     // Evaluate and return a ScalarValues as protobuf bytes
     pub evaluate: unsafe extern "C" fn(
         accumulator: &mut Self,
         emit_to: FFI_EmitTo,
-    ) -> RResult<WrappedArray, RString>,
+    ) -> FFIResult<WrappedArray>,
 
     pub size: unsafe extern "C" fn(accumulator: &Self) -> usize,
 
     pub state: unsafe extern "C" fn(
         accumulator: &mut Self,
         emit_to: FFI_EmitTo,
-    ) -> RResult<RVec<WrappedArray>, RString>,
+    ) -> FFIResult<RVec<WrappedArray>>,
 
     pub merge_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
@@ -69,14 +70,13 @@ pub struct FFI_GroupsAccumulator {
         group_indices: RVec<usize>,
         opt_filter: ROption<WrappedArray>,
         total_num_groups: usize,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     pub convert_to_state: unsafe extern "C" fn(
         accumulator: &Self,
         values: RVec<WrappedArray>,
         opt_filter: ROption<WrappedArray>,
-    )
-        -> RResult<RVec<WrappedArray>, RString>,
+    ) -> FFIResult<RVec<WrappedArray>>,
 
     pub supports_convert_to_state: bool,
 
@@ -86,10 +86,12 @@ pub struct FFI_GroupsAccumulator {
     /// Internal data. This is only to be accessed by the provider of the accumulator.
     /// A [`ForeignGroupsAccumulator`] should never attempt to access this data.
     pub private_data: *mut c_void,
-}
 
-unsafe impl Send for FFI_GroupsAccumulator {}
-unsafe impl Sync for FFI_GroupsAccumulator {}
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
+}
 
 pub struct GroupsAccumulatorPrivateData {
     pub accumulator: Box<dyn GroupsAccumulator>,
@@ -98,14 +100,18 @@ pub struct GroupsAccumulatorPrivateData {
 impl FFI_GroupsAccumulator {
     #[inline]
     unsafe fn inner_mut(&mut self) -> &mut Box<dyn GroupsAccumulator> {
-        let private_data = self.private_data as *mut GroupsAccumulatorPrivateData;
-        &mut (*private_data).accumulator
+        unsafe {
+            let private_data = self.private_data as *mut GroupsAccumulatorPrivateData;
+            &mut (*private_data).accumulator
+        }
     }
 
     #[inline]
     unsafe fn inner(&self) -> &dyn GroupsAccumulator {
-        let private_data = self.private_data as *const GroupsAccumulatorPrivateData;
-        (*private_data).accumulator.deref()
+        unsafe {
+            let private_data = self.private_data as *const GroupsAccumulatorPrivateData;
+            (*private_data).accumulator.deref()
+        }
     }
 }
 
@@ -134,47 +140,57 @@ unsafe extern "C" fn update_batch_fn_wrapper(
     group_indices: RVec<usize>,
     opt_filter: ROption<WrappedArray>,
     total_num_groups: usize,
-) -> RResult<(), RString> {
-    let accumulator = accumulator.inner_mut();
-    let values = rresult_return!(process_values(values));
-    let group_indices: Vec<usize> = group_indices.into_iter().collect();
-    let opt_filter = rresult_return!(process_opt_filter(opt_filter));
+) -> FFIResult<()> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
+        let values = rresult_return!(process_values(values));
+        let group_indices: Vec<usize> = group_indices.into_iter().collect();
+        let opt_filter = rresult_return!(process_opt_filter(opt_filter));
 
-    rresult!(accumulator.update_batch(
-        &values,
-        &group_indices,
-        opt_filter.as_ref(),
-        total_num_groups
-    ))
+        rresult!(accumulator.update_batch(
+            &values,
+            &group_indices,
+            opt_filter.as_ref(),
+            total_num_groups
+        ))
+    }
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
-) -> RResult<WrappedArray, RString> {
-    let accumulator = accumulator.inner_mut();
+) -> FFIResult<WrappedArray> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let result = rresult_return!(accumulator.evaluate(emit_to.into()));
+        let result = rresult_return!(accumulator.evaluate(emit_to.into()));
 
-    rresult!(WrappedArray::try_from(&result))
+        rresult!(WrappedArray::try_from(&result))
+    }
 }
 
 unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_GroupsAccumulator) -> usize {
-    let accumulator = accumulator.inner();
-    accumulator.size()
+    unsafe {
+        let accumulator = accumulator.inner();
+        accumulator.size()
+    }
 }
 
 unsafe extern "C" fn state_fn_wrapper(
     accumulator: &mut FFI_GroupsAccumulator,
     emit_to: FFI_EmitTo,
-) -> RResult<RVec<WrappedArray>, RString> {
-    let accumulator = accumulator.inner_mut();
+) -> FFIResult<RVec<WrappedArray>> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let state = rresult_return!(accumulator.state(emit_to.into()));
-    rresult!(state
-        .into_iter()
-        .map(|arr| WrappedArray::try_from(&arr).map_err(DataFusionError::from))
-        .collect::<Result<RVec<_>>>())
+        let state = rresult_return!(accumulator.state(emit_to.into()));
+        rresult!(
+            state
+                .into_iter()
+                .map(|arr| WrappedArray::try_from(&arr).map_err(DataFusionError::from))
+                .collect::<Result<RVec<_>>>()
+        )
+    }
 }
 
 unsafe extern "C" fn merge_batch_fn_wrapper(
@@ -183,41 +199,53 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
     group_indices: RVec<usize>,
     opt_filter: ROption<WrappedArray>,
     total_num_groups: usize,
-) -> RResult<(), RString> {
-    let accumulator = accumulator.inner_mut();
-    let values = rresult_return!(process_values(values));
-    let group_indices: Vec<usize> = group_indices.into_iter().collect();
-    let opt_filter = rresult_return!(process_opt_filter(opt_filter));
+) -> FFIResult<()> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
+        let values = rresult_return!(process_values(values));
+        let group_indices: Vec<usize> = group_indices.into_iter().collect();
+        let opt_filter = rresult_return!(process_opt_filter(opt_filter));
 
-    rresult!(accumulator.merge_batch(
-        &values,
-        &group_indices,
-        opt_filter.as_ref(),
-        total_num_groups
-    ))
+        rresult!(accumulator.merge_batch(
+            &values,
+            &group_indices,
+            opt_filter.as_ref(),
+            total_num_groups
+        ))
+    }
 }
 
 unsafe extern "C" fn convert_to_state_fn_wrapper(
     accumulator: &FFI_GroupsAccumulator,
     values: RVec<WrappedArray>,
     opt_filter: ROption<WrappedArray>,
-) -> RResult<RVec<WrappedArray>, RString> {
-    let accumulator = accumulator.inner();
-    let values = rresult_return!(process_values(values));
-    let opt_filter = rresult_return!(process_opt_filter(opt_filter));
-    let state =
-        rresult_return!(accumulator.convert_to_state(&values, opt_filter.as_ref()));
+) -> FFIResult<RVec<WrappedArray>> {
+    unsafe {
+        let accumulator = accumulator.inner();
+        let values = rresult_return!(process_values(values));
+        let opt_filter = rresult_return!(process_opt_filter(opt_filter));
+        let state =
+            rresult_return!(accumulator.convert_to_state(&values, opt_filter.as_ref()));
 
-    rresult!(state
-        .iter()
-        .map(|arr| WrappedArray::try_from(arr).map_err(DataFusionError::from))
-        .collect::<Result<RVec<_>>>())
+        rresult!(
+            state
+                .iter()
+                .map(|arr| WrappedArray::try_from(arr).map_err(DataFusionError::from))
+                .collect::<Result<RVec<_>>>()
+        )
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator) {
-    let private_data =
-        Box::from_raw(accumulator.private_data as *mut GroupsAccumulatorPrivateData);
-    drop(private_data);
+    unsafe {
+        if !accumulator.private_data.is_null() {
+            let private_data = Box::from_raw(
+                accumulator.private_data as *mut GroupsAccumulatorPrivateData,
+            );
+            drop(private_data);
+            accumulator.private_data = null_mut();
+        }
+    }
 }
 
 impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
@@ -236,6 +264,7 @@ impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
 
             release: release_fn_wrapper,
             private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -260,9 +289,20 @@ pub struct ForeignGroupsAccumulator {
 unsafe impl Send for ForeignGroupsAccumulator {}
 unsafe impl Sync for ForeignGroupsAccumulator {}
 
-impl From<FFI_GroupsAccumulator> for ForeignGroupsAccumulator {
-    fn from(accumulator: FFI_GroupsAccumulator) -> Self {
-        Self { accumulator }
+impl From<FFI_GroupsAccumulator> for Box<dyn GroupsAccumulator> {
+    fn from(mut accumulator: FFI_GroupsAccumulator) -> Self {
+        if (accumulator.library_marker_id)() == crate::get_library_marker_id() {
+            unsafe {
+                let private_data = Box::from_raw(
+                    accumulator.private_data as *mut GroupsAccumulatorPrivateData,
+                );
+                // We must set this to null to avoid a double free
+                accumulator.private_data = null_mut();
+                private_data.accumulator
+            }
+        } else {
+            Box::new(ForeignGroupsAccumulator { accumulator })
+        }
     }
 }
 
@@ -428,22 +468,24 @@ impl From<FFI_EmitTo> for EmitTo {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{make_array, Array, BooleanArray};
+    use super::{FFI_EmitTo, FFI_GroupsAccumulator, ForeignGroupsAccumulator};
+    use arrow::array::{Array, BooleanArray, make_array};
+    use datafusion::functions_aggregate::stddev::StddevGroupsAccumulator;
     use datafusion::{
         common::create_array,
         error::Result,
         logical_expr::{EmitTo, GroupsAccumulator},
     };
     use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
-
-    use super::{FFI_EmitTo, FFI_GroupsAccumulator, ForeignGroupsAccumulator};
+    use datafusion_functions_aggregate_common::stats::StatsType;
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
         let boxed_accum: Box<dyn GroupsAccumulator> =
             Box::new(BooleanGroupsAccumulator::new(|a, b| a && b, true));
-        let ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
-        let mut foreign_accum: ForeignGroupsAccumulator = ffi_accum.into();
+        let mut ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
+        let mut foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
 
         // Send in an array to evaluate. We want a mean of 30 and standard deviation of 4.
         let values = create_array!(Boolean, vec![true, true, true, false, true, true]);
@@ -507,6 +549,37 @@ mod tests {
     fn test_all_emit_to_round_trip() -> Result<()> {
         test_emit_to_round_trip(EmitTo::All)?;
         test_emit_to_round_trip(EmitTo::First(10))?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_groups_accumulator_local_bypass_inner() -> Result<()> {
+        let original_accum = StddevGroupsAccumulator::new(StatsType::Population);
+        let boxed_accum: Box<dyn GroupsAccumulator> = Box::new(original_accum);
+        let original_size = boxed_accum.size();
+
+        let ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
+
+        // Verify local libraries can be downcast to their original
+        let foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn GroupsAccumulator
+                as *const StddevGroupsAccumulator);
+            assert_eq!(original_size, concrete.size());
+        }
+
+        // Verify different library markers generate foreign accumulator
+        let original_accum = StddevGroupsAccumulator::new(StatsType::Population);
+        let boxed_accum: Box<dyn GroupsAccumulator> = Box::new(original_accum);
+        let mut ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn GroupsAccumulator
+                as *const ForeignGroupsAccumulator);
+            assert_eq!(original_size, concrete.size());
+        }
 
         Ok(())
     }

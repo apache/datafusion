@@ -70,19 +70,10 @@ to see the high level structure of the plan
 |               | │      RepartitionExec      │ |
 |               | │    --------------------   │ |
 |               | │   input_partition_count:  │ |
-|               | │             16            │ |
-|               | │                           │ |
-|               | │    partitioning_scheme:   │ |
-|               | │      Hash([b@0], 16)      │ |
-|               | └─────────────┬─────────────┘ |
-|               | ┌─────────────┴─────────────┐ |
-|               | │      RepartitionExec      │ |
-|               | │    --------------------   │ |
-|               | │   input_partition_count:  │ |
 |               | │             1             │ |
 |               | │                           │ |
 |               | │    partitioning_scheme:   │ |
-|               | │    RoundRobinBatch(16)    │ |
+|               | │      Hash([b@0], 16)      │ |
 |               | └─────────────┬─────────────┘ |
 |               | ┌─────────────┴─────────────┐ |
 |               | │       AggregateExec       │ |
@@ -126,10 +117,9 @@ Elapsed 0.004 seconds.
 | physical_plan | ProjectionExec: expr=[sum(t.x)@1 as sum(t.x)]                                 |
 |               |   AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[sum(t.x)]       |
 |               |     CoalesceBatchesExec: target_batch_size=8192                               |
-|               |       RepartitionExec: partitioning=Hash([b@0], 16), input_partitions=16      |
-|               |         RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1 |
-|               |           AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(t.x)]        |
-|               |             DataSourceExec: partitions=1, partition_sizes=[1]                 |
+|               |       RepartitionExec: partitioning=Hash([b@0], 16), input_partitions=1       |
+|               |         AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[sum(t.x)]          |
+|               |           DataSourceExec: partitions=1, partition_sizes=[1]                   |
 |               |                                                                               |
 +---------------+-------------------------------------------------------------------------------+
 2 row(s) fetched.

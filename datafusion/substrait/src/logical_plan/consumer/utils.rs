@@ -18,16 +18,16 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    exec_err, not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
-    DFSchemaRef,
+    DFSchema, DFSchemaRef, exec_err, not_impl_err, substrait_datafusion_err,
+    substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
 use std::collections::HashSet;
 use std::sync::Arc;
+use substrait::proto::SortField;
 use substrait::proto::sort_field::SortDirection;
 use substrait::proto::sort_field::SortKind::{ComparisonFunctionReference, Direction};
-use substrait::proto::SortField;
 
 // Substrait PrecisionTimestampTz indicates that the timestamp is relative to UTC, which
 // is the same as the expectation for any non-empty timezone in DF, so any non-empty timezone
@@ -246,7 +246,8 @@ pub(super) fn make_renamed_schema(
         return substrait_err!(
             "Names list must match exactly to nested schema, but found {} uses for {} names",
             name_idx,
-            dfs_names.len());
+            dfs_names.len()
+        );
     }
 
     DFSchema::from_field_specific_qualified_schema(
@@ -577,12 +578,12 @@ pub(crate) mod tests {
 
         assert_eq!(renamed_schema.fields().len(), 5);
         assert_eq!(
-            *renamed_schema.field(0),
-            Field::new("a", DataType::Int32, false)
+            renamed_schema.field(0),
+            &Arc::new(Field::new("a", DataType::Int32, false))
         );
         assert_eq!(
-            *renamed_schema.field(1),
-            Field::new_struct(
+            renamed_schema.field(1),
+            &Arc::new(Field::new_struct(
                 "b",
                 vec![
                     Field::new("c", DataType::Int32, false),
@@ -593,11 +594,11 @@ pub(crate) mod tests {
                     )
                 ],
                 false,
-            )
+            ))
         );
         assert_eq!(
-            *renamed_schema.field(2),
-            Field::new_list(
+            renamed_schema.field(2),
+            &Arc::new(Field::new_list(
                 "f",
                 Arc::new(Field::new_struct(
                     "item",
@@ -605,11 +606,11 @@ pub(crate) mod tests {
                     false,
                 )),
                 false,
-            )
+            ))
         );
         assert_eq!(
-            *renamed_schema.field(3),
-            Field::new_large_list(
+            renamed_schema.field(3),
+            &Arc::new(Field::new_large_list(
                 "h",
                 Arc::new(Field::new_struct(
                     "item",
@@ -617,11 +618,11 @@ pub(crate) mod tests {
                     false,
                 )),
                 false,
-            )
+            ))
         );
         assert_eq!(
-            *renamed_schema.field(4),
-            Field::new_map(
+            renamed_schema.field(4),
+            &Arc::new(Field::new_map(
                 "j",
                 "entries",
                 Arc::new(Field::new_struct(
@@ -636,7 +637,7 @@ pub(crate) mod tests {
                 )),
                 false,
                 false,
-            )
+            ))
         );
         Ok(())
     }

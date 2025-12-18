@@ -20,11 +20,11 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::{as_string_array, create_array, record_batch, Int8Array, UInt64Array};
 use arrow::array::{
-    builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
-    Int32Array, RecordBatch, StringArray,
+    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+    builder::BooleanBuilder, cast::AsArray,
 };
+use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
@@ -38,15 +38,17 @@ use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_datafusion_err,
-    exec_err, not_impl_err, plan_err, DFSchema, DataFusionError, Result, ScalarValue,
+    DFSchema, DataFusionError, Result, ScalarValue, assert_batches_eq,
+    assert_batches_sorted_eq, assert_contains, exec_datafusion_err, exec_err,
+    not_impl_err, plan_err,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    lit_with_metadata, Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody,
-    LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
+    OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility, lit_with_metadata,
 };
+use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
 use regex::Regex;
@@ -63,13 +65,13 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await?;
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +------------------------------------------+
     | avg(custom_sqrt(aggregate_test_100.c11)) |
     +------------------------------------------+
     | 0.6584408483418835                       |
     +------------------------------------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -82,13 +84,13 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await?;
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +------------------------------------------+
     | avg(custom_sqrt(aggregate_test_100.c12)) |
     +------------------------------------------+
     | 0.6706002946036459                       |
     +------------------------------------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -153,7 +155,7 @@ async fn scalar_udf() -> Result<()> {
 
     let result = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+-----+-----------------+
     | a   | b   | my_add(t.a,t.b) |
     +-----+-----+-----------------+
@@ -162,7 +164,7 @@ async fn scalar_udf() -> Result<()> {
     | 10  | 12  | 22              |
     | 100 | 120 | 220             |
     +-----+-----+-----------------+
-    "###);
+    ");
 
     let batch = &result[0];
     let a = as_int32_array(batch.column(0))?;
@@ -279,7 +281,7 @@ async fn scalar_udf_zero_params() -> Result<()> {
     ctx.register_udf(ScalarUDF::from(get_100_udf));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+
     | a   |
     +-----+
@@ -288,22 +290,22 @@ async fn scalar_udf_zero_params() -> Result<()> {
     | 100 |
     | 100 |
     +-----+
-    "###);
+    ");
 
     let result = plan_and_collect(&ctx, "select get_100() a").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+
     | a   |
     +-----+
     | 100 |
     +-----+
-    "###);
+    ");
 
     let result = plan_and_collect(&ctx, "select get_100() from t where a=999").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     ++
     ++
-    "###);
+    ");
 
     Ok(())
 }
@@ -330,13 +332,13 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
 
     // Make sure that the UDF is used instead of the built-in function
     let result = plan_and_collect(&ctx, "select abs(a) a from t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +---+
     | a |
     +---+
     | 1 |
     +---+
-    "###);
+    ");
 
     Ok(())
 }
@@ -425,20 +427,21 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
         .await
         .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Error during planning: Invalid function \'my_func\'"));
+    assert!(
+        err.to_string()
+            .contains("Error during planning: Invalid function \'my_func\'")
+    );
 
     // Can call it if you put quotes
     let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +--------------+
     | MY_FUNC(t.i) |
     +--------------+
     | 1            |
     +--------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -469,13 +472,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     ctx.register_udf(udf);
 
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +------------+
     | dummy(t.i) |
     +------------+
     | 1          |
     +------------+
-    "###);
+    ");
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
     insta::assert_snapshot!(batches_to_string(&alias_result), @r"
@@ -945,6 +948,7 @@ struct ScalarFunctionWrapper {
     expr: Expr,
     signature: Signature,
     return_type: DataType,
+    defaults: Vec<Option<Expr>>,
 }
 
 impl ScalarUDFImpl for ScalarFunctionWrapper {
@@ -973,7 +977,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         args: Vec<Expr>,
         _info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        let replacement = Self::replacement(&self.expr, &args)?;
+        let replacement = Self::replacement(&self.expr, &args, &self.defaults)?;
 
         Ok(ExprSimplifyResult::Simplified(replacement))
     }
@@ -981,7 +985,11 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
 impl ScalarFunctionWrapper {
     // replaces placeholders with actual arguments
-    fn replacement(expr: &Expr, args: &[Expr]) -> Result<Expr> {
+    fn replacement(
+        expr: &Expr,
+        args: &[Expr],
+        defaults: &[Option<Expr>],
+    ) -> Result<Expr> {
         let result = expr.clone().transform(|e| {
             let r = match e {
                 Expr::Placeholder(placeholder) => {
@@ -989,11 +997,19 @@ impl ScalarFunctionWrapper {
                         Self::parse_placeholder_identifier(&placeholder.id)?;
                     if placeholder_position < args.len() {
                         Transformed::yes(args[placeholder_position].clone())
-                    } else {
+                    } else if placeholder_position >= defaults.len() {
                         exec_err!(
-                            "Function argument {} not provided, argument missing!",
+                            "Invalid placeholder, out of range: {}",
                             placeholder.id
                         )?
+                    } else {
+                        match defaults[placeholder_position] {
+                            Some(ref default) => Transformed::yes(default.clone()),
+                            None => exec_err!(
+                                "Function argument {} not provided, argument missing!",
+                                placeholder.id
+                            )?,
+                        }
                     }
                 }
                 _ => Transformed::no(e),
@@ -1021,6 +1037,32 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
     type Error = DataFusionError;
 
     fn try_from(definition: CreateFunction) -> std::result::Result<Self, Self::Error> {
+        let args = definition.args.unwrap_or_default();
+        let defaults: Vec<Option<Expr>> =
+            args.iter().map(|a| a.default_expr.clone()).collect();
+        let signature: Signature = match defaults.iter().position(|v| v.is_some()) {
+            Some(pos) => {
+                let mut type_signatures: Vec<TypeSignature> = vec![];
+                // Generate all valid signatures
+                for n in pos..defaults.len() + 1 {
+                    if n == 0 {
+                        type_signatures.push(TypeSignature::Nullary)
+                    } else {
+                        type_signatures.push(TypeSignature::Exact(
+                            args.iter().take(n).map(|a| a.data_type.clone()).collect(),
+                        ))
+                    }
+                }
+                Signature::one_of(
+                    type_signatures,
+                    definition.params.behavior.unwrap_or(Volatility::Volatile),
+                )
+            }
+            None => Signature::exact(
+                args.iter().map(|a| a.data_type.clone()).collect(),
+                definition.params.behavior.unwrap_or(Volatility::Volatile),
+            ),
+        };
         Ok(Self {
             name: definition.name,
             expr: definition
@@ -1030,15 +1072,8 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
             return_type: definition
                 .return_type
                 .expect("Return type has to be defined!"),
-            signature: Signature::exact(
-                definition
-                    .args
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|a| a.data_type)
-                    .collect(),
-                definition.params.behavior.unwrap_or(Volatility::Volatile),
-            ),
+            signature,
+            defaults,
         })
     }
 }
@@ -1061,10 +1096,11 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     // Create the `better_add` function dynamically via CREATE FUNCTION statement
     assert!(ctx.sql(sql).await.is_ok());
     // try to `drop function` when sql options have allow ddl disabled
-    assert!(ctx
-        .sql_with_options("drop function better_add", options)
-        .await
-        .is_err());
+    assert!(
+        ctx.sql_with_options("drop function better_add", options)
+            .await
+            .is_err()
+    );
 
     let result = ctx
         .sql("select better_add(2.0, 2.0)")
@@ -1109,6 +1145,180 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
     "#;
     assert!(ctx.sql(bad_definition_sql).await.is_err());
 
+    // FIXME: Definitions with invalid placeholders are allowed, fail at runtime
+    let bad_expression_sql = r#"
+    CREATE FUNCTION better_add(DOUBLE, DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + $3
+    "#;
+    assert!(ctx.sql(bad_expression_sql).await.is_ok());
+
+    let err = ctx
+        .sql("select better_add(2.0, 2.0)")
+        .await?
+        .collect()
+        .await
+        .expect_err("unknown placeholder");
+    let expected = "Optimizer rule 'simplify_expressions' failed\ncaused by\nExecution error: Invalid placeholder, out of range: $3";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement_named_arguments() -> Result<()> {
+    let function_factory = Arc::new(CustomFunctionFactory::default());
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
+
+    let sql = r#"
+    CREATE FUNCTION better_add(a DOUBLE, b DOUBLE)
+        RETURNS DOUBLE
+        RETURN $a + $b
+    "#;
+
+    assert!(ctx.sql(sql).await.is_ok());
+
+    let result = ctx
+        .sql("select better_add(2.0, 2.0)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+-----------------------------------+",
+            "| better_add(Float64(2),Float64(2)) |",
+            "+-----------------------------------+",
+            "| 4.0                               |",
+            "+-----------------------------------+",
+        ],
+        &result
+    );
+
+    // cannot mix named and positional style
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(DOUBLE, b DOUBLE)
+        RETURNS DOUBLE
+        RETURN $1 + $b
+    "#;
+    let err = ctx
+        .sql(bad_expression_sql)
+        .await
+        .expect_err("cannot mix named and positional style");
+    let expected = "Error during planning: All function arguments must use either named or positional style.";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_scalar_function_from_sql_statement_default_arguments() -> Result<()> {
+    let function_factory = Arc::new(CustomFunctionFactory::default());
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
+
+    let sql = r#"
+    CREATE FUNCTION better_add(a DOUBLE = 2.0, b DOUBLE = 2.0)
+        RETURNS DOUBLE
+        RETURN $a + $b
+    "#;
+
+    assert!(ctx.sql(sql).await.is_ok());
+
+    // Check all function arity supported
+    let result = ctx.sql("select better_add()").await?.collect().await?;
+
+    assert_batches_eq!(
+        &[
+            "+--------------+",
+            "| better_add() |",
+            "+--------------+",
+            "| 4.0          |",
+            "+--------------+",
+        ],
+        &result
+    );
+
+    let result = ctx.sql("select better_add(2.0)").await?.collect().await?;
+
+    assert_batches_eq!(
+        &[
+            "+------------------------+",
+            "| better_add(Float64(2)) |",
+            "+------------------------+",
+            "| 4.0                    |",
+            "+------------------------+",
+        ],
+        &result
+    );
+
+    let result = ctx
+        .sql("select better_add(2.0, 2.0)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        &[
+            "+-----------------------------------+",
+            "| better_add(Float64(2),Float64(2)) |",
+            "+-----------------------------------+",
+            "| 4.0                               |",
+            "+-----------------------------------+",
+        ],
+        &result
+    );
+
+    assert!(ctx.sql("select better_add(2.0, 2.0, 2.0)").await.is_err());
+    assert!(ctx.sql("drop function better_add").await.is_ok());
+
+    // works with positional style
+    let sql = r#"
+    CREATE FUNCTION better_add(DOUBLE, DOUBLE = 2.0)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+    assert!(ctx.sql(sql).await.is_ok());
+
+    assert!(ctx.sql("select better_add()").await.is_err());
+    let result = ctx.sql("select better_add(2.0)").await?.collect().await?;
+    assert_batches_eq!(
+        &[
+            "+------------------------+",
+            "| better_add(Float64(2)) |",
+            "+------------------------+",
+            "| 4.0                    |",
+            "+------------------------+",
+        ],
+        &result
+    );
+
+    // non-default argument cannot follow default argument
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(a DOUBLE = 2.0, b DOUBLE)
+        RETURNS DOUBLE
+        RETURN $a + $b
+    "#;
+    let err = ctx
+        .sql(bad_expression_sql)
+        .await
+        .expect_err("non-default argument cannot follow default argument");
+    let expected =
+        "Error during planning: Non-default arguments cannot follow default arguments.";
+    assert!(expected.starts_with(&err.strip_backtrace()));
+
+    // FIXME: The `DEFAULT` syntax does not work with positional params
+    let bad_expression_sql = r#"
+    CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE DEFAULT 2.0)
+        RETURNS DOUBLE
+        RETURN $1 + $2
+    "#;
+    let err = ctx
+        .sql(bad_expression_sql)
+        .await
+        .expect_err("sqlparser error");
+    let expected =
+        "SQL error: ParserError(\"Expected: ), found: 2.0 at Line: 2, Column: 63\")";
+    assert!(expected.starts_with(&err.strip_backtrace()));
     Ok(())
 }
 

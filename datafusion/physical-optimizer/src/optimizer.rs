@@ -36,10 +36,10 @@ use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
 
-use crate::coalesce_async_exec_input::CoalesceAsyncExecInput;
 use crate::limit_pushdown_past_window::LimitPushPastWindows;
-use datafusion_common::config::ConfigOptions;
+use crate::pushdown_sort::PushdownSort;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
@@ -123,7 +123,6 @@ impl PhysicalOptimizer {
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
-            Arc::new(CoalesceAsyncExecInput::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
@@ -147,6 +146,8 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // PushdownSort: Detect sorts that can be pushed down to data sources.
+            Arc::new(PushdownSort::new()),
             Arc::new(EnsureCooperative::new()),
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.

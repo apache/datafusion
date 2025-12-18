@@ -18,26 +18,25 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::{config::ConfigOptions, internal_err, Result, Statistics};
+use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
-    file::FileSource, file_scan_config::FileScanConfig,
+    PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
-    schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
+    schema_adapter::SchemaAdapterFactory, source::DataSourceExec,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
-    displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, displayable,
     filter::FilterExec,
     filter_pushdown::{
         ChildFilterDescription, ChildPushdownResult, FilterDescription,
         FilterPushdownPropagation,
     },
     metrics::ExecutionPlanMetricsSet,
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
@@ -60,6 +59,9 @@ pub struct TestOpener {
 impl FileOpener for TestOpener {
     fn open(&self, _partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let mut batches = self.batches.clone();
+        if self.batches.is_empty() {
+            return Ok((async { Ok(TestStream::new(vec![]).boxed()) }).boxed());
+        }
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
             let mut new_batches = Vec::new();
@@ -105,7 +107,6 @@ impl FileOpener for TestOpener {
 pub struct TestSource {
     support: bool,
     predicate: Option<Arc<dyn PhysicalExpr>>,
-    statistics: Option<Statistics>,
     batch_size: Option<usize>,
     batches: Vec<RecordBatch>,
     schema: SchemaRef,
@@ -125,7 +126,6 @@ impl TestSource {
             metrics: ExecutionPlanMetricsSet::new(),
             batches,
             predicate: None,
-            statistics: None,
             batch_size: None,
             projection: None,
             schema_adapter_factory: None,
@@ -140,14 +140,14 @@ impl FileSource for TestSource {
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        Arc::new(TestOpener {
+    ) -> Result<Arc<dyn FileOpener>> {
+        Ok(Arc::new(TestOpener {
             batches: self.batches.clone(),
             batch_size: self.batch_size,
             schema: Arc::clone(&self.schema),
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
-        })
+        }))
     }
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
@@ -165,30 +165,8 @@ impl FileSource for TestSource {
         })
     }
 
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            projection: config.projection_exprs.as_ref().map(|p| p.column_indices()),
-            ..self.clone()
-        })
-    }
-
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            statistics: Some(statistics),
-            ..self.clone()
-        })
-    }
-
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
         &self.metrics
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        Ok(self
-            .statistics
-            .as_ref()
-            .expect("statistics not set")
-            .clone())
     }
 
     fn file_type(&self) -> &str {
@@ -337,11 +315,12 @@ impl TestStream {
     /// least one entry in data (for the schema)
     pub fn new(data: Vec<RecordBatch>) -> Self {
         // check that there is at least one entry in data and that all batches have the same schema
-        assert!(!data.is_empty(), "data must not be empty");
-        assert!(
-            data.iter().all(|batch| batch.schema() == data[0].schema()),
-            "all batches must have the same schema"
-        );
+        if let Some(first) = data.first() {
+            assert!(
+                data.iter().all(|batch| batch.schema() == first.schema()),
+                "all batches must have the same schema"
+            );
+        }
         Self {
             data,
             ..Default::default()

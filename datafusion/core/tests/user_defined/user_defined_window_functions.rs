@@ -19,8 +19,8 @@
 //! user defined window functions
 
 use arrow::array::{
-    record_batch, Array, ArrayRef, AsArray, Int64Array, RecordBatch, StringArray,
-    UInt64Array,
+    Array, ArrayRef, AsArray, Int64Array, RecordBatch, StringArray, UInt64Array,
+    record_batch,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_schema::FieldRef;
@@ -38,8 +38,8 @@ use datafusion_functions_window_common::{
     expr::ExpressionArgs, field::WindowUDFFieldArgs,
 };
 use datafusion_physical_expr::{
-    expressions::{col, lit},
     PhysicalExpr,
+    expressions::{col, lit},
 };
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -47,8 +47,8 @@ use std::{
     any::Any,
     ops::Range,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -62,8 +62,7 @@ const UNBOUNDED_WINDOW_QUERY_WITH_ALIAS: &str = "SELECT x, y, val, \
      from t ORDER BY x, y";
 
 /// A query with a window function evaluated over a moving window
-const BOUNDED_WINDOW_QUERY:  &str  =
-    "SELECT x, y, val, \
+const BOUNDED_WINDOW_QUERY: &str = "SELECT x, y, val, \
      odd_counter(val) OVER (PARTITION BY x ORDER BY y ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
      from t ORDER BY x, y";
 
@@ -75,22 +74,22 @@ async fn test_setup() {
     let sql = "SELECT * from t order by x, y";
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+
-         | x | y | val |
-         +---+---+-----+
-         | 1 | a | 0   |
-         | 1 | b | 1   |
-         | 1 | c | 2   |
-         | 2 | d | 3   |
-         | 2 | e | 4   |
-         | 2 | f | 5   |
-         | 2 | g | 6   |
-         | 2 | h | 6   |
-         | 2 | i | 6   |
-         | 2 | j | 6   |
-         +---+---+-----+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+
+    | x | y | val |
+    +---+---+-----+
+    | 1 | a | 0   |
+    | 1 | b | 1   |
+    | 1 | c | 2   |
+    | 2 | d | 3   |
+    | 2 | e | 4   |
+    | 2 | f | 5   |
+    | 2 | g | 6   |
+    | 2 | h | 6   |
+    | 2 | i | 6   |
+    | 2 | j | 6   |
+    +---+---+-----+
+    ");
 }
 
 /// Basic user defined window function
@@ -101,22 +100,22 @@ async fn test_udwf() {
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 1                                                                                                                     |
-         | 1 | b | 1   | 1                                                                                                                     |
-         | 1 | c | 2   | 1                                                                                                                     |
-         | 2 | d | 3   | 2                                                                                                                     |
-         | 2 | e | 4   | 2                                                                                                                     |
-         | 2 | f | 5   | 2                                                                                                                     |
-         | 2 | g | 6   | 2                                                                                                                     |
-         | 2 | h | 6   | 2                                                                                                                     |
-         | 2 | i | 6   | 2                                                                                                                     |
-         | 2 | j | 6   | 2                                                                                                                     |
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    | 1 | a | 0   | 1                                                                                                                     |
+    | 1 | b | 1   | 1                                                                                                                     |
+    | 1 | c | 2   | 1                                                                                                                     |
+    | 2 | d | 3   | 2                                                                                                                     |
+    | 2 | e | 4   | 2                                                                                                                     |
+    | 2 | f | 5   | 2                                                                                                                     |
+    | 2 | g | 6   | 2                                                                                                                     |
+    | 2 | h | 6   | 2                                                                                                                     |
+    | 2 | i | 6   | 2                                                                                                                     |
+    | 2 | j | 6   | 2                                                                                                                     |
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    ");
 
     // evaluated on two distinct batches
     assert_eq!(test_state.evaluate_all_called(), 2);
@@ -175,22 +174,22 @@ async fn test_udwf_bounded_window_ignores_frame() {
     // Since the UDWF doesn't say it needs the window frame, the frame is ignored
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 1                                                                                                            |
-         | 1 | b | 1   | 1                                                                                                            |
-         | 1 | c | 2   | 1                                                                                                            |
-         | 2 | d | 3   | 2                                                                                                            |
-         | 2 | e | 4   | 2                                                                                                            |
-         | 2 | f | 5   | 2                                                                                                            |
-         | 2 | g | 6   | 2                                                                                                            |
-         | 2 | h | 6   | 2                                                                                                            |
-         | 2 | i | 6   | 2                                                                                                            |
-         | 2 | j | 6   | 2                                                                                                            |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | 1 | a | 0   | 1                                                                                                            |
+    | 1 | b | 1   | 1                                                                                                            |
+    | 1 | c | 2   | 1                                                                                                            |
+    | 2 | d | 3   | 2                                                                                                            |
+    | 2 | e | 4   | 2                                                                                                            |
+    | 2 | f | 5   | 2                                                                                                            |
+    | 2 | g | 6   | 2                                                                                                            |
+    | 2 | h | 6   | 2                                                                                                            |
+    | 2 | i | 6   | 2                                                                                                            |
+    | 2 | j | 6   | 2                                                                                                            |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    ");
 
     // evaluated on 2 distinct batches (when x=1 and x=2)
     assert_eq!(test_state.evaluate_called(), 0);
@@ -205,22 +204,22 @@ async fn test_udwf_bounded_window() {
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 1                                                                                                            |
-         | 1 | b | 1   | 1                                                                                                            |
-         | 1 | c | 2   | 1                                                                                                            |
-         | 2 | d | 3   | 1                                                                                                            |
-         | 2 | e | 4   | 2                                                                                                            |
-         | 2 | f | 5   | 1                                                                                                            |
-         | 2 | g | 6   | 1                                                                                                            |
-         | 2 | h | 6   | 0                                                                                                            |
-         | 2 | i | 6   | 0                                                                                                            |
-         | 2 | j | 6   | 0                                                                                                            |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | 1 | a | 0   | 1                                                                                                            |
+    | 1 | b | 1   | 1                                                                                                            |
+    | 1 | c | 2   | 1                                                                                                            |
+    | 2 | d | 3   | 1                                                                                                            |
+    | 2 | e | 4   | 2                                                                                                            |
+    | 2 | f | 5   | 1                                                                                                            |
+    | 2 | g | 6   | 1                                                                                                            |
+    | 2 | h | 6   | 0                                                                                                            |
+    | 2 | i | 6   | 0                                                                                                            |
+    | 2 | j | 6   | 0                                                                                                            |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    ");
 
     // Evaluate is called for each input rows
     assert_eq!(test_state.evaluate_called(), 10);
@@ -237,22 +236,22 @@ async fn test_stateful_udwf() {
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 0                                                                                                                     |
-         | 1 | b | 1   | 1                                                                                                                     |
-         | 1 | c | 2   | 1                                                                                                                     |
-         | 2 | d | 3   | 1                                                                                                                     |
-         | 2 | e | 4   | 1                                                                                                                     |
-         | 2 | f | 5   | 2                                                                                                                     |
-         | 2 | g | 6   | 2                                                                                                                     |
-         | 2 | h | 6   | 2                                                                                                                     |
-         | 2 | i | 6   | 2                                                                                                                     |
-         | 2 | j | 6   | 2                                                                                                                     |
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    | 1 | a | 0   | 0                                                                                                                     |
+    | 1 | b | 1   | 1                                                                                                                     |
+    | 1 | c | 2   | 1                                                                                                                     |
+    | 2 | d | 3   | 1                                                                                                                     |
+    | 2 | e | 4   | 1                                                                                                                     |
+    | 2 | f | 5   | 2                                                                                                                     |
+    | 2 | g | 6   | 2                                                                                                                     |
+    | 2 | h | 6   | 2                                                                                                                     |
+    | 2 | i | 6   | 2                                                                                                                     |
+    | 2 | j | 6   | 2                                                                                                                     |
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    ");
 
     assert_eq!(test_state.evaluate_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
@@ -268,22 +267,22 @@ async fn test_stateful_udwf_bounded_window() {
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 1                                                                                                            |
-         | 1 | b | 1   | 1                                                                                                            |
-         | 1 | c | 2   | 1                                                                                                            |
-         | 2 | d | 3   | 1                                                                                                            |
-         | 2 | e | 4   | 2                                                                                                            |
-         | 2 | f | 5   | 1                                                                                                            |
-         | 2 | g | 6   | 1                                                                                                            |
-         | 2 | h | 6   | 0                                                                                                            |
-         | 2 | i | 6   | 0                                                                                                            |
-         | 2 | j | 6   | 0                                                                                                            |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | 1 | a | 0   | 1                                                                                                            |
+    | 1 | b | 1   | 1                                                                                                            |
+    | 1 | c | 2   | 1                                                                                                            |
+    | 2 | d | 3   | 1                                                                                                            |
+    | 2 | e | 4   | 2                                                                                                            |
+    | 2 | f | 5   | 1                                                                                                            |
+    | 2 | g | 6   | 1                                                                                                            |
+    | 2 | h | 6   | 0                                                                                                            |
+    | 2 | i | 6   | 0                                                                                                            |
+    | 2 | j | 6   | 0                                                                                                            |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    ");
 
     // Evaluate and update_state is called for each input row
     assert_eq!(test_state.evaluate_called(), 10);
@@ -298,22 +297,22 @@ async fn test_udwf_query_include_rank() {
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 3                                                                                                                     |
-         | 1 | b | 1   | 2                                                                                                                     |
-         | 1 | c | 2   | 1                                                                                                                     |
-         | 2 | d | 3   | 7                                                                                                                     |
-         | 2 | e | 4   | 6                                                                                                                     |
-         | 2 | f | 5   | 5                                                                                                                     |
-         | 2 | g | 6   | 4                                                                                                                     |
-         | 2 | h | 6   | 3                                                                                                                     |
-         | 2 | i | 6   | 2                                                                                                                     |
-         | 2 | j | 6   | 1                                                                                                                     |
-         +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    | 1 | a | 0   | 3                                                                                                                     |
+    | 1 | b | 1   | 2                                                                                                                     |
+    | 1 | c | 2   | 1                                                                                                                     |
+    | 2 | d | 3   | 7                                                                                                                     |
+    | 2 | e | 4   | 6                                                                                                                     |
+    | 2 | f | 5   | 5                                                                                                                     |
+    | 2 | g | 6   | 4                                                                                                                     |
+    | 2 | h | 6   | 3                                                                                                                     |
+    | 2 | i | 6   | 2                                                                                                                     |
+    | 2 | j | 6   | 1                                                                                                                     |
+    +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
+    ");
 
     assert_eq!(test_state.evaluate_called(), 0);
     assert_eq!(test_state.evaluate_all_called(), 0);
@@ -329,22 +328,22 @@ async fn test_udwf_bounded_query_include_rank() {
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 3                                                                                                            |
-         | 1 | b | 1   | 2                                                                                                            |
-         | 1 | c | 2   | 1                                                                                                            |
-         | 2 | d | 3   | 7                                                                                                            |
-         | 2 | e | 4   | 6                                                                                                            |
-         | 2 | f | 5   | 5                                                                                                            |
-         | 2 | g | 6   | 4                                                                                                            |
-         | 2 | h | 6   | 3                                                                                                            |
-         | 2 | i | 6   | 2                                                                                                            |
-         | 2 | j | 6   | 1                                                                                                            |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | 1 | a | 0   | 3                                                                                                            |
+    | 1 | b | 1   | 2                                                                                                            |
+    | 1 | c | 2   | 1                                                                                                            |
+    | 2 | d | 3   | 7                                                                                                            |
+    | 2 | e | 4   | 6                                                                                                            |
+    | 2 | f | 5   | 5                                                                                                            |
+    | 2 | g | 6   | 4                                                                                                            |
+    | 2 | h | 6   | 3                                                                                                            |
+    | 2 | i | 6   | 2                                                                                                            |
+    | 2 | j | 6   | 1                                                                                                            |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    ");
 
     assert_eq!(test_state.evaluate_called(), 0);
     assert_eq!(test_state.evaluate_all_called(), 0);
@@ -362,22 +361,22 @@ async fn test_udwf_bounded_window_returns_null() {
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         | 1 | a | 0   | 1                                                                                                            |
-         | 1 | b | 1   | 1                                                                                                            |
-         | 1 | c | 2   | 1                                                                                                            |
-         | 2 | d | 3   | 1                                                                                                            |
-         | 2 | e | 4   | 2                                                                                                            |
-         | 2 | f | 5   | 1                                                                                                            |
-         | 2 | g | 6   | 1                                                                                                            |
-         | 2 | h | 6   |                                                                                                              |
-         | 2 | i | 6   |                                                                                                              |
-         | 2 | j | 6   |                                                                                                              |
-         +---+---+-----+--------------------------------------------------------------------------------------------------------------+
-         "###);
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    | 1 | a | 0   | 1                                                                                                            |
+    | 1 | b | 1   | 1                                                                                                            |
+    | 1 | c | 2   | 1                                                                                                            |
+    | 2 | d | 3   | 1                                                                                                            |
+    | 2 | e | 4   | 2                                                                                                            |
+    | 2 | f | 5   | 1                                                                                                            |
+    | 2 | g | 6   | 1                                                                                                            |
+    | 2 | h | 6   |                                                                                                              |
+    | 2 | i | 6   |                                                                                                              |
+    | 2 | j | 6   |                                                                                                              |
+    +---+---+-----+--------------------------------------------------------------------------------------------------------------+
+    ");
 
     // Evaluate is called for each input rows
     assert_eq!(test_state.evaluate_called(), 10);
@@ -616,7 +615,9 @@ impl PartitionEvaluator for OddCounter {
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         self.test_state.inc_evaluate_all_with_rank_called();
-        println!("evaluate_all_with_rank, values: {num_rows:#?}, ranks_in_partitions: {ranks_in_partition:?}");
+        println!(
+            "evaluate_all_with_rank, values: {num_rows:#?}, ranks_in_partitions: {ranks_in_partition:?}"
+        );
         // when evaluating with ranks, just return the inverse rank instead
         let array: Int64Array = ranks_in_partition
             .iter()

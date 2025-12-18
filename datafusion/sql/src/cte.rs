@@ -20,9 +20,8 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{
-    not_impl_err, plan_err,
+    Result, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
-    Result,
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
 use sqlparser::ast::{Query, SetExpr, SetOperator, With};
@@ -92,7 +91,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => (left, right, set_quantifier),
             other => {
                 // If the query is not a UNION, then it is not a recursive CTE
-                cte_query.body = Box::new(other);
+                *cte_query.body = other;
                 return self.non_recursive_cte(cte_query, planner_context);
             }
         };
@@ -191,11 +190,11 @@ fn has_work_table_reference(
 ) -> bool {
     let mut has_reference = false;
     plan.apply(|node| {
-        if let LogicalPlan::TableScan(scan) = node {
-            if Arc::ptr_eq(&scan.source, work_table_source) {
-                has_reference = true;
-                return Ok(TreeNodeRecursion::Stop);
-            }
+        if let LogicalPlan::TableScan(scan) = node
+            && Arc::ptr_eq(&scan.source, work_table_source)
+        {
+            has_reference = true;
+            return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })

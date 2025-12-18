@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::DataType::{Boolean, Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -96,7 +96,7 @@ impl ScalarUDFImpl for IsZeroFunc {
 }
 
 /// Iszero SQL function
-pub fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Float64 => Ok(Arc::new(BooleanArray::from_unary(
             args[0].as_primitive::<Float64Type>(),

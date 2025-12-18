@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! See `main.rs` for how to run it.
+
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
@@ -414,7 +416,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<(), Status> {
         let handle = std::str::from_utf8(&handle.prepared_statement_handle);
         if let Ok(handle) = handle {
-            info!("do_action_close_prepared_statement: removing plan and results for {handle}");
+            info!(
+                "do_action_close_prepared_statement: removing plan and results for {handle}"
+            );
             let _ = self.remove_plan(handle);
             let _ = self.remove_result(handle);
         }

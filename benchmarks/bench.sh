@@ -87,6 +87,9 @@ tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB),
 tpch_csv10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single csv file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
 
+# TPC-DS Benchmarks
+tpcds:                  TPCDS inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table, hash join
+
 # Extended TPC-H Benchmarks
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=1)
 sort_tpch10:            Benchmark of sorting speed for end-to-end sort queries on TPC-H dataset (SF=10)
@@ -98,6 +101,9 @@ clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against partitioned (100 files) parquet
 clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
+
+# Sorted Data Benchmarks (ORDER BY Optimization)
+clickbench_sorted:     ClickBench queries on pre-sorted data using prefer_existing_sort (tests sort elimination optimization)
 
 # H2O.ai Benchmarks (Group By, Join, Window)
 h2o_small:                      h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
@@ -126,6 +132,7 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 cancellation:           How long cancelling a query takes
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
+smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -189,8 +196,8 @@ main() {
             echo "***************************"
             case "$BENCHMARK" in
                 all)
-                    data_tpch "1"
-                    data_tpch "10"
+                    data_tpch "1" "parquet"
+                    data_tpch "10" "parquet"
                     data_h2o "SMALL"
                     data_h2o "MEDIUM"
                     data_h2o "BIG"
@@ -203,18 +210,25 @@ main() {
                     # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 tpch_mem)
-                    # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
+                    ;;
+                tpch_csv)
+                    data_tpch "1" "csv"
                     ;;
                 tpch10)
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 tpch_mem10)
-                    # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
+                    ;;
+                tpch_csv10)
+                    data_tpch "10" "csv"
+                    ;;
+                tpcds)
+                    data_tpcds
                     ;;
                 clickbench_1)
                     data_clickbench_1
@@ -289,19 +303,19 @@ main() {
                     ;;
                 external_aggr)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 sort_tpch)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 sort_tpch10)
                     # same data as for tpch10
-                    data_tpch "10"
+                    data_tpch "10" "parquet"
                     ;;
                 topk_tpch)
                     # same data as for tpch
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
                     ;;
                 nlj)
                     # nlj uses range() function, no data generation needed
@@ -311,8 +325,15 @@ main() {
                     # hj uses range() function, no data generation needed
                     echo "HJ benchmark does not require data generation"
                     ;;
+                smj)
+                    # smj uses range() function, no data generation needed
+                    echo "SMJ benchmark does not require data generation"
+                    ;;
                 compile_profile)
-                    data_tpch "1"
+                    data_tpch "1" "parquet"
+                    ;;
+                clickbench_sorted)
+                    clickbench_sorted
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for data generation"
@@ -384,6 +405,8 @@ main() {
                     run_external_aggr
                     run_nlj
                     run_hj
+                    run_tpcds
+                    run_smj
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -402,6 +425,9 @@ main() {
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
+                    ;;
+                tpcds)
+                    run_tpcds
                     ;;
                 cancellation)
                     run_cancellation
@@ -445,7 +471,7 @@ main() {
                 h2o_medium_window)
                     run_h2o_window "MEDIUM" "CSV" "window"
                     ;;
-                h2o_big_window) 
+                h2o_big_window)
                     run_h2o_window "BIG" "CSV" "window"
                     ;;
                 h2o_small_parquet)
@@ -494,8 +520,14 @@ main() {
                 hj)
                     run_hj
                     ;;
+                smj)
+                    run_smj
+                    ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
+                    ;;
+                clickbench_sorted)
+                    run_clickbench_sorted
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -529,7 +561,7 @@ main() {
 # Creates TPCH data at a certain scale factor, if it doesn't already
 # exist
 #
-# call like: data_tpch($scale_factor)
+# call like: data_tpch($scale_factor, format)
 #
 # Creates data in $DATA_DIR/tpch_sf1 for scale factor 1
 # Creates data in $DATA_DIR/tpch_sf10 for scale factor 10
@@ -540,20 +572,23 @@ data_tpch() {
         echo "Internal error: Scale factor not specified"
         exit 1
     fi
+    FORMAT=$2
+    if [ -z "$FORMAT" ] ; then
+        echo "Internal error: Format not specified"
+        exit 1
+    fi
 
     TPCH_DIR="${DATA_DIR}/tpch_sf${SCALE_FACTOR}"
-    echo "Creating tpch dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
+    echo "Creating tpch $FORMAT dataset at Scale Factor ${SCALE_FACTOR} in ${TPCH_DIR}..."
 
     # Ensure the target data directory exists
     mkdir -p "${TPCH_DIR}"
 
-    # Create 'tbl' (CSV format) data into $DATA_DIR if it does not already exist
-    FILE="${TPCH_DIR}/supplier.tbl"
-    if test -f "${FILE}"; then
-        echo " tbl files exist ($FILE exists)."
-    else
-        echo " creating tbl files with tpch_dbgen..."
-        docker run -v "${TPCH_DIR}":/data -it --rm ghcr.io/scalytics/tpch-docker:main -vf -s "${SCALE_FACTOR}"
+    # check if tpchgen-cli is installed
+    if ! command -v tpchgen-cli &> /dev/null
+    then
+        echo "tpchgen-cli could not be found, please install it via 'cargo install tpchgen-cli'"
+        exit 1
     fi
 
     # Copy expected answers into the ./data/answers directory if it does not already exist
@@ -566,27 +601,52 @@ data_tpch() {
         docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
-    # Create 'parquet' files from tbl
-    FILE="${TPCH_DIR}/supplier"
-    if test -d "${FILE}"; then
-        echo " parquet files exist ($FILE exists)."
-    else
-        echo " creating parquet files using benchmark binary ..."
-        pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}" --format parquet
-        popd > /dev/null
+    if [ "$FORMAT" = "parquet" ]; then
+      # Create 'parquet' files, one directory per file
+      FILE="${TPCH_DIR}/supplier"
+      if test -d "${FILE}"; then
+          echo " parquet files exist ($FILE exists)."
+      else
+          echo " creating parquet files using tpchgen-cli ..."
+          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format parquet --parquet-compression='ZSTD(1)' --parts=1 --output-dir "${TPCH_DIR}"
+      fi
+      return
     fi
 
-    # Create 'csv' files from tbl
-    FILE="${TPCH_DIR}/csv/supplier"
-    if test -d "${FILE}"; then
-        echo " csv files exist ($FILE exists)."
-    else
-        echo " creating csv files using benchmark binary ..."
-        pushd "${SCRIPT_DIR}" > /dev/null
-        $CARGO_COMMAND --bin tpch -- convert --input "${TPCH_DIR}" --output "${TPCH_DIR}/csv" --format csv
-        popd > /dev/null
+    # Create 'csv' files, one directory per file
+    if [ "$FORMAT" = "csv" ]; then
+      FILE="${TPCH_DIR}/csv/supplier"
+      if test -d "${FILE}"; then
+          echo " csv files exist ($FILE exists)."
+      else
+          echo " creating csv files using tpchgen-cli binary ..."
+          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format csv --parts=1 --output-dir "${TPCH_DIR}/csv"
+      fi
+      return
     fi
+
+    echo "Error: unknown format '$FORMAT' for tpch data generation, expected 'parquet' or 'csv'"
+    exit 1
+}
+
+# Downloads TPC-DS data
+data_tpcds() {
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
+
+    # Check if `web_site.parquet` exists in the TPCDS data directory to verify data presence
+    echo "Checking TPC-DS data directory: ${TPCDS_DIR}"
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
+        mkdir -p "${TPCDS_DIR}"
+        # Download the DataFusion benchmarks repository zip if it is not already downloaded
+        if [ ! -f "${DATA_DIR}/datafusion-benchmarks.zip" ]; then
+          echo "Downloading DataFusion benchmarks repository zip to: ${DATA_DIR}/datafusion-benchmarks.zip"
+          wget --timeout=30 --tries=3 -O "${DATA_DIR}/datafusion-benchmarks.zip" https://github.com/apache/datafusion-benchmarks/archive/refs/heads/main.zip
+        fi
+        echo "Extracting TPC-DS parquet data to ${TPCDS_DIR}..."
+        unzip -o -j -d "${TPCDS_DIR}" "${DATA_DIR}/datafusion-benchmarks.zip" datafusion-benchmarks-main/tpcds/data/sf1/*
+        echo "TPC-DS data extracted."
+    fi
+    echo "Done."
 }
 
 # Runs the tpch benchmark
@@ -603,10 +663,10 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     FORMAT=$2
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format ${FORMAT} -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
-# Runs the tpch in memory
+# Runs the tpch in memory (needs tpch parquet data)
 run_tpch_mem() {
     SCALE_FACTOR=$1
     if [ -z "$SCALE_FACTOR" ] ; then
@@ -619,7 +679,27 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    debug_run $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpch --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
+# Runs the tpcds benchmark
+run_tpcds() {
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
+
+    # Check if TPCDS data directory and representative file exists
+    if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then
+        echo "" >&2
+        echo "Please prepare TPC-DS data first by following instructions:" >&2
+        echo "  ./bench.sh data tpcds" >&2
+        echo "" >&2
+        exit 1
+    fi
+
+    RESULTS_FILE="${RESULTS_DIR}/tpcds_sf1.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running tpcds benchmark..."
+
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
 # Runs the compile profile benchmark helper
@@ -1154,6 +1234,14 @@ run_hj() {
     debug_run $CARGO_COMMAND --bin dfbench -- hj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
 }
 
+# Runs the smj benchmark
+run_smj() {
+    RESULTS_FILE="${RESULTS_DIR}/smj.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running smj benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- smj --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG}
+}
+
 
 compare_benchmarks() {
     BASE_RESULTS_DIR="${SCRIPT_DIR}/results"
@@ -1187,6 +1275,113 @@ compare_benchmarks() {
         fi
     done
 
+}
+
+# Creates sorted ClickBench data from hits.parquet (full dataset)
+# The data is sorted by EventTime in ascending order
+# Uses datafusion-cli to reduce dependencies
+clickbench_sorted() {
+    SORTED_FILE="${DATA_DIR}/hits_sorted.parquet"
+    ORIGINAL_FILE="${DATA_DIR}/hits.parquet"
+
+    # Default memory limit is 12GB, can be overridden with DATAFUSION_MEMORY_GB env var
+    MEMORY_LIMIT_GB=${DATAFUSION_MEMORY_GB:-12}
+
+    echo "Creating sorted ClickBench dataset from hits.parquet..."
+    echo "Configuration:"
+    echo "  Memory limit: ${MEMORY_LIMIT_GB}G"
+    echo "  Row group size: 64K rows"
+    echo "  Compression: uncompressed"
+
+    if [ ! -f "${ORIGINAL_FILE}" ]; then
+        echo "hits.parquet not found. Running data_clickbench_1 first..."
+        data_clickbench_1
+    fi
+
+    if [ -f "${SORTED_FILE}" ]; then
+        echo "Sorted hits.parquet already exists at ${SORTED_FILE}"
+        return 0
+    fi
+
+    echo "Sorting hits.parquet by EventTime (this may take several minutes)..."
+
+    pushd "${DATAFUSION_DIR}" > /dev/null
+    echo "Building datafusion-cli..."
+    cargo build --release --bin datafusion-cli
+    DATAFUSION_CLI="${DATAFUSION_DIR}/target/release/datafusion-cli"
+    popd > /dev/null
+
+
+    START_TIME=$(date +%s)
+    echo "Start time: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "Using datafusion-cli to create sorted parquet file..."
+    "${DATAFUSION_CLI}" << EOF
+-- Memory and performance configuration
+SET datafusion.runtime.memory_limit = '${MEMORY_LIMIT_GB}G';
+SET datafusion.execution.spill_compression = 'uncompressed';
+SET datafusion.execution.sort_spill_reservation_bytes = 10485760; -- 10MB
+SET datafusion.execution.batch_size = 8192;
+SET datafusion.execution.target_partitions = 1;
+
+-- Parquet output configuration
+SET datafusion.execution.parquet.max_row_group_size = 65536;
+SET datafusion.execution.parquet.compression = 'uncompressed';
+
+-- Execute sort and write
+COPY (SELECT * FROM '${ORIGINAL_FILE}' ORDER BY "EventTime")
+TO '${SORTED_FILE}'
+STORED AS PARQUET;
+EOF
+
+    local result=$?
+
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    echo "End time: $(date '+%Y-%m-%d %H:%M:%S')"
+
+    if [ $result -eq 0 ]; then
+        echo "✓ Successfully created sorted ClickBench dataset"
+
+        INPUT_SIZE=$(stat -f%z "${ORIGINAL_FILE}" 2>/dev/null || stat -c%s "${ORIGINAL_FILE}" 2>/dev/null)
+        OUTPUT_SIZE=$(stat -f%z "${SORTED_FILE}" 2>/dev/null || stat -c%s "${SORTED_FILE}" 2>/dev/null)
+        INPUT_MB=$((INPUT_SIZE / 1024 / 1024))
+        OUTPUT_MB=$((OUTPUT_SIZE / 1024 / 1024))
+
+        echo "  Input:  ${INPUT_MB} MB"
+        echo "  Output: ${OUTPUT_MB} MB"
+
+        echo ""
+        echo "Time Statistics:"
+        echo "  Total duration: ${DURATION} seconds ($(printf '%02d:%02d:%02d' $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60))))"
+        echo "  Throughput: $((INPUT_MB / DURATION)) MB/s"
+
+        return 0
+    else
+        echo "✗ Error: Failed to create sorted dataset"
+        echo "💡 Tip: Try increasing memory with: DATAFUSION_MEMORY_GB=16 ./bench.sh data clickbench_sorted"
+        return 1
+    fi
+}
+
+# Runs the sorted data benchmark with prefer_existing_sort configuration
+run_clickbench_sorted() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_sorted.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sorted data benchmark with prefer_existing_sort optimization..."
+
+    # Ensure sorted data exists
+    clickbench_sorted
+
+    # Run benchmark with prefer_existing_sort configuration
+    # This allows DataFusion to optimize away redundant sorts while maintaining parallelism
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench \
+        --iterations 5 \
+        --path "${DATA_DIR}/hits_sorted.parquet" \
+        --queries-path "${SCRIPT_DIR}/queries/clickbench/queries/sorted_data" \
+        --sorted-by "EventTime" \
+        -c datafusion.optimizer.prefer_existing_sort=true \
+        -o "${RESULTS_FILE}" \
+        ${QUERY_ARG}
 }
 
 setup_venv() {

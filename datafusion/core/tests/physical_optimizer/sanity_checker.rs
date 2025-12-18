@@ -30,13 +30,13 @@ use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTab
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_physical_expr::expressions::{col, Literal};
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::{displayable, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use async_trait::async_trait;
 
@@ -556,10 +556,10 @@ async fn test_sort_merge_join_satisfied() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
-      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
     "
@@ -606,7 +606,7 @@ async fn test_sort_merge_join_order_missing() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
@@ -654,10 +654,10 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
         actual,
         @r"
     SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
-      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
     "

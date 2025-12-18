@@ -137,7 +137,7 @@ impl PhysicalExpr for Literal {
 }
 
 /// Create a literal expression
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 pub fn lit<T: datafusion_expr::Literal>(value: T) -> Arc<dyn PhysicalExpr> {
     match value.lit() {
         Expr::Literal(v, _) => Arc::new(Literal::new(v)),

@@ -19,14 +19,15 @@ use std::sync::Arc;
 
 use crate::memory_limit::DummyStreamPartition;
 use crate::physical_optimizer::test_utils::{
-    aggregate_exec, bounded_window_exec, bounded_window_exec_with_partition,
-    check_integrity, coalesce_batches_exec, coalesce_partitions_exec, create_test_schema,
-    create_test_schema2, create_test_schema3, filter_exec, global_limit_exec,
-    hash_join_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_with_sort,
-    projection_exec, repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr,
-    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
+    RequirementsTestExec, aggregate_exec, bounded_window_exec,
+    bounded_window_exec_with_partition, check_integrity, coalesce_batches_exec,
+    coalesce_partitions_exec, create_test_schema, create_test_schema2,
+    create_test_schema3, filter_exec, global_limit_exec, hash_join_exec,
+    local_limit_exec, memory_exec, parquet_exec, parquet_exec_with_sort, projection_exec,
+    repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr, sort_expr_options,
+    sort_merge_join_exec, sort_preserving_merge_exec,
     sort_preserving_merge_exec_with_fetch, spr_repartition_exec, stream_exec_ordered,
-    union_exec, RequirementsTestExec,
+    union_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -65,7 +66,7 @@ use datafusion_execution::TaskContext;
 use datafusion_catalog::streaming::StreamingTable;
 
 use futures::StreamExt;
-use insta::{assert_snapshot, Settings};
+use insta::{Settings, assert_snapshot};
 
 /// Create a sorted Csv exec
 fn csv_exec_sorted(
@@ -366,8 +367,8 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 
 #[tokio::test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true(
-) -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
+-> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r"
@@ -392,8 +393,8 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
 
 #[tokio::test]
 // Test with `repartition_sorts` disabled, causing a full resort of the data
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false(
-) -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
+-> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
@@ -664,20 +665,12 @@ async fn test_union_inputs_different_sorted7() -> Result<()> {
     // Union has unnecessarily fine ordering below it. We should be able to replace them with absolutely necessary ordering.
     let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
     assert_snapshot!(test.run(), @r"
-    Input Plan:
+    Input / Optimized Plan:
     SortPreservingMergeExec: [nullable_col@0 ASC]
       UnionExec
         SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
         SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-
-    Optimized Plan:
-    SortPreservingMergeExec: [nullable_col@0 ASC]
-      UnionExec
-        SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
-        SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
     ");
     // Union preserves the inputs ordering, and we should not change any of the SortExecs under UnionExec
@@ -778,8 +771,8 @@ async fn test_soft_hard_requirements_remove_soft_requirement() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns(
-) -> Result<()> {
+async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns()
+-> Result<()> {
     let schema = create_test_schema()?;
     let source = parquet_exec(schema.clone());
     let ordering = [sort_expr_options(
@@ -1077,8 +1070,8 @@ async fn test_soft_hard_requirements_multiple_sorts() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_requirement(
-) -> Result<()> {
+async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_requirement()
+-> Result<()> {
     let schema = create_test_schema()?;
     let source = parquet_exec(schema.clone());
     let ordering = [sort_expr_options(
@@ -1631,13 +1624,13 @@ async fn test_with_lost_ordering_unbounded() -> Result<()> {
     SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
       CoalescePartitionsExec
         RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
             StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]
 
     Optimized Plan:
     SortPreservingMergeExec: [a@0 ASC]
       RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
           StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]
     ");
 
@@ -1649,13 +1642,13 @@ async fn test_with_lost_ordering_unbounded() -> Result<()> {
     SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
       CoalescePartitionsExec
         RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
             StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]
 
     Optimized Plan:
     SortPreservingMergeExec: [a@0 ASC]
       RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
           StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]
     ");
 
@@ -1674,7 +1667,7 @@ async fn test_with_lost_ordering_bounded() -> Result<()> {
     SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
       CoalescePartitionsExec
         RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false
     ");
 
@@ -1686,14 +1679,14 @@ async fn test_with_lost_ordering_bounded() -> Result<()> {
     SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
       CoalescePartitionsExec
         RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false
 
     Optimized Plan:
     SortPreservingMergeExec: [a@0 ASC]
       SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
         RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10
-          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=csv, has_header=false
     ");
 
@@ -1715,7 +1708,7 @@ async fn test_do_not_pushdown_through_spm() -> Result<()> {
     Input / Optimized Plan:
     SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
       SortPreservingMergeExec: [a@0 ASC, b@1 ASC]
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false
     ");
 
@@ -1744,13 +1737,13 @@ async fn test_pushdown_through_spm() -> Result<()> {
     Input Plan:
     SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]
       SortPreservingMergeExec: [a@0 ASC, b@1 ASC]
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false
 
     Optimized Plan:
     SortPreservingMergeExec: [a@0 ASC, b@1 ASC]
       SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[true]
-        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=csv, has_header=false
     ");
     Ok(())
@@ -1774,7 +1767,7 @@ async fn test_window_multi_layer_requirement() -> Result<()> {
     BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
       SortPreservingMergeExec: [a@0 ASC, b@1 ASC]
         RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC, b@1 ASC
-          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
             SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]
               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
 
@@ -1969,7 +1962,7 @@ async fn test_remove_unnecessary_sort2() -> Result<()> {
     assert_snapshot!(test.run(), @r"
     Input Plan:
     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
           SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]
             SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]
@@ -2016,7 +2009,7 @@ async fn test_remove_unnecessary_sort3() -> Result<()> {
     AggregateExec: mode=Final, gby=[], aggr=[]
       SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]
         SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]
-          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
             SortPreservingMergeExec: [non_nullable_col@1 ASC]
               SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
                 DataSourceExec: partitions=1, partition_sizes=[0]
@@ -2365,7 +2358,7 @@ async fn test_commutativity() -> Result<()> {
 
     assert_snapshot!(displayable(orig_plan.as_ref()).indent(true), @r#"
     SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
-      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
         BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
           DataSourceExec: partitions=1, partition_sizes=[0]
     "#);

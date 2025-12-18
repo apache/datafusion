@@ -18,17 +18,18 @@
 //! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use std::hash::{Hash, Hasher};
-use std::{cmp::Ordering, sync::atomic, sync::Arc};
+use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
 mod pool;
 pub mod proxy {
-    pub use datafusion_common::utils::proxy::{
-        HashTableAllocExt, RawTableAllocExt, VecAllocExt,
-    };
+    pub use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 }
 
+pub use datafusion_common::{
+    human_readable_count, human_readable_duration, human_readable_size, units,
+};
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.
@@ -473,34 +474,6 @@ impl Drop for MemoryReservation {
     fn drop(&mut self) {
         self.free();
     }
-}
-
-pub mod units {
-    pub const TB: u64 = 1 << 40;
-    pub const GB: u64 = 1 << 30;
-    pub const MB: u64 = 1 << 20;
-    pub const KB: u64 = 1 << 10;
-}
-
-/// Present size in human-readable form
-pub fn human_readable_size(size: usize) -> String {
-    use units::*;
-
-    let size = size as u64;
-    let (value, unit) = {
-        if size >= 2 * TB {
-            (size as f64 / TB as f64, "TB")
-        } else if size >= 2 * GB {
-            (size as f64 / GB as f64, "GB")
-        } else if size >= 2 * MB {
-            (size as f64 / MB as f64, "MB")
-        } else if size >= 2 * KB {
-            (size as f64 / KB as f64, "KB")
-        } else {
-            (size as f64, "B")
-        }
-    };
-    format!("{value:.1} {unit}")
 }
 
 #[cfg(test)]

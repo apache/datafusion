@@ -20,10 +20,10 @@
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
-use crate::physical_expr::{with_new_children_if_necessary, PhysicalExpr};
+use crate::physical_expr::{PhysicalExpr, with_new_children_if_necessary};
 
-use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};
 use datafusion_common::Result;
+use datafusion_common::tree_node::{ConcreteTreeNode, DynTreeNode};
 
 impl DynTreeNode for dyn PhysicalExpr {
     fn arc_children(&self) -> Vec<&Arc<Self>> {

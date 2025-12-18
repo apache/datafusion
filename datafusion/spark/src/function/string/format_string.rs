@@ -26,12 +26,12 @@ use arrow::{
     datatypes::DataType,
 };
 use bigdecimal::{
-    num_bigint::{BigInt, Sign},
     BigDecimal, ToPrimitive,
+    num_bigint::{BigInt, Sign},
 };
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, plan_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, plan_err,
 };
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -81,8 +81,12 @@ impl ScalarUDFImpl for FormatStringFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types[0] {
             DataType::Null => Ok(DataType::Utf8),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(arg_types[0].clone()),
-            _ => plan_err!("The format_string function expects the first argument to be Utf8, LargeUtf8 or Utf8View")
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                Ok(arg_types[0].clone())
+            }
+            _ => plan_err!(
+                "The format_string function expects the first argument to be Utf8, LargeUtf8 or Utf8View"
+            ),
         }
     }
 
@@ -304,7 +308,7 @@ impl<'a> Formatter<'a> {
                         return exec_err!("No previous argument to reference");
                     };
                     let (spec, rest) =
-                        take_conversion_specifier(rest, p, arg_types[p - 1].clone())?;
+                        take_conversion_specifier(rest, p, &arg_types[p - 1])?;
                     res.push(FormatElement::Format(spec));
                     rem = rest;
                     continue;
@@ -317,7 +321,7 @@ impl<'a> Formatter<'a> {
                             (index as usize, &rest2[1..])
                         }
                         (NumericParam::FromArgument, true) => {
-                            return exec_err!("Invalid numeric parameter")
+                            return exec_err!("Invalid numeric parameter");
                         }
                         (_, false) => {
                             argument_index += 1;
@@ -335,7 +339,7 @@ impl<'a> Formatter<'a> {
                 let (spec, rest) = take_conversion_specifier(
                     rest,
                     current_argument_index,
-                    arg_types[current_argument_index - 1].clone(),
+                    &arg_types[current_argument_index - 1],
                 )
                 .map_err(|e| exec_datafusion_err!("{:?}, format string: {:?}", e, fmt))?;
                 res.push(FormatElement::Format(spec));
@@ -582,7 +586,7 @@ impl TryFrom<char> for TimeFormat {
 }
 
 impl ConversionType {
-    pub fn validate(&self, arg_type: DataType) -> Result<()> {
+    pub fn validate(&self, arg_type: &DataType) -> Result<()> {
         match self {
             ConversionType::BooleanLower | ConversionType::BooleanUpper => {
                 if !matches!(arg_type, DataType::Boolean) {
@@ -716,11 +720,11 @@ impl ConversionType {
     }
 }
 
-fn take_conversion_specifier(
-    mut s: &str,
+fn take_conversion_specifier<'a>(
+    mut s: &'a str,
     argument_index: usize,
-    arg_type: DataType,
-) -> Result<(ConversionSpecifier, &str)> {
+    arg_type: &DataType,
+) -> Result<(ConversionSpecifier, &'a str)> {
     let mut spec = ConversionSpecifier {
         argument_index,
         alt_form: false,
@@ -1186,7 +1190,7 @@ impl ConversionSpecifier {
                         | ConversionType::CompactFloatLower
                         | ConversionType::CompactFloatUpper,
                         Some(value),
-                    ) => self.format_decimal(string, value.to_string(), *scale as i64),
+                    ) => self.format_decimal(string, &value.to_string(), *scale as i64),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1212,7 +1216,7 @@ impl ConversionSpecifier {
                         | ConversionType::CompactFloatLower
                         | ConversionType::CompactFloatUpper,
                         Some(value),
-                    ) => self.format_decimal(string, value.to_string(), *scale as i64),
+                    ) => self.format_decimal(string, &value.to_string(), *scale as i64),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1675,7 +1679,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for boolean array",
                     self.conversion_type
-                )
+                );
             }
         };
         self.format_str(writer, formatted)
@@ -1744,7 +1748,7 @@ impl ConversionSpecifier {
                     return exec_err!(
                         "Invalid conversion type: {:?} for float",
                         self.conversion_type
-                    )
+                    );
                 }
             }
 
@@ -1789,7 +1793,7 @@ impl ConversionSpecifier {
                     return exec_err!(
                         "Invalid conversion type: {:?} for float",
                         self.conversion_type
-                    )
+                    );
                 }
             }
         }
@@ -1908,7 +1912,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for u64",
                     self.conversion_type
-                )
+                );
             }
         }
         let mut prefix = if self.alt_form {
@@ -1991,12 +1995,7 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_decimal(
-        &self,
-        writer: &mut String,
-        value: String,
-        scale: i64,
-    ) -> Result<()> {
+    fn format_decimal(&self, writer: &mut String, value: &str, scale: i64) -> Result<()> {
         let mut prefix = String::new();
         let upper = self.conversion_type.is_upper();
 
@@ -2070,7 +2069,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for decimal",
                     self.conversion_type
-                )
+                );
             }
         };
 

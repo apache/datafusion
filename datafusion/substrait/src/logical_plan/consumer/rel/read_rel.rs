@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
-use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{
-    not_impl_err, plan_err, substrait_datafusion_err, substrait_err, DFSchema,
-    DFSchemaRef, TableReference,
+    DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
+    substrait_datafusion_err, substrait_err,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::utils::split_conjunction_owned;
@@ -30,12 +30,12 @@ use datafusion::logical_expr::{
 };
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
-use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::read_rel::ReadType;
+use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{Expression, ReadRel};
 use url::Url;
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
@@ -121,57 +121,53 @@ pub async fn from_read_rel(
                 }));
             }
 
+            // Check for produce_one_row pattern in both old (values) and new (expressions) formats.
+            // A VirtualTable with exactly one row containing only empty/default fields represents
+            // an EmptyRelation with produce_one_row=true. This pattern is used for queries without
+            // a FROM clause (e.g., "SELECT 1 AS one") where a single phantom row is needed to
+            // provide a context for evaluating scalar expressions. This is conceptually similar to
+            // the SQL "DUAL" table (see: https://en.wikipedia.org/wiki/DUAL_table) which some
+            // databases provide as a single-row source for selecting constant expressions when no
+            // real table is present.
+            let is_produce_one_row = (vt.values.len() == 1
+                && vt.expressions.is_empty()
+                && substrait_schema.fields().is_empty()
+                && vt.values[0].fields.is_empty())
+                || (vt.expressions.len() == 1
+                    && vt.values.is_empty()
+                    && substrait_schema.fields().is_empty()
+                    && vt.expressions[0].fields.is_empty());
+
+            if is_produce_one_row {
+                return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: true,
+                    schema: DFSchemaRef::new(substrait_schema),
+                }));
+            }
+
             let values = if !vt.expressions.is_empty() {
                 let mut exprs = vec![];
                 for row in &vt.expressions {
-                    let mut name_idx = 0;
                     let mut row_exprs = vec![];
                     for expression in &row.fields {
-                        name_idx += 1;
                         let expr = consumer
-                            .consume_expression(expression, &DFSchema::empty())
+                            .consume_expression(expression, &substrait_schema)
                             .await?;
                         row_exprs.push(expr);
                     }
-                    if name_idx != named_struct.names.len() {
+                    // For expressions, validate against top-level schema fields, not nested names
+                    if row_exprs.len() != substrait_schema.fields().len() {
                         return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                named_struct.names.len()
-                            );
+                            "Field count mismatch: expected {} fields but found {} in virtual table row",
+                            substrait_schema.fields().len(),
+                            row_exprs.len()
+                        );
                     }
                     exprs.push(row_exprs);
                 }
                 exprs
             } else {
-                vt
-                .values
-                .iter()
-                .map(|row| {
-                    let mut name_idx = 0;
-                    let lits = row
-                        .fields
-                        .iter()
-                        .map(|lit| {
-                            name_idx += 1; // top-level names are provided through schema
-                            Ok(Expr::Literal(from_substrait_literal(
-                                consumer,
-                                lit,
-                                &named_struct.names,
-                                &mut name_idx,
-                            )?, None))
-                        })
-                        .collect::<datafusion::common::Result<_>>()?;
-                    if name_idx != named_struct.names.len() {
-                        return substrait_err!(
-                                "Names list must match exactly to nested schema, but found {} uses for {} names",
-                                name_idx,
-                                named_struct.names.len()
-                            );
-                    }
-                    Ok(lits)
-                })
-                .collect::<datafusion::common::Result<_>>()?
+                convert_literal_rows(consumer, vt, named_struct)?
             };
 
             Ok(LogicalPlan::Values(Values {
@@ -226,6 +222,46 @@ pub async fn from_read_rel(
     }
 }
 
+/// Converts Substrait literal rows from a VirtualTable into DataFusion expressions.
+///
+/// This function processes the deprecated `values` field of VirtualTable, converting
+/// each literal value into a `Expr::Literal` while tracking and validating the name
+/// indices against the provided named struct schema.
+fn convert_literal_rows(
+    consumer: &impl SubstraitConsumer,
+    vt: &substrait::proto::read_rel::VirtualTable,
+    named_struct: &substrait::proto::NamedStruct,
+) -> datafusion::common::Result<Vec<Vec<Expr>>> {
+    #[expect(deprecated)]
+    vt.values
+        .iter()
+        .map(|row| {
+            let mut name_idx = 0;
+            let lits = row
+                .fields
+                .iter()
+                .map(|lit| {
+                    name_idx += 1; // top-level names are provided through schema
+                    Ok(Expr::Literal(from_substrait_literal(
+                        consumer,
+                        lit,
+                        &named_struct.names,
+                        &mut name_idx,
+                    )?, None))
+                })
+                .collect::<datafusion::common::Result<_>>()?;
+            if name_idx != named_struct.names.len() {
+                return substrait_err!(
+                    "Names list must match exactly to nested schema, but found {} uses for {} names",
+                    name_idx,
+                    named_struct.names.len()
+                );
+            }
+            Ok(lits)
+        })
+        .collect::<datafusion::common::Result<_>>()
+}
+
 pub fn apply_masking(
     schema: DFSchema,
     mask_expression: &::core::option::Option<MaskExpression>,
@@ -242,9 +278,7 @@ pub fn apply_masking(
                 let fields = column_indices
                     .iter()
                     .map(|i| schema.qualified_field(*i))
-                    .map(|(qualifier, field)| {
-                        (qualifier.cloned(), Arc::new(field.clone()))
-                    })
+                    .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
                     .collect();
 
                 Ok(DFSchema::new_with_metadata(
@@ -288,7 +322,7 @@ fn apply_projection(
             let fields = column_indices
                 .iter()
                 .map(|i| df_schema.qualified_field(*i))
-                .map(|(qualifier, field)| (qualifier.cloned(), Arc::new(field.clone())))
+                .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
                 .collect();
 
             scan.projected_schema = DFSchemaRef::new(DFSchema::new_with_metadata(

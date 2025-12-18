@@ -20,12 +20,13 @@
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(clippy::allow_attributes)]
 
 extern crate proc_macro;
 use datafusion_doc::scalar_doc_sections::doc_sections_const;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, LitStr};
+use syn::{DeriveInput, LitStr, parse_macro_input};
 
 /// This procedural macro is intended to parse a rust custom attribute and create user documentation
 /// from it by constructing a `DocumentBuilder()` automatically. The `Documentation` can be

@@ -77,3 +77,4 @@ mod arithmetic;
 mod comparison;
 mod dictionary;
 mod null_coercion;
+mod run_end_encoded;
