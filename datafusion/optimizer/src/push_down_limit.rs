@@ -18,15 +18,14 @@
 //! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan
 
 use std::cmp::min;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::combine_limit;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 use datafusion_expr::{FetchType, SkipType, lit};
@@ -305,11 +304,11 @@ mod test {
 
     use super::*;
     use crate::test::*;
-    use crate::{assert_optimized_plan_eq_snapshot, Optimizer};
+    use crate::{Optimizer, assert_optimized_plan_eq_snapshot};
 
     use crate::OptimizerContext;
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion_common::DFSchemaRef;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion_expr::expr::WindowFunctionParams;
     use datafusion_expr::{
         Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
@@ -1075,7 +1074,7 @@ mod test {
             plan,
             @r"
         Limit: skip=0, fetch=1000
-          Cross Join: 
+          Cross Join:
             Limit: skip=0, fetch=1000
               TableScan: test, fetch=1000
             Limit: skip=0, fetch=1000
@@ -1098,7 +1097,7 @@ mod test {
             plan,
             @r"
         Limit: skip=1000, fetch=1000
-          Cross Join: 
+          Cross Join:
             Limit: skip=0, fetch=2000
               TableScan: test, fetch=2000
             Limit: skip=0, fetch=2000

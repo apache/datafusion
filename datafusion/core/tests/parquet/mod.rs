@@ -153,13 +153,12 @@ impl TestOutput {
                 && let MetricValue::PruningMetrics {
                     pruning_metrics, ..
                 } = metric.value()
-                {
-                    total_pruned += pruning_metrics.pruned();
-                    total_matched += pruning_metrics.matched();
-                    total_fully_matched += pruning_metrics.fully_matched();
+            {
+                total_pruned += pruning_metrics.pruned();
+                total_matched += pruning_metrics.matched();
+                total_fully_matched += pruning_metrics.fully_matched();
 
-                    found = true;
-                }
+                found = true;
             }
         }
 
