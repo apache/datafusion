@@ -164,7 +164,7 @@ itertools = "0.14"
 liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
 num-traits = { version = "0.2" }
-object_store = { version = "0.12.4", default-features = false }
+object_store = { version = "0.13.0", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "57.1.0", default-features = false, features = [
     "arrow",
@@ -288,6 +288,9 @@ arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/
 arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
 arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
 parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+
+object_store = {  git = "https://github.com/alamb/arrow-rs-object-store.git", branch="alamb/prepare_0.13.0" }
+
 
 #arrow = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow" }
 #arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-array" }
