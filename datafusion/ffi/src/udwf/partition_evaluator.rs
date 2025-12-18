@@ -21,11 +21,11 @@ use super::range::FFI_Range;
 use crate::util::FFIResult;
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 use abi_stable::std_types::RResult;
-use abi_stable::{std_types::RVec, StableAbi};
+use abi_stable::{StableAbi, std_types::RVec};
 use arrow::{array::ArrayRef, error::ArrowError};
 use datafusion::{
     error::{DataFusionError, Result},
-    logical_expr::{window_state::WindowAggState, PartitionEvaluator},
+    logical_expr::{PartitionEvaluator, window_state::WindowAggState},
     scalar::ScalarValue,
 };
 use prost::Message;
@@ -89,13 +89,17 @@ pub struct PartitionEvaluatorPrivateData {
 
 impl FFI_PartitionEvaluator {
     unsafe fn inner_mut(&mut self) -> &mut Box<dyn PartitionEvaluator + 'static> {
-        let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
-        &mut (*private_data).evaluator
+        unsafe {
+            let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
+            &mut (*private_data).evaluator
+        }
     }
 
     unsafe fn inner(&self) -> &(dyn PartitionEvaluator + 'static) {
-        let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
-        (*private_data).evaluator.as_ref()
+        unsafe {
+            let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
+            (*private_data).evaluator.as_ref()
+        }
     }
 }
 
@@ -104,19 +108,24 @@ unsafe extern "C" fn evaluate_all_fn_wrapper(
     values: RVec<WrappedArray>,
     num_rows: usize,
 ) -> FFIResult<WrappedArray> {
-    let inner = evaluator.inner_mut();
+    unsafe {
+        let inner = evaluator.inner_mut();
 
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
+        let values_arrays = values
+            .into_iter()
+            .map(|v| v.try_into().map_err(DataFusionError::from))
+            .collect::<Result<Vec<ArrayRef>>>();
+        let values_arrays = rresult_return!(values_arrays);
 
-    let return_array = inner
-        .evaluate_all(&values_arrays, num_rows)
-        .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
+        let return_array =
+            inner
+                .evaluate_all(&values_arrays, num_rows)
+                .and_then(|array| {
+                    WrappedArray::try_from(&array).map_err(DataFusionError::from)
+                });
 
-    rresult!(return_array)
+        rresult!(return_array)
+    }
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
@@ -124,21 +133,24 @@ unsafe extern "C" fn evaluate_fn_wrapper(
     values: RVec<WrappedArray>,
     range: FFI_Range,
 ) -> FFIResult<RVec<u8>> {
-    let inner = evaluator.inner_mut();
+    unsafe {
+        let inner = evaluator.inner_mut();
 
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
+        let values_arrays = values
+            .into_iter()
+            .map(|v| v.try_into().map_err(DataFusionError::from))
+            .collect::<Result<Vec<ArrayRef>>>();
+        let values_arrays = rresult_return!(values_arrays);
 
-    // let return_array = (inner.evaluate(&values_arrays, &range.into()));
-    // .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
-    let scalar_result = rresult_return!(inner.evaluate(&values_arrays, &range.into()));
-    let proto_result: datafusion_proto::protobuf::ScalarValue =
-        rresult_return!((&scalar_result).try_into());
+        // let return_array = (inner.evaluate(&values_arrays, &range.into()));
+        // .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
+        let scalar_result =
+            rresult_return!(inner.evaluate(&values_arrays, &range.into()));
+        let proto_result: datafusion_proto::protobuf::ScalarValue =
+            rresult_return!((&scalar_result).try_into());
 
-    RResult::ROk(proto_result.encode_to_vec().into())
+        RResult::ROk(proto_result.encode_to_vec().into())
+    }
 }
 
 unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
@@ -146,18 +158,22 @@ unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
     num_rows: usize,
     ranks_in_partition: RVec<FFI_Range>,
 ) -> FFIResult<WrappedArray> {
-    let inner = evaluator.inner();
+    unsafe {
+        let inner = evaluator.inner();
 
-    let ranks_in_partition = ranks_in_partition
-        .into_iter()
-        .map(Range::from)
-        .collect::<Vec<_>>();
+        let ranks_in_partition = ranks_in_partition
+            .into_iter()
+            .map(Range::from)
+            .collect::<Vec<_>>();
 
-    let return_array = inner
-        .evaluate_all_with_rank(num_rows, &ranks_in_partition)
-        .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
+        let return_array = inner
+            .evaluate_all_with_rank(num_rows, &ranks_in_partition)
+            .and_then(|array| {
+                WrappedArray::try_from(&array).map_err(DataFusionError::from)
+            });
 
-    rresult!(return_array)
+        rresult!(return_array)
+    }
 }
 
 unsafe extern "C" fn get_range_fn_wrapper(
@@ -165,18 +181,23 @@ unsafe extern "C" fn get_range_fn_wrapper(
     idx: usize,
     n_rows: usize,
 ) -> FFIResult<FFI_Range> {
-    let inner = evaluator.inner();
-    let range = inner.get_range(idx, n_rows).map(FFI_Range::from);
+    unsafe {
+        let inner = evaluator.inner();
+        let range = inner.get_range(idx, n_rows).map(FFI_Range::from);
 
-    rresult!(range)
+        rresult!(range)
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) {
-    if !evaluator.private_data.is_null() {
-        let private_data =
-            Box::from_raw(evaluator.private_data as *mut PartitionEvaluatorPrivateData);
-        drop(private_data);
-        evaluator.private_data = std::ptr::null_mut();
+    unsafe {
+        if !evaluator.private_data.is_null() {
+            let private_data = Box::from_raw(
+                evaluator.private_data as *mut PartitionEvaluatorPrivateData,
+            );
+            drop(private_data);
+            evaluator.private_data = std::ptr::null_mut();
+        }
     }
 }
 
