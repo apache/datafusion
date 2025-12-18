@@ -901,7 +901,7 @@ fn add_hash_on_top(
     }
 
     let dist = Distribution::HashPartitioned(hash_exprs);
-    let satisfaction = input.plan.output_partitioning().satisfy(
+    let satisfaction = input.plan.output_partitioning().satisfaction(
         &dist,
         input.plan.equivalence_properties(),
         allow_subset_satisfy_partitioning,
@@ -1186,8 +1186,7 @@ pub fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
-    let subset_satisfaction_threshold =
-        config.optimizer.subset_satisfaction_partition_threshold;
+    let subset_satisfaction_threshold = config.optimizer.subset_repartition_threshold;
     let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
         && matches!(
             dist_context.plan.pipeline_behavior(),
@@ -1227,6 +1226,33 @@ pub fn ensure_distribution(
 
     // For joins in partitioned mode, we need exact hash matching between
     // both sides, so subset partitioning logic must be disabled.
+    //
+    // Why: Different hash expressions produce different hash values, causing
+    // rows with the same join key to land in different partitions. Since
+    // partitioned joins match partition N left with partition N right, rows
+    // that should match may be in different partitions and miss each other.
+    //
+    // Example JOIN ON left.a = right.a:
+    //
+    // Left: Hash([a])
+    //  Partition 1: a=1
+    //  Partition 2: a=2
+    //
+    // Right: Hash([a, b])
+    //  Partition 1: (a=1, b=1) -> Same a=1
+    //  Partition 2: (a=2, b=2)
+    //  Partition 3: (a=1, b=2) -> Same a=1
+    //
+    // Partitioned join execution:
+    //  P1 left (a=1) joins P1 right (a=1, b=1) -> Match
+    //  P2 left (a=2) joins P2 right (a=2, b=2) -> Match
+    //  P3 left (empty) joins P3 right (a=1, b=2) -> Missing, errors
+    //
+    // The row (a=1, b=2) should match left.a=1 but they're in different
+    // partitions, causing panics.
+    //
+    // CollectLeft/CollectRight modes are safe because one side is collected
+    // to a single partition which eliminates partition-to-partition mapping.
     let is_partitioned_join = plan
         .as_any()
         .downcast_ref::<HashJoinExec>()

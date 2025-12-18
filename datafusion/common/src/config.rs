@@ -1012,7 +1012,7 @@ config_namespace! {
         /// Set to 0 to always repartition (disable subset satisfaction optimization).
         /// Set to a high value to always use subset satisfaction.
         ///
-        /// Example (subset_satisfaction_partition_threshold = 4):
+        /// Example (subset_repartition_threshold = 4):
         /// ```text
         ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a])
         ///
@@ -1026,7 +1026,7 @@ config_namespace! {
         ///     AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
         ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
         /// ```
-        pub subset_satisfaction_partition_threshold: usize, default = 4
+        pub subset_repartition_threshold: usize, default = 4
 
         /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
         /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and

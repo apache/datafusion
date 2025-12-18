@@ -189,9 +189,19 @@ impl Partitioning {
         })
     }
 
+    #[deprecated(since = "52.0.0", note = "Use satisfaction instead")]
+    pub fn satisfy(
+        &self,
+        required: &Distribution,
+        eq_properties: &EquivalenceProperties,
+    ) -> bool {
+        self.satisfaction(required, eq_properties, false)
+            == PartitioningSatisfaction::Exact
+    }
+
     /// Returns how this [`Partitioning`] satisfies the partitioning scheme mandated
     /// by the `required` [`Distribution`].
-    pub fn satisfy(
+    pub fn satisfaction(
         &self,
         required: &Distribution,
         eq_properties: &EquivalenceProperties,
@@ -383,19 +393,19 @@ mod tests {
         for distribution in distribution_types {
             let result = (
                 single_partition
-                    .satisfy(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &eq_properties, true)
                     .is_satisfied(),
                 unspecified_partition
-                    .satisfy(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &eq_properties, true)
                     .is_satisfied(),
                 round_robin_partition
-                    .satisfy(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &eq_properties, true)
                     .is_satisfied(),
                 hash_partition1
-                    .satisfy(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &eq_properties, true)
                     .is_satisfied(),
                 hash_partition2
-                    .satisfy(&distribution, &eq_properties, true)
+                    .satisfaction(&distribution, &eq_properties, true)
                     .is_satisfied(),
             );
 
@@ -464,18 +474,40 @@ mod tests {
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
+            (
+                "Hash([b]) vs Hash([a, b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([b, a]) vs Hash([a, b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
         ];
 
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfy(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfy(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -537,13 +569,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfy(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfy(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -580,13 +612,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfy(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfy(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -635,13 +667,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfy(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfy(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -687,13 +719,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfy(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfy(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -747,13 +779,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfy(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfy(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"
@@ -798,13 +830,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfy(&required, &eq_properties, true);
+            let result = partition.satisfaction(&required, &eq_properties, true);
             assert_eq!(
                 result, expected_with_subset,
                 "Failed for {desc} with subset enabled"
             );
 
-            let result = partition.satisfy(&required, &eq_properties, false);
+            let result = partition.satisfaction(&required, &eq_properties, false);
             assert_eq!(
                 result, expected_without_subset,
                 "Failed for {desc} with subset disabled"

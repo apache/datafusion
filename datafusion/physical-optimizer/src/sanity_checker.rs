@@ -153,7 +153,7 @@ pub fn check_plan_sanity(
 
         if !child
             .output_partitioning()
-            .satisfy(&dist_req, child_eq_props, true)
+            .satisfaction(&dist_req, child_eq_props, true)
             .is_satisfied()
         {
             let plan_str = get_plan_string(&plan);

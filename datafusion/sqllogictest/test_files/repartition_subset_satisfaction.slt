@@ -144,7 +144,7 @@ LOCATION 'test_files/scratch/repartition_subset_satisfaction/dimension/';
 
 # With subset repartitioning forced (disables subset optimization)
 statement ok
-set datafusion.optimizer.subset_satisfaction_partition_threshold = 4;
+set datafusion.optimizer.subset_repartition_threshold = 4;
 
 query TT
 EXPLAIN SELECT f_dkey, date_bin(INTERVAL '30 seconds', timestamp) as time_bin,
@@ -187,7 +187,7 @@ C 2023-01-01T09:12:30 2 262.7
 
 # With subset logic enabled (default - enables subset optimization)
 statement ok
-set datafusion.optimizer.subset_satisfaction_partition_threshold = 1;
+set datafusion.optimizer.subset_repartition_threshold = 1;
 
 query TT
 EXPLAIN SELECT f_dkey, date_bin(INTERVAL '30 seconds', timestamp) as time_bin,
@@ -233,7 +233,7 @@ C 2023-01-01T09:12:30 2 262.7
 
 # With subset repartitioning forced (disables subset optimization)
 statement ok
-set datafusion.optimizer.subset_satisfaction_partition_threshold = 4;
+set datafusion.optimizer.subset_repartition_threshold = 4;
 
 query TT
 EXPLAIN SELECT f_dkey, timestamp, value,
@@ -276,7 +276,7 @@ C 2023-01-01T09:00:20 310.2 3
 
 # With subset logic enabled (default - enables subset optimization)
 statement ok
-set datafusion.optimizer.subset_satisfaction_partition_threshold = 1;
+set datafusion.optimizer.subset_repartition_threshold = 1;
 
 query TT
 EXPLAIN SELECT f_dkey, timestamp, value,
@@ -322,7 +322,7 @@ C 2023-01-01T09:00:20 310.2 3
 
 # With subset repartitioning forced (disables subset optimization)
 statement ok
-set datafusion.optimizer.subset_satisfaction_partition_threshold = 4;
+set datafusion.optimizer.subset_repartition_threshold = 4;
 
 query TT
 EXPLAIN SELECT env, time_bin, AVG(max_bin_value) AS avg_max_value
@@ -421,7 +421,7 @@ prod 2023-01-01T09:12:30 197.7
 
 # With subset logic enabled (default - enables subset optimization)
 statement ok
-set datafusion.optimizer.subset_satisfaction_partition_threshold = 1;
+set datafusion.optimizer.subset_repartition_threshold = 1;
 
 query TT
 EXPLAIN SELECT env, time_bin, AVG(max_bin_value) AS avg_max_value
