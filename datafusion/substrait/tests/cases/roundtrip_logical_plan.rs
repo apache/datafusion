@@ -2118,10 +2118,10 @@ async fn create_all_type_context() -> Result<SessionContext> {
 /// Helper to create a TableScan that references a CteWorkTable.
 /// This is needed for testing RecursiveQuery plans, where the recursive_term
 /// must reference a work table.
-fn create_work_table_scan(name: &str, schema: Arc<Schema>) -> Result<LogicalPlan> {
-    let provider = Arc::new(CteWorkTable::new(name, Arc::clone(&schema)));
+fn create_work_table_scan(name: &str, schema: &Arc<Schema>) -> Result<LogicalPlan> {
+    let provider = Arc::new(CteWorkTable::new(name, Arc::clone(schema)));
     let source = Arc::new(DefaultTableSource::new(provider));
-    let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+    let df_schema = DFSchema::try_from(Arc::clone(schema))?;
 
     Ok(LogicalPlan::TableScan(TableScan {
         table_name: TableReference::bare(name),
