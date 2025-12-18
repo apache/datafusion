@@ -110,9 +110,9 @@ mod tests {
 
         let display = displayable(optimized.as_ref()).indent(true).to_string();
         // Use insta snapshot to ensure full plan structure
-        assert_snapshot!(display, @r###"
-            CooperativeExec
-              DataSourceExec: partitions=1, partition_sizes=[1]
-            "###);
+        assert_snapshot!(display, @r"
+        CooperativeExec
+          DataSourceExec: partitions=1, partition_sizes=[1]
+        ");
     }
 }

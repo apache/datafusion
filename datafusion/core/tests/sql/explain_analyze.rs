@@ -346,12 +346,12 @@ async fn csv_explain_plans() {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Explain
       Projection: aggregate_test_100.c1
         Filter: aggregate_test_100.c2 > Int64(10)
           TableScan: aggregate_test_100
-    "###
+    "
     );
     //
     // verify the grahviz format of the plan
@@ -417,13 +417,12 @@ async fn csv_explain_plans() {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Explain
       Projection: aggregate_test_100.c1
         Filter: aggregate_test_100.c2 > Int8(10)
           TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]
-
-    "###
+    "
     );
     //
     // verify the grahviz format of the plan
@@ -563,12 +562,12 @@ async fn csv_explain_verbose_plans() {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Explain
       Projection: aggregate_test_100.c1
         Filter: aggregate_test_100.c2 > Int64(10)
           TableScan: aggregate_test_100
-    "###
+    "
     );
     //
     // verify the grahviz format of the plan
@@ -634,12 +633,12 @@ async fn csv_explain_verbose_plans() {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Explain
       Projection: aggregate_test_100.c1
         Filter: aggregate_test_100.c2 > Int8(10)
           TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]
-    "###
+    "
     );
     //
     // verify the grahviz format of the plan
@@ -1082,11 +1081,11 @@ async fn explain_physical_plan_only() {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     physical_plan
     ProjectionExec: expr=[2 as count(*)]
       PlaceholderRowExec
-    "###
+    "
     );
 }
 

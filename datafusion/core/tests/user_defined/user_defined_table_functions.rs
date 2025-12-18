@@ -55,7 +55,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(batches_to_string(&rbs), @r###"
+    insta::assert_snapshot!(batches_to_string(&rbs), @r"
     +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
     | n_nationkey | n_name    | n_regionkey | n_comment                                                                                                   |
     +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
@@ -65,7 +65,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
     | 4           | EGYPT     | 4           | y above the carefully unusual theodolites. final dugouts are quickly across the furiously regular d         |
     | 5           | ETHIOPIA  | 0           | ven packages wake quickly. regu                                                                             |
     +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
-    "###);
+    ");
 
     // just run, return all rows
     let rbs = ctx
@@ -74,7 +74,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(batches_to_string(&rbs), @r###"
+    insta::assert_snapshot!(batches_to_string(&rbs), @r"
     +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
     | n_nationkey | n_name    | n_regionkey | n_comment                                                                                                          |
     +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
@@ -89,7 +89,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
     | 9           | INDONESIA | 2           |  slyly express asymptotes. regular deposits haggle slyly. carefully ironic hockey players sleep blithely. carefull |
     | 10          | IRAN      | 4           | efully alongside of the slyly final dependencies.                                                                  |
     +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
-    "###);
+    ");
 
     Ok(())
 }
