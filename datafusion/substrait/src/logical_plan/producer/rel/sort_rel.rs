@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{substrait_sort_field, SubstraitProducer};
+use crate::logical_plan::producer::{SubstraitProducer, substrait_sort_field};
 use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::logical_expr::Sort;
 use substrait::proto::expression::literal::LiteralType;
 use substrait::proto::expression::{Literal, RexType};
 use substrait::proto::rel::RelType;
-use substrait::proto::{fetch_rel, Expression, FetchRel, Rel, SortRel};
+use substrait::proto::{Expression, FetchRel, Rel, SortRel, fetch_rel};
 
 pub fn from_sort(
     producer: &mut impl SubstraitProducer,

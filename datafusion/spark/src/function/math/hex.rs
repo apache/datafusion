@@ -18,23 +18,25 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
-};
 use arrow::array::{Array, StringArray};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
     datatypes::Int32Type,
 };
+use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
+use datafusion_common::types::{NativeType, logical_int64, logical_string};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
+    DataFusionError,
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
-    exec_err, DataFusionError,
+    exec_err,
 };
-use datafusion_expr::Signature;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
 use std::fmt::Write;
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
@@ -52,8 +54,27 @@ impl Default for SparkHex {
 
 impl SparkHex {
     pub fn new() -> Self {
+        let int64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Int64,
+        );
+
+        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+
+        let binary = Coercion::new_exact(TypeSignatureClass::Binary);
+
+        let variants = vec![
+            // accepts numeric types
+            TypeSignature::Coercible(vec![int64]),
+            // accepts string types (Utf8, Utf8View, LargeUtf8)
+            TypeSignature::Coercible(vec![string]),
+            // accepts binary types (Binary, FixedSizeBinary, LargeBinary)
+            TypeSignature::Coercible(vec![binary]),
+        ];
+
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(variants, Volatility::Immutable),
             aliases: vec![],
         }
     }
@@ -88,56 +109,6 @@ impl ScalarUDFImpl for SparkHex {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    fn coerce_types(
-        &self,
-        arg_types: &[DataType],
-    ) -> datafusion_common::Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("hex", (1, 1), arg_types.len()));
-        }
-        match &arg_types[0] {
-            DataType::Int64
-            | DataType::Utf8
-            | DataType::Utf8View
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary => Ok(vec![arg_types[0].clone()]),
-            DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-                DataType::Int64
-                | DataType::Utf8
-                | DataType::Utf8View
-                | DataType::LargeUtf8
-                | DataType::Binary
-                | DataType::LargeBinary => Ok(vec![arg_types[0].clone()]),
-                other => {
-                    if other.is_numeric() {
-                        Ok(vec![DataType::Dictionary(
-                            key_type.clone(),
-                            Box::new(DataType::Int64),
-                        )])
-                    } else {
-                        Err(unsupported_data_type_exec_err(
-                            "hex",
-                            "Numeric, String, or Binary",
-                            &arg_types[0],
-                        ))
-                    }
-                }
-            },
-            other => {
-                if other.is_numeric() {
-                    Ok(vec![DataType::Int64])
-                } else {
-                    Err(unsupported_data_type_exec_err(
-                        "hex",
-                        "Numeric, String, or Binary",
-                        &arg_types[0],
-                    ))
-                }
-            }
-        }
     }
 }
 
@@ -240,6 +211,16 @@ pub fn compute_hex(
 
                 Ok(ColumnarValue::Array(Arc::new(hexed)))
             }
+            DataType::LargeBinary => {
+                let array = as_large_binary_array(array)?;
+
+                let hexed: StringArray = array
+                    .iter()
+                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
+                    .collect::<Result<_, _>>()?;
+
+                Ok(ColumnarValue::Array(Arc::new(hexed)))
+            }
             DataType::FixedSizeBinary(_) => {
                 let array = as_fixed_size_binary_array(array)?;
 
@@ -295,8 +276,8 @@ mod test {
     use arrow::array::{Int64Array, StringArray};
     use arrow::{
         array::{
-            as_string_array, BinaryDictionaryBuilder, PrimitiveDictionaryBuilder,
-            StringBuilder, StringDictionaryBuilder,
+            BinaryDictionaryBuilder, PrimitiveDictionaryBuilder, StringBuilder,
+            StringDictionaryBuilder, as_string_array,
         },
         datatypes::{Int32Type, Int64Type},
     };

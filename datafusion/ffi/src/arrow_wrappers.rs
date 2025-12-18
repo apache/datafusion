@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use abi_stable::StableAbi;
 use arrow::{
-    array::{make_array, ArrayRef},
+    array::{ArrayRef, make_array},
     datatypes::{Schema, SchemaRef},
     error::ArrowError,
-    ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+    ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi, to_ffi},
 };
 use datafusion_common::{DataFusionError, ScalarValue};
 use log::error;
@@ -38,7 +38,9 @@ impl From<SchemaRef> for WrappedSchema {
         let ffi_schema = match FFI_ArrowSchema::try_from(value.as_ref()) {
             Ok(s) => s,
             Err(e) => {
-                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}");
+                error!(
+                    "Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}"
+                );
                 FFI_ArrowSchema::empty()
             }
         };
@@ -52,7 +54,9 @@ impl From<SchemaRef> for WrappedSchema {
 /// empty schema.
 #[cfg(not(tarpaulin_include))]
 fn catch_df_schema_error(e: &ArrowError) -> Schema {
-    error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}");
+    error!(
+        "Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}"
+    );
     Schema::empty()
 }
 
