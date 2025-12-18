@@ -124,7 +124,8 @@ impl std::fmt::Debug for HashExpr {
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        write!(f, "{}({})", self.description, cols)
+        let (s1, s2, s3, s4) = self.seeds();
+        write!(f, "{}({cols}, [{s1},{s2},{s3},{s4}])", self.description)
     }
 }
 
@@ -258,12 +259,15 @@ impl Hash for HashTableLookupExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.hash_expr.dyn_hash(state);
         self.description.hash(state);
+        Arc::as_ptr(&self.hash_map).hash(state);
     }
 }
 
 impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.hash_expr.dyn_eq(&other.hash_expr) && self.description == other.description
+        self.hash_expr.dyn_eq(&other.hash_expr)
+            && self.description == other.description
+            && Arc::ptr_eq(&self.hash_map, &other.hash_map)
     }
 }
 
