@@ -27,6 +27,7 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
+use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::{AggregateUDF, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
@@ -2033,79 +2034,94 @@ impl Expr {
                     // If `expr` is not present, then the type of each WHEN expression must evaluate to a boolean.
                     // The types of the THEN and ELSE expressions must match the result type of the CASE expression.
 
-                    // Find the source expression for WHEN type inference
-                    // For simple CASE (with expr), use the base expr or first non-null WHEN
-                    // For searched CASE (no expr), WHEN must be Boolean
-                    let when_source: Option<Expr> = match expr {
-                        Some(e) => {
-                            let expr_type = e.get_type(schema)?;
-                            if expr_type != DataType::Null {
-                                Some(e.as_ref().clone())
-                            } else {
-                                // Find first non-null WHEN expression
-                                when_then_expr.iter().find_map(|(when_expr, _)| {
-                                    when_expr
-                                        .get_type(schema)
-                                        .ok()
-                                        .filter(|t| *t != DataType::Null)
-                                        .map(|_| when_expr.as_ref().clone())
-                                })
-                            }
+                    fn concrete_type(expr: &Expr, schema: &DFSchema) -> Option<DataType> {
+                        // Untyped placeholders (`$1`, `$2`, ...) don't contribute to inferring a
+                        // common type (they are what we are trying to infer).
+                        if matches!(expr, Expr::Placeholder(Placeholder { field: None, .. }))
+                        {
+                            return None;
                         }
-                        None => None, // Searched CASE: WHEN must be Boolean
+
+                        // Treat NULL (and unknown / erroring types) as "no concrete type".
+                        let data_type = expr.get_type(schema).ok()?;
+                        if data_type.is_null() {
+                            None
+                        } else {
+                            Some(data_type)
+                        }
+                    }
+
+                    // Determine a common type for the CASE base expression (if any) and WHEN
+                    // expressions.
+                    let when_types = when_then_expr
+                        .iter()
+                        .filter_map(|(when_expr, _)| {
+                            concrete_type(when_expr.as_ref(), schema)
+                        })
+                        .collect::<Vec<_>>();
+                    let case_type = expr
+                        .as_ref()
+                        .and_then(|e| concrete_type(e.as_ref(), schema));
+
+                    let case_when_target_type = match (case_type, when_types.is_empty()) {
+                        (Some(case_type), true) => Some(case_type),
+                        (Some(case_type), false) => get_coerce_type_for_case_expression(
+                            &when_types,
+                            Some(&case_type),
+                        ),
+                        (None, false) => {
+                            get_coerce_type_for_case_expression(&when_types, None)
+                        }
+                        (None, true) => None,
                     };
 
-                    // Find the source expression for THEN/ELSE type inference
-                    // Use the first non-null THEN expression, or else the ELSE expression
-                    let result_source: Option<Expr> = when_then_expr
-                        .iter()
-                        .find_map(|(_, then_expr)| {
-                            then_expr
-                                .get_type(schema)
-                                .ok()
-                                .filter(|t| !t.is_null())
-                                .map(|_| then_expr.as_ref().clone())
-                        })
-                        .or_else(|| {
-                            else_expr.as_ref().and_then(|e| {
-                                e.get_type(schema)
-                                    .ok()
-                                    .filter(|t| !t.is_null())
-                                    .map(|_| e.as_ref().clone())
+                    // Determine a common type for THEN / ELSE expressions.
+                    let then_else_target_type = {
+                        let mut result_types = when_then_expr
+                            .iter()
+                            .filter_map(|(_, then_expr)| {
+                                concrete_type(then_expr.as_ref(), schema)
                             })
-                        });
+                            .collect::<Vec<_>>();
+                        if let Some(t) = else_expr
+                            .as_ref()
+                            .and_then(|e| concrete_type(e.as_ref(), schema))
+                        {
+                            result_types.push(t);
+                        }
+
+                        if result_types.is_empty() {
+                            None
+                        } else {
+                            get_coerce_type_for_case_expression(&result_types, None)
+                        }
+                    };
 
                     // Rewrite base expression placeholder if present
                     if let Some(e) = expr
-                        && let Some(ref source) = when_source
+                        && let Some(ref dt) = case_when_target_type
                     {
-                        rewrite_placeholder(e.as_mut(), source, schema)?;
+                        rewrite_placeholder_type(e.as_mut(), dt)?;
                     }
 
                     // Rewrite WHEN and THEN placeholders
                     for (when_expr, then_expr) in when_then_expr.iter_mut() {
-                        match &when_source {
-                            Some(source) => {
-                                rewrite_placeholder(when_expr.as_mut(), source, schema)?;
-                            }
-                            None => {
-                                // Searched CASE: WHEN must be Boolean
-                                rewrite_placeholder_type(
-                                    when_expr.as_mut(),
-                                    &DataType::Boolean,
-                                )?;
-                            }
+                        if expr.is_none() {
+                            // Searched CASE: WHEN must be Boolean
+                            rewrite_placeholder_type(when_expr.as_mut(), &DataType::Boolean)?;
+                        } else if let Some(ref dt) = case_when_target_type {
+                            rewrite_placeholder_type(when_expr.as_mut(), dt)?;
                         }
-                        if let Some(ref source) = result_source {
-                            rewrite_placeholder(then_expr.as_mut(), source, schema)?;
+                        if let Some(ref dt) = then_else_target_type {
+                            rewrite_placeholder_type(then_expr.as_mut(), dt)?;
                         }
                     }
 
                     // Rewrite ELSE placeholder
                     if let Some(else_expr) = else_expr
-                        && let Some(ref source) = result_source
+                        && let Some(ref dt) = then_else_target_type
                     {
-                        rewrite_placeholder(else_expr.as_mut(), source, schema)?;
+                        rewrite_placeholder_type(else_expr.as_mut(), dt)?;
                     }
                 }
                 Expr::Placeholder(_) => {
@@ -3607,6 +3623,7 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
+    use crate::type_coercion::other::get_coerce_type_for_case_expression;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
         lit, placeholder, qualified_wildcard, when, wildcard, wildcard_with_options,
@@ -4240,6 +4257,93 @@ mod test {
                 {
                     assert!(placeholder.field.is_none());
                 }
+            }
+            _ => panic!("Expected Case expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_case_then_else_uses_common_type() {
+        // CASE WHEN true THEN 1::int64 WHEN false THEN 1.0::float32 ELSE $1 END
+        let df_schema = DFSchema::try_from(Arc::new(Schema::empty())).unwrap();
+
+        let expected = get_coerce_type_for_case_expression(
+            &[DataType::Int64, DataType::Float32],
+            None,
+        )
+        .unwrap();
+
+        let case_expr = when(lit(true), lit(1i64))
+            .when(lit(false), lit(1f32))
+            .otherwise(placeholder("$1"))
+            .unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            case_expr.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::Case(Case { else_expr, .. }) => {
+                let Expr::Placeholder(placeholder) = else_expr.unwrap().as_ref().clone()
+                else {
+                    panic!("Expected Placeholder for ELSE");
+                };
+                assert_eq!(placeholder.field.unwrap().data_type(), &expected);
+            }
+            _ => panic!("Expected Case expression"),
+        }
+
+        // Verify inference is not order-dependent
+        let case_expr_swapped = when(lit(true), lit(1f32))
+            .when(lit(false), lit(1i64))
+            .otherwise(placeholder("$1"))
+            .unwrap();
+
+        let (inferred_expr, _) = case_expr_swapped
+            .infer_placeholder_types(&df_schema)
+            .unwrap();
+
+        match inferred_expr {
+            Expr::Case(Case { else_expr, .. }) => {
+                let Expr::Placeholder(placeholder) = else_expr.unwrap().as_ref().clone()
+                else {
+                    panic!("Expected Placeholder for ELSE");
+                };
+                assert_eq!(placeholder.field.unwrap().data_type(), &expected);
+            }
+            _ => panic!("Expected Case expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_case_then_placeholder_uses_common_type() {
+        // CASE WHEN true THEN $1 WHEN false THEN 1::int64 ELSE 1.0::float32 END
+        let df_schema = DFSchema::try_from(Arc::new(Schema::empty())).unwrap();
+
+        let expected = get_coerce_type_for_case_expression(
+            &[DataType::Int64, DataType::Float32],
+            None,
+        )
+        .unwrap();
+
+        let case_expr = when(lit(true), placeholder("$1"))
+            .when(lit(false), lit(1i64))
+            .otherwise(lit(1f32))
+            .unwrap();
+
+        let (inferred_expr, contains_placeholder) =
+            case_expr.infer_placeholder_types(&df_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::Case(Case { when_then_expr, .. }) => {
+                let Expr::Placeholder(placeholder) = when_then_expr[0].1.as_ref().clone()
+                else {
+                    panic!("Expected Placeholder for THEN");
+                };
+                assert_eq!(placeholder.field.unwrap().data_type(), &expected);
             }
             _ => panic!("Expected Case expression"),
         }
