@@ -621,15 +621,15 @@ mod tests {
             .collect()
             .await?;
 
-        assert_snapshot!(batches_to_string(&record_batch), @r###"
-            +----+------+
-            | c2 | c3   |
-            +----+------+
-            | 5  | 36   |
-            | 5  | -31  |
-            | 5  | -101 |
-            +----+------+
-        "###);
+        assert_snapshot!(batches_to_string(&record_batch), @r"
+        +----+------+
+        | c2 | c3   |
+        +----+------+
+        | 5  | 36   |
+        | 5  | -31  |
+        | 5  | -101 |
+        +----+------+
+        ");
 
         Ok(())
     }
@@ -736,13 +736,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c2) |
         +--------------+
         | 285          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(n_partitions, actual_partitions);
@@ -775,13 +775,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c3) |
         +--------------+
         | 781          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(1, actual_partitions); // Compressed csv won't be scanned in parallel
@@ -812,13 +812,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c3) |
         +--------------+
         | 781          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(1, actual_partitions); // csv won't be scanned in parallel when newlines_in_values is set
@@ -843,10 +843,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -868,10 +868,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -1036,10 +1036,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -1088,13 +1088,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
-            +---------------------+
-            | sum(empty.column_1) |
-            +---------------------+
-            | 10                  |
-            +---------------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
+        +---------------------+
+        | sum(empty.column_1) |
+        +---------------------+
+        | 10                  |
+        +---------------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -1136,13 +1136,13 @@ mod tests {
             file_size
         };
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +-----------------------+
         | sum(one_col.column_1) |
         +-----------------------+
         | 50                    |
         +-----------------------+
-        "###);
+        ");
         }
 
         assert_eq!(expected_partitions, actual_partitions);
@@ -1175,13 +1175,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
-            +---------------+
-            | sum_of_5_cols |
-            +---------------+
-            | 15            |
-            +---------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
+        +---------------+
+        | sum_of_5_cols |
+        +---------------+
+        | 15            |
+        +---------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions);
 

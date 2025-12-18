@@ -140,13 +140,13 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
         +----+--------------+
         | id | extra_column |
         +----+--------------+
         | 1  | foo          |
         +----+--------------+
-        "###);
+        ");
     }
 
     #[test]

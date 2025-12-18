@@ -219,7 +219,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             table_scan,
-            @ r"TableScan: test projection=[a], full_filters=[Boolean(true)]"
+            @ "TableScan: test projection=[a], full_filters=[Boolean(true)]"
         )
     }
 
@@ -252,10 +252,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-            Filter: test.b > Int32(1)
-              Projection: test.a
-                TableScan: test
-            "
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
     }
 
@@ -270,10 +270,10 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-            Filter: test.b > Int32(1)
-              Projection: test.a
-                TableScan: test
-            "
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
     }
 

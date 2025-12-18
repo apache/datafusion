@@ -1206,10 +1206,10 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result), @r###"
-            ++
-            ++
-       "###);
+        assert_snapshot!(batches_to_string(&result), @r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -1235,10 +1235,10 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result), @r###"
-            ++
-            ++
-       "###);
+        assert_snapshot!(batches_to_string(&result), @r"
+        ++
+        ++
+        ");
 
         Ok(())
     }

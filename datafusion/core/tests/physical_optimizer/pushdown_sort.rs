@@ -44,7 +44,7 @@ fn test_sort_pushdown_disabled() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), false),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
@@ -53,7 +53,7 @@ fn test_sort_pushdown_disabled() {
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    "###
+    "
     );
 }
 
@@ -270,7 +270,7 @@ fn test_no_prefix_match_wrong_direction() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
@@ -279,7 +279,7 @@ fn test_no_prefix_match_wrong_direction() {
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST, b@1 ASC], file_type=parquet
-    "###
+    "
     );
 }
 
@@ -301,7 +301,7 @@ fn test_no_prefix_match_longer_than_source() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
@@ -310,7 +310,7 @@ fn test_no_prefix_match_longer_than_source() {
         Ok:
           - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
           -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST], file_type=parquet
-    "###
+    "
     );
 }
 
@@ -417,7 +417,7 @@ fn test_non_sort_plans_unchanged() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - CoalesceBatchesExec: target_batch_size=1024
@@ -426,7 +426,7 @@ fn test_non_sort_plans_unchanged() {
         Ok:
           - CoalesceBatchesExec: target_batch_size=1024
           -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    "###
+    "
     );
 }
 
@@ -550,7 +550,7 @@ fn test_no_pushdown_for_unordered_source() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
@@ -559,7 +559,7 @@ fn test_no_pushdown_for_unordered_source() {
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
           -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    "###
+    "
     );
 }
 
@@ -580,7 +580,7 @@ fn test_no_pushdown_for_non_reverse_sort() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
-        @r###"
+        @r"
     OptimizationTest:
       input:
         - SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
@@ -589,7 +589,7 @@ fn test_no_pushdown_for_non_reverse_sort() {
         Ok:
           - SortExec: expr=[b@1 ASC], preserve_partitioning=[false]
           -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
-    "###
+    "
     );
 }
 
