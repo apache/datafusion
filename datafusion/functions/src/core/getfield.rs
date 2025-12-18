@@ -202,7 +202,7 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
         (DataType::Struct(_), _, Some(k)) => {
             let as_struct_array = as_struct_array(&array)?;
             match as_struct_array.column_by_name(&k) {
-                None => exec_err!("get indexed field {k} not found in struct"),
+                None => exec_err!("Field {k} not found in struct"),
                 Some(col) => Ok(ColumnarValue::Array(Arc::clone(col))),
             }
         }
