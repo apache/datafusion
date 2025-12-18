@@ -29,14 +29,34 @@ use datafusion::sql::{
 ///
 /// This technique can be used to implement a custom SQL dialect, for example.
 pub async fn dialect() -> Result<()> {
-    let mut my_parser =
-        MyParser::new("COPY source_table TO 'file.fasta' STORED AS FASTA")?;
+    for sql in [
+        "COPY source_table TO 'file.fasta' STORED AS FASTA",
+        "COPY source_table TO 'file.csv' STORED AS CSV",
+    ] {
+        println!("Query: {sql}");
 
-    let my_statement = my_parser.parse_statement()?;
+        // 1. Without extension (standard DFParser)
+        println!("--- Parsing without extension ---");
+        let mut df_parser = DFParserBuilder::new(sql).build()?;
+        match df_parser.parse_statement()? {
+            Statement::CopyTo(s) => {
+                println!("Standard DFParser: Parsed as Statement::CopyTo: {s}")
+            }
+            s => println!("Standard DFParser: Parsed as other statement: {s}"),
+        }
 
-    match my_statement {
-        MyStatement::DFStatement(s) => println!("df: {s}"),
-        MyStatement::MyCopyTo(s) => println!("my_copy: {s}"),
+        // 2. With extension (MyParser)
+        println!("\n--- Parsing with extension ---");
+        let mut my_parser = MyParser::new(sql)?;
+        match my_parser.parse_statement()? {
+            MyStatement::DFStatement(s) => {
+                println!("Custom MyParser: Parsed as MyStatement::DFStatement: {s}")
+            }
+            MyStatement::MyCopyTo(s) => {
+                println!("Custom MyParser: Parsed as MyStatement::MyCopyTo: {s}")
+            }
+        }
+        println!("\n{}\n", "-".repeat(40));
     }
 
     Ok(())
