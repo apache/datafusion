@@ -276,18 +276,18 @@ strip = false
 ## Temporary arrow-rs patch until 57.2.0 is released
 
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
 
 #arrow = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow" }
 #arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-array" }
