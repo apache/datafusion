@@ -18,12 +18,12 @@
 //! Functionality used both on logical and physical plans
 
 use ahash::{AHasher, RandomState};
-use std::hash::Hasher;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use std::hash::Hasher;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
