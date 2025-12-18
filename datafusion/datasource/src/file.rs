@@ -31,9 +31,11 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use object_store::ObjectStore;
 
 /// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
@@ -84,6 +86,21 @@ pub trait FileSource: Send + Sync {
         Ok(())
     }
 
+    /// Returns whether this file source supports repartitioning files by byte ranges.
+    ///
+    /// When this returns `true`, files can be split into multiple partitions
+    /// based on byte offsets for parallel reading.
+    ///
+    /// When this returns `false`, files cannot be repartitioned (e.g., CSV files
+    /// with `newlines_in_values` enabled cannot be split because record boundaries
+    /// cannot be determined by byte offset alone).
+    ///
+    /// The default implementation returns `true`. File sources that cannot support
+    /// repartitioning should override this method.
+    fn supports_repartitioning(&self) -> bool {
+        true
+    }
+
     /// If supported by the [`FileSource`], redistribute files across partitions
     /// according to their size. Allows custom file formats to implement their
     /// own repartitioning logic.
@@ -97,7 +114,8 @@ pub trait FileSource: Send + Sync {
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
-        if config.file_compression_type.is_compressed() || config.new_lines_in_values {
+        if config.file_compression_type.is_compressed() || !self.supports_repartitioning()
+        {
             return Ok(None);
         }
 
@@ -127,6 +145,21 @@ pub trait FileSource: Send + Sync {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to create a new FileSource that can produce data in the specified sort order.
+    ///
+    /// # Returns
+    /// * `Exact` - Created a source that guarantees perfect ordering
+    /// * `Inexact` - Created a source optimized for ordering (e.g., reordered files) but not perfectly sorted
+    /// * `Unsupported` - Cannot optimize for this ordering
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_reverse_output(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
     }
 
     /// Try to push down a projection into a this FileSource.
@@ -182,5 +215,23 @@ pub trait FileSource: Send + Sync {
     /// Default implementation returns `None`.
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
+    }
+
+    /// Set the file ordering information
+    ///
+    /// This allows the file source to know how the files are sorted,
+    /// enabling it to make informed decisions about sort pushdown.
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns `not_impl_err!`. FileSource implementations that support
+    /// sort optimization should override this method.
+    fn with_file_ordering_info(
+        &self,
+        _ordering: Option<LexOrdering>,
+    ) -> Result<Arc<dyn FileSource>> {
+        // Default: clone self without modification
+        // ParquetSource will override this
+        not_impl_err!("with_file_ordering_info not implemented for this FileSource")
     }
 }

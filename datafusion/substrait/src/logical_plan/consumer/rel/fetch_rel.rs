@@ -17,9 +17,9 @@
 
 use crate::logical_plan::consumer::SubstraitConsumer;
 use async_recursion::async_recursion;
-use datafusion::common::{not_impl_err, DFSchema, DFSchemaRef};
-use datafusion::logical_expr::{lit, LogicalPlan, LogicalPlanBuilder};
-use substrait::proto::{fetch_rel, FetchRel};
+use datafusion::common::{DFSchema, DFSchemaRef, not_impl_err};
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, lit};
+use substrait::proto::{FetchRel, fetch_rel};
 
 #[async_recursion]
 pub async fn from_fetch_rel(

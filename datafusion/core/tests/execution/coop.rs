@@ -655,7 +655,7 @@ async fn join_agg_yields(
 
     let proj_expr = vec![ProjectionExpr::new(
         Arc::new(Column::new_with_schema("value", &input_schema)?) as _,
-        "value".to_string(),
+        "value",
     )];
 
     let projection = Arc::new(ProjectionExec::try_new(proj_expr, join)?);

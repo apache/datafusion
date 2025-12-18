@@ -413,14 +413,14 @@ async fn select_with_periods() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +------+
     | f.c1 |
     +------+
     | 1    |
     | 10   |
     +------+
-    "###
+    "
     );
 
     Ok(())
@@ -568,14 +568,14 @@ async fn drop_with_quotes() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r#"
     +------+
     | f"c2 |
     +------+
     | 11   |
     | 2    |
     +------+
-    "###
+    "#
     );
 
     Ok(())
@@ -600,14 +600,14 @@ async fn drop_with_periods() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +------+
     | f.c2 |
     +------+
     | 11   |
     | 2    |
     +------+
-    "###
+    "
     );
 
     Ok(())
@@ -744,23 +744,23 @@ async fn test_aggregate_with_pk() -> Result<()> {
 
     assert_snapshot!(
         physical_plan_to_string(&df).await,
-        @r###"
+        @r"
     AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
       DataSourceExec: partitions=1, partition_sizes=[1]
-    "###
+    "
     );
 
     let df_results = df.collect().await?;
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+------+
     | id | name |
     +----+------+
     | 1  | a    |
     +----+------+
-    "###
+    "
     );
 
     Ok(())
@@ -798,13 +798,13 @@ async fn test_aggregate_with_pk2() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+------+
     | id | name |
     +----+------+
     | 1  | a    |
     +----+------+
-    "###
+    "
     );
 
     Ok(())
@@ -846,13 +846,13 @@ async fn test_aggregate_with_pk3() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+------+
     | id | name |
     +----+------+
     | 1  | a    |
     +----+------+
-    "###
+    "
     );
 
     Ok(())
@@ -894,13 +894,13 @@ async fn test_aggregate_with_pk4() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+
     | id |
     +----+
     | 1  |
     +----+
-    "###
+    "
     );
 
     Ok(())
@@ -922,7 +922,7 @@ async fn test_aggregate_alias() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+
     | c2 |
     +----+
@@ -932,7 +932,7 @@ async fn test_aggregate_alias() -> Result<()> {
     | 5  |
     | 6  |
     +----+
-    "###
+    "
     );
 
     Ok(())
@@ -969,7 +969,7 @@ async fn test_aggregate_with_union() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+------------+
     | c1 | sum_result |
     +----+------------+
@@ -979,7 +979,7 @@ async fn test_aggregate_with_union() -> Result<()> {
     | d  | 126        |
     | e  | 121        |
     +----+------------+
-    "###
+    "
     );
     Ok(())
 }
@@ -1005,7 +1005,7 @@ async fn test_aggregate_subexpr() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----------------+------+
     | c2 + Int32(10) | sum  |
     +----------------+------+
@@ -1015,7 +1015,7 @@ async fn test_aggregate_subexpr() -> Result<()> {
     | 15             | 95   |
     | 16             | -146 |
     +----------------+------+
-    "###
+    "
     );
 
     Ok(())
@@ -1038,7 +1038,7 @@ async fn test_aggregate_name_collision() -> Result<()> {
         // The select expr has the same display_name as the group_expr,
         // but since they are different expressions, it should fail.
         .expect_err("Expected error");
-    assert_snapshot!(df.strip_backtrace(), @r###"Schema error: No field named aggregate_test_100.c2. Valid fields are "aggregate_test_100.c2 + aggregate_test_100.c3"."###);
+    assert_snapshot!(df.strip_backtrace(), @r#"Schema error: No field named aggregate_test_100.c2. Valid fields are "aggregate_test_100.c2 + aggregate_test_100.c3"."#);
 
     Ok(())
 }
@@ -1097,7 +1097,7 @@ async fn window_using_aggregates() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df),
-        @r###"
+        @r"
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
     | first_value | last_val | approx_distinct | approx_median | median | max | min  | c2 | c3   |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
@@ -1123,7 +1123,7 @@ async fn window_using_aggregates() -> Result<()> {
     | -85         | 65       | 17              | -17           | -18    | 83  | -101 | 5  | -101 |
     | -85         | 83       | 5               | -25           | -25    | 83  | -85  | 2  | -48  |
     +-------------+----------+-----------------+---------------+--------+-----+------+----+------+
-    "###
+    "
     );
 
     Ok(())
@@ -1190,7 +1190,7 @@ async fn window_aggregates_with_filter() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results),
-        @r###"
+        @r"
     +---------+---------+---------+---------+---------+----+-----+
     | sum_pos | avg_pos | min_pos | max_pos | cnt_pos | ts | val |
     +---------+---------+---------+---------+---------+----+-----+
@@ -1200,7 +1200,7 @@ async fn window_aggregates_with_filter() -> Result<()> {
     | 5       | 2.5     | 1       | 4       | 2       | 4  | 4   |
     | 5       | 2.5     | 1       | 4       | 2       | 5  | -1  |
     +---------+---------+---------+---------+---------+----+-----+
-    "###
+    "
     );
 
     Ok(())
@@ -1256,7 +1256,7 @@ async fn test_distinct_sort_by() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+
     | c1 |
     +----+
@@ -1266,7 +1266,7 @@ async fn test_distinct_sort_by() -> Result<()> {
     | d  |
     | e  |
     +----+
-    "###
+    "
     );
 
     Ok(())
@@ -1304,7 +1304,7 @@ async fn test_distinct_on() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+
     | c1 |
     +----+
@@ -1314,7 +1314,7 @@ async fn test_distinct_on() -> Result<()> {
     | d  |
     | e  |
     +----+
-    "###
+    "
     );
 
     Ok(())
@@ -1339,7 +1339,7 @@ async fn test_distinct_on_sort_by() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+
     | c1 |
     +----+
@@ -1349,7 +1349,7 @@ async fn test_distinct_on_sort_by() -> Result<()> {
     | d  |
     | e  |
     +----+
-    "###
+    "
     );
 
     Ok(())
@@ -1413,13 +1413,13 @@ async fn join_coercion_unnamed() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----+------+
     | id | name |
     +----+------+
     | 10 | d    |
     +----+------+
-    "###
+    "
     );
     Ok(())
 }
@@ -1438,13 +1438,13 @@ async fn join_on() -> Result<()> {
         [col("a.c1").not_eq(col("b.c1")), col("a.c2").eq(col("b.c2"))],
     )?;
 
-    assert_snapshot!(join.logical_plan(), @r###"
+    assert_snapshot!(join.logical_plan(), @r"
     Inner Join:  Filter: a.c1 != b.c1 AND a.c2 = b.c2
       Projection: a.c1, a.c2
         TableScan: a
       Projection: b.c1, b.c2
         TableScan: b
-    "###);
+    ");
 
     Ok(())
 }
@@ -1467,7 +1467,11 @@ async fn join_on_filter_datatype() -> Result<()> {
     let err = join.into_optimized_plan().unwrap_err();
     assert_snapshot!(
         err.strip_backtrace(),
-        @"type_coercion\ncaused by\nError during planning: Join condition must be boolean type, but got Utf8"
+        @r"
+    type_coercion
+    caused by
+    Error during planning: Join condition must be boolean type, but got Utf8
+    "
     );
     Ok(())
 }
@@ -1664,7 +1668,7 @@ async fn register_table() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+-----------------------------+
     | c1 | sum(aggregate_test_100.c12) |
     +----+-----------------------------+
@@ -1674,13 +1678,13 @@ async fn register_table() -> Result<()> {
     | d  | 8.793968289758968           |
     | e  | 10.206140546981722          |
     +----+-----------------------------+
-    "###
+    "
     );
 
     // the results are the same as the results from the view, modulo the leaf table name
     assert_snapshot!(
         batches_to_sort_string(table_results),
-        @r###"
+        @r"
     +----+---------------------+
     | c1 | sum(test_table.c12) |
     +----+---------------------+
@@ -1690,7 +1694,7 @@ async fn register_table() -> Result<()> {
     | d  | 8.793968289758968   |
     | e  | 10.206140546981722  |
     +----+---------------------+
-    "###
+    "
     );
     Ok(())
 }
@@ -1739,7 +1743,7 @@ async fn with_column() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+----+-----+-----+
     | c1 | c2 | c3  | sum |
     +----+----+-----+-----+
@@ -1750,7 +1754,7 @@ async fn with_column() -> Result<()> {
     | a  | 3  | 14  | 17  |
     | a  | 3  | 17  | 20  |
     +----+----+-----+-----+
-    "###
+    "
     );
 
     // check that col with the same name overwritten
@@ -1762,7 +1766,7 @@ async fn with_column() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results_overwrite),
-        @r###"
+        @r"
     +-----+----+-----+-----+
     | c1  | c2 | c3  | sum |
     +-----+----+-----+-----+
@@ -1773,7 +1777,7 @@ async fn with_column() -> Result<()> {
     | 17  | 3  | 14  | 17  |
     | 20  | 3  | 17  | 20  |
     +-----+----+-----+-----+
-    "###
+    "
     );
 
     // check that col with the same name overwritten using same name as reference
@@ -1785,7 +1789,7 @@ async fn with_column() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results_overwrite_self),
-        @r###"
+        @r"
     +----+----+-----+-----+
     | c1 | c2 | c3  | sum |
     +----+----+-----+-----+
@@ -1796,7 +1800,7 @@ async fn with_column() -> Result<()> {
     | a  | 4  | 14  | 17  |
     | a  | 4  | 17  | 20  |
     +----+----+-----+-----+
-    "###
+    "
     );
 
     Ok(())
@@ -1824,14 +1828,14 @@ async fn test_window_function_with_column() -> Result<()> {
     let df_results = df.clone().collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+----+-----+-----+---+
     | c1 | c2 | c3  | s   | r |
     +----+----+-----+-----+---+
     | c  | 2  | 1   | 3   | 1 |
     | d  | 5  | -40 | -35 | 2 |
     +----+----+-----+-----+---+
-    "###
+    "
     );
 
     Ok(())
@@ -1866,13 +1870,13 @@ async fn with_column_join_same_columns() -> Result<()> {
     let df_results = df.clone().collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+----+
     | c1 | c1 |
     +----+----+
     | a  | a  |
     +----+----+
-    "###
+    "
     );
 
     let df_with_column = df.clone().with_column("new_column", lit(true))?;
@@ -1895,7 +1899,7 @@ async fn with_column_join_same_columns() -> Result<()> {
 
     assert_snapshot!(
         df_with_column.clone().into_optimized_plan().unwrap(),
-        @r###"
+        @r"
     Projection: t1.c1, t2.c1, Boolean(true) AS new_column
       Sort: t1.c1 ASC NULLS FIRST, fetch=1
         Inner Join: t1.c1 = t2.c1
@@ -1903,20 +1907,20 @@ async fn with_column_join_same_columns() -> Result<()> {
             TableScan: aggregate_test_100 projection=[c1]
           SubqueryAlias: t2
             TableScan: aggregate_test_100 projection=[c1]
-    "###
+    "
     );
 
     let df_results = df_with_column.collect().await?;
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+----+------------+
     | c1 | c1 | new_column |
     +----+----+------------+
     | a  | a  | true       |
     +----+----+------------+
-    "###
+    "
     );
 
     Ok(())
@@ -1966,13 +1970,13 @@ async fn with_column_renamed() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(batches),
-        @r###"
+        @r"
     +-----+-----+-----+-------+
     | one | two | c3  | total |
     +-----+-----+-----+-------+
     | a   | 3   | -72 | -69   |
     +-----+-----+-----+-------+
-    "###
+    "
     );
 
     Ok(())
@@ -2037,13 +2041,13 @@ async fn with_column_renamed_join() -> Result<()> {
     let df_results = df.clone().collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+----+-----+----+----+-----+
     | c1 | c2 | c3  | c1 | c2 | c3  |
     +----+----+-----+----+----+-----+
     | a  | 1  | -85 | a  | 1  | -85 |
     +----+----+-----+----+----+-----+
-    "###
+    "
     );
 
     let df_renamed = df.clone().with_column_renamed("t1.c1", "AAA")?;
@@ -2066,7 +2070,7 @@ async fn with_column_renamed_join() -> Result<()> {
 
     assert_snapshot!(
         df_renamed.clone().into_optimized_plan().unwrap(),
-        @r###"
+        @r"
     Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3
       Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1
         Inner Join: t1.c1 = t2.c1
@@ -2074,20 +2078,20 @@ async fn with_column_renamed_join() -> Result<()> {
             TableScan: aggregate_test_100 projection=[c1, c2, c3]
           SubqueryAlias: t2
             TableScan: aggregate_test_100 projection=[c1, c2, c3]
-    "###
+    "
     );
 
     let df_results = df_renamed.collect().await?;
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +-----+----+-----+----+----+-----+
     | AAA | c2 | c3  | c1 | c2 | c3  |
     +-----+----+-----+----+----+-----+
     | a   | 1  | -85 | a  | 1  | -85 |
     +-----+----+-----+----+----+-----+
-    "###
+    "
     );
 
     Ok(())
@@ -2122,13 +2126,13 @@ async fn with_column_renamed_case_sensitive() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(res),
-        @r###"
+        @r"
     +---------+
     | CoLuMn1 |
     +---------+
     | a       |
     +---------+
-    "###
+    "
     );
 
     let df_renamed = df_renamed
@@ -2138,13 +2142,13 @@ async fn with_column_renamed_case_sensitive() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_renamed),
-        @r###"
+        @r"
     +----+
     | c1 |
     +----+
     | a  |
     +----+
-    "###
+    "
     );
 
     Ok(())
@@ -2182,19 +2186,19 @@ async fn describe_lookup_via_quoted_identifier() -> Result<()> {
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&describe_result.clone().collect().await?),
-        @r###"
-        +------------+--------------+
-        | describe   | CoLu.Mn["1"] |
-        +------------+--------------+
-        | count      | 1            |
-        | max        | a            |
-        | mean       | null         |
-        | median     | null         |
-        | min        | a            |
-        | null_count | 0            |
-        | std        | null         |
-        +------------+--------------+
-    "###
+        @r#"
+    +------------+--------------+
+    | describe   | CoLu.Mn["1"] |
+    +------------+--------------+
+    | count      | 1            |
+    | max        | a            |
+    | mean       | null         |
+    | median     | null         |
+    | min        | a            |
+    | null_count | 0            |
+    | std        | null         |
+    +------------+--------------+
+    "#
     );
 
     Ok(())
@@ -2212,13 +2216,13 @@ async fn cast_expr_test() -> Result<()> {
     df.clone().show().await?;
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +----+----+-----+
     | c2 | c3 | sum |
     +----+----+-----+
     | 2  | 1  | 3   |
     +----+----+-----+
-    "###
+    "
     );
 
     Ok(())
@@ -2280,14 +2284,14 @@ async fn with_column_name() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&df_results),
-        @r###"
+        @r"
     +------+-------+
     | f.c1 | f.c2  |
     +------+-------+
     | 1    | hello |
     | 10   | hello |
     +------+-------+
-    "###
+    "
     );
 
     Ok(())
@@ -2323,13 +2327,13 @@ async fn cache_test() -> Result<()> {
     let cached_df_results = cached_df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&cached_df_results),
-        @r###"
+        @r"
     +----+----+-----+
     | c2 | c3 | sum |
     +----+----+-----+
     | 2  | 1  | 3   |
     +----+----+-----+
-    "###
+    "
     );
 
     assert_eq!(&df_results, &cached_df_results);
@@ -2349,13 +2353,13 @@ async fn cache_producer_test() -> Result<()> {
 
     assert_snapshot!(
         cached_df.clone().into_optimized_plan().unwrap(),
-        @r###"
+        @r"
     CacheNode
       Projection: aggregate_test_100.c2, aggregate_test_100.c3, CAST(CAST(aggregate_test_100.c2 AS Int64) + CAST(aggregate_test_100.c3 AS Int64) AS Int64) AS sum
         Projection: aggregate_test_100.c2, aggregate_test_100.c3
           Limit: skip=0, fetch=1
             TableScan: aggregate_test_100, fetch=1
-    "###
+    "
     );
     Ok(())
 }
@@ -2629,13 +2633,13 @@ async fn filtered_aggr_with_param_values() -> Result<()> {
     let df_results = df?.collect().await?;
     assert_snapshot!(
         batches_to_string(&df_results),
-        @r###"
+        @r"
     +------------------------------------------------+
     | count(table1.c2) FILTER (WHERE table1.c3 > $1) |
     +------------------------------------------------+
     | 54                                             |
     +------------------------------------------------+
-    "###
+    "
     );
 
     Ok(())
@@ -2683,7 +2687,7 @@ async fn write_parquet_with_order() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +---+---+
     | a | b |
     +---+---+
@@ -2693,7 +2697,7 @@ async fn write_parquet_with_order() -> Result<()> {
     | 5 | 3 |
     | 7 | 4 |
     +---+---+
-    "###
+    "
     );
 
     Ok(())
@@ -2741,7 +2745,7 @@ async fn write_csv_with_order() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results),
-        @r###"
+        @r"
     +---+---+
     | a | b |
     +---+---+
@@ -2751,7 +2755,7 @@ async fn write_csv_with_order() -> Result<()> {
     | 5 | 3 |
     | 7 | 4 |
     +---+---+
-    "###
+    "
     );
     Ok(())
 }
@@ -2798,7 +2802,7 @@ async fn write_json_with_order() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +---+---+
     | a | b |
     +---+---+
@@ -2808,7 +2812,7 @@ async fn write_json_with_order() -> Result<()> {
     | 5 | 3 |
     | 7 | 4 |
     +---+---+
-    "###
+    "
     );
     Ok(())
 }
@@ -2857,7 +2861,7 @@ async fn write_table_with_order() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-----------+
     | tablecol1 |
     +-----------+
@@ -2867,7 +2871,7 @@ async fn write_table_with_order() -> Result<()> {
     | x         |
     | z         |
     +-----------+
-    "###
+    "
     );
     Ok(())
 }
@@ -3176,7 +3180,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
 -> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
-        @r#"
+        @r"
     AggregateExec: mode=Final, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
       SortPreservingMergeExec: [id@0 ASC NULLS LAST]
         AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[], ordering_mode=Sorted
@@ -3184,7 +3188,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
             DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
             SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
               DataSourceExec: file_groups={1 group: [[{testdata}/alltypes_tiny_pages.parquet]]}, projection=[id], file_type=parquet
-    "#);
+    ");
 
     Ok(())
 }
@@ -3269,7 +3273,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r###"
+        @r"
     +---------------+-----------------------------------------------------+
     | plan_type     | plan                                                |
     +---------------+-----------------------------------------------------+
@@ -3280,7 +3284,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     |               |   PlaceholderRowExec                                |
     |               |                                                     |
     +---------------+-----------------------------------------------------+
-    "###
+    "
     );
 
     // add `.select(vec![count_wildcard()])?` to make sure we can analyze all node instead of just top node.
@@ -3490,7 +3494,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-----+
     | a   |
     +-----+
@@ -3499,7 +3503,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     | 10  |
     | 1   |
     +-----+
-    "###
+    "
     );
 
     Ok(())
@@ -3537,7 +3541,7 @@ async fn sort_on_distinct_columns() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-----+
     | a   |
     +-----+
@@ -3545,7 +3549,7 @@ async fn sort_on_distinct_columns() -> Result<()> {
     | 10  |
     | 1   |
     +-----+
-    "###
+    "
     );
     Ok(())
 }
@@ -3676,14 +3680,14 @@ async fn filter_with_alias_overwrite() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +------+
     | a    |
     +------+
     | true |
     | true |
     +------+
-    "###
+    "
     );
 
     Ok(())
@@ -3712,7 +3716,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-------+
     | a     |
     +-------+
@@ -3721,7 +3725,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
     | true  |
     | false |
     +-------+
-    "###
+    "
     );
 
     Ok(())
@@ -3747,7 +3751,7 @@ async fn test_grouping_sets() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-----------+-----+---------------+
     | a         | b   | count(test.a) |
     +-----------+-----+---------------+
@@ -3763,7 +3767,7 @@ async fn test_grouping_sets() -> Result<()> {
     | 123AbcDef |     | 1             |
     | 123AbcDef | 100 | 1             |
     +-----------+-----+---------------+
-    "###
+    "
     );
 
     Ok(())
@@ -3790,7 +3794,7 @@ async fn test_grouping_sets_count() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +----+----+-----------------+
     | c1 | c2 | count(Int32(1)) |
     +----+----+-----------------+
@@ -3805,7 +3809,7 @@ async fn test_grouping_sets_count() -> Result<()> {
     | b  |    | 19              |
     | a  |    | 21              |
     +----+----+-----------------+
-    "###
+    "
     );
 
     Ok(())
@@ -3839,7 +3843,7 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +----+----+--------+---------------------+
     | c1 | c2 | sum_c3 | avg_c3              |
     +----+----+--------+---------------------+
@@ -3879,7 +3883,7 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
     | a  | 2  | -46    | -15.333333333333334 |
     | a  | 1  | -88    | -17.6               |
     +----+----+--------+---------------------+
-    "###
+    "
     );
 
     Ok(())
@@ -3916,25 +3920,25 @@ async fn join_with_alias_filter() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: t1.a, t2.a, t1.b, t1.c, t2.b, t2.c [a:UInt32, a:UInt32, b:Utf8, c:Int32, b:Utf8, c:Int32]
       Inner Join: t1.a + UInt32(3) = t2.a + UInt32(1) [a:UInt32, b:Utf8, c:Int32, a:UInt32, b:Utf8, c:Int32]
         TableScan: t1 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
         TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
-    "###
+    "
     );
 
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----+----+---+----+---+---+
     | a  | a  | b | c  | b | c |
     +----+----+---+----+---+---+
     | 1  | 3  | a | 10 | a | 1 |
     | 11 | 13 | c | 30 | c | 3 |
     +----+----+---+----+---+---+
-    "###
+    "
     );
 
     Ok(())
@@ -3961,27 +3965,27 @@ async fn right_semi_with_alias_filter() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]
       Projection: t1.a [a:UInt32]
         Filter: t1.c > Int32(1) [a:UInt32, c:Int32]
           TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]
       Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]
         TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
-    "###
+    "
     );
 
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +-----+---+---+
     | a   | b | c |
     +-----+---+---+
     | 10  | b | 2 |
     | 100 | d | 4 |
     +-----+---+---+
-    "###
+    "
     );
 
     Ok(())
@@ -4008,26 +4012,26 @@ async fn right_anti_filter_push_down() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]
       Projection: t1.a [a:UInt32]
         Filter: t1.c > Int32(1) [a:UInt32, c:Int32]
           TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]
       TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
-    "###
+    "
     );
 
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----+---+---+
     | a  | b | c |
     +----+---+---+
     | 13 | c | 3 |
     | 3  | a | 1 |
     +----+---+---+
-    "###
+    "
     );
 
     Ok(())
@@ -4040,37 +4044,37 @@ async fn unnest_columns() -> Result<()> {
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
-          +----------+---------------------------------+--------------------------+
-          | shape_id | points                          | tags                     |
-          +----------+---------------------------------+--------------------------+
-          | 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | [tag1]                   |
-          | 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | [tag1]                   |
-          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | [tag1, tag2, tag3, tag4] |
-          | 4        |                                 | [tag1, tag2, tag3]       |
-          +----------+---------------------------------+--------------------------+
-        "###);
+        @r"
+    +----------+---------------------------------+--------------------------+
+    | shape_id | points                          | tags                     |
+    +----------+---------------------------------+--------------------------+
+    | 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | [tag1]                   |
+    | 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | [tag1]                   |
+    | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | [tag1, tag2, tag3, tag4] |
+    | 4        |                                 | [tag1, tag2, tag3]       |
+    +----------+---------------------------------+--------------------------+
+    ");
 
     // Unnest tags
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.unnest_columns(&["tags"])?.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
-          +----------+---------------------------------+------+
-          | shape_id | points                          | tags |
-          +----------+---------------------------------+------+
-          | 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | tag1 |
-          | 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | tag1 |
-          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag1 |
-          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag2 |
-          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag3 |
-          | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag4 |
-          | 4        |                                 | tag1 |
-          | 4        |                                 | tag2 |
-          | 4        |                                 | tag3 |
-          +----------+---------------------------------+------+
-        "###);
+        @r"
+    +----------+---------------------------------+------+
+    | shape_id | points                          | tags |
+    +----------+---------------------------------+------+
+    | 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | tag1 |
+    | 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | tag1 |
+    | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag1 |
+    | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag2 |
+    | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag3 |
+    | 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag4 |
+    | 4        |                                 | tag1 |
+    | 4        |                                 | tag2 |
+    | 4        |                                 | tag3 |
+    +----------+---------------------------------+------+
+    ");
 
     // Test aggregate results for tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -4082,19 +4086,19 @@ async fn unnest_columns() -> Result<()> {
     let results = df.unnest_columns(&["points"])?.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
-          +----------+----------------+--------------------------+
-          | shape_id | points         | tags                     |
-          +----------+----------------+--------------------------+
-          | 1        | {x: -3, y: -4} | [tag1]                   |
-          | 1        | {x: 5, y: -8}  | [tag1]                   |
-          | 2        | {x: -2, y: -8} | [tag1]                   |
-          | 2        | {x: 6, y: 2}   | [tag1]                   |
-          | 3        | {x: -2, y: 5}  | [tag1, tag2, tag3, tag4] |
-          | 3        | {x: -9, y: -7} | [tag1, tag2, tag3, tag4] |
-          | 4        |                | [tag1, tag2, tag3]       |
-          +----------+----------------+--------------------------+
-        "###);
+        @r"
+    +----------+----------------+--------------------------+
+    | shape_id | points         | tags                     |
+    +----------+----------------+--------------------------+
+    | 1        | {x: -3, y: -4} | [tag1]                   |
+    | 1        | {x: 5, y: -8}  | [tag1]                   |
+    | 2        | {x: -2, y: -8} | [tag1]                   |
+    | 2        | {x: 6, y: 2}   | [tag1]                   |
+    | 3        | {x: -2, y: 5}  | [tag1, tag2, tag3, tag4] |
+    | 3        | {x: -9, y: -7} | [tag1, tag2, tag3, tag4] |
+    | 4        |                | [tag1, tag2, tag3]       |
+    +----------+----------------+--------------------------+
+    ");
 
     // Test aggregate results for points.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -4110,27 +4114,27 @@ async fn unnest_columns() -> Result<()> {
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
-          +----------+----------------+------+
-          | shape_id | points         | tags |
-          +----------+----------------+------+
-          | 1        | {x: -3, y: -4} | tag1 |
-          | 1        | {x: 5, y: -8}  | tag1 |
-          | 2        | {x: -2, y: -8} | tag1 |
-          | 2        | {x: 6, y: 2}   | tag1 |
-          | 3        | {x: -2, y: 5}  | tag1 |
-          | 3        | {x: -2, y: 5}  | tag2 |
-          | 3        | {x: -2, y: 5}  | tag3 |
-          | 3        | {x: -2, y: 5}  | tag4 |
-          | 3        | {x: -9, y: -7} | tag1 |
-          | 3        | {x: -9, y: -7} | tag2 |
-          | 3        | {x: -9, y: -7} | tag3 |
-          | 3        | {x: -9, y: -7} | tag4 |
-          | 4        |                | tag1 |
-          | 4        |                | tag2 |
-          | 4        |                | tag3 |
-          +----------+----------------+------+
-    "###);
+        @r"
+    +----------+----------------+------+
+    | shape_id | points         | tags |
+    +----------+----------------+------+
+    | 1        | {x: -3, y: -4} | tag1 |
+    | 1        | {x: 5, y: -8}  | tag1 |
+    | 2        | {x: -2, y: -8} | tag1 |
+    | 2        | {x: 6, y: 2}   | tag1 |
+    | 3        | {x: -2, y: 5}  | tag1 |
+    | 3        | {x: -2, y: 5}  | tag2 |
+    | 3        | {x: -2, y: 5}  | tag3 |
+    | 3        | {x: -2, y: 5}  | tag4 |
+    | 3        | {x: -9, y: -7} | tag1 |
+    | 3        | {x: -9, y: -7} | tag2 |
+    | 3        | {x: -9, y: -7} | tag3 |
+    | 3        | {x: -9, y: -7} | tag4 |
+    | 4        |                | tag1 |
+    | 4        |                | tag2 |
+    | 4        |                | tag3 |
+    +----------+----------------+------+
+    ");
 
     // Test aggregate results for points and tags.
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -4170,7 +4174,7 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
     let results = df.collect().await.unwrap();
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-----------------+---------+
     | make_array_expr | column1 |
     +-----------------+---------+
@@ -4178,7 +4182,7 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
     | y               | y       |
     | z               | z       |
     +-----------------+---------+
-    "###
+    "
     );
 
     // make_array(dict_encoded_string,literal string)
@@ -4198,7 +4202,7 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
     let results = df.collect().await.unwrap();
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-----------------+---------+
     | make_array_expr | column1 |
     +-----------------+---------+
@@ -4209,7 +4213,7 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
     | z               | z       |
     | fixed_string    | z       |
     +-----------------+---------+
-    "###
+    "
     );
     Ok(())
 }
@@ -4220,7 +4224,7 @@ async fn unnest_column_nulls() -> Result<()> {
     let results = df.clone().collect().await?;
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +--------+----+
     | list   | id |
     +--------+----+
@@ -4229,7 +4233,7 @@ async fn unnest_column_nulls() -> Result<()> {
     | []     | C  |
     | [3]    | D  |
     +--------+----+
-    "###
+    "
     );
 
     // Unnest, preserving nulls (row with B is preserved)
@@ -4242,7 +4246,7 @@ async fn unnest_column_nulls() -> Result<()> {
         .await?;
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +------+----+
     | list | id |
     +------+----+
@@ -4251,7 +4255,7 @@ async fn unnest_column_nulls() -> Result<()> {
     |      | B  |
     | 3    | D  |
     +------+----+
-    "###
+    "
     );
 
     let options = UnnestOptions::new().with_preserve_nulls(false);
@@ -4261,7 +4265,7 @@ async fn unnest_column_nulls() -> Result<()> {
         .await?;
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +------+----+
     | list | id |
     +------+----+
@@ -4269,7 +4273,7 @@ async fn unnest_column_nulls() -> Result<()> {
     | 2    | A  |
     | 3    | D  |
     +------+----+
-    "###
+    "
     );
 
     Ok(())
@@ -4286,7 +4290,7 @@ async fn unnest_fixed_list() -> Result<()> {
     let results = df.clone().collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+----------------+
     | shape_id | tags           |
     +----------+----------------+
@@ -4297,7 +4301,7 @@ async fn unnest_fixed_list() -> Result<()> {
     | 5        | [tag51, tag52] |
     | 6        | [tag61, tag62] |
     +----------+----------------+
-    "###
+    "
     );
 
     let options = UnnestOptions::new().with_preserve_nulls(true);
@@ -4308,7 +4312,7 @@ async fn unnest_fixed_list() -> Result<()> {
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+-------+
     | shape_id | tags  |
     +----------+-------+
@@ -4323,7 +4327,7 @@ async fn unnest_fixed_list() -> Result<()> {
     | 6        | tag61 |
     | 6        | tag62 |
     +----------+-------+
-    "###
+    "
     );
 
     Ok(())
@@ -4340,7 +4344,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
     let results = df.clone().collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+----------------+
     | shape_id | tags           |
     +----------+----------------+
@@ -4351,7 +4355,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
     | 5        | [tag51, tag52] |
     | 6        | [tag61, tag62] |
     +----------+----------------+
-    "###
+    "
     );
 
     let options = UnnestOptions::new().with_preserve_nulls(false);
@@ -4362,7 +4366,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+-------+
     | shape_id | tags  |
     +----------+-------+
@@ -4375,7 +4379,7 @@ async fn unnest_fixed_list_drop_nulls() -> Result<()> {
     | 6        | tag61 |
     | 6        | tag62 |
     +----------+-------+
-    "###
+    "
     );
 
     Ok(())
@@ -4411,7 +4415,7 @@ async fn unnest_fixed_list_non_null() -> Result<()> {
     let results = df.clone().collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+----------------+
     | shape_id | tags           |
     +----------+----------------+
@@ -4422,7 +4426,7 @@ async fn unnest_fixed_list_non_null() -> Result<()> {
     | 5        | [tag51, tag52] |
     | 6        | [tag61, tag62] |
     +----------+----------------+
-    "###
+    "
     );
 
     let options = UnnestOptions::new().with_preserve_nulls(true);
@@ -4432,7 +4436,7 @@ async fn unnest_fixed_list_non_null() -> Result<()> {
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+-------+
     | shape_id | tags  |
     +----------+-------+
@@ -4449,7 +4453,7 @@ async fn unnest_fixed_list_non_null() -> Result<()> {
     | 6        | tag61 |
     | 6        | tag62 |
     +----------+-------+
-    "###
+    "
     );
 
     Ok(())
@@ -4463,17 +4467,17 @@ async fn unnest_aggregate_columns() -> Result<()> {
     let results = df.select_columns(&["tags"])?.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
-        +--------------------------+
-        | tags                     |
-        +--------------------------+
-        | [tag1, tag2, tag3, tag4] |
-        | [tag1, tag2, tag3]       |
-        | [tag1, tag2]             |
-        | [tag1]                   |
-        | [tag1]                   |
-        +--------------------------+
-    "###
+        @r"
+    +--------------------------+
+    | tags                     |
+    +--------------------------+
+    | [tag1, tag2, tag3, tag4] |
+    | [tag1, tag2, tag3]       |
+    | [tag1, tag2]             |
+    | [tag1]                   |
+    | [tag1]                   |
+    +--------------------------+
+    "
     );
 
     let df = table_with_nested_types(NUM_ROWS).await?;
@@ -4484,13 +4488,13 @@ async fn unnest_aggregate_columns() -> Result<()> {
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +-------------+
     | count(tags) |
     +-------------+
     | 11          |
     +-------------+
-    "###
+    "
     );
 
     Ok(())
@@ -4563,7 +4567,7 @@ async fn unnest_array_agg() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+--------+
     | shape_id | tag_id |
     +----------+--------+
@@ -4577,7 +4581,7 @@ async fn unnest_array_agg() -> Result<()> {
     | 3        | 32     |
     | 3        | 33     |
     +----------+--------+
-    "###
+    "
     );
 
     // Doing an `array_agg` by `shape_id` produces:
@@ -4591,7 +4595,7 @@ async fn unnest_array_agg() -> Result<()> {
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+--------------+
     | shape_id | tag_id       |
     +----------+--------------+
@@ -4599,7 +4603,7 @@ async fn unnest_array_agg() -> Result<()> {
     | 2        | [21, 22, 23] |
     | 3        | [31, 32, 33] |
     +----------+--------------+
-    "###
+    "
     );
 
     // Unnesting again should produce the original batch.
@@ -4615,7 +4619,7 @@ async fn unnest_array_agg() -> Result<()> {
         .await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+--------+
     | shape_id | tag_id |
     +----------+--------+
@@ -4629,7 +4633,7 @@ async fn unnest_array_agg() -> Result<()> {
     | 3        | 32     |
     | 3        | 33     |
     +----------+--------+
-    "###
+    "
     );
 
     Ok(())
@@ -4659,7 +4663,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let results = df.clone().collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+--------+
     | shape_id | tag_id |
     +----------+--------+
@@ -4673,7 +4677,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     | 3        | 32     |
     | 3        | 33     |
     +----------+--------+
-    "###
+    "
     );
 
     // Doing an `array_agg` by `shape_id` produces:
@@ -4703,7 +4707,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----------+
     | shape_id |
     +----------+
@@ -4717,7 +4721,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     | 3        |
     | 3        |
     +----------+
-    "###
+    "
     );
 
     Ok(())
@@ -4758,7 +4762,7 @@ async fn unnest_multiple_columns() -> Result<()> {
     // string:      a, b, c, d
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +------+------------+------------+--------+
     | list | large_list | fixed_list | string |
     +------+------------+------------+--------+
@@ -4772,7 +4776,7 @@ async fn unnest_multiple_columns() -> Result<()> {
     |      |            | 4          | c      |
     |      |            |            | d      |
     +------+------------+------------+--------+
-    "###
+    "
     );
 
     // Test with `preserve_nulls = false``
@@ -4789,7 +4793,7 @@ async fn unnest_multiple_columns() -> Result<()> {
     // string:      a, b, c, d
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +------+------------+------------+--------+
     | list | large_list | fixed_list | string |
     +------+------------+------------+--------+
@@ -4802,7 +4806,7 @@ async fn unnest_multiple_columns() -> Result<()> {
     |      |            | 3          | c      |
     |      |            | 4          | c      |
     +------+------------+------------+--------+
-    "###
+    "
     );
 
     Ok(())
@@ -4831,7 +4835,7 @@ async fn unnest_non_nullable_list() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +----+
     | c1 |
     +----+
@@ -4839,7 +4843,7 @@ async fn unnest_non_nullable_list() -> Result<()> {
     | 2  |
     |    |
     +----+
-    "###
+    "
     );
 
     Ok(())
@@ -4884,7 +4888,7 @@ async fn test_read_batches() -> Result<()> {
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----+--------+
     | id | number |
     +----+--------+
@@ -4897,7 +4901,7 @@ async fn test_read_batches() -> Result<()> {
     | 5  | 3.33   |
     | 5  | 6.66   |
     +----+--------+
-    "###
+    "
     );
     Ok(())
 }
@@ -4918,10 +4922,10 @@ async fn test_read_batches_empty() -> Result<()> {
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     ++
     ++
-    "###
+    "
     );
     Ok(())
 }
@@ -4970,14 +4974,14 @@ async fn consecutive_projection_same_schema() -> Result<()> {
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +----+----+----+
     | id | t  | t2 |
     +----+----+----+
     | 0  |    |    |
     | 1  | 10 | 10 |
     +----+----+----+
-    "###
+    "
     );
 
     Ok(())
@@ -5291,13 +5295,13 @@ async fn test_array_agg() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-------------------------------------+
     | array_agg(test.a)                   |
     +-------------------------------------+
     | [abcDEF, abc123, CBAdef, 123AbcDef] |
     +-------------------------------------+
-    "###
+    "
     );
 
     Ok(())
@@ -5365,10 +5369,10 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
     // N.B., the test is basically `SELECT 1 as a WHERE a = 3;` which returns no results.
     assert_snapshot!(
        batches_to_string(&df.collect().await.unwrap()),
-        @r###"
+        @r"
     ++
     ++
-    "###
+    "
     );
 
     Ok(())
@@ -5424,13 +5428,13 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&df.collect().await.unwrap()),
-        @r###"
+        @r"
     +----+
     | $1 |
     +----+
     | 3  |
     +----+
-    "###
+    "
     );
 
     Ok(())
@@ -5497,13 +5501,13 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&df.collect().await.unwrap()),
-        @r###"
+        @r"
     +-----+
     | a   |
     +-----+
     | foo |
     +-----+
-    "###
+    "
     );
 
     Ok(())
@@ -5561,13 +5565,13 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     let results = filter_df.collect().await?;
     assert_snapshot!(
        batches_to_string(&results),
-        @r###"
+        @r"
     +-----+
     | c1  |
     +-----+
     | abc |
     +-----+
-    "###
+    "
     );
 
     // Read the entire set of parquet files
@@ -5583,14 +5587,14 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     let results = df.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +-----+-----+
     | c1  | c2  |
     +-----+-----+
     | abc | 123 |
     | def | 456 |
     +-----+-----+
-    "###
+    "
     );
 
     Ok(())
@@ -5747,7 +5751,7 @@ async fn sparse_union_is_null() {
     // view_all
     assert_snapshot!(
         batches_to_sort_string(&df.clone().collect().await.unwrap()),
-        @r###"
+        @r"
     +----------+
     | my_union |
     +----------+
@@ -5758,14 +5762,14 @@ async fn sparse_union_is_null() {
     | {C=a}    |
     | {C=}     |
     +----------+
-    "###
+    "
     );
 
     // filter where is null
     let result_df = df.clone().filter(col("my_union").is_null()).unwrap();
     assert_snapshot!(
         batches_to_sort_string(&result_df.collect().await.unwrap()),
-        @r###"
+        @r"
     +----------+
     | my_union |
     +----------+
@@ -5773,14 +5777,14 @@ async fn sparse_union_is_null() {
     | {B=}     |
     | {C=}     |
     +----------+
-    "###
+    "
     );
 
     // filter where is not null
     let result_df = df.filter(col("my_union").is_not_null()).unwrap();
     assert_snapshot!(
         batches_to_sort_string(&result_df.collect().await.unwrap()),
-        @r###"
+        @r"
     +----------+
     | my_union |
     +----------+
@@ -5788,7 +5792,7 @@ async fn sparse_union_is_null() {
     | {B=3.2}  |
     | {C=a}    |
     +----------+
-    "###
+    "
     );
 }
 
@@ -5830,7 +5834,7 @@ async fn dense_union_is_null() {
     // view_all
     assert_snapshot!(
         batches_to_sort_string(&df.clone().collect().await.unwrap()),
-        @r###"
+        @r"
     +----------+
     | my_union |
     +----------+
@@ -5841,14 +5845,14 @@ async fn dense_union_is_null() {
     | {C=a}    |
     | {C=}     |
     +----------+
-    "###
+    "
     );
 
     // filter where is null
     let result_df = df.clone().filter(col("my_union").is_null()).unwrap();
     assert_snapshot!(
         batches_to_sort_string(&result_df.collect().await.unwrap()),
-        @r###"
+        @r"
     +----------+
     | my_union |
     +----------+
@@ -5856,14 +5860,14 @@ async fn dense_union_is_null() {
     | {B=}     |
     | {C=}     |
     +----------+
-    "###
+    "
     );
 
     // filter where is not null
     let result_df = df.filter(col("my_union").is_not_null()).unwrap();
     assert_snapshot!(
         batches_to_sort_string(&result_df.collect().await.unwrap()),
-        @r###"
+        @r"
     +----------+
     | my_union |
     +----------+
@@ -5871,7 +5875,7 @@ async fn dense_union_is_null() {
     | {B=3.2}  |
     | {C=a}    |
     +----------+
-    "###
+    "
     );
 }
 
@@ -5903,7 +5907,7 @@ async fn boolean_dictionary_as_filter() {
     // view_all
     assert_snapshot!(
        batches_to_string(&df.clone().collect().await.unwrap()),
-        @r###"
+        @r"
     +---------+
     | my_dict |
     +---------+
@@ -5915,14 +5919,14 @@ async fn boolean_dictionary_as_filter() {
     | true    |
     | false   |
     +---------+
-    "###
+    "
     );
 
     let result_df = df.clone().filter(col("my_dict")).unwrap();
 
     assert_snapshot!(
        batches_to_string(&result_df.collect().await.unwrap()),
-        @r###"
+        @r"
     +---------+
     | my_dict |
     +---------+
@@ -5930,7 +5934,7 @@ async fn boolean_dictionary_as_filter() {
     | true    |
     | true    |
     +---------+
-    "###
+    "
     );
 
     // test nested dictionary
@@ -5961,26 +5965,26 @@ async fn boolean_dictionary_as_filter() {
     // view_all
     assert_snapshot!(
        batches_to_string(&df.clone().collect().await.unwrap()),
-        @r###"
+        @r"
     +----------------+
     | my_nested_dict |
     +----------------+
     | true           |
     | false          |
     +----------------+
-    "###
+    "
     );
 
     let result_df = df.clone().filter(col("my_nested_dict")).unwrap();
     assert_snapshot!(
        batches_to_string(&result_df.collect().await.unwrap()),
-        @r###"
+        @r"
     +----------------+
     | my_nested_dict |
     +----------------+
     | true           |
     +----------------+
-    "###
+    "
     );
 }
 
@@ -6058,11 +6062,11 @@ async fn test_alias() -> Result<()> {
         .into_unoptimized_plan()
         .display_indent_schema()
         .to_string();
-    assert_snapshot!(plan, @r###"
+    assert_snapshot!(plan, @r"
     SubqueryAlias: table_alias [a:Utf8, b:Int32, one:Int32]
       Projection: test.a, test.b, Int32(1) AS one [a:Utf8, b:Int32, one:Int32]
         TableScan: test [a:Utf8, b:Int32]
-    "###);
+    ");
 
     // Select over the aliased DataFrame
     let df = df.select(vec![
@@ -6071,7 +6075,7 @@ async fn test_alias() -> Result<()> {
     ])?;
     assert_snapshot!(
         batches_to_sort_string(&df.collect().await.unwrap()),
-        @r###"
+        @r"
     +-----------+---------------------------------+
     | a         | table_alias.b + table_alias.one |
     +-----------+---------------------------------+
@@ -6080,7 +6084,7 @@ async fn test_alias() -> Result<()> {
     | abc123    | 11                              |
     | abcDEF    | 2                               |
     +-----------+---------------------------------+
-    "###
+    "
     );
     Ok(())
 }
@@ -6110,7 +6114,7 @@ async fn test_alias_self_join() -> Result<()> {
     let joined = left.join(right, JoinType::Full, &["a"], &["a"], None)?;
     assert_snapshot!(
         batches_to_sort_string(&joined.collect().await.unwrap()),
-        @r###"
+        @r"
     +-----------+-----+-----------+-----+
     | a         | b   | a         | b   |
     +-----------+-----+-----------+-----+
@@ -6119,7 +6123,7 @@ async fn test_alias_self_join() -> Result<()> {
     | abc123    | 10  | abc123    | 10  |
     | abcDEF    | 1   | abcDEF    | 1   |
     +-----------+-----+-----------+-----+
-    "###
+    "
     );
     Ok(())
 }
@@ -6132,14 +6136,14 @@ async fn test_alias_empty() -> Result<()> {
         .into_unoptimized_plan()
         .display_indent_schema()
         .to_string();
-    assert_snapshot!(plan, @r###"
+    assert_snapshot!(plan, @r"
     SubqueryAlias:  [a:Utf8, b:Int32]
       TableScan: test [a:Utf8, b:Int32]
-    "###);
+    ");
 
     assert_snapshot!(
         batches_to_sort_string(&df.select(vec![col("a"), col("b")])?.collect().await.unwrap()),
-        @r###"
+        @r"
     +-----------+-----+
     | a         | b   |
     +-----------+-----+
@@ -6148,7 +6152,7 @@ async fn test_alias_empty() -> Result<()> {
     | abc123    | 10  |
     | abcDEF    | 1   |
     +-----------+-----+
-    "###
+    "
     );
 
     Ok(())
@@ -6167,12 +6171,12 @@ async fn test_alias_nested() -> Result<()> {
         .into_optimized_plan()?
         .display_indent_schema()
         .to_string();
-    assert_snapshot!(plan, @r###"
+    assert_snapshot!(plan, @r"
     SubqueryAlias: alias2 [a:Utf8, b:Int32, one:Int32]
       SubqueryAlias: alias1 [a:Utf8, b:Int32, one:Int32]
         Projection: test.a, test.b, Int32(1) AS one [a:Utf8, b:Int32, one:Int32]
           TableScan: test projection=[a, b] [a:Utf8, b:Int32]
-    "###);
+    ");
 
     // Select over the aliased DataFrame
     let select1 = df
@@ -6181,7 +6185,7 @@ async fn test_alias_nested() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&select1.collect().await.unwrap()),
-        @r###"
+        @r"
     +-----------+-----------------------+
     | a         | alias2.b + alias2.one |
     +-----------+-----------------------+
@@ -6190,7 +6194,7 @@ async fn test_alias_nested() -> Result<()> {
     | abc123    | 11                    |
     | abcDEF    | 2                     |
     +-----------+-----------------------+
-    "###
+    "
     );
 
     // Only the outermost alias is visible
@@ -6360,7 +6364,7 @@ async fn test_fill_null() -> Result<()> {
     let results = df_filled.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +---+---------+
     | a | b       |
     +---+---------+
@@ -6368,7 +6372,7 @@ async fn test_fill_null() -> Result<()> {
     | 1 | x       |
     | 3 | z       |
     +---+---------+
-    "###
+    "
     );
 
     Ok(())
@@ -6388,7 +6392,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
 
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +---+---------+
     | a | b       |
     +---+---------+
@@ -6396,7 +6400,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     | 1 | x       |
     | 3 | z       |
     +---+---------+
-    "###
+    "
     );
 
     // Fill column "a" null values with a value that cannot be cast to Int32.
@@ -6405,7 +6409,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     let results = df_filled.collect().await?;
     assert_snapshot!(
         batches_to_sort_string(&results),
-        @r###"
+        @r"
     +---+---------+
     | a | b       |
     +---+---------+
@@ -6413,7 +6417,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     | 1 | x       |
     | 3 | z       |
     +---+---------+
-    "###
+    "
     );
     Ok(())
 }
@@ -6486,14 +6490,14 @@ async fn test_insert_into_casting_support() -> Result<()> {
 
     assert_snapshot!(
        batches_to_string(&res),
-        @r###"
+        @r"
     +------+
     | a    |
     +------+
     | a123 |
     | b456 |
     +------+
-    "###
+    "
     );
     Ok(())
 }
@@ -6629,13 +6633,13 @@ async fn test_copy_to_preserves_order() -> Result<()> {
     // Expect that input to the DataSinkExec is sorted correctly
     assert_snapshot!(
         physical_plan_format,
-        @r###"
+        @r"
     UnionExec
       DataSinkExec: sink=CsvSink(file_groups=[])
         SortExec: expr=[column1@0 DESC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[1]
       DataSourceExec: partitions=1, partition_sizes=[1]
-    "###
+    "
     );
     Ok(())
 }

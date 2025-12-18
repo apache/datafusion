@@ -426,3 +426,329 @@ SET datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
 
 statement ok
 SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+# Test 6: Sort Pushdown for ordered Parquet files
+
+# Create a sorted dataset
+statement ok
+CREATE TABLE sorted_data(id INT, value INT, name VARCHAR) AS VALUES
+(1, 100, 'a'),
+(2, 200, 'b'),
+(3, 300, 'c'),
+(4, 400, 'd'),
+(5, 500, 'e'),
+(6, 600, 'f'),
+(7, 700, 'g'),
+(8, 800, 'h'),
+(9, 900, 'i'),
+(10, 1000, 'j');
+
+# Copy to parquet with sorting
+query I
+COPY (SELECT * FROM sorted_data ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet';
+----
+10
+
+statement ok
+CREATE EXTERNAL TABLE sorted_parquet(id INT, value INT, name VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet'
+WITH ORDER (id ASC);
+
+# Test 6.1: Sort pushdown with DESC (opposite of ASC)
+# Should show reverse_row_groups=true
+query TT
+EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_parquet.id DESC NULLS FIRST, fetch=3
+02)--TableScan: sorted_parquet projection=[id, value, name]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+# Test 6.2: Verify results are correct
+query IIT
+SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
+----
+10 1000 j
+9 900 i
+8 800 h
+
+# Test 6.3: Should NOT apply for ASC (same direction)
+query TT
+EXPLAIN SELECT * FROM sorted_parquet ORDER BY id ASC LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_parquet.id ASC NULLS LAST, fetch=3
+02)--TableScan: sorted_parquet projection=[id, value, name]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+# Test 6.4: Disable sort pushdown
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = false;
+
+query TT
+EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_parquet.id DESC NULLS FIRST, fetch=3
+02)--TableScan: sorted_parquet projection=[id, value, name]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Re-enable
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Test 6.5: With OFFSET
+query TT
+EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
+----
+logical_plan
+01)Limit: skip=2, fetch=3
+02)--Sort: sorted_parquet.id DESC NULLS FIRST, fetch=5
+03)----TableScan: sorted_parquet projection=[id, value, name]
+physical_plan
+01)GlobalLimitExec: skip=2, fetch=3
+02)--SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+query IIT
+SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
+----
+8 800 h
+7 700 g
+6 600 f
+
+# Test 6.6: Reverse scan with row selection (page index pruning)
+# This tests that when reverse_row_groups=true, the RowSelection is also properly reversed
+
+# Create a dataset with multiple row groups and enable page index
+statement ok
+CREATE TABLE multi_rg_data(id INT, category VARCHAR, value INT) AS VALUES
+(1, 'alpha', 10),
+(2, 'alpha', 20),
+(3, 'beta', 30),
+(4, 'beta', 40),
+(5, 'gamma', 50),
+(6, 'gamma', 60),
+(7, 'delta', 70),
+(8, 'delta', 80);
+
+# Write with small row groups (2 rows each = 4 row groups)
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 2;
+
+query I
+COPY (SELECT * FROM multi_rg_data ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/multi_rg_sorted.parquet';
+----
+8
+
+# Reset row group size
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE multi_rg_sorted(id INT, category VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/multi_rg_sorted.parquet'
+WITH ORDER (id ASC);
+
+# Enable page index for better pruning
+statement ok
+SET datafusion.execution.parquet.enable_page_index = true;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+# Test with reverse scan and filter that prunes some row groups
+# This will create a RowSelection with partial row group scans
+query TT
+EXPLAIN SELECT * FROM multi_rg_sorted
+WHERE category IN ('alpha', 'gamma')
+ORDER BY id DESC LIMIT 5;
+----
+logical_plan
+01)Sort: multi_rg_sorted.id DESC NULLS FIRST, fetch=5
+02)--Filter: multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")
+03)----TableScan: multi_rg_sorted projection=[id, category, value], partial_filters=[multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")]
+physical_plan
+01)SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/multi_rg_sorted.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], reverse_row_groups=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1, required_guarantees=[category in (alpha, gamma)]
+
+# Verify the results are correct despite reverse scanning with row selection
+# Expected: gamma values (6, 5) then alpha values (2, 1), in DESC order by id
+query ITI
+SELECT * FROM multi_rg_sorted
+WHERE category IN ('alpha', 'gamma')
+ORDER BY id DESC LIMIT 5;
+----
+6 gamma 60
+5 gamma 50
+2 alpha 20
+1 alpha 10
+
+# Test with more complex selection pattern
+query ITI
+SELECT * FROM multi_rg_sorted
+WHERE category IN ('beta', 'delta')
+ORDER BY id DESC;
+----
+8 delta 80
+7 delta 70
+4 beta 40
+3 beta 30
+
+# Test forward scan for comparison (should give same logical results in ASC order)
+query ITI
+SELECT * FROM multi_rg_sorted
+WHERE category IN ('alpha', 'gamma')
+ORDER BY id ASC;
+----
+1 alpha 10
+2 alpha 20
+5 gamma 50
+6 gamma 60
+
+# Disable reverse scan and verify it still works
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = false;
+
+query ITI
+SELECT * FROM multi_rg_sorted
+WHERE category IN ('alpha', 'gamma')
+ORDER BY id DESC LIMIT 5;
+----
+6 gamma 60
+5 gamma 50
+2 alpha 20
+1 alpha 10
+
+# Re-enable
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Test 6.7: Sort pushdown with more than one partition
+# Create multiple parquet files to trigger it
+
+# Split data into multiple files
+statement ok
+CREATE TABLE sorted_data_part1(id INT, value INT, name VARCHAR) AS VALUES
+(1, 100, 'a'),
+(2, 200, 'b'),
+(3, 300, 'c');
+
+statement ok
+CREATE TABLE sorted_data_part2(id INT, value INT, name VARCHAR) AS VALUES
+(4, 400, 'd'),
+(5, 500, 'e'),
+(6, 600, 'f');
+
+statement ok
+CREATE TABLE sorted_data_part3(id INT, value INT, name VARCHAR) AS VALUES
+(7, 700, 'g'),
+(8, 800, 'h'),
+(9, 900, 'i'),
+(10, 1000, 'j');
+
+# Create directory for multi-file parquet
+query I
+COPY (SELECT * FROM sorted_data_part1 ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part1.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM sorted_data_part2 ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part2.parquet';
+----
+3
+
+query I
+COPY (SELECT * FROM sorted_data_part3 ORDER BY id ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part3.parquet';
+----
+4
+
+# Create external table pointing to directory with multiple files
+statement ok
+CREATE EXTERNAL TABLE sorted_parquet_multi(id INT, value INT, name VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/'
+WITH ORDER (id ASC);
+
+# Enable multiple partitions
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+# Now we should see RepartitionExec because we have 3 input partitions (3 files)
+query TT
+EXPLAIN SELECT * FROM sorted_parquet_multi ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: sorted_parquet_multi.id DESC NULLS FIRST, fetch=3
+02)--TableScan: sorted_parquet_multi projection=[id, value, name]
+physical_plan
+01)SortPreservingMergeExec: [id@0 DESC], fetch=3
+02)--SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[true]
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/sorted_multi/part3.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+# Verify correctness with repartitioning and multiple files
+query IIT
+SELECT * FROM sorted_parquet_multi ORDER BY id DESC LIMIT 3;
+----
+10 1000 j
+9 900 i
+8 800 h
+
+# Test ASC order (should not trigger reverse scan)
+query IIT
+SELECT * FROM sorted_parquet_multi ORDER BY id ASC LIMIT 3;
+----
+1 100 a
+2 200 b
+3 300 c
+
+# Cleanup
+statement ok
+DROP TABLE sorted_data_part1;
+
+statement ok
+DROP TABLE sorted_data_part2;
+
+statement ok
+DROP TABLE sorted_data_part3;
+
+statement ok
+DROP TABLE sorted_parquet_multi;
+
+# Reset to default
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+# Cleanup
+statement ok
+DROP TABLE multi_rg_data;
+
+statement ok
+DROP TABLE multi_rg_sorted;
+
+statement ok
+SET datafusion.execution.parquet.enable_page_index = false;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;
+
+# Cleanup
+statement ok
+DROP TABLE sorted_data;
+
+statement ok
+DROP TABLE sorted_parquet;
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;

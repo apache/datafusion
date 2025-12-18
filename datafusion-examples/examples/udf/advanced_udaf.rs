@@ -28,13 +28,13 @@ use arrow::array::{
 use arrow::datatypes::{ArrowNativeTypeOp, ArrowPrimitiveType, Float64Type, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
-use datafusion::common::{cast::as_float64_array, ScalarValue};
+use datafusion::common::{ScalarValue, cast::as_float64_array};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
+    Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Signature,
     expr::AggregateFunction,
     function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
     simplify::SimplifyInfo,
-    Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Signature,
 };
 use datafusion::prelude::*;
 

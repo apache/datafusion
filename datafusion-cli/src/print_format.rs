@@ -247,12 +247,12 @@ mod tests {
             .with_schema(three_column_schema())
             .with_batches(vec![])
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+---+---+
         | a | b | c |
         +---+---+---+
         +---+---+---+
-        "#);
+        ");
     }
 
     #[test]
@@ -262,11 +262,11 @@ mod tests {
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::No)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         1,4,7
         2,5,8
         3,6,9
-        "#);
+        ");
     }
 
     #[test]
@@ -276,12 +276,12 @@ mod tests {
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         a,b,c
         1,4,7
         2,5,8
         3,6,9
-        "#);
+        ");
     }
 
     #[test]
@@ -291,10 +291,10 @@ mod tests {
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::No)
             .run();
-        assert_snapshot!(output, @"
-        1\t4\t7
-        2\t5\t8
-        3\t6\t9
+        assert_snapshot!(output, @r"
+        1	4	7
+        2	5	8
+        3	6	9
         ")
     }
 
@@ -305,11 +305,11 @@ mod tests {
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
-        assert_snapshot!(output, @"
-        a\tb\tc
-        1\t4\t7
-        2\t5\t8
-        3\t6\t9
+        assert_snapshot!(output, @r"
+        a	b	c
+        1	4	7
+        2	5	8
+        3	6	9
         ");
     }
 
@@ -320,7 +320,7 @@ mod tests {
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Ignored)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+---+---+
         | a | b | c |
         +---+---+---+
@@ -328,7 +328,7 @@ mod tests {
         | 2 | 5 | 8 |
         | 3 | 6 | 9 |
         +---+---+---+
-        "#);
+        ");
     }
     #[test]
     fn print_json() {
@@ -337,9 +337,7 @@ mod tests {
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Ignored)
             .run();
-        assert_snapshot!(output, @r#"
-        [{"a":1,"b":4,"c":7},{"a":2,"b":5,"c":8},{"a":3,"b":6,"c":9}]
-        "#);
+        assert_snapshot!(output, @r#"[{"a":1,"b":4,"c":7},{"a":2,"b":5,"c":8},{"a":3,"b":6,"c":9}]"#);
     }
 
     #[test]
@@ -363,11 +361,11 @@ mod tests {
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::No)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         1,4,7
         2,5,8
         3,6,9
-        "#);
+        ");
     }
     #[test]
     fn print_automatic_with_header() {
@@ -376,12 +374,12 @@ mod tests {
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Yes)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         a,b,c
         1,4,7
         2,5,8
         3,6,9
-        "#);
+        ");
     }
 
     #[test]
@@ -396,7 +394,7 @@ mod tests {
                 .with_maxrows(max_rows)
                 .run();
             allow_duplicates! {
-                assert_snapshot!(output, @r#"
+                assert_snapshot!(output, @r"
                 +---+
                 | a |
                 +---+
@@ -404,7 +402,7 @@ mod tests {
                 | 2 |
                 | 3 |
                 +---+
-                "#);
+                ");
             }
         }
     }
@@ -416,7 +414,7 @@ mod tests {
             .with_batches(vec![one_column_batch()])
             .with_maxrows(MaxRows::Limited(1))
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+
         | a |
         +---+
@@ -425,7 +423,7 @@ mod tests {
         | . |
         | . |
         +---+
-        "#);
+        ");
     }
 
     #[test]
@@ -439,7 +437,7 @@ mod tests {
             ])
             .with_maxrows(MaxRows::Limited(5))
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+
         | a |
         +---+
@@ -452,7 +450,7 @@ mod tests {
         | . |
         | . |
         +---+
-        "#);
+        ");
     }
 
     #[test]
@@ -464,7 +462,7 @@ mod tests {
             .with_format(PrintFormat::Table)
             .with_batches(vec![empty_batch.clone(), batch, empty_batch])
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+
         | a |
         +---+
@@ -472,7 +470,7 @@ mod tests {
         | 2 |
         | 3 |
         +---+
-        "#);
+        ");
     }
 
     #[test]
@@ -486,12 +484,12 @@ mod tests {
             .with_batches(vec![empty_batch])
             .with_header(WithHeader::Yes)
             .run();
-        assert_snapshot!(output, @r#"
+        assert_snapshot!(output, @r"
         +---+
         | a |
         +---+
         +---+
-        "#);
+        ");
 
         // No output for empty batch when schema contains no columns
         let empty_batch = RecordBatch::new_empty(Arc::new(Schema::empty()));

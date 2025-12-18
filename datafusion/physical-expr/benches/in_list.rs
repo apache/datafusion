@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, Float32Array, Int32Array, StringArray, StringViewArray,
+    Array, ArrayRef, Float32Array, Int16Array, Int32Array, StringArray, StringViewArray,
+    TimestampNanosecondArray, UInt8Array,
 };
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -28,6 +29,7 @@ use rand::prelude::*;
 use std::any::TypeId;
 use std::hint::black_box;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Measures how long `in_list(col("a"), exprs)` takes to evaluate against a single RecordBatch.
 fn do_bench(c: &mut Criterion, name: &str, values: ArrayRef, exprs: &[ScalarValue]) {
@@ -47,10 +49,10 @@ fn random_string(rng: &mut StdRng, len: usize) -> String {
     String::from_utf8(value).unwrap()
 }
 
-const IN_LIST_LENGTHS: [usize; 3] = [3, 8, 100];
+const IN_LIST_LENGTHS: [usize; 4] = [3, 8, 28, 100];
 const NULL_PERCENTS: [f64; 2] = [0., 0.2];
 const STRING_LENGTHS: [usize; 3] = [3, 12, 100];
-const ARRAY_LENGTH: usize = 1024;
+const ARRAY_LENGTH: usize = 8192;
 
 /// Returns a friendly type name for the array type.
 fn array_type_name<A: 'static>() -> &'static str {
@@ -61,8 +63,14 @@ fn array_type_name<A: 'static>() -> &'static str {
         "Utf8View"
     } else if id == TypeId::of::<Float32Array>() {
         "Float32"
+    } else if id == TypeId::of::<Int16Array>() {
+        "Int16"
     } else if id == TypeId::of::<Int32Array>() {
         "Int32"
+    } else if id == TypeId::of::<TimestampNanosecondArray>() {
+        "TimestampNs"
+    } else if id == TypeId::of::<UInt8Array>() {
+        "UInt8"
     } else {
         "Unknown"
     }
@@ -142,7 +150,7 @@ fn bench_numeric_type<T, A>(
     }
 }
 
-/// Entry point: registers in_list benchmarks for Utf8, Utf8View, Float32, and Int32 arrays.
+/// Entry point: registers in_list benchmarks for string and numeric array types.
 fn criterion_benchmark(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(120320);
 
@@ -151,6 +159,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     bench_string_type::<StringViewArray>(c, &mut rng, |s| ScalarValue::Utf8View(Some(s)));
 
     // Benchmarks for numeric types
+    bench_numeric_type::<u8, UInt8Array>(
+        c,
+        &mut rng,
+        |rng| rng.random(),
+        |v| ScalarValue::UInt8(Some(v)),
+    );
+    bench_numeric_type::<i16, Int16Array>(
+        c,
+        &mut rng,
+        |rng| rng.random(),
+        |v| ScalarValue::Int16(Some(v)),
+    );
     bench_numeric_type::<f32, Float32Array>(
         c,
         &mut rng,
@@ -163,7 +183,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         |rng| rng.random(),
         |v| ScalarValue::Int32(Some(v)),
     );
+    bench_numeric_type::<i64, TimestampNanosecondArray>(
+        c,
+        &mut rng,
+        |rng| rng.random(),
+        |v| ScalarValue::TimestampNanosecond(Some(v), None),
+    );
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_millis(500));
+    targets = criterion_benchmark
+}
 criterion_main!(benches);

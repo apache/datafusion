@@ -16,14 +16,14 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{not_impl_err, plan_err, Column, JoinType, NullEquality};
+use datafusion::common::{Column, JoinType, NullEquality, not_impl_err, plan_err};
 use datafusion::logical_expr::requalify_sides_if_needed;
 use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
 };
 
-use substrait::proto::{join_rel, JoinRel};
+use substrait::proto::{JoinRel, join_rel};
 
 pub async fn from_join_rel(
     consumer: &impl SubstraitConsumer,

@@ -72,6 +72,7 @@ use tokio::io::AsyncWriteExt;
 ///     has_header: Some(true),
 ///     delimiter: b',',
 ///     quote: b'"',
+///     newlines_in_values: Some(true), // The file contains newlines in values
 ///     ..Default::default()
 /// };
 /// let source = Arc::new(CsvSource::new(file_schema.clone())
@@ -81,7 +82,6 @@ use tokio::io::AsyncWriteExt;
 /// // Create a DataSourceExec for reading the first 100MB of `file1.csv`
 /// let config = FileScanConfigBuilder::new(object_store_url, source)
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
-///     .with_newlines_in_values(true) // The file contains newlines in values;
 ///     .build();
 /// let exec = (DataSourceExec::from_data_source(config));
 /// ```
@@ -175,6 +175,11 @@ impl CsvSource {
         let mut conf = self.clone();
         conf.options.truncated_rows = Some(truncate_rows);
         conf
+    }
+
+    /// Whether values may contain newline characters
+    pub fn newlines_in_values(&self) -> bool {
+        self.options.newlines_in_values.unwrap_or(false)
     }
 }
 
@@ -297,6 +302,13 @@ impl FileSource for CsvSource {
     fn file_type(&self) -> &str {
         "csv"
     }
+
+    fn supports_repartitioning(&self) -> bool {
+        // Cannot repartition if values may contain newlines, as record
+        // boundaries cannot be determined by byte offset alone
+        !self.options.newlines_in_values.unwrap_or(false)
+    }
+
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
