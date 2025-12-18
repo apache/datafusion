@@ -37,6 +37,7 @@ use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
     PhysicalExprAdapterFactory,
 };
+use object_store::ObjectStoreExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path};
 use parquet::arrow::ArrowWriter;
 

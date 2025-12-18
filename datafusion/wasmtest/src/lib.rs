@@ -99,7 +99,8 @@ mod test {
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
-    use object_store::{ObjectStore, memory::InMemory, path::Path};
+    use object_store::ObjectStoreExt;
+    use object_store::{memory::InMemory, path::Path};
     use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
 

@@ -45,9 +45,10 @@ use datafusion::scalar::ScalarValue;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
+use object_store::ObjectStoreExt;
+use object_store::PutPayload;
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, PutPayload};
 
 // Example showing how to implement custom filter rewriting for JSON shredding.
 //

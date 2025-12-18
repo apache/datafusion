@@ -60,12 +60,14 @@ mod tests {
     use futures::StreamExt;
     use futures::stream::BoxStream;
     use insta::assert_snapshot;
+    use object_store::ObjectStoreExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
-        Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
-        ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        Attributes, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult,
+        MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
+        PutPayload, PutResult,
     };
     use regex::Regex;
     use rstest::*;
@@ -102,10 +104,6 @@ mod tests {
             _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             unimplemented!()
-        }
-
-        async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-            self.get_opts(location, GetOptions::default()).await
         }
 
         async fn get_opts(
@@ -147,14 +145,6 @@ mod tests {
             unimplemented!()
         }
 
-        async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
-            unimplemented!()
-        }
-
-        async fn delete(&self, _location: &Path) -> object_store::Result<()> {
-            unimplemented!()
-        }
-
         fn list(
             &self,
             _prefix: Option<&Path>,
@@ -169,14 +159,18 @@ mod tests {
             unimplemented!()
         }
 
-        async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+        fn delete_stream(
+            &self,
+            _locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
             unimplemented!()
         }
 
-        async fn copy_if_not_exists(
+        async fn copy_opts(
             &self,
             _from: &Path,
             _to: &Path,
+            _options: CopyOptions,
         ) -> object_store::Result<()> {
             unimplemented!()
         }

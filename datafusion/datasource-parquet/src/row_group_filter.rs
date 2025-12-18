@@ -1537,7 +1537,7 @@ mod tests {
         pruning_predicate: &PruningPredicate,
     ) -> Result<RowGroupAccessPlanFilter> {
         use datafusion_datasource::PartitionedFile;
-        use object_store::{ObjectMeta, ObjectStore};
+        use object_store::{ObjectMeta, ObjectStoreExt};
 
         let object_meta = ObjectMeta {
             location: object_store::path::Path::parse(file_name).expect("creating path"),

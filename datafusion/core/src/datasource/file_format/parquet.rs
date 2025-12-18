@@ -157,7 +157,7 @@ mod tests {
     use object_store::ObjectMeta;
     use object_store::local::LocalFileSystem;
     use object_store::{
-        GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
         PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
     };
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -300,6 +300,13 @@ mod tests {
         }
     }
 
+    fn not_implemented(operation: &str) -> object_store::Error {
+        object_store::Error::NotImplemented {
+            operation: operation.to_string(),
+            implementer: "RequestCountingObjectStore".to_string(),
+        }
+    }
+
     #[async_trait]
     impl ObjectStore for RequestCountingObjectStore {
         async fn put_opts(
@@ -308,7 +315,7 @@ mod tests {
             _payload: PutPayload,
             _opts: PutOptions,
         ) -> object_store::Result<PutResult> {
-            Err(object_store::Error::NotImplemented)
+            Err(not_implemented("put_opts"))
         }
 
         async fn put_multipart_opts(
@@ -316,7 +323,7 @@ mod tests {
             _location: &Path,
             _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            Err(object_store::Error::NotImplemented)
+            Err(not_implemented("put_multipart_opts"))
         }
 
         async fn get_opts(
@@ -328,12 +335,13 @@ mod tests {
             self.inner.get_opts(location, options).await
         }
 
-        async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn delete(&self, _location: &Path) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
+        fn delete_stream(
+            &self,
+            _locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            Box::pin(futures::stream::once(async {
+                Err(not_implemented("delete_stream"))
+            }))
         }
 
         fn list(
@@ -341,7 +349,7 @@ mod tests {
             _prefix: Option<&Path>,
         ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             Box::pin(futures::stream::once(async {
-                Err(object_store::Error::NotImplemented)
+                Err(not_implemented("list"))
             }))
         }
 
@@ -349,19 +357,16 @@ mod tests {
             &self,
             _prefix: Option<&Path>,
         ) -> object_store::Result<ListResult> {
-            Err(object_store::Error::NotImplemented)
+            Err(not_implemented("list_with_delimiter"))
         }
 
-        async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn copy_if_not_exists(
+        async fn copy_opts(
             &self,
             _from: &Path,
             _to: &Path,
+            _options: CopyOptions,
         ) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
+            Err(not_implemented("copy_opts"))
         }
     }
 

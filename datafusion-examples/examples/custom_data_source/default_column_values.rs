@@ -46,6 +46,7 @@ use datafusion_physical_expr_adapter::{
     replace_columns_with_literals,
 };
 use futures::StreamExt;
+use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, PutPayload};

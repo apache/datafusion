@@ -29,6 +29,7 @@ use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_parquet::ParquetFormat;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use itertools::Itertools;
+use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, PutPayload};

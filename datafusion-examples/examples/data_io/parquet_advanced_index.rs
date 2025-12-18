@@ -567,7 +567,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             .object_meta
             .location
             .parts()
-            .last()
+            .next_back()
             .expect("No path in location")
             .as_ref()
             .to_string();

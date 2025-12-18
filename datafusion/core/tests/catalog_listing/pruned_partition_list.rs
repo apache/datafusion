@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use futures::{FutureExt, StreamExt as _, TryStreamExt as _};
-use object_store::{ObjectStore as _, memory::InMemory, path::Path};
+use object_store::ObjectStoreExt;
+use object_store::{memory::InMemory, path::Path};
 
 use datafusion::execution::SessionStateBuilder;
 use datafusion_catalog_listing::helpers::{
