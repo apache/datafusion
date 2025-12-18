@@ -17,13 +17,12 @@
 
 //! Functionality used both on logical and physical plans
 
-use ahash::{AHasher, RandomState};
+use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use std::hash::Hasher;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
@@ -35,13 +34,22 @@ use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
 use std::cell::RefCell;
 
-// Combines two hashes into one hash
+const MULTIPLIER: u64 = 0x517cc1b727220a95;
+
+#[inline]
+fn finalize_hash(mut h: u64) -> u64 {
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51afd7ed558ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ceb9fe1a85ec53);
+    h ^= h >> 33;
+    h
+}
+
 #[inline]
 pub fn combine_hashes(l: u64, r: u64) -> u64 {
-    let mut hasher = AHasher::default();
-    hasher.write_u64(l);
-    hasher.write_u64(r);
-    hasher.finish()
+    let h = l.wrapping_add(MULTIPLIER).wrapping_add(r);
+    finalize_hash(h)
 }
 
 /// Maximum size for the thread-local hash buffer before truncation (4MB = 524,288 u64 elements).
@@ -370,7 +378,7 @@ fn hash_map_array(
             if nulls.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
                 for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
-                    *hash = combine_hashes(*hash, *values_hash);
+                    *hash = (*hash ^ *values_hash).wrapping_mul(MULTIPLIER);
                 }
             }
         }
@@ -378,7 +386,7 @@ fn hash_map_array(
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             let hash = &mut hashes_buffer[i];
             for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
-                *hash = combine_hashes(*hash, *values_hash);
+                *hash = (*hash ^ *values_hash).wrapping_mul(MULTIPLIER);
             }
         }
     }
@@ -405,7 +413,7 @@ where
             if nulls.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
                 for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
-                    *hash = combine_hashes(*hash, *values_hash);
+                    *hash = (*hash ^ *values_hash).wrapping_mul(MULTIPLIER);
                 }
             }
         }
@@ -413,7 +421,7 @@ where
         for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
             let hash = &mut hashes_buffer[i];
             for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
-                *hash = combine_hashes(*hash, *values_hash);
+                *hash = (*hash ^ *values_hash).wrapping_mul(MULTIPLIER);
             }
         }
     }
@@ -448,7 +456,8 @@ fn hash_union_array(
         let child_offset = array.value_offset(i);
 
         let child_hash = child_hashes.get(&type_id).expect("invalid type_id");
-        hashes_buffer[i] = combine_hashes(hashes_buffer[i], child_hash[child_offset]);
+        hashes_buffer[i] =
+            (hashes_buffer[i] ^ child_hash[child_offset]).wrapping_mul(MULTIPLIER);
     }
 
     Ok(())
