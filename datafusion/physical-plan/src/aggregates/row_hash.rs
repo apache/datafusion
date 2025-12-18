@@ -572,14 +572,22 @@ impl GroupedHashAggregateStream {
         let oom_mode = match (agg.mode, &group_ordering) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
             (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
-            // For non-partial aggregation modes, don't use spilling if the input
-            // of fully sorted by the grouping expressions. Regular emission of completed
-            // group values will handle memory pressure.
-            (_, GroupOrdering::Full(_)) => OutOfMemoryMode::ReportError,
-            // For unsorted or partially sorted inputs, use disk spilling
-            (_, GroupOrdering::None | GroupOrdering::Partial(_)) => {
+            // For non-partial aggregation modes, emitting incomplete results is not an option.
+            // Instead, use disk spilling to store sorted, incomplete results, and merge them
+            // afterwards.
+            (_, GroupOrdering::None | GroupOrdering::Partial(_))
+                if context.runtime_env().disk_manager.tmp_files_enabled() =>
+            {
                 OutOfMemoryMode::Spill
             }
+            // For `GroupOrdering::Full`, the incoming stream is already sorted. This ensures the
+            // number of incomplete groups can be kept small at all times. If we still hit
+            // an out-of-memory condition, spilling to disk would not be beneficial since the same
+            // situation is likely to reoccur when reading back the spilled data.
+            // Therefore, we fall back to simply reporting the error immediately.
+            // This mode will also be used if the `DiskManager` is not configured to allow spilling
+            // to disk.
+            _ => OutOfMemoryMode::ReportError,
         };
 
         let group_values = new_group_values(group_schema, &group_ordering)?;
