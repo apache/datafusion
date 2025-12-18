@@ -2145,7 +2145,7 @@ async fn roundtrip_recursive_query() -> Result<()> {
 
     // Create a work table scan for the recursive term
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
-    let work_table_scan = create_work_table_scan("nodes", schema)?;
+    let work_table_scan = create_work_table_scan("nodes", &schema)?;
     let recursive_term = LogicalPlanBuilder::from(work_table_scan)
         .filter(col("id").lt(lit(10i64)))?
         .project(vec![col("id").add(lit(1i64)).alias("id")])?
@@ -2245,7 +2245,7 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
 
     // Create a work table scan for the recursive term
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
-    let work_table_scan = create_work_table_scan("cte", schema)?;
+    let work_table_scan = create_work_table_scan("cte", &schema)?;
     let recursive_term = LogicalPlanBuilder::from(work_table_scan)
         .filter(col("id").lt(lit(5i64)))?
         .project(vec![col("id").add(lit(1i64)).alias("id")])?
@@ -2293,7 +2293,7 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
         DataType::Int64,
         true,
     )]));
-    let work_table_scan = create_work_table_scan("test_cte", schema)?;
+    let work_table_scan = create_work_table_scan("test_cte", &schema)?;
     let recursive_term = LogicalPlanBuilder::from(work_table_scan)
         .filter(col("value").gt(lit(5i64)))? // Specific filter condition
         .project(vec![
