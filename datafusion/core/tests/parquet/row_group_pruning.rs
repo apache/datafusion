@@ -1840,8 +1840,8 @@ async fn test_limit_pruning_complex_filter() -> datafusion_common::error::Result
 }
 
 #[tokio::test]
-async fn test_limit_pruning_multiple_fully_matched(
-) -> datafusion_common::error::Result<()> {
+async fn test_limit_pruning_multiple_fully_matched()
+-> datafusion_common::error::Result<()> {
     // Test Case 2: Limit requires multiple fully matched row groups
     // Row Group 0: a=[5,5,5,5] -> Fully matched, 4 rows
     // Row Group 1: a=[5,5,5,5] -> Fully matched, 4 rows
