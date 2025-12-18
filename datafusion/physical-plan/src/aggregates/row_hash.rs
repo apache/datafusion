@@ -552,12 +552,10 @@ impl GroupedHashAggregateStream {
                     let output_expr = Column::new(field.name().as_str(), idx);
 
                     // Try to use the sort options from the output ordering, if available.
-                    // This ensures that spilled state is emitted in the expected order.
-                    let sort_options = if idx < agg_group_by.expr.len() {
-                        find_sort_options(output_ordering, &output_expr)
-                    } else {
-                        SortOptions::default()
-                    };
+                    // This ensures that spilled state is sorted in the required order as well.
+                    let sort_options = output_ordering
+                        .and_then(|o| o.get_sort_options(&output_expr))
+                        .unwrap_or_else(SortOptions::default);
 
                     PhysicalSortExpr::new(Arc::new(output_expr), sort_options)
                 });
@@ -678,21 +676,6 @@ impl GroupedHashAggregateStream {
     }
 }
 
-fn find_sort_options(
-    output_ordering: Option<&LexOrdering>,
-    expr: &dyn PhysicalExpr,
-) -> SortOptions {
-    if let Some(ordering) = output_ordering {
-        for e in ordering {
-            if e.expr.as_ref().dyn_eq(expr) {
-                return e.options;
-            }
-        }
-    }
-
-    SortOptions::default()
-}
-
 /// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
 /// that is supported by the aggregate, or a
 /// [`GroupsAccumulatorAdapter`] if not.
@@ -791,7 +774,7 @@ impl Stream for GroupedHashAggregateStream {
                             // If we reach this point, try to update the memory reservation
                             // handling out-of-memory conditions as determined by the OOM mode.
                             if let Some(new_state) =
-                                self.update_memory_reservation_with_oom_handling()?
+                                self.try_update_memory_reservation()?
                             {
                                 timer.done();
                                 self.exec_state = new_state;
@@ -1022,9 +1005,14 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    fn update_memory_reservation_with_oom_handling(
-        &mut self,
-    ) -> Result<Option<ExecutionState>> {
+    /// Attempts to update the memory reservation. If that fails due to a
+    /// [DataFusionError::ResourcesExhausted] error, an attempt will be made to resolve
+    /// the out-of-memory condition based on the [out-of-memory handling mode](OutOfMemoryMode).
+    ///
+    /// If the out-of-memory condition can not be resolved, an `Err` value will be returned
+    ///
+    /// Returns `Ok(Some(ExecutionState))` if the state should be changed, `Ok(None)` otherwise.
+    fn try_update_memory_reservation(&mut self) -> Result<Option<ExecutionState>> {
         let oom = match self.update_memory_reservation() {
             Err(e @ DataFusionError::ResourcesExhausted(_)) => e,
             Err(e) => return Err(e),
