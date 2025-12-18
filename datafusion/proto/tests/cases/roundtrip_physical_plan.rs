@@ -2386,7 +2386,7 @@ fn roundtrip_hash_expr() -> Result<()> {
     let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
     let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(HashExpr::new(
         on_columns,
-        SeededRandomState::with_seeds(0, 0, 0, 0), // repartition seeds
+        SeededRandomState::with_seeds(0, 1, 2, 3), // arbitrary random seeds for testing
         "test_hash".to_string(),
     ));
 
@@ -2398,5 +2398,7 @@ fn roundtrip_hash_expr() -> Result<()> {
         Arc::new(EmptyExec::new(schema)),
     )?);
 
+    // Confirm that the debug string contains the random state seeds
+    assert!("{filter:?}".contains("[0, 1, 2, 3]"));
     roundtrip_test(filter)
 }
