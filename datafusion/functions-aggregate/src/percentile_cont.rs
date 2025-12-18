@@ -26,19 +26,18 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
     array::{Array, ArrayRef, AsArray},
     datatypes::{
-        ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-        Decimal64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
+        ArrowNativeType, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
     },
 };
 
 use arrow::array::ArrowNativeTypeOp;
 
+use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, plan_err, DataFusionError,
-    Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_datafusion_err, plan_err, utils::take_function_args,
 };
-use datafusion_expr::expr::{AggregateFunction, Sort};
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -46,6 +45,11 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{
+    expr::{AggregateFunction, Cast, Sort},
+    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+    simplify::SimplifyInfo,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
@@ -283,12 +287,14 @@ impl AggregateUDFImpl for PercentileCont {
             "percentile_cont"
         };
 
-        Ok(vec![Field::new(
-            format_state_name(args.name, state_name),
-            DataType::List(Arc::new(field)),
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, state_name),
+                DataType::List(Arc::new(field)),
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -358,12 +364,100 @@ impl AggregateUDFImpl for PercentileCont {
         }
     }
 
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        Some(Box::new(|aggregate_function, info| {
+            simplify_percentile_cont_aggregate(aggregate_function, info)
+        }))
+    }
+
     fn supports_within_group_clause(&self) -> bool {
         true
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PercentileRewriteTarget {
+    Min,
+    Max,
+}
+
+#[expect(clippy::needless_pass_by_value)]
+fn simplify_percentile_cont_aggregate(
+    aggregate_function: AggregateFunction,
+    info: &dyn SimplifyInfo,
+) -> Result<Expr> {
+    let original_expr = Expr::AggregateFunction(aggregate_function.clone());
+    let params = &aggregate_function.params;
+
+    let [value, percentile] = take_function_args("percentile_cont", &params.args)?;
+
+    let is_descending = params
+        .order_by
+        .first()
+        .map(|sort| !sort.asc)
+        .unwrap_or(false);
+
+    let rewrite_target = match extract_percentile_literal(percentile) {
+        Some(0.0) => {
+            if is_descending {
+                PercentileRewriteTarget::Max
+            } else {
+                PercentileRewriteTarget::Min
+            }
+        }
+        Some(1.0) => {
+            if is_descending {
+                PercentileRewriteTarget::Min
+            } else {
+                PercentileRewriteTarget::Max
+            }
+        }
+        _ => return Ok(original_expr),
+    };
+
+    let input_type = match info.get_data_type(value) {
+        Ok(data_type) => data_type,
+        Err(_) => return Ok(original_expr),
+    };
+
+    let expected_return_type =
+        match percentile_cont_udaf().return_type(std::slice::from_ref(&input_type)) {
+            Ok(data_type) => data_type,
+            Err(_) => return Ok(original_expr),
+        };
+
+    let mut agg_arg = value.clone();
+    if expected_return_type != input_type {
+        // min/max return the same type as their input. percentile_cont widens
+        // integers to Float64 (and preserves float/decimal types), so ensure the
+        // rewritten aggregate sees an input of the final return type.
+        agg_arg = Expr::Cast(Cast::new(Box::new(agg_arg), expected_return_type.clone()));
+    }
+
+    let udaf = match rewrite_target {
+        PercentileRewriteTarget::Min => min_udaf(),
+        PercentileRewriteTarget::Max => max_udaf(),
+    };
+
+    let rewritten = Expr::AggregateFunction(AggregateFunction::new_udf(
+        udaf,
+        vec![agg_arg],
+        params.distinct,
+        params.filter.clone(),
+        vec![],
+        params.null_treatment,
+    ));
+    Ok(rewritten)
+}
+
+fn extract_percentile_literal(expr: &Expr) -> Option<f64> {
+    match expr {
+        Expr::Literal(ScalarValue::Float64(Some(value)), _) => Some(*value),
+        _ => None,
     }
 }
 

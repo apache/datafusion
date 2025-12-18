@@ -22,9 +22,9 @@ use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
-use datafusion_common::config::ConfigOptions;
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use datafusion_common::DataFusionError;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
 use std::hint::black_box;
@@ -99,6 +99,7 @@ fn create_args_with_count<O: OffsetSizeTrait>(
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn invoke_substr_with_args(
     args: Vec<ColumnarValue>,
     number_rows: usize,

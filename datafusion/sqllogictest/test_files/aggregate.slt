@@ -434,20 +434,19 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[array_length(array_agg(DISTINCT a.foo)@1) as array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
 02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
-06)----------UnionExec
-07)------------ProjectionExec: expr=[1 as id, 2 as foo]
-08)--------------PlaceholderRowExec
-09)------------ProjectionExec: expr=[1 as id, NULL as foo]
-10)--------------PlaceholderRowExec
-11)------------ProjectionExec: expr=[1 as id, NULL as foo]
-12)--------------PlaceholderRowExec
-13)------------ProjectionExec: expr=[1 as id, 3 as foo]
-14)--------------PlaceholderRowExec
-15)------------ProjectionExec: expr=[1 as id, 2 as foo]
-16)--------------PlaceholderRowExec
+03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
+05)--------UnionExec
+06)----------ProjectionExec: expr=[1 as id, 2 as foo]
+07)------------PlaceholderRowExec
+08)----------ProjectionExec: expr=[1 as id, NULL as foo]
+09)------------PlaceholderRowExec
+10)----------ProjectionExec: expr=[1 as id, NULL as foo]
+11)------------PlaceholderRowExec
+12)----------ProjectionExec: expr=[1 as id, 3 as foo]
+13)------------PlaceholderRowExec
+14)----------ProjectionExec: expr=[1 as id, 2 as foo]
+15)------------PlaceholderRowExec
 
 
 # FIX: custom absolute values
@@ -991,6 +990,99 @@ SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
+# median_sliding_window
+statement ok
+CREATE TABLE median_window_test (
+    timestamp INT,
+    tags VARCHAR,
+    value DOUBLE
+);
+
+statement ok
+INSERT INTO median_window_test (timestamp, tags, value) VALUES
+(1, 'tag1', 10.0),
+(2, 'tag1', 20.0),
+(3, 'tag1', 30.0),
+(4, 'tag1', 40.0),
+(5, 'tag1', 50.0),
+(1, 'tag2', 60.0),
+(2, 'tag2', 70.0),
+(3, 'tag2', 80.0),
+(4, 'tag2', 90.0),
+(5, 'tag2', 100.0);
+
+query ITRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+    ) AS value_median_3
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 15
+2 tag1 20 20
+3 tag1 30 30
+4 tag1 40 40
+5 tag1 50 45
+1 tag2 60 65
+2 tag2 70 70
+3 tag2 80 80
+4 tag2 90 90
+5 tag2 100 95
+
+# median_non_sliding_window
+query ITRRRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS value_median_unbounded_preceding,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS value_median_unbounded_both,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    ) AS value_median_unbounded_following
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10 30 30
+2 tag1 20 15 30 35
+3 tag1 30 20 30 40
+4 tag1 40 25 30 45
+5 tag1 50 30 30 50
+1 tag2 60 60 80 80
+2 tag2 70 65 80 85
+3 tag2 80 70 80 90
+4 tag2 90 75 80 95
+5 tag2 100 80 80 100
+
+statement ok
+DROP TABLE median_window_test;
+
+query RT
+select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
+----
+2.75 Float16
+
+query ?T
+select approx_median(NULL), arrow_typeof(approx_median(NULL)) from median_table;
+----
+NULL Null
+
 # median decimal
 statement ok
 create table t(c decimal(10, 4)) as values (0.0001), (0.0002), (0.0003), (0.0004), (0.0005), (0.0006);
@@ -1266,10 +1358,9 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[median(alias1)]
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
-08)--------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -3487,6 +3578,59 @@ query R
 SELECT percentile_cont(1.0) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 5
+
+# Ensure percentile_cont simplification rewrites to min/max plans
+query TT
+EXPLAIN SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[min(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]]
+02)--TableScan: aggregate_test_100 projection=[c2]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 ASC NULLS LAST]]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
+
+query TT
+EXPLAIN SELECT percentile_cont(0.0) WITHIN GROUP (ORDER BY c2 DESC) FROM aggregate_test_100;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[max(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]]
+02)--TableScan: aggregate_test_100 projection=[c2]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(Float64(0)) WITHIN GROUP [aggregate_test_100.c2 DESC NULLS FIRST]]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
+
+query TT
+EXPLAIN SELECT percentile_cont(c2, 0.0) FROM aggregate_test_100;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[min(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(aggregate_test_100.c2,Float64(0))]]
+02)--TableScan: aggregate_test_100 projection=[c2]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(0))]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(0))]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
+
+query TT
+EXPLAIN SELECT percentile_cont(c2, 1.0) FROM aggregate_test_100;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[max(CAST(aggregate_test_100.c2 AS Float64)) AS percentile_cont(aggregate_test_100.c2,Float64(1))]]
+02)--TableScan: aggregate_test_100 projection=[c2]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(1))]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[percentile_cont(aggregate_test_100.c2,Float64(1))]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c2], file_type=csv, has_header=true
 
 query R
 SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
@@ -6050,15 +6194,13 @@ logical_plan
 physical_plan
 01)CoalescePartitionsExec: fetch=5
 02)--AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
-05)--------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-06)----------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
-07)------------CoalesceBatchesExec: target_batch_size=8192
-08)--------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
-09)----------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
-10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
+03)----RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
+06)----------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
+07)------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
 
 
 #
@@ -7288,10 +7430,9 @@ logical_plan
 physical_plan
 01)FilterExec: max(having_test.v1)@2 = 3, projection=[v1@0, v2@1]
 02)--AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=1
+04)------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query error
@@ -7436,20 +7577,19 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]@1 as last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
 02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-05)--------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
-06)----------UnionExec
-07)------------ProjectionExec: expr=[1 as id, 2 as foo]
-08)--------------PlaceholderRowExec
-09)------------ProjectionExec: expr=[1 as id, 4 as foo]
-10)--------------PlaceholderRowExec
-11)------------ProjectionExec: expr=[1 as id, 5 as foo]
-12)--------------PlaceholderRowExec
-13)------------ProjectionExec: expr=[1 as id, 3 as foo]
-14)--------------PlaceholderRowExec
-15)------------ProjectionExec: expr=[1 as id, 2 as foo]
-16)--------------PlaceholderRowExec
+03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
+04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+05)--------UnionExec
+06)----------ProjectionExec: expr=[1 as id, 2 as foo]
+07)------------PlaceholderRowExec
+08)----------ProjectionExec: expr=[1 as id, 4 as foo]
+09)------------PlaceholderRowExec
+10)----------ProjectionExec: expr=[1 as id, 5 as foo]
+11)------------PlaceholderRowExec
+12)----------ProjectionExec: expr=[1 as id, 3 as foo]
+13)------------PlaceholderRowExec
+14)----------ProjectionExec: expr=[1 as id, 2 as foo]
+15)------------PlaceholderRowExec
 
 # SortExec is removed if it is coming after one-row producing AggregateExec's having an empty group by expression
 query TT

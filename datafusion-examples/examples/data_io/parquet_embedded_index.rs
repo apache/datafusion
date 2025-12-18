@@ -118,11 +118,11 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{exec_err, HashMap, HashSet, Result};
+use datafusion::common::{HashMap, HashSet, Result, exec_err};
+use datafusion::datasource::TableType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::TableType;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Operator, TableProviderFilterPushDown};
 use datafusion::parquet::arrow::ArrowWriter;
@@ -132,7 +132,7 @@ use datafusion::parquet::file::reader::{FileReader, SerializedFileReader};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
-use std::fs::{read_dir, File};
+use std::fs::{File, read_dir};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -419,21 +419,15 @@ impl TableProvider for DistinctIndexTable {
         // equality analysis or write your own custom logic.
         let mut target: Option<&str> = None;
 
-        if filters.len() == 1 {
-            if let Expr::BinaryExpr(expr) = &filters[0] {
-                if expr.op == Operator::Eq {
-                    if let (
-                        Expr::Column(c),
-                        Expr::Literal(ScalarValue::Utf8(Some(v)), _),
-                    ) = (&*expr.left, &*expr.right)
-                    {
-                        if c.name == "category" {
-                            println!("Filtering for category: {v}");
-                            target = Some(v);
-                        }
-                    }
-                }
-            }
+        if filters.len() == 1
+            && let Expr::BinaryExpr(expr) = &filters[0]
+            && expr.op == Operator::Eq
+            && let (Expr::Column(c), Expr::Literal(ScalarValue::Utf8(Some(v)), _)) =
+                (&*expr.left, &*expr.right)
+            && c.name == "category"
+        {
+            println!("Filtering for category: {v}");
+            target = Some(v);
         }
         // Determine which files to scan
         let files_to_scan: Vec<_> = self

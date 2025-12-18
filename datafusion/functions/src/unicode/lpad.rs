@@ -19,17 +19,17 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
-use DataType::{LargeUtf8, Utf8, Utf8View};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -129,7 +129,7 @@ impl ScalarUDFImpl for LPadFunc {
 /// Extends the string to length 'length' by prepending the characters fill (a space by default).
 /// If the string is already longer than length then it is truncated (on the right).
 /// lpad('hi', 5, 'xy') = 'xyxhi'
-pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() <= 1 || args.len() > 3 {
         return exec_err!(
             "lpad was called with {} arguments. It requires at least 2 and at most 3.",
@@ -526,9 +526,13 @@ mod tests {
         );
 
         #[cfg(not(feature = "unicode_expressions"))]
-        test_lpad!(Some("josé".into()), ScalarValue::Int64(Some(5i64)), internal_err!(
+        test_lpad!(
+            Some("josé".into()),
+            ScalarValue::Int64(Some(5i64)),
+            internal_err!(
                 "function lpad requires compilation with feature flag: unicode_expressions."
-        ));
+            )
+        );
 
         Ok(())
     }

@@ -21,40 +21,41 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::ExecutionPlanProperties;
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, SharedBuildAccumulator,
+    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
-    asymmetric_join_output_partitioning, reorder_output_after_swap, swap_join_projection,
-    update_hash, OnceAsync, OnceFut,
+    OnceAsync, OnceFut, asymmetric_join_output_partitioning, reorder_output_after_swap,
+    swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
 use crate::projection::{
-    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
-    ProjectionExec,
+    EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
+    try_pushdown_through_join,
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
-use crate::ExecutionPlanProperties;
 use crate::{
-    common::can_project,
-    joins::utils::{
-        build_join_schema, check_join_is_valid, estimate_join_statistics,
-        need_produce_result_in_final, symmetric_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-    },
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
+    common::can_project,
+    joins::utils::{
+        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
+        build_join_schema, check_join_is_valid, estimate_join_statistics,
+        need_produce_result_in_final, symmetric_join_output_partitioning,
+    },
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
@@ -66,17 +67,17 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    assert_or_internal_err, plan_err, project_schema, DataFusionError, JoinSide,
-    JoinType, NullEquality, Result,
+    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, plan_err,
+    project_schema,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::equivalence::{
-    join_equivalence_properties, ProjectionMapping,
+    ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::{lit, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
@@ -86,7 +87,7 @@ use futures::TryStreamExt;
 use parking_lot::Mutex;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
-const HASH_JOIN_SEED: RandomState =
+pub(crate) const HASH_JOIN_SEED: RandomState =
     RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
 /// HashTable and input data for the left (build side) of a join
@@ -112,6 +113,9 @@ pub(super) struct JoinLeftData {
     /// If the partition is empty (no rows) this will be None.
     /// If the partition has some rows this will be Some with the bounds for each join key column.
     pub(super) bounds: Option<PartitionBounds>,
+    /// Membership testing strategy for filter pushdown
+    /// Contains either InList values for small build sides or hash table reference for large build sides
+    pub(super) membership: PushdownStrategy,
 }
 
 impl JoinLeftData {
@@ -135,6 +139,11 @@ impl JoinLeftData {
         &self.visited_indices_bitmap
     }
 
+    /// returns a reference to the InList values for filter pushdown
+    pub(super) fn membership(&self) -> &PushdownStrategy {
+        &self.membership
+    }
+
     /// Decrements the counter of running threads, and returns `true`
     /// if caller is the last running thread
     pub(super) fn report_probe_completed(&self) -> bool {
@@ -142,7 +151,7 @@ impl JoinLeftData {
     }
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
+#[expect(rustdoc::private_intra_doc_links)]
 /// Join execution plan: Evaluates equijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
 /// join.
@@ -387,7 +396,7 @@ impl HashJoinExec {
     ///
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -929,6 +938,16 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_size,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_distinct_values,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -947,6 +966,16 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_size,
+                    context
+                        .session_config()
+                        .options()
+                        .optimizer
+                        .hash_join_inlist_pushdown_max_distinct_values,
                 ))
             }
             PartitionMode::Auto => {
@@ -1157,7 +1186,7 @@ impl ExecutionPlan for HashJoinExec {
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
-                                                                               // We expect 0 or 1 self filters
+        // We expect 0 or 1 self filters
         if let Some(filter) = right_child_self_filters.first() {
             // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
@@ -1336,7 +1365,7 @@ impl BuildSideState {
 /// # Returns
 /// `JoinLeftData` containing the hash map, consolidated batch, join key values,
 /// visited indices bitmap, and computed bounds (if requested).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,
@@ -1346,6 +1375,8 @@ async fn collect_left_input(
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
     should_compute_dynamic_filters: bool,
+    max_inlist_size: usize,
+    max_inlist_distinct_values: usize,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1469,6 +1500,29 @@ async fn collect_left_input(
     // Convert Box to Arc for sharing with SharedBuildAccumulator
     let hash_map: Arc<dyn JoinHashMapType> = hashmap.into();
 
+    let membership = if num_rows == 0 {
+        PushdownStrategy::Empty
+    } else {
+        // If the build side is small enough we can use IN list pushdown.
+        // If it's too big we fall back to pushing down a reference to the hash table.
+        // See `PushdownStrategy` for more details.
+        let estimated_size = left_values
+            .iter()
+            .map(|arr| arr.get_array_memory_size())
+            .sum::<usize>();
+        if left_values.is_empty()
+            || left_values[0].is_empty()
+            || estimated_size > max_inlist_size
+            || hash_map.len() > max_inlist_distinct_values
+        {
+            PushdownStrategy::HashTable(Arc::clone(&hash_map))
+        } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
+            PushdownStrategy::InList(in_list_values)
+        } else {
+            PushdownStrategy::HashTable(Arc::clone(&hash_map))
+        }
+    };
+
     let data = JoinLeftData {
         hash_map,
         batch,
@@ -1477,6 +1531,7 @@ async fn collect_left_input(
         probe_threads_counter: AtomicUsize::new(probe_threads_count),
         _reservation: reservation,
         bounds,
+        membership,
     };
 
     Ok(data)
@@ -1487,7 +1542,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
-    use crate::test::{assert_join_metrics, TestMemoryExec};
+    use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
         test::exec::MockExec,
@@ -1500,14 +1555,14 @@ mod tests {
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
-        internal_err, ScalarValue,
+        ScalarValue, assert_batches_eq, assert_batches_sorted_eq, assert_contains,
+        exec_err, internal_err,
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
@@ -1636,7 +1691,7 @@ mod tests {
                 Partitioning::Hash(left_expr, partition_count),
             )?),
             PartitionMode::Auto => {
-                return internal_err!("Unexpected PartitionMode::Auto in join tests")
+                return internal_err!("Unexpected PartitionMode::Auto in join tests");
             }
         };
 
@@ -1657,7 +1712,7 @@ mod tests {
                 Partitioning::Hash(right_expr, partition_count),
             )?),
             PartitionMode::Auto => {
-                return internal_err!("Unexpected PartitionMode::Auto in join tests")
+                return internal_err!("Unexpected PartitionMode::Auto in join tests");
             }
         };
 
@@ -1724,15 +1779,15 @@ mod tests {
 
         allow_duplicates! {
             // Inner join output is expected to preserve both inputs order
-            assert_snapshot!(batches_to_string(&batches), @r#"
-                +----+----+----+----+----+----+
-                | a1 | b1 | c1 | a2 | b1 | c2 |
-                +----+----+----+----+----+----+
-                | 1  | 4  | 7  | 10 | 4  | 70 |
-                | 2  | 5  | 8  | 20 | 5  | 80 |
-                | 3  | 5  | 9  | 20 | 5  | 80 |
-                +----+----+----+----+----+----+
-                "#);
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 5  | 9  | 20 | 5  | 80 |
+            +----+----+----+----+----+----+
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -1772,15 +1827,15 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
-                +----+----+----+----+----+----+
-                | a1 | b1 | c1 | a2 | b1 | c2 |
-                +----+----+----+----+----+----+
-                | 1  | 4  | 7  | 10 | 4  | 70 |
-                | 2  | 5  | 8  | 20 | 5  | 80 |
-                | 3  | 5  | 9  | 20 | 5  | 80 |
-                +----+----+----+----+----+----+
-                "#);
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 5  | 9  | 20 | 5  | 80 |
+            +----+----+----+----+----+----+
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -1820,7 +1875,7 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -1828,7 +1883,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 5  | 9  | 20 | 5  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -1868,7 +1923,7 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -1877,7 +1932,7 @@ mod tests {
             | 0  | 4  | 6  | 10 | 4  | 70 |
             | 1  | 4  | 7  | 10 | 4  | 70 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 4);
@@ -1936,11 +1991,16 @@ mod tests {
             div_ceil(9, batch_size)
         };
 
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b2 | c1 | a1 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -1948,7 +2008,7 @@ mod tests {
             | 2  | 2  | 8  | 2  | 2  | 80 |
             | 2  | 2  | 9  | 2  | 2  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -2016,11 +2076,16 @@ mod tests {
             div_ceil(9, batch_size)
         };
 
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b2 | c1 | a1 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2028,7 +2093,7 @@ mod tests {
             | 2  | 2  | 8  | 2  | 2  | 80 |
             | 2  | 2  | 9  | 2  | 2  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -2079,7 +2144,7 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2088,7 +2153,7 @@ mod tests {
             | 0  | 4  | 6  | 10 | 4  | 70 |
             | 1  | 4  | 7  | 10 | 4  | 70 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 4);
@@ -2152,17 +2217,22 @@ mod tests {
             // and filtered later.
             div_ceil(6, batch_size)
         };
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
             | 1  | 4  | 7  | 10 | 4  | 70 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         // second part
@@ -2177,18 +2247,23 @@ mod tests {
             // and filtered later.
             div_ceil(3, batch_size)
         };
-        assert_eq!(batches.len(), expected_batch_count);
+        // With batch coalescing, we may have fewer batches than expected
+        assert!(
+            batches.len() <= expected_batch_count,
+            "expected at most {expected_batch_count} batches, got {}",
+            batches.len()
+        );
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
             | 2  | 5  | 8  | 30 | 5  | 90 |
             | 3  | 5  | 9  | 30 | 5  | 90 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2239,7 +2314,7 @@ mod tests {
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -2249,7 +2324,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
     }
 
@@ -2289,7 +2364,7 @@ mod tests {
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2301,7 +2376,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
     }
 
@@ -2337,7 +2412,7 @@ mod tests {
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -2345,7 +2420,7 @@ mod tests {
             | 2  | 5  | 8  |    |    |    |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
     }
 
@@ -2381,7 +2456,7 @@ mod tests {
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2389,7 +2464,7 @@ mod tests {
             | 2  | 5  | 8  |    |    |    |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
     }
 
@@ -2425,7 +2500,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -2433,7 +2508,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -2473,7 +2548,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -2481,7 +2556,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -2537,7 +2612,7 @@ mod tests {
 
         // ignore the order
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
@@ -2545,7 +2620,7 @@ mod tests {
             | 13 | 10 | 130 |
             | 9  | 8  | 90  |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2638,13 +2713,13 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
             | 13 | 10 | 130 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2679,7 +2754,7 @@ mod tests {
 
         // RightSemi join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -2687,7 +2762,7 @@ mod tests {
             | 12 | 10 | 40  |
             | 10 | 10 | 100 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2742,7 +2817,7 @@ mod tests {
 
         // RightSemi join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -2750,7 +2825,7 @@ mod tests {
             | 12 | 10 | 40  |
             | 10 | 10 | 100 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
@@ -2779,14 +2854,14 @@ mod tests {
 
         // RightSemi join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
             | 12 | 10 | 40  |
             | 10 | 10 | 100 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2819,7 +2894,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+
             | a1 | b1 | c1 |
             +----+----+----+
@@ -2828,7 +2903,7 @@ mod tests {
             | 5  | 5  | 50 |
             | 7  | 7  | 70 |
             +----+----+----+
-                "#);
+            ");
         }
         Ok(())
     }
@@ -2879,7 +2954,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
@@ -2890,7 +2965,7 @@ mod tests {
             | 7  | 7  | 70  |
             | 9  | 8  | 90  |
             +----+----+-----+
-                "#);
+            ");
         }
 
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2 != 13
@@ -2922,7 +2997,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
@@ -2933,7 +3008,7 @@ mod tests {
             | 7  | 7  | 70  |
             | 9  | 8  | 90  |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2966,7 +3041,7 @@ mod tests {
 
         // RightAnti join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -2974,7 +3049,7 @@ mod tests {
             | 2  | 2  | 80  |
             | 4  | 4  | 120 |
             +----+----+-----+
-                "#);
+            ");
         }
         Ok(())
     }
@@ -3027,7 +3102,7 @@ mod tests {
 
         // RightAnti join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -3037,7 +3112,7 @@ mod tests {
             | 10 | 10 | 100 |
             | 4  | 4  | 120 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and right_table.b2!=8
@@ -3074,7 +3149,7 @@ mod tests {
 
         // RightAnti join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -3083,7 +3158,7 @@ mod tests {
             | 2  | 2  | 80  |
             | 4  | 4  | 120 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3121,7 +3196,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -3129,7 +3204,7 @@ mod tests {
             | 1  | 4  | 7  | 10 | 4  | 70 |
             | 2  | 5  | 8  | 20 | 5  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -3169,7 +3244,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -3177,7 +3252,7 @@ mod tests {
             | 1  | 4  | 7  | 10 | 4  | 70 |
             | 2  | 5  | 8  | 20 | 5  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -3219,7 +3294,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -3228,7 +3303,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3266,7 +3341,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+-------+
             | a1 | b1 | c1 | mark  |
             +----+----+----+-------+
@@ -3274,7 +3349,7 @@ mod tests {
             | 2  | 5  | 8  | true  |
             | 3  | 7  | 9  | false |
             +----+----+----+-------+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -3314,7 +3389,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+-------+
             | a1 | b1 | c1 | mark  |
             +----+----+----+-------+
@@ -3322,7 +3397,7 @@ mod tests {
             | 2  | 5  | 8  | true  |
             | 3  | 7  | 9  | false |
             +----+----+----+-------+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -3467,6 +3542,8 @@ mod tests {
         let mut hashes_buffer = vec![0; right.num_rows()];
         create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
@@ -3475,6 +3552,8 @@ mod tests {
             &hashes_buffer,
             8192,
             (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
         )?;
 
         let left_ids: UInt64Array = vec![0, 1].into();
@@ -3524,6 +3603,8 @@ mod tests {
         let mut hashes_buffer = vec![0; right.num_rows()];
         create_hashes([&right_keys_values], &random_state, &mut hashes_buffer)?;
 
+        let mut probe_indices_buffer = Vec::new();
+        let mut build_indices_buffer = Vec::new();
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
@@ -3532,6 +3613,8 @@ mod tests {
             &hashes_buffer,
             8192,
             (0, None),
+            &mut probe_indices_buffer,
+            &mut build_indices_buffer,
         )?;
 
         // We still expect to match rows 0 and 1 on both sides
@@ -3578,14 +3661,14 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+---+----+---+----+
             | a | b | c | a  | b | c  |
             +---+---+---+----+---+----+
             | 1 | 4 | 7 | 10 | 1 | 70 |
             | 2 | 5 | 8 | 20 | 2 | 80 |
             +---+---+---+----+---+----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3655,14 +3738,14 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+---+----+---+---+
             | a | b | c | a  | b | c |
             +---+---+---+----+---+---+
             | 2 | 7 | 9 | 10 | 2 | 7 |
             | 2 | 7 | 9 | 20 | 2 | 5 |
             +---+---+---+----+---+---+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3704,7 +3787,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+---+----+---+---+
             | a | b | c | a  | b | c |
             +---+---+---+----+---+---+
@@ -3714,7 +3797,7 @@ mod tests {
             | 2 | 7 | 9 | 20 | 2 | 5 |
             | 2 | 8 | 1 |    |   |   |
             +---+---+---+----+---+---+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3756,7 +3839,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+---+----+---+---+
             | a | b | c | a  | b | c |
             +---+---+---+----+---+---+
@@ -3765,7 +3848,7 @@ mod tests {
             | 2 | 7 | 9 | 10 | 2 | 7 |
             | 2 | 7 | 9 | 20 | 2 | 5 |
             +---+---+---+----+---+---+
-                "#);
+            ");
         }
 
         Ok(())
@@ -4011,7 +4094,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +------------+---+------------+---+
             | date       | n | date       | n |
             +------------+---+------------+---+
@@ -4019,7 +4102,7 @@ mod tests {
             | 2022-04-26 | 2 | 2022-04-26 | 5 |
             | 2022-04-27 | 3 | 2022-04-27 | 6 |
             +------------+---+------------+---+
-                "#);
+            ");
         }
 
         Ok(())
@@ -4197,10 +4280,11 @@ mod tests {
                     }
                     _ => div_ceil(expected_resultset_records, batch_size) + 1,
                 };
-                assert_eq!(
-                    batches.len(),
-                    expected_batch_count,
-                    "expected {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}"
+                // With batch coalescing, we may have fewer batches than expected
+                assert!(
+                    batches.len() <= expected_batch_count,
+                    "expected at most {expected_batch_count} output batches for {join_type} join with batch_size = {batch_size}, got {}",
+                    batches.len()
                 );
 
                 let expected = match join_type {
@@ -4210,7 +4294,17 @@ mod tests {
                     JoinType::LeftAnti => left_empty.to_vec(),
                     _ => common_result.to_vec(),
                 };
-                assert_batches_eq!(expected, &batches);
+                // For anti joins with empty results, we may get zero batches
+                // (with coalescing) instead of one empty batch with schema
+                if batches.is_empty() {
+                    // Verify this is an expected empty result case
+                    assert!(
+                        matches!(join_type, JoinType::RightAnti | JoinType::LeftAnti),
+                        "Unexpected empty result for {join_type} join"
+                    );
+                } else {
+                    assert_batches_eq!(expected, &batches);
+                }
             }
         }
     }
@@ -4348,7 +4442,6 @@ mod tests {
             assert_contains!(
                 err.to_string(),
                 "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
-
             );
 
             assert_contains!(
@@ -4411,7 +4504,7 @@ mod tests {
         assert_eq!(columns, vec!["n1", "n2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +--------+--------+
             | n1     | n2     |
             +--------+--------+
@@ -4419,7 +4512,7 @@ mod tests {
             | {a: 1} | {a: 1} |
             | {a: 2} | {a: 2} |
             +--------+--------+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -4450,13 +4543,13 @@ mod tests {
         .await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches_null_eq), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches_null_eq), @r"
             +----+----+
             | n1 | n2 |
             +----+----+
             |    |    |
             +----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 1);
@@ -4473,9 +4566,15 @@ mod tests {
 
         assert_join_metrics!(metrics, 0);
 
-        let expected_null_neq =
-            ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
-        assert_batches_eq!(expected_null_neq, &batches_null_neq);
+        // With batch coalescing, empty results may not emit any batches
+        // Check that either we have no batches, or an empty batch with proper schema
+        if batches_null_neq.is_empty() {
+            // This is fine - no output rows
+        } else {
+            let expected_null_neq =
+                ["+----+----+", "| n1 | n2 |", "+----+----+", "+----+----+"];
+            assert_batches_eq!(expected_null_neq, &batches_null_neq);
+        }
 
         Ok(())
     }

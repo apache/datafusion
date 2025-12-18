@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use itertools::Itertools;
 
@@ -36,12 +36,12 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
-    make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
-    ProjectionExec, ProjectionExpr,
+    EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
+    try_embed_projection, update_expr,
 };
 use crate::{
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
     DisplayFormatType, ExecutionPlan,
+    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
 };
 
 use arrow::compute::filter_record_batch;
@@ -51,17 +51,17 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{lit, BinaryExpr, Column};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, conjunction, split_conjunction, AcrossPartitions, AnalysisContext,
-    ConstExpr, ExprBoundaries, PhysicalExpr,
+    AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
+    conjunction, split_conjunction,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -252,22 +252,21 @@ impl FilterExec {
 
         let conjunctions = split_conjunction(predicate);
         for conjunction in conjunctions {
-            if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>() {
-                if binary.op() == &Operator::Eq {
-                    // Filter evaluates to single value for all partitions
-                    if input_eqs.is_expr_constant(binary.left()).is_some() {
-                        let across = input_eqs
-                            .is_expr_constant(binary.right())
-                            .unwrap_or_default();
-                        res_constants
-                            .push(ConstExpr::new(Arc::clone(binary.right()), across));
-                    } else if input_eqs.is_expr_constant(binary.right()).is_some() {
-                        let across = input_eqs
-                            .is_expr_constant(binary.left())
-                            .unwrap_or_default();
-                        res_constants
-                            .push(ConstExpr::new(Arc::clone(binary.left()), across));
-                    }
+            if let Some(binary) = conjunction.as_any().downcast_ref::<BinaryExpr>()
+                && binary.op() == &Operator::Eq
+            {
+                // Filter evaluates to single value for all partitions
+                if input_eqs.is_expr_constant(binary.left()).is_some() {
+                    let across = input_eqs
+                        .is_expr_constant(binary.right())
+                        .unwrap_or_default();
+                    res_constants
+                        .push(ConstExpr::new(Arc::clone(binary.right()), across));
+                } else if input_eqs.is_expr_constant(binary.right()).is_some() {
+                    let across = input_eqs
+                        .is_expr_constant(binary.left())
+                        .unwrap_or_default();
+                    res_constants.push(ConstExpr::new(Arc::clone(binary.left()), across));
                 }
             }
         }
@@ -415,7 +414,12 @@ impl ExecutionPlan for FilterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let metrics = FilterExecMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
@@ -495,6 +499,7 @@ impl ExecutionPlan for FilterExec {
                 .into_iter()
                 .map(PushedDownPredicate::supported)
                 .collect();
+
             return Ok(FilterDescription::new().with_child(ChildFilterDescription {
                 parent_filters: filter_supports,
                 self_filters: vec![],
@@ -646,6 +651,7 @@ fn collect_new_statistics(
                         min_value: Precision::Exact(ScalarValue::Null),
                         sum_value: Precision::Exact(ScalarValue::Null),
                         distinct_count: Precision::Exact(0),
+                        byte_size: input_column_stats[idx].byte_size,
                     };
                 };
                 let (lower, upper) = interval.into_bounds();
@@ -660,6 +666,7 @@ fn collect_new_statistics(
                     min_value,
                     sum_value: Precision::Absent,
                     distinct_count: distinct_count.to_inexact(),
+                    byte_size: input_column_stats[idx].byte_size,
                 }
             },
         )
@@ -685,10 +692,12 @@ struct FilterExecStream {
 
 /// The metrics for `FilterExec`
 struct FilterExecMetrics {
-    // Common metrics for most operators
+    /// Common metrics for most operators
     baseline_metrics: BaselineMetrics,
-    // Selectivity of the filter, calculated as output_rows / input_rows
+    /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
+    // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
+    // or modifying metrics comments
 }
 
 impl FilterExecMetrics {
@@ -1354,6 +1363,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Null),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     min_value: Precision::Exact(ScalarValue::Null),
@@ -1361,6 +1371,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Null),
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ]
         );
@@ -1462,6 +1473,7 @@ mod tests {
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
             }],
         };
 

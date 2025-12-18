@@ -25,11 +25,11 @@ use arrow::datatypes::Field;
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -42,10 +42,11 @@ use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
+use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
+    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -519,11 +520,6 @@ pub fn parse_protobuf_file_scan_config(
     file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
-    let projection = proto
-        .projection
-        .iter()
-        .map(|i| *i as usize)
-        .collect::<Vec<_>>();
 
     let constraints = convert_required!(proto.constraints)?;
     let statistics = convert_required!(proto.statistics)?;
@@ -550,11 +546,38 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.extend(LexOrdering::new(sort_exprs));
     }
 
+    // Parse projection expressions if present and apply to file source
+    let file_source = if let Some(proto_projection_exprs) = &proto.projection_exprs {
+        let projection_exprs: Vec<ProjectionExpr> = proto_projection_exprs
+            .projections
+            .iter()
+            .map(|proto_expr| {
+                let expr = parse_physical_expr(
+                    proto_expr.expr.as_ref().ok_or_else(|| {
+                        internal_datafusion_err!("ProjectionExpr missing expr field")
+                    })?,
+                    ctx,
+                    &schema,
+                    codec,
+                )?;
+                Ok(ProjectionExpr::new(expr, proto_expr.alias.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let projection_exprs = ProjectionExprs::new(projection_exprs);
+
+        // Apply projection to file source
+        file_source
+            .try_pushdown_projection(&projection_exprs)?
+            .unwrap_or(file_source)
+    } else {
+        file_source
+    };
+
     let config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
-        .with_projection_indices(Some(projection))
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
         .with_batch_size(proto.batch_size.map(|s| s as usize))
@@ -710,8 +733,8 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use datafusion_datasource::PartitionedFile;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     #[test]
     fn partitioned_file_path_roundtrip_percent_encoded() {

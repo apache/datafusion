@@ -15,19 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`ProjectionExpr`] and [`ProjectionExprs`] for representing projections.
+
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::PhysicalExpr;
 use crate::expressions::Column;
 use crate::utils::collect_columns;
-use crate::PhysicalExpr;
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Field, Schema, SchemaRef};
-use datafusion_common::stats::{ColumnStatistics, Precision};
+use datafusion_common::stats::ColumnStatistics;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    assert_or_internal_err, internal_datafusion_err, plan_err, DataFusionError, Result,
+    Result, assert_or_internal_err, internal_datafusion_err, plan_err,
 };
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -35,7 +37,7 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-/// A projection expression as used by projection operations.
+/// An expression used by projection operations.
 ///
 /// The expression is evaluated and the result is stored in a column
 /// with the name specified by `alias`.
@@ -43,6 +45,8 @@ use itertools::Itertools;
 /// For example, the SQL expression `a + b AS sum_ab` would be represented
 /// as a `ProjectionExpr` where `expr` is the expression `a + b`
 /// and `alias` is the string `sum_ab`.
+///
+/// See [`ProjectionExprs`] for a collection of projection expressions.
 #[derive(Debug, Clone)]
 pub struct ProjectionExpr {
     /// The expression that will be evaluated.
@@ -72,7 +76,8 @@ impl std::fmt::Display for ProjectionExpr {
 
 impl ProjectionExpr {
     /// Create a new projection expression
-    pub fn new(expr: Arc<dyn PhysicalExpr>, alias: String) -> Self {
+    pub fn new(expr: Arc<dyn PhysicalExpr>, alias: impl Into<String>) -> Self {
+        let alias = alias.into();
         Self { expr, alias }
     }
 
@@ -107,11 +112,14 @@ impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
     }
 }
 
-/// A collection of projection expressions.
+/// A collection of  [`ProjectionExpr`] instances, representing a complete
+/// projection operation.
 ///
-/// This struct encapsulates multiple `ProjectionExpr` instances,
-/// representing a complete projection operation and provides
-/// methods to manipulate and analyze the projection as a whole.
+/// Projection operations are used in query plans to select specific columns or
+/// compute new columns based on existing ones.
+///
+/// See [`ProjectionExprs::from_indices`] to select a subset of columns by
+/// indices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionExprs {
     exprs: Vec<ProjectionExpr>,
@@ -240,6 +248,49 @@ impl ProjectionExprs {
         self.exprs.iter().map(|e| Arc::clone(&e.expr))
     }
 
+    /// Apply a fallible transformation to the [`PhysicalExpr`] of each projection.
+    ///
+    /// This method transforms the expression in each [`ProjectionExpr`] while preserving
+    /// the alias. This is useful for rewriting expressions, such as when adapting
+    /// expressions to a different schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_common::Result;
+    /// use datafusion_physical_expr::expressions::Column;
+    /// use datafusion_physical_expr::projection::ProjectionExprs;
+    /// use datafusion_physical_expr::PhysicalExpr;
+    ///
+    /// // Create a schema and projection
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Int32, false),
+    /// ]));
+    /// let projection = ProjectionExprs::from_indices(&[0, 1], &schema);
+    ///
+    /// // Transform each expression (this example just clones them)
+    /// let transformed = projection.try_map_exprs(|expr| Ok(expr))?;
+    /// assert_eq!(transformed.as_ref().len(), 2);
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
+    pub fn try_map_exprs<F>(self, mut f: F) -> Result<Self>
+    where
+        F: FnMut(Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>>,
+    {
+        let exprs = self
+            .exprs
+            .into_iter()
+            .map(|mut proj| {
+                proj.expr = f(proj.expr)?;
+                Ok(proj)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self::new(exprs))
+    }
+
     /// Apply another projection on top of this projection, returning the combined projection.
     /// For example, if this projection is `SELECT c@2 AS x, b@1 AS y, a@0 as z` and the other projection is `SELECT x@0 + 1 AS c1, y@1 + z@2 as c2`,
     /// we return a projection equivalent to `SELECT c@2 + 1 AS c1, b@1 + a@0 as c2`.
@@ -364,6 +415,14 @@ impl ProjectionExprs {
     ///
     /// Use [`column_indices()`](Self::column_indices) instead if the projection may contain
     /// non-column expressions or if you need a deduplicated sorted list.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any expression in the projection is not a simple column reference.
+    #[deprecated(
+        since = "52.0.0",
+        note = "Use column_indices() instead. This method will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+    )]
     pub fn ordered_column_indices(&self) -> Vec<usize> {
         self.exprs
             .iter()
@@ -428,37 +487,114 @@ impl ProjectionExprs {
     /// Project statistics according to this projection.
     /// For example, for a projection `SELECT a AS x, b + 1 AS y`, where `a` is at index 0 and `b` is at index 1,
     /// if the input statistics has column statistics for columns `a`, `b`, and `c`, the output statistics would have column statistics for columns `x` and `y`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
+    /// use datafusion_physical_expr::projection::ProjectionExprs;
+    /// use datafusion_common::Result;
+    /// use datafusion_common::ScalarValue;
+    /// use std::sync::Arc;
+    ///
+    /// fn main() -> Result<()> {
+    ///     // Input schema: a: Int32, b: Int32, c: Int32
+    ///     let input_schema = Arc::new(Schema::new(vec![
+    ///         Field::new("a", DataType::Int32, false),
+    ///         Field::new("b", DataType::Int32, false),
+    ///         Field::new("c", DataType::Int32, false),
+    ///     ]));
+    ///
+    ///     // Input statistics with column stats for a, b, c
+    ///     let input_stats = Statistics {
+    ///         num_rows: Precision::Exact(100),
+    ///         total_byte_size: Precision::Exact(1200),
+    ///         column_statistics: vec![
+    ///             // Column a stats
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(0))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+    ///                 .with_distinct_count(Precision::Exact(100)),
+    ///             // Column b stats
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(0))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(60))))
+    ///                 .with_distinct_count(Precision::Exact(50)),
+    ///             // Column c stats
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(5))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(-10))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(200))))
+    ///                 .with_distinct_count(Precision::Exact(25)),
+    ///         ],
+    ///     };
+    ///
+    ///     // Create a projection that selects columns c and a (indices 2 and 0)
+    ///     let projection = ProjectionExprs::from_indices(&[2, 0], &input_schema);
+    ///
+    ///     // Compute output schema
+    ///     let output_schema = projection.project_schema(&input_schema)?;
+    ///
+    ///     // Project the statistics
+    ///     let output_stats = projection.project_statistics(input_stats, &output_schema)?;
+    ///
+    ///     // The output should have 2 column statistics (for c and a, in that order)
+    ///     assert_eq!(output_stats.column_statistics.len(), 2);
+    ///
+    ///     // First column in output is c (was at index 2)
+    ///     assert_eq!(
+    ///         output_stats.column_statistics[0].min_value,
+    ///         Precision::Exact(ScalarValue::Int32(Some(-10)))
+    ///     );
+    ///     assert_eq!(
+    ///         output_stats.column_statistics[0].null_count,
+    ///         Precision::Exact(5)
+    ///     );
+    ///
+    ///     // Second column in output is a (was at index 0)
+    ///     assert_eq!(
+    ///         output_stats.column_statistics[1].min_value,
+    ///         Precision::Exact(ScalarValue::Int32(Some(0)))
+    ///     );
+    ///     assert_eq!(
+    ///         output_stats.column_statistics[1].distinct_count,
+    ///         Precision::Exact(100)
+    ///     );
+    ///
+    ///     // Total byte size is recalculated based on projected columns
+    ///     assert_eq!(
+    ///         output_stats.total_byte_size,
+    ///         Precision::Exact(800), // each Int32 column is 4 bytes * 100 rows * 2 columns
+    ///     );
+    ///
+    ///     // Number of rows remains the same
+    ///     assert_eq!(output_stats.num_rows, Precision::Exact(100));
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn project_statistics(
         &self,
         mut stats: datafusion_common::Statistics,
-        input_schema: &Schema,
+        output_schema: &Schema,
     ) -> Result<datafusion_common::Statistics> {
-        let mut primitive_row_size = 0;
-        let mut primitive_row_size_possible = true;
         let mut column_statistics = vec![];
 
         for proj_expr in &self.exprs {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                stats.column_statistics[col.index()].clone()
+                std::mem::take(&mut stats.column_statistics[col.index()])
             } else {
                 // TODO stats: estimate more statistics from expressions
                 // (expressions should compute their statistics themselves)
                 ColumnStatistics::new_unknown()
             };
             column_statistics.push(col_stats);
-            let data_type = expr.data_type(input_schema)?;
-            if let Some(value) = data_type.primitive_width() {
-                primitive_row_size += value;
-                continue;
-            }
-            primitive_row_size_possible = false;
         }
-
-        if primitive_row_size_possible {
-            stats.total_byte_size =
-                Precision::Exact(primitive_row_size).multiply(&stats.num_rows);
-        }
+        stats.calculate_total_byte_size(output_schema);
         stats.column_statistics = column_statistics;
         Ok(stats)
     }
@@ -857,14 +993,15 @@ pub(crate) mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::equivalence::{convert_to_orderings, EquivalenceProperties};
-    use crate::expressions::{col, BinaryExpr, Literal};
+    use crate::equivalence::{EquivalenceProperties, convert_to_orderings};
+    use crate::expressions::{BinaryExpr, Literal, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::stats::Precision;
     use datafusion_common::{ScalarValue, Statistics};
     use datafusion_expr::{Operator, ScalarUDF};
     use insta::assert_snapshot;
@@ -1731,6 +1868,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -1738,6 +1876,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -1745,6 +1884,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         }
@@ -1773,11 +1913,15 @@ pub(crate) mod tests {
             },
         ]);
 
-        let result = projection.project_statistics(source, &schema).unwrap();
+        let result = projection
+            .project_statistics(source, &projection.project_schema(&schema).unwrap())
+            .unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
-            total_byte_size: Precision::Exact(23),
+            // Because there is a variable length Utf8 column we cannot calculate exact byte size after projection
+            // Thus we set it to Inexact (originally it was Exact(23))
+            total_byte_size: Precision::Inexact(23),
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -1785,6 +1929,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -1792,6 +1937,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -1815,7 +1961,9 @@ pub(crate) mod tests {
             },
         ]);
 
-        let result = projection.project_statistics(source, &schema).unwrap();
+        let result = projection
+            .project_statistics(source, &projection.project_schema(&schema).unwrap())
+            .unwrap();
 
         let expected = Statistics {
             num_rows: Precision::Exact(5),
@@ -1827,6 +1975,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -1834,6 +1983,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -2300,7 +2450,10 @@ pub(crate) mod tests {
             },
         ]);
 
-        let output_stats = projection.project_statistics(input_stats, &input_schema)?;
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
 
         // Row count should be preserved
         assert_eq!(output_stats.num_rows, Precision::Exact(5));
@@ -2352,7 +2505,10 @@ pub(crate) mod tests {
             },
         ]);
 
-        let output_stats = projection.project_statistics(input_stats, &input_schema)?;
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
 
         // Row count should be preserved
         assert_eq!(output_stats.num_rows, Precision::Exact(5));
@@ -2396,7 +2552,10 @@ pub(crate) mod tests {
             },
         ]);
 
-        let output_stats = projection.project_statistics(input_stats, &input_schema)?;
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
 
         // Row count should be preserved
         assert_eq!(output_stats.num_rows, Precision::Exact(5));
@@ -2418,7 +2577,10 @@ pub(crate) mod tests {
 
         let projection = ProjectionExprs::new(vec![]);
 
-        let output_stats = projection.project_statistics(input_stats, &input_schema)?;
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
 
         // Row count should be preserved
         assert_eq!(output_stats.num_rows, Precision::Exact(5));

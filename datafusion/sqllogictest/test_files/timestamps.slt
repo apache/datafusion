@@ -2250,7 +2250,7 @@ SET TIME ZONE = '+05:00'
 
 statement ok
 CREATE TABLE foo (time TIMESTAMPTZ) AS VALUES
-    ('2020-01-01T00:00:00+05:00'), 
+    ('2020-01-01T00:00:00+05:00'),
     ('2020-01-01T01:00:00+05:00'),
     ('2020-01-01T02:00:00+05:00'),
     ('2020-01-01T03:00:00+05:00')
@@ -2335,17 +2335,17 @@ NULL 1970-01-01T00:00:00 2031-01-19T23:33:25 1970-01-01T00:00:01 1969-12-31T23:5
 # verify timestamp syntax styles are consistent
 query BBBBBBBBBBBBB
 SELECT to_timestamp(null) is null as c1,
-       null::timestamp is null as c2, 
-       cast(null as timestamp) is null as c3, 
-       to_timestamp(0) = 0::timestamp as c4, 
-       to_timestamp(1926632005) = 1926632005::timestamp as c5, 
-       to_timestamp(1) = 1::timestamp as c6, 
-       to_timestamp(-1) = -1::timestamp as c7, 
+       null::timestamp is null as c2,
+       cast(null as timestamp) is null as c3,
+       to_timestamp(0) = 0::timestamp as c4,
+       to_timestamp(1926632005) = 1926632005::timestamp as c5,
+       to_timestamp(1) = 1::timestamp as c6,
+       to_timestamp(-1) = -1::timestamp as c7,
        to_timestamp(0-1) = (0-1)::timestamp as c8,
-       to_timestamp(0) = cast(0 as timestamp) as c9, 
-       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10, 
-       to_timestamp(1) = cast(1 as timestamp) as c11, 
-       to_timestamp(-1) = cast(-1 as timestamp) as c12, 
+       to_timestamp(0) = cast(0 as timestamp) as c9,
+       to_timestamp(1926632005) = cast(1926632005 as timestamp) as c10,
+       to_timestamp(1) = cast(1 as timestamp) as c11,
+       to_timestamp(-1) = cast(-1 as timestamp) as c12,
        to_timestamp(0-1) = cast(0-1 as timestamp) as c13
 ----
 true true true true true true true true true true true true true
@@ -2358,10 +2358,10 @@ Timestamp(ns) Timestamp(ns) Timestamp(ns)
 
 # verify timestamp output types using timestamp literal syntax
 query BBBBBB
-SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1, 
+SELECT arrow_typeof(to_timestamp(1)) = arrow_typeof(1::timestamp) as c1,
        arrow_typeof(to_timestamp(null)) = arrow_typeof(null::timestamp) as c2,
        arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof('2023-01-10 12:34:56.000'::timestamp) as c3,
-       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4, 
+       arrow_typeof(to_timestamp(1)) = arrow_typeof(cast(1 as timestamp)) as c4,
        arrow_typeof(to_timestamp(null)) = arrow_typeof(cast(null as timestamp)) as c5,
        arrow_typeof(to_timestamp('2023-01-10 12:34:56.000')) = arrow_typeof(cast('2023-01-10 12:34:56.000' as timestamp)) as c6
 ----
@@ -2605,13 +2605,13 @@ drop table table_a
 ##########
 
 statement ok
-create table table_a (ts timestamp) as values 
-    ('2020-09-08T11:42:29Z'::timestamp), 
+create table table_a (ts timestamp) as values
+    ('2020-09-08T11:42:29Z'::timestamp),
     ('2020-09-08T12:42:29Z'::timestamp),
     ('2020-09-08T13:42:29Z'::timestamp)
 
 statement ok
-create table table_b (ts timestamp) as values 
+create table table_b (ts timestamp) as values
     ('2020-09-08T11:42:29.190Z'::timestamp),
     ('2020-09-08T13:42:29.190Z'::timestamp),
     ('2020-09-08T12:42:29.190Z'::timestamp)
@@ -2733,8 +2733,8 @@ statement ok
 drop table t1
 
 statement ok
-create table table_a (val int, ts1 timestamp, ts2 timestamp) as values 
-    (1, '2018-07-01T06:00:00'::timestamp, '2018-07-01T07:00:00'::timestamp), 
+create table table_a (val int, ts1 timestamp, ts2 timestamp) as values
+    (1, '2018-07-01T06:00:00'::timestamp, '2018-07-01T07:00:00'::timestamp),
     (2, '2018-07-01T07:00:00'::timestamp, '2018-07-01T08:00:00'::timestamp)
 
 query I?
@@ -2847,8 +2847,12 @@ select make_date(t.year, t.month, '4') from table_nums t;
 statement ok
 insert into table_nums values (2024, null, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+query D
 select make_date(t.year, t.month, t.day) from table_nums t;
+----
+2024-01-23
+2023-11-30
+NULL
 
 statement ok
 drop table table_nums;
@@ -2867,48 +2871,344 @@ select make_date(t.year, t.month, t.day) from table_strings t;
 statement ok
 insert into table_strings values (2024, null, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+query D
 select make_date(t.year, t.month, t.day) from table_strings t;
+----
+2024-01-23
+2023-11-30
+NULL
 
 statement ok
 drop table table_strings;
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 13, 23
+query error DataFusion error: Execution error: Month value '13' is out of range
 select make_date(2024, 13, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 1, 32
-select make_date(2024, 01, 32);
+query error DataFusion error: Execution error: Day value '32' is out of range
+select make_date(2024, 1, 32);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 0, 23
+query error DataFusion error: Execution error: Month value '0' is out of range
 select make_date(2024, 0, 23);
 
 query error DataFusion error: Execution error: Month value '\-1' is out of range
 select make_date(2024, -1, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from 2024, 12, 0
+query error DataFusion error: Execution error: Day value '0' is out of range
 select make_date(2024, 12, 0);
 
-query error DataFusion error: Execution error: Day value '\-1' is out of range
+query error DataFusion error: Execution error: Month value '13' is out of range
 select make_date(2024, 13, -1);
 
-query error DataFusion error: Execution error: Unable to parse date from null/empty value
+query D
 select make_date(null, 1, 23);
+----
+NULL
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+query error Cast error: Cannot cast string '' to value of Int32 type
 select make_date('', 1, 23);
 
-query error DataFusion error: Execution error: Unable to parse date from null/empty value
+query D
 select make_date(2024, null, 23);
+----
+NULL
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+query error Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 select make_date(2024, '', 27);
 
-query error DataFusion error: Execution error: Unable to parse date from null/empty value
+query D
 select make_date(2024, 1, null);
+----
+NULL
 
-query error DataFusion error: Arrow error: Cast error: Cannot cast string '' to value of Int32 type
+query error Arrow error: Cast error: Cannot cast string '' to value of Int32 type
 select make_date(2024, 1, '');
 
+query error DataFusion error: Execution error: Unable to parse date from 2024, 11, 31
+select make_date(2024, 11, 31);
+
+query D
+select make_date(null, 1::bigint, 14::bigint unsigned);
+----
+NULL
+
+query error DataFusion error: Error during planning: Function 'make_date' expects 3 arguments but received 1
+select make_date(1);
+
+query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int32\), Int32\)\) but received NativeType::Interval\(MonthDayNano\), DataType: Interval\(MonthDayNano\)
+select make_date(interval '1 day', '2001-05-21'::timestamp, '2001-05-21'::timestamp);
+
+##########
+## make time tests
+##########
+
+query D
+select make_time(22, 1, 27);
+----
+22:01:27
+
+query D
+select make_time(22, 0, 0);
+----
+22:00:00
+
+query D
+select make_time(0, 0, 0);
+----
+00:00:00
+
+query D
+select make_time(22, 2, 29);
+----
+22:02:29
+
+query D
+select make_time(null, null, null);
+----
+NULL
+
+query D
+select make_time(null, 1, 23);
+----
+NULL
+
+query D
+select make_time(22, null, 23);
+----
+NULL
+
+query D
+select make_time(22, 1, null);
+----
+NULL
+
+query D
+select make_time('22', '01', '27');
+----
+22:01:27
+
+query D
+select make_time(12 + 11, '01', '27');
+----
+23:01:27
+
+query D
+select make_time(22::tinyint, 01::tinyint, 27::tinyint);
+----
+22:01:27
+
+query D
+select make_time(22::smallint, 01::smallint, 27::smallint);
+----
+22:01:27
+
+query D
+select make_time(22::int, 01::int, 27::int);
+----
+22:01:27
+
+query D
+select make_time(22::bigint, 01::bigint, 27::bigint);
+----
+22:01:27
+
+query D
+select make_time(22::tinyint unsigned, 01::tinyint unsigned, 27::tinyint unsigned);
+----
+22:01:27
+
+query D
+select make_time(22::smallint unsigned, 01::smallint unsigned, 27::smallint unsigned);
+----
+22:01:27
+
+query D
+select make_time(22::int unsigned, 01::int unsigned, 27::int unsigned);
+----
+22:01:27
+
+query D
+select make_time(22::bigint unsigned, 01::bigint unsigned, 27::bigint unsigned);
+----
+22:01:27
+
+query D
+select make_time(arrow_cast(22, 'Int32'), arrow_cast(1, 'Int32'), arrow_cast(27, 'Int32'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast(22, 'Int64'), arrow_cast(1, 'Int64'), arrow_cast(27, 'Int64'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'Utf8'), arrow_cast('1', 'Utf8'), arrow_cast('27', 'Utf8'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'Utf8View'), arrow_cast('1', 'Utf8View'), arrow_cast('27', 'Utf8View'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'LargeUtf8'), arrow_cast('1', 'LargeUtf8'), arrow_cast('27', 'LargeUtf8'));
+----
+22:01:27
+
+query D
+select make_time(22, arrow_cast('1', 'Int64'), arrow_cast('27', 'UInt32'));
+----
+22:01:27
+
+query D
+select make_time(22, arrow_cast('1', 'UInt64'), arrow_cast('27', 'UInt32'));
+----
+22:01:27
+
+query D
+select make_time(arrow_cast('22', 'Utf8'), arrow_cast('1', 'LargeUtf8'), arrow_cast('27', 'Utf8'));
+----
+22:01:27
+
+query D
+select make_time(22, arrow_cast('1', 'LargeUtf8'), arrow_cast('27', 'Utf8'));
+----
+22:01:27
+
+query error Can't cast value 18446744073709551615 to type Int32
+select make_time(22, 18446744073709551615, 27);
+
+query T
+select arrow_typeof(make_time(22, 1, 27));
+----
+Time32(s)
+
+statement ok
+create table table_nums (hour int, minute int, second int) as values
+    (22, 1, 23),
+    (20, 11, 30);
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_nums t;
+----
+22:01:23
+20:11:30
+
+query D
+select make_time(21, t.minute, t.second) from table_nums t;
+----
+21:01:23
+21:11:30
+
+query D
+select make_time(t.hour, 3, t.second) from table_nums t;
+----
+22:03:23
+20:03:30
+
+query D
+select make_time(t.hour, t.minute, 4) from table_nums t;
+----
+22:01:04
+20:11:04
+
+query D
+select make_time('21', t.minute, t.second) from table_nums t;
+----
+21:01:23
+21:11:30
+
+query D
+select make_time(t.hour, '3', t.second) from table_nums t;
+----
+22:03:23
+20:03:30
+
+query D
+select make_time(t.hour, t.minute, '4') from table_nums t;
+----
+22:01:04
+20:11:04
+
+statement ok
+insert into table_nums values (25, null, 77);
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_nums t;
+----
+22:01:23
+20:11:30
+NULL
+
+statement ok
+drop table table_nums;
+
+statement ok
+create table table_strings (hour varchar(4), minute varchar(2), second varchar(2)) as values
+    ('22', '1', '23'),
+    ('23', '11', '30');
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_strings t;
+----
+22:01:23
+23:11:30
+
+statement ok
+insert into table_strings values ('33', null, '23');
+
+query D
+select make_time(t.hour, t.minute, t.second) from table_strings t;
+----
+22:01:23
+23:11:30
+NULL
+
+statement ok
+insert into table_strings values ('33', '12', '23');
+
+query error DataFusion error: Execution error: Hour value '33' is out of range
+select make_time(t.hour, t.minute, t.second) from table_strings t;
+
+statement ok
+drop table table_strings;
+
+query error Function 'make_time' expects 3 arguments but received 1
+select make_time(22);
+
+query error Function 'make_time' expects 3 arguments but received 2
+select make_time(22, 22);
+
+query error DataFusion error: Execution error: Hour value '26' is out of range
+select make_time(26, 13, 23);
+
+query error DataFusion error: Execution error: Second value '62' is out of range
+select make_time(22, 01, 62);
+
+query error DataFusion error: Execution error: Minute value '64' is out of range
+select make_time(22, 64, 23);
+
+query error DataFusion error: Execution error: Hour value '-1' is out of range
+select make_time(-1, 12, 0);
+
+query error DataFusion error: Execution error: Minute value '-1' is out of range
+select make_time(22, -1, 23);
+
+query error DataFusion error: Execution error: Second value '-1' is out of range
+select make_time(22, 13, -1);
+
+query error Cannot cast string '' to value of Int32 type
+select make_time('', 1, 23);
+
+query error Cannot cast string '' to value of Int32 type
+select make_time(22, '', 27);
+
+query error Cannot cast string '' to value of Int32 type
+select make_time(22, 1, '');
+
+query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int32\), Int32\)\) but received NativeType::Float64, DataType: Float64
+select make_time(arrow_cast(22, 'Float64'), 1, '');
 
 ##########
 ## to_char tests
@@ -3038,7 +3338,7 @@ NULL
 
 query T
 SELECT to_char(date_column, '%Y-%m-%d')
-FROM (VALUES 
+FROM (VALUES
     (DATE '2020-09-01'),
     (NULL)
 ) AS t(date_column);
@@ -3048,7 +3348,7 @@ NULL
 
 query T
 SELECT to_char(date_column, '%Y-%m-%d')
-FROM (VALUES 
+FROM (VALUES
     (NULL),
     (DATE '2020-09-01')
 ) AS t(date_column);
@@ -3249,7 +3549,7 @@ statement error
 select to_local_time('2024-04-01T00:00:20Z'::timestamp, 'some string');
 
 # invalid argument data type
-statement error The to_local_time function can only accept Timestamp as the arg got Utf8
+statement error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Timestamp but received NativeType::String, DataType: Utf8
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone
@@ -3276,6 +3576,13 @@ query P
 select to_local_time(NULL);
 ----
 NULL
+
+query PT
+select
+  to_local_time(arrow_cast(null, 'Timestamp(s, "Asia/Tokyo")')),
+  arrow_typeof(to_local_time(arrow_cast(null, 'Timestamp(s, "Asia/Tokyo")')));
+----
+NULL Timestamp(s)
 
 query PTPT
 select
@@ -3694,6 +4001,76 @@ FROM ts_data_micros_kolkata
 2020-09-08T19:12:29.190+05:30
 2020-09-08T18:12:29.190+05:30
 2020-09-08T17:12:29.190+05:30
+
+
+##########
+## Casting between timestamp with and without timezone
+##########
+
+# Test casting from Timestamp(Nanosecond, Some("UTC")) to Timestamp(Nanosecond, None)
+# Verifies that the underlying nanosecond values are preserved when removing timezone
+
+# Verify input type
+query T
+SELECT arrow_typeof(arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+Timestamp(ns, "UTC")
+
+# Verify output type after casting
+query T
+SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))'), 'Timestamp(Nanosecond, None)'));
+----
+Timestamp(ns)
+
+# Verify values are preserved when casting from timestamp with timezone to timestamp without timezone
+query P rowsort
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, None)')
+FROM (VALUES
+  (arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(2, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(3, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(4, 'Timestamp(Nanosecond, Some("UTC"))')),
+  (arrow_cast(5, 'Timestamp(Nanosecond, Some("UTC"))'))
+) t;
+----
+1970-01-01T00:00:00.000000001
+1970-01-01T00:00:00.000000002
+1970-01-01T00:00:00.000000003
+1970-01-01T00:00:00.000000004
+1970-01-01T00:00:00.000000005
+
+# Test casting from Timestamp(Nanosecond, None) to Timestamp(Nanosecond, Some("UTC"))
+# Verifies that the underlying nanosecond values are preserved when adding timezone
+
+# Verify input type
+query T
+SELECT arrow_typeof(arrow_cast(1, 'Timestamp(Nanosecond, None)'));
+----
+Timestamp(ns)
+
+# Verify output type after casting
+query T
+SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, None)'), 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+Timestamp(ns, "UTC")
+
+# Verify values are preserved when casting from timestamp without timezone to timestamp with timezone
+query P rowsort
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))')
+FROM (VALUES
+  (arrow_cast(1, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(2, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(3, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(4, 'Timestamp(Nanosecond, None)')),
+  (arrow_cast(5, 'Timestamp(Nanosecond, None)'))
+) t;
+----
+1970-01-01T00:00:00.000000001Z
+1970-01-01T00:00:00.000000002Z
+1970-01-01T00:00:00.000000003Z
+1970-01-01T00:00:00.000000004Z
+1970-01-01T00:00:00.000000005Z
+
 
 ##########
 ## Common timestamp data

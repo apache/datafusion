@@ -22,16 +22,17 @@ use std::sync::Arc;
 
 use crate::strings::make_and_append_view;
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericStringArray, GenericStringBuilder,
-    NullBufferBuilder, OffsetSizeTrait, StringBuilder, StringViewArray,
+    Array, ArrayRef, GenericStringArray, GenericStringBuilder, NullBufferBuilder,
+    OffsetSizeTrait, StringBuilder, StringViewArray, new_null_array,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::Result;
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 
+#[derive(Copy, Clone)]
 pub(crate) enum TrimType {
     Left,
     Right,
@@ -48,7 +49,6 @@ impl Display for TrimType {
     }
 }
 
-#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn general_trim<T: OffsetSizeTrait>(
     args: &[ArrayRef],
     trim_type: TrimType,
@@ -186,7 +186,7 @@ fn string_view_trim<'a>(
         }
         other => {
             return exec_err!(
-            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
+                "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             );
         }
     }
@@ -295,7 +295,7 @@ fn string_trim<'a, T: OffsetSizeTrait>(
         }
         other => {
             exec_err!(
-            "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
+                "Function TRIM was called with {other} arguments. It requires at least 1 and at most 2."
             )
         }
     }

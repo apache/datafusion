@@ -26,14 +26,14 @@ use arrow::datatypes::DataType::Utf8;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 /// Returns the character with the given code.
 /// chr(65) = 'A'
-pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = as_int64_array(&args[0])?;
 
     let mut builder = GenericStringBuilder::<i32>::with_capacity(
@@ -47,11 +47,11 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     for integer in integer_array {
         match integer {
             Some(integer) => {
-                if let Ok(u) = u32::try_from(integer) {
-                    if let Some(c) = core::char::from_u32(u) {
-                        builder.append_value(c.encode_utf8(&mut buf));
-                        continue;
-                    }
+                if let Ok(u) = u32::try_from(integer)
+                    && let Some(c) = core::char::from_u32(u)
+                {
+                    builder.append_value(c.encode_utf8(&mut buf));
+                    continue;
                 }
 
                 return exec_err!("invalid Unicode scalar value: {integer}");

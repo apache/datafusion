@@ -35,8 +35,8 @@ use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{
-    self, proto_error, window_agg_exec_node, ListUnnest as ProtoListUnnest, SortExprNode,
-    SortMergeJoinExecNode,
+    self, ListUnnest as ProtoListUnnest, SortExprNode, SortMergeJoinExecNode,
+    proto_error, window_agg_exec_node,
 };
 use crate::{convert_required, into_required};
 
@@ -45,7 +45,7 @@ use arrow::datatypes::{IntervalMonthDayNanoType, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, Result,
+    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 #[cfg(feature = "parquet")]
 use datafusion_datasource::file::FileSource;
@@ -100,8 +100,10 @@ use datafusion_physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr};
 
-use prost::bytes::BufMut;
+use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
+use datafusion_physical_plan::async_func::AsyncFuncExec;
 use prost::Message;
+use prost::bytes::BufMut;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -153,11 +155,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             PhysicalPlanType::JsonScan(scan) => {
                 self.try_into_json_scan_physical_plan(scan, ctx, extension_codec)
             }
-            #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
                 self.try_into_parquet_scan_physical_plan(scan, ctx, extension_codec)
             }
-            #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
             PhysicalPlanType::AvroScan(scan) => {
                 self.try_into_avro_scan_physical_plan(scan, ctx, extension_codec)
             }
@@ -250,6 +250,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
             PhysicalPlanType::SortMergeJoin(sort_join) => {
                 self.try_into_sort_join(sort_join, ctx, extension_codec)
+            }
+            PhysicalPlanType::AsyncFunc(async_func) => {
+                self.try_into_async_func_physical_plan(async_func, ctx, extension_codec)
             }
         }
     }
@@ -362,13 +365,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
-        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
-            if let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
+            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
                 data_source_exec,
                 extension_codec,
-            )? {
-                return Ok(node);
-            }
+            )?
+        {
+            return Ok(node);
         }
 
         if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {
@@ -431,13 +434,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSinkExec>() {
-            if let Some(node) = protobuf::PhysicalPlanNode::try_from_data_sink_exec(
+        if let Some(exec) = plan.downcast_ref::<DataSinkExec>()
+            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_sink_exec(
                 exec,
                 extension_codec,
-            )? {
-                return Ok(node);
-            }
+            )?
+        {
+            return Ok(node);
         }
 
         if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
@@ -454,12 +457,18 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
-        if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>() {
-            if let Some(node) =
+        if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
+            && let Some(node) =
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
-            {
-                return Ok(node);
-            }
+        {
+            return Ok(node);
+        }
+
+        if let Some(exec) = plan.downcast_ref::<AsyncFuncExec>() {
+            return protobuf::PhysicalPlanNode::try_from_async_func_exec(
+                exec,
+                extension_codec,
+            );
         }
 
         let mut buf: Vec<u8> = vec![];
@@ -622,6 +631,7 @@ impl protobuf::PhysicalPlanNode {
             has_header: Some(scan.has_header),
             delimiter: str_to_byte(&scan.delimiter, "delimiter")?,
             quote: str_to_byte(&scan.quote, "quote")?,
+            newlines_in_values: Some(scan.newlines_in_values),
             ..Default::default()
         };
         let source = Arc::new(
@@ -637,7 +647,6 @@ impl protobuf::PhysicalPlanNode {
             extension_codec,
             source,
         )?)
-        .with_newlines_in_values(scan.newlines_in_values)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
         .build();
         Ok(DataSourceExec::from_data_source(conf))
@@ -661,12 +670,11 @@ impl protobuf::PhysicalPlanNode {
         Ok(DataSourceExec::from_data_source(scan_conf))
     }
 
-    #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
     fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
         ctx: &TaskContext,
-
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
@@ -725,10 +733,12 @@ impl protobuf::PhysicalPlanNode {
             Ok(DataSourceExec::from_data_source(base_config))
         }
         #[cfg(not(feature = "parquet"))]
-        panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
+        panic!(
+            "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+        )
     }
 
-    #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
     fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
@@ -747,6 +757,7 @@ impl protobuf::PhysicalPlanNode {
             )?;
             Ok(DataSourceExec::from_data_source(conf))
         }
+
         #[cfg(not(feature = "avro"))]
         panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
     }
@@ -999,6 +1010,8 @@ impl protobuf::PhysicalPlanNode {
             vec![]
         };
 
+        let has_grouping_set = hash_agg.has_grouping_set;
+
         let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
             internal_datafusion_err!("input_schema in AggregateNode is missing.")
         })?;
@@ -1096,7 +1109,7 @@ impl protobuf::PhysicalPlanNode {
 
         let agg = AggregateExec::try_new(
             agg_mode,
-            PhysicalGroupBy::new(group_expr, null_expr, groups),
+            PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
             physical_aggr_expr,
             physical_filter_expr,
             input,
@@ -1973,6 +1986,44 @@ impl protobuf::PhysicalPlanNode {
         Ok(Arc::new(CooperativeExec::new(input)))
     }
 
+    fn try_into_async_func_physical_plan(
+        &self,
+        async_func: &protobuf::AsyncFuncExecNode,
+        ctx: &TaskContext,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> =
+            into_physical_plan(&async_func.input, ctx, extension_codec)?;
+
+        if async_func.async_exprs.len() != async_func.async_expr_names.len() {
+            return internal_err!(
+                "AsyncFuncExecNode async_exprs length does not match async_expr_names"
+            );
+        }
+
+        let async_exprs = async_func
+            .async_exprs
+            .iter()
+            .zip(async_func.async_expr_names.iter())
+            .map(|(expr, name)| {
+                let physical_expr = parse_physical_expr(
+                    expr,
+                    ctx,
+                    input.schema().as_ref(),
+                    extension_codec,
+                )?;
+
+                Ok(Arc::new(AsyncFuncExpr::try_new(
+                    name.clone(),
+                    physical_expr,
+                    input.schema().as_ref(),
+                )?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
+    }
+
     fn try_from_explain_exec(
         exec: &ExplainExec,
         _extension_codec: &dyn PhysicalExtensionCodec,
@@ -2491,6 +2542,7 @@ impl protobuf::PhysicalPlanNode {
                     null_expr,
                     groups,
                     limit,
+                    has_grouping_set: exec.group_expr().has_grouping_set(),
                 },
             ))),
         })
@@ -2579,7 +2631,7 @@ impl protobuf::PhysicalPlanNode {
                             } else {
                                 None
                             },
-                            newlines_in_values: maybe_csv.newlines_in_values(),
+                            newlines_in_values: csv_config.newlines_in_values(),
                             truncate_rows: csv_config.truncate_rows(),
                         },
                     )),
@@ -3223,6 +3275,34 @@ impl protobuf::PhysicalPlanNode {
 
         Ok(None)
     }
+
+    fn try_from_async_func_exec(
+        exec: &AsyncFuncExec,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self> {
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+            Arc::clone(exec.input()),
+            extension_codec,
+        )?;
+
+        let mut async_exprs = vec![];
+        let mut async_expr_names = vec![];
+
+        for async_expr in exec.async_exprs() {
+            async_exprs.push(serialize_physical_expr(&async_expr.func, extension_codec)?);
+            async_expr_names.push(async_expr.name.clone())
+        }
+
+        Ok(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::AsyncFunc(Box::new(
+                protobuf::AsyncFuncExecNode {
+                    input: Some(Box::new(input)),
+                    async_exprs,
+                    async_expr_names,
+                },
+            ))),
+        })
+    }
 }
 
 pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
@@ -3440,7 +3520,6 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
 fn into_physical_plan(
     node: &Option<Box<protobuf::PhysicalPlanNode>>,
     ctx: &TaskContext,
-
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(field) = node {

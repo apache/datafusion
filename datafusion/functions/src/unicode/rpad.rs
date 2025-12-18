@@ -16,14 +16,15 @@
 // under the License.
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::cast::as_int64_array;
 use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::cast::as_int64_array;
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -33,7 +34,6 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
-use DataType::{LargeUtf8, Utf8, Utf8View};
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -145,7 +145,7 @@ impl ScalarUDFImpl for RPadFunc {
     }
 }
 
-pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
+fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
@@ -205,7 +205,7 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
 
 /// Extends the string to length 'length' by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.
 /// rpad('hi', 5, 'xy') = 'hixyx'
-pub fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
+fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
     string_array: &StringArrType,
     length_array: &Int64Array,
     fill_array: Option<FillArrType>,

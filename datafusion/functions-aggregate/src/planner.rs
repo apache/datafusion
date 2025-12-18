@@ -19,11 +19,11 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
+    Expr,
     expr::{AggregateFunction, AggregateFunctionParams},
     expr_rewriter::NamePreserver,
     planner::{ExprPlanner, PlannerResult, RawAggregateExpr},
     utils::COUNT_STAR_EXPANSION,
-    Expr,
 };
 
 #[derive(Debug)]

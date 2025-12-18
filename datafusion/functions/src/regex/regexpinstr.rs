@@ -23,7 +23,7 @@ use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
     TypeSignature::Uniform, Volatility,
@@ -163,7 +163,9 @@ impl ScalarUDFImpl for RegexpInstrFunc {
 pub fn regexp_instr_func(args: &[ArrayRef]) -> Result<ArrayRef> {
     let args_len = args.len();
     if !(2..=6).contains(&args_len) {
-        return exec_err!("regexp_instr was called with {args_len} arguments. It requires at least 2 and at most 6.");
+        return exec_err!(
+            "regexp_instr was called with {args_len} arguments. It requires at least 2 and at most 6."
+        );
     }
 
     let values = &args[0];
@@ -205,7 +207,7 @@ pub fn regexp_instr_func(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// # Errors
 /// Returns an error if the input arrays have mismatched lengths or if the regular expression fails to compile.
-pub fn regexp_instr(
+fn regexp_instr(
     values: &dyn Array,
     regex_array: &dyn Datum,
     start_array: Option<&dyn Datum>,
@@ -233,48 +235,48 @@ pub fn regexp_instr(
 
     match (values.data_type(), regex_array.data_type(), flags_array) {
         (Utf8, Utf8, None) => regexp_instr_inner(
-            values.as_string::<i32>(),
-            regex_array.as_string::<i32>(),
+            &values.as_string::<i32>(),
+            &regex_array.as_string::<i32>(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
             None,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
         (Utf8, Utf8, Some(flags_array)) if *flags_array.data_type() == Utf8 => regexp_instr_inner(
-            values.as_string::<i32>(),
-            regex_array.as_string::<i32>(),
+            &values.as_string::<i32>(),
+            &regex_array.as_string::<i32>(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
             Some(flags_array.as_string::<i32>()),
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
         (LargeUtf8, LargeUtf8, None) => regexp_instr_inner(
-            values.as_string::<i64>(),
-            regex_array.as_string::<i64>(),
+            &values.as_string::<i64>(),
+            &regex_array.as_string::<i64>(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
             None,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
         (LargeUtf8, LargeUtf8, Some(flags_array)) if *flags_array.data_type() == LargeUtf8 => regexp_instr_inner(
-            values.as_string::<i64>(),
-            regex_array.as_string::<i64>(),
+            &values.as_string::<i64>(),
+            &regex_array.as_string::<i64>(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
             Some(flags_array.as_string::<i64>()),
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
         (Utf8View, Utf8View, None) => regexp_instr_inner(
-            values.as_string_view(),
-            regex_array.as_string_view(),
+            &values.as_string_view(),
+            &regex_array.as_string_view(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
             None,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
         (Utf8View, Utf8View, Some(flags_array)) if *flags_array.data_type() == Utf8View => regexp_instr_inner(
-            values.as_string_view(),
-            regex_array.as_string_view(),
+            &values.as_string_view(),
+            &regex_array.as_string_view(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
             Some(flags_array.as_string_view()),
@@ -286,11 +288,9 @@ pub fn regexp_instr(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[expect(clippy::needless_pass_by_value)]
-pub fn regexp_instr_inner<'a, S>(
-    values: S,
-    regex_array: S,
+fn regexp_instr_inner<'a, S>(
+    values: &S,
+    regex_array: &S,
     start_array: Option<&Int64Array>,
     nth_array: Option<&Int64Array>,
     flags_array: Option<S>,
@@ -358,14 +358,14 @@ fn handle_subexp(
     value: &str,
     byte_start_offset: usize,
 ) -> Result<Option<i64>, ArrowError> {
-    if let Some(captures) = pattern.captures(search_slice) {
-        if let Some(matched) = captures.get(subexpr as usize) {
-            // Convert byte offset relative to search_slice back to 1-based character offset
-            // relative to the original `value` string.
-            let start_char_offset =
-                value[..byte_start_offset + matched.start()].chars().count() as i64 + 1;
-            return Ok(Some(start_char_offset));
-        }
+    if let Some(captures) = pattern.captures(search_slice)
+        && let Some(matched) = captures.get(subexpr as usize)
+    {
+        // Convert byte offset relative to search_slice back to 1-based character offset
+        // relative to the original `value` string.
+        let start_char_offset =
+            value[..byte_start_offset + matched.start()].chars().count() as i64 + 1;
+        return Ok(Some(start_char_offset));
     }
     Ok(Some(0)) // Return 0 if the subexpression was not found
 }

@@ -31,9 +31,9 @@ use tonic::{Request, Response, Status, Streaming};
 use datafusion::prelude::*;
 
 use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
+    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
 };
 
 #[derive(Clone)]
@@ -189,6 +189,7 @@ impl FlightService for FlightServiceImpl {
     }
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn to_tonic_err(e: datafusion::error::DataFusionError) -> Status {
     Status::internal(format!("{e:?}"))
 }

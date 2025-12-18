@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
+#![deny(clippy::allow_attributes)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
@@ -32,15 +31,13 @@ pub use udaf::aggregate_doc_sections;
 pub use udf::scalar_doc_sections;
 pub use udwf::window_doc_sections;
 
-#[allow(rustdoc::broken_intra_doc_links)]
-/// Documentation for use by [`ScalarUDFImpl`](ScalarUDFImpl),
-/// [`AggregateUDFImpl`](AggregateUDFImpl) and [`WindowUDFImpl`](WindowUDFImpl) functions.
+/// Documentation for use by `ScalarUDFImpl`, `AggregateUDFImpl` and `WindowUDFImpl` functions.
 ///
 /// See the [`DocumentationBuilder`] to create a new [`Documentation`] struct.
 ///
 /// The DataFusion [SQL function documentation] is automatically  generated from these structs.
-/// The name of the udf will be pulled from the [`ScalarUDFImpl::name`](ScalarUDFImpl::name),
-/// [`AggregateUDFImpl::name`](AggregateUDFImpl::name) or [`WindowUDFImpl::name`](WindowUDFImpl::name)
+/// The name of the udf will be pulled from the `ScalarUDFImpl::name`,
+/// `AggregateUDFImpl::name` or `WindowUDFImpl::name`
 /// function as appropriate.
 ///
 /// All strings in the documentation are required to be

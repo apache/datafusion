@@ -114,7 +114,7 @@ arrow = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.6.1", optional = true }
+bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
@@ -142,7 +142,7 @@ datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
 datafusion-sql = { workspace = true, optional = true }
-flate2 = { version = "1.1.4", optional = true }
+flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 liblzma = { workspace = true, optional = true }
@@ -152,14 +152,13 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
 regex = { workspace = true }
-rstest = { workspace = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.18", features = ["v4", "js"] }
-zstd = { version = "0.13", optional = true, default-features = false }
+uuid = { version = "1.19", features = ["v4", "js"] }
+zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
@@ -172,9 +171,9 @@ datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
-glob = { version = "0.3.0" }
+glob = { workspace = true }
 insta = { workspace = true }
-paste = "^1.0"
+paste = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.5"
 regex = { workspace = true }
@@ -271,3 +270,8 @@ name = "dataframe"
 [[bench]]
 harness = false
 name = "spm"
+
+[[bench]]
+harness = false
+name = "preserve_file_partitioning"
+required-features = ["parquet"]

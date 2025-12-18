@@ -18,8 +18,8 @@
 use std::{any::Any, ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{ROption, RString, RVec},
     StableAbi,
+    std_types::{ROption, RString, RVec},
 };
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use tokio::runtime::Handle;
@@ -58,6 +58,11 @@ pub struct FFI_CatalogProviderList {
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignCatalogProviderList`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_CatalogProviderList {}
@@ -70,21 +75,27 @@ struct ProviderPrivateData {
 
 impl FFI_CatalogProviderList {
     unsafe fn inner(&self) -> &Arc<dyn CatalogProviderList + Send> {
-        let private_data = self.private_data as *const ProviderPrivateData;
-        &(*private_data).provider
+        unsafe {
+            let private_data = self.private_data as *const ProviderPrivateData;
+            &(*private_data).provider
+        }
     }
 
     unsafe fn runtime(&self) -> Option<Handle> {
-        let private_data = self.private_data as *const ProviderPrivateData;
-        (*private_data).runtime.clone()
+        unsafe {
+            let private_data = self.private_data as *const ProviderPrivateData;
+            (*private_data).runtime.clone()
+        }
     }
 }
 
 unsafe extern "C" fn catalog_names_fn_wrapper(
     provider: &FFI_CatalogProviderList,
 ) -> RVec<RString> {
-    let names = provider.inner().catalog_names();
-    names.into_iter().map(|s| s.into()).collect()
+    unsafe {
+        let names = provider.inner().catalog_names();
+        names.into_iter().map(|s| s.into()).collect()
+    }
 }
 
 unsafe extern "C" fn register_catalog_fn_wrapper(
@@ -92,52 +103,64 @@ unsafe extern "C" fn register_catalog_fn_wrapper(
     name: RString,
     catalog: &FFI_CatalogProvider,
 ) -> ROption<FFI_CatalogProvider> {
-    let runtime = provider.runtime();
-    let provider = provider.inner();
-    let catalog = Arc::new(ForeignCatalogProvider::from(catalog));
+    unsafe {
+        let runtime = provider.runtime();
+        let provider = provider.inner();
+        let catalog: Arc<dyn CatalogProvider + Send> = catalog.into();
 
-    provider
-        .register_catalog(name.into(), catalog)
-        .map(|catalog| FFI_CatalogProvider::new(catalog, runtime))
-        .into()
+        provider
+            .register_catalog(name.into(), catalog)
+            .map(|catalog| FFI_CatalogProvider::new(catalog, runtime))
+            .into()
+    }
 }
 
 unsafe extern "C" fn catalog_fn_wrapper(
     provider: &FFI_CatalogProviderList,
     name: RString,
 ) -> ROption<FFI_CatalogProvider> {
-    let runtime = provider.runtime();
-    let provider = provider.inner();
-    provider
-        .catalog(name.as_str())
-        .map(|catalog| FFI_CatalogProvider::new(catalog, runtime))
-        .into()
+    unsafe {
+        let runtime = provider.runtime();
+        let provider = provider.inner();
+        provider
+            .catalog(name.as_str())
+            .map(|catalog| FFI_CatalogProvider::new(catalog, runtime))
+            .into()
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_CatalogProviderList) {
-    let private_data = Box::from_raw(provider.private_data as *mut ProviderPrivateData);
-    drop(private_data);
+    unsafe {
+        debug_assert!(!provider.private_data.is_null());
+        let private_data =
+            Box::from_raw(provider.private_data as *mut ProviderPrivateData);
+        drop(private_data);
+        provider.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
     provider: &FFI_CatalogProviderList,
 ) -> FFI_CatalogProviderList {
-    let old_private_data = provider.private_data as *const ProviderPrivateData;
-    let runtime = (*old_private_data).runtime.clone();
+    unsafe {
+        let old_private_data = provider.private_data as *const ProviderPrivateData;
+        let runtime = (*old_private_data).runtime.clone();
 
-    let private_data = Box::into_raw(Box::new(ProviderPrivateData {
-        provider: Arc::clone(&(*old_private_data).provider),
-        runtime,
-    })) as *mut c_void;
+        let private_data = Box::into_raw(Box::new(ProviderPrivateData {
+            provider: Arc::clone(&(*old_private_data).provider),
+            runtime,
+        })) as *mut c_void;
 
-    FFI_CatalogProviderList {
-        register_catalog: register_catalog_fn_wrapper,
-        catalog_names: catalog_names_fn_wrapper,
-        catalog: catalog_fn_wrapper,
-        clone: clone_fn_wrapper,
-        release: release_fn_wrapper,
-        version: super::version,
-        private_data,
+        FFI_CatalogProviderList {
+            register_catalog: register_catalog_fn_wrapper,
+            catalog_names: catalog_names_fn_wrapper,
+            catalog: catalog_fn_wrapper,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data,
+            library_marker_id: crate::get_library_marker_id,
+        }
     }
 }
 
@@ -163,6 +186,7 @@ impl FFI_CatalogProviderList {
             release: release_fn_wrapper,
             version: super::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -177,9 +201,14 @@ pub struct ForeignCatalogProviderList(FFI_CatalogProviderList);
 unsafe impl Send for ForeignCatalogProviderList {}
 unsafe impl Sync for ForeignCatalogProviderList {}
 
-impl From<&FFI_CatalogProviderList> for ForeignCatalogProviderList {
+impl From<&FFI_CatalogProviderList> for Arc<dyn CatalogProviderList + Send> {
     fn from(provider: &FFI_CatalogProviderList) -> Self {
-        Self(provider.clone())
+        if (provider.library_marker_id)() == crate::get_library_marker_id() {
+            return Arc::clone(unsafe { provider.inner() });
+        }
+
+        Arc::new(ForeignCatalogProviderList(provider.clone()))
+            as Arc<dyn CatalogProviderList + Send>
     }
 }
 
@@ -243,14 +272,18 @@ mod tests {
         let prior_catalog = Arc::new(MemoryCatalogProvider::new());
 
         let catalog_list = Arc::new(MemoryCatalogProviderList::new());
-        assert!(catalog_list
-            .as_ref()
-            .register_catalog("prior_catalog".to_owned(), prior_catalog)
-            .is_none());
+        assert!(
+            catalog_list
+                .as_ref()
+                .register_catalog("prior_catalog".to_owned(), prior_catalog)
+                .is_none()
+        );
 
-        let ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None);
+        let mut ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None);
+        ffi_catalog_list.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_catalog_list: ForeignCatalogProviderList = (&ffi_catalog_list).into();
+        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+            (&ffi_catalog_list).into();
 
         let prior_catalog_names = foreign_catalog_list.catalog_names();
         assert_eq!(prior_catalog_names.len(), 1);
@@ -279,5 +312,33 @@ mod tests {
         // Retrieve valid catalog
         let returned_catalog = foreign_catalog_list.catalog("second_catalog");
         assert!(returned_catalog.is_some());
+    }
+
+    #[test]
+    fn test_ffi_catalog_provider_list_local_bypass() {
+        let catalog_list = Arc::new(MemoryCatalogProviderList::new());
+
+        let mut ffi_catalog_list = FFI_CatalogProviderList::new(catalog_list, None);
+
+        // Verify local libraries can be downcast to their original
+        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+            (&ffi_catalog_list).into();
+        assert!(
+            foreign_catalog_list
+                .as_any()
+                .downcast_ref::<MemoryCatalogProviderList>()
+                .is_some()
+        );
+
+        // Verify different library markers generate foreign providers
+        ffi_catalog_list.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_catalog_list: Arc<dyn CatalogProviderList + Send> =
+            (&ffi_catalog_list).into();
+        assert!(
+            foreign_catalog_list
+                .as_any()
+                .downcast_ref::<ForeignCatalogProviderList>()
+                .is_some()
+        );
     }
 }

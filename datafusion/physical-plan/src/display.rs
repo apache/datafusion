@@ -31,7 +31,7 @@ use datafusion_physical_expr::LexOrdering;
 use crate::metrics::MetricType;
 use crate::render_tree::RenderTree;
 
-use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
+use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1120,7 +1120,7 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{internal_datafusion_err, Result, Statistics};
+    use datafusion_common::{Result, Statistics, internal_datafusion_err};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};

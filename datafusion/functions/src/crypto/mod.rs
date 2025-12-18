@@ -23,16 +23,13 @@ use std::sync::Arc;
 pub mod basic;
 pub mod digest;
 pub mod md5;
-pub mod sha224;
-pub mod sha256;
-pub mod sha384;
-pub mod sha512;
+pub mod sha;
 make_udf_function!(digest::DigestFunc, digest);
 make_udf_function!(md5::Md5Func, md5);
-make_udf_function!(sha224::SHA224Func, sha224);
-make_udf_function!(sha256::SHA256Func, sha256);
-make_udf_function!(sha384::SHA384Func, sha384);
-make_udf_function!(sha512::SHA512Func, sha512);
+make_udf_function!(sha::SHAFunc, sha224, sha::SHAFunc::sha224);
+make_udf_function!(sha::SHAFunc, sha256, sha::SHAFunc::sha256);
+make_udf_function!(sha::SHAFunc, sha384, sha::SHAFunc::sha384);
+make_udf_function!(sha::SHAFunc, sha512, sha::SHAFunc::sha512);
 
 pub mod expr_fn {
     export_functions!((

@@ -19,11 +19,11 @@ use super::{
     LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalUnionFields,
     TypeSignature,
 };
-use crate::error::{Result, _internal_err};
+use crate::error::{_internal_err, Result};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
-    DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
+    Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
 use std::{fmt::Display, sync::Arc};
 
@@ -241,9 +241,7 @@ impl LogicalType for NativeType {
             (Self::Decimal(p, s), _) => Decimal256(*p, *s),
             (Self::Timestamp(tu, tz), _) => Timestamp(*tu, tz.clone()),
             // If given type is Date, return the same type
-            (Self::Date, origin) if matches!(origin, Date32 | Date64) => {
-                origin.to_owned()
-            }
+            (Self::Date, Date32 | Date64) => origin.to_owned(),
             (Self::Date, _) => Date32,
             (Self::Time(tu), _) => match tu {
                 TimeUnit::Second | TimeUnit::Millisecond => Time32(*tu),
@@ -253,6 +251,8 @@ impl LogicalType for NativeType {
             (Self::Interval(iu), _) => Interval(*iu),
             (Self::Binary, LargeUtf8) => LargeBinary,
             (Self::Binary, Utf8View) => BinaryView,
+            // We don't cast to another kind of binary type if the origin one is already a binary type
+            (Self::Binary, Binary | LargeBinary | BinaryView) => origin.to_owned(),
             (Self::Binary, data_type) if can_cast_types(data_type, &BinaryView) => {
                 BinaryView
             }
@@ -364,7 +364,7 @@ impl LogicalType for NativeType {
                     "Unavailable default cast for native type {} from physical type {}",
                     self,
                     origin
-                )
+                );
             }
         })
     }

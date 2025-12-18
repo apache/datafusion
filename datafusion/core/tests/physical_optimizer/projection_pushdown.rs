@@ -26,8 +26,8 @@ use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::TableSchema;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{
@@ -35,16 +35,16 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr::expressions::{
-    binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
+    BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr, binary, cast, col,
 };
 use datafusion_physical_expr::{Distribution, Partitioning, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -52,13 +52,13 @@ use datafusion_physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
     SymmetricHashJoinExec,
 };
-use datafusion_physical_plan::projection::{update_expr, ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr, update_expr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::{displayable, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use insta::assert_snapshot;
 use itertools::Itertools;
@@ -230,9 +230,11 @@ fn test_update_matching_exprs() -> Result<()> {
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
     for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
-        assert!(update_expr(&expr, &child_exprs, true)?
-            .unwrap()
-            .eq(&expected_expr));
+        assert!(
+            update_expr(&expr, &child_exprs, true)?
+                .unwrap()
+                .eq(&expected_expr)
+        );
     }
 
     Ok(())
@@ -369,9 +371,11 @@ fn test_update_projected_exprs() -> Result<()> {
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
     for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
-        assert!(update_expr(&expr, &proj_exprs, false)?
-            .unwrap()
-            .eq(&expected_expr));
+        assert!(
+            update_expr(&expr, &proj_exprs, false)?
+                .unwrap()
+                .eq(&expected_expr)
+        );
     }
 
     Ok(())
@@ -395,8 +399,9 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
             };
             Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
         })
-        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_file(PartitionedFile::new("x", 100))
         .with_projection_indices(Some(vec![0, 1, 2, 3, 4]))
+        .unwrap()
         .build();
 
     DataSourceExec::from_data_source(config)
@@ -419,8 +424,9 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
             };
             Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
         })
-        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_file(PartitionedFile::new("x", 100))
         .with_projection_indices(Some(vec![3, 2, 1]))
+        .unwrap()
         .build();
 
     DataSourceExec::from_data_source(config)
@@ -443,8 +449,8 @@ fn test_csv_after_projection() -> Result<()> {
     let csv = create_projecting_csv_exec();
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("b", 2)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 0)), "d".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("b", 2)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 0)), "d"),
         ],
         csv.clone(),
     )?);
@@ -480,9 +486,9 @@ fn test_memory_after_projection() -> Result<()> {
     let memory = create_projecting_memory_exec();
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("d", 2)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 3)), "e".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 1)), "a".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("d", 2)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 3)), "e"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 1)), "a"),
         ],
         memory.clone(),
     )?);
@@ -586,9 +592,9 @@ fn test_streaming_table_after_projection() -> Result<()> {
     )?;
     let projection = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 2)), "e".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 2)), "e"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
         ],
         Arc::new(streaming_table) as _,
     )?) as _;
@@ -653,28 +659,25 @@ fn test_projection_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let child_projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 4)), "new_e".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "new_b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 4)), "new_e"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "new_b"),
         ],
         csv.clone(),
     )?);
     let top_projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("new_b", 3)), "new_b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("new_b", 3)), "new_b"),
             ProjectionExpr::new(
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("c", 0)),
                     Operator::Plus,
                     Arc::new(Column::new("new_e", 1)),
                 )),
-                "binary".to_string(),
+                "binary",
             ),
-            ProjectionExpr::new(
-                Arc::new(Column::new("new_b", 3)),
-                "newest_b".to_string(),
-            ),
+            ProjectionExpr::new(Arc::new(Column::new("new_b", 3)), "newest_b"),
         ],
         child_projection.clone(),
     )?);
@@ -703,10 +706,7 @@ fn test_projection_after_projection() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r"
-    ProjectionExec: expr=[b@1 as new_b, c@2 + e@4 as binary, b@1 as newest_b]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-    "
+        @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[b@1 as new_b, c@2 + e@4 as binary, b@1 as newest_b], file_type=csv, has_header=false"
     );
 
     Ok(())
@@ -742,9 +742,9 @@ fn test_output_req_after_projection() -> Result<()> {
     ));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
         ],
         sort_req.clone(),
     )?);
@@ -773,8 +773,7 @@ fn test_output_req_after_projection() -> Result<()> {
         actual,
         @r"
     OutputRequirementExec: order_by=[(b@2, asc), (c@0 + new_a@1, asc)], dist_by=HashPartitioned[[new_a@1, b@2]])
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
 
@@ -816,10 +815,11 @@ fn test_output_req_after_projection() -> Result<()> {
         .required_input_distribution()[0]
         .clone()
     {
-        assert!(vec
-            .iter()
-            .zip(expected_distribution)
-            .all(|(actual, expected)| actual.eq(&expected)));
+        assert!(
+            vec.iter()
+                .zip(expected_distribution)
+                .all(|(actual, expected)| actual.eq(&expected))
+        );
     } else {
         panic!("Expected HashPartitioned distribution!");
     };
@@ -834,9 +834,9 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
         Arc::new(CoalescePartitionsExec::new(csv));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_new".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_new"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d"),
         ],
         coalesce_partitions,
     )?);
@@ -864,8 +864,7 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
         actual,
         @r"
     CoalescePartitionsExec
-      ProjectionExec: expr=[b@1 as b, a@0 as a_new, d@3 as d]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[b, a@0 as a_new, d], file_type=csv, has_header=false
     "
     );
 
@@ -891,9 +890,9 @@ fn test_filter_after_projection() -> Result<()> {
     let filter = Arc::new(FilterExec::try_new(predicate, csv)?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_new".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_new"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d"),
         ],
         filter.clone(),
     )?) as _;
@@ -922,8 +921,7 @@ fn test_filter_after_projection() -> Result<()> {
         actual,
         @r"
     FilterExec: b@1 - a_new@0 > d@2 - a_new@0
-      ProjectionExec: expr=[a@0 as a_new, b@1 as b, d@3 as d]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a@0 as a_new, b, d], file_type=csv, has_header=false
     "
     );
 
@@ -986,17 +984,11 @@ fn test_join_after_projection() -> Result<()> {
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left".to_string()),
-            ProjectionExpr::new(
-                Arc::new(Column::new("a", 5)),
-                "a_from_right".to_string(),
-            ),
-            ProjectionExpr::new(
-                Arc::new(Column::new("c", 7)),
-                "c_from_right".to_string(),
-            ),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 5)), "a_from_right"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c_from_right"),
         ],
         join,
     )?) as _;
@@ -1025,10 +1017,8 @@ fn test_join_after_projection() -> Result<()> {
         actual,
         @r"
     SymmetricHashJoinExec: mode=SinglePartition, join_type=Inner, on=[(b_from_left@1, c_from_right@1)], filter=b_left_inter@0 - 1 + a_right_inter@1 <= a_right_inter@1 + c_left_inter@2
-      ProjectionExec: expr=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-      ProjectionExec: expr=[a@0 as a_from_right, c@2 as c_from_right]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c@2 as c_from_left, b@1 as b_from_left, a@0 as a_from_left], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a@0 as a_from_right, c@2 as c_from_right], file_type=csv, has_header=false
     "
     );
 
@@ -1117,16 +1107,16 @@ fn test_join_after_required_projection() -> Result<()> {
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("a", 5)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 6)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 8)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 9)), "e".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 4)), "e".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("a", 5)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 6)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 8)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 9)), "e"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 4)), "e"),
         ],
         join,
     )?) as _;
@@ -1206,7 +1196,7 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
     )?) as _;
 
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-        vec![ProjectionExpr::new(col_left_c, "c".to_string())],
+        vec![ProjectionExpr::new(col_left_c, "c")],
         Arc::clone(&join),
     )?) as _;
     let initial = displayable(projection.as_ref()).indent(true).to_string();
@@ -1296,13 +1286,10 @@ fn test_hash_join_after_projection() -> Result<()> {
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left".to_string()),
-            ProjectionExpr::new(
-                Arc::new(Column::new("c", 7)),
-                "c_from_right".to_string(),
-            ),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c_from_right"),
         ],
         join.clone(),
     )?) as _;
@@ -1338,10 +1325,10 @@ fn test_hash_join_after_projection() -> Result<()> {
 
     let projection = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c"),
         ],
         join.clone(),
     )?);
@@ -1382,9 +1369,9 @@ fn test_repartition_after_projection() -> Result<()> {
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_new".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d_new".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_new"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d_new"),
         ],
         repartition,
     )?) as _;
@@ -1410,8 +1397,7 @@ fn test_repartition_after_projection() -> Result<()> {
         actual,
         @r"
     RepartitionExec: partitioning=Hash([a@1, b_new@0, d_new@2], 6), input_partitions=1
-      ProjectionExec: expr=[b@1 as b_new, a@0 as a, d@3 as d_new]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[b@1 as b_new, a, d@3 as d_new], file_type=csv, has_header=false
     "
     );
 
@@ -1452,9 +1438,9 @@ fn test_sort_after_projection() -> Result<()> {
     );
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
         ],
         Arc::new(sort_exec),
     )?) as _;
@@ -1481,8 +1467,7 @@ fn test_sort_after_projection() -> Result<()> {
         actual,
         @r"
     SortExec: expr=[b@2 ASC, c@0 + new_a@1 ASC], preserve_partitioning=[false]
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
 
@@ -1506,9 +1491,9 @@ fn test_sort_preserving_after_projection() -> Result<()> {
     );
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
         ],
         Arc::new(sort_exec),
     )?) as _;
@@ -1535,8 +1520,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
         actual,
         @r"
     SortPreservingMergeExec: [b@2 ASC, c@0 + new_a@1 ASC]
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
 
@@ -1549,9 +1533,9 @@ fn test_union_after_projection() -> Result<()> {
     let union = UnionExec::try_new(vec![csv.clone(), csv.clone(), csv])?;
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
         ],
         union.clone(),
     )?) as _;
@@ -1580,12 +1564,9 @@ fn test_union_after_projection() -> Result<()> {
         actual,
         @r"
     UnionExec
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
-      ProjectionExec: expr=[c@2 as c, a@0 as new_a, b@1 as b]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[c, a@0 as new_a, b], file_type=csv, has_header=false
     "
     );
 
@@ -1614,8 +1595,9 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         ObjectStoreUrl::parse("test:///").unwrap(),
         Arc::new(CsvSource::new(table_schema).with_csv_options(options)),
     )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_file(PartitionedFile::new("x", 100))
     .with_projection_indices(Some(vec![0, 1, 2]))
+    .unwrap()
     .build();
 
     DataSourceExec::from_data_source(config)
@@ -1630,16 +1612,13 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
         vec![
             ProjectionExpr::new(
                 col("string_col", partitioned_schema.as_ref())?,
-                "string_col".to_string(),
+                "string_col",
             ),
             ProjectionExpr::new(
                 col("partition_col", partitioned_schema.as_ref())?,
-                "partition_col".to_string(),
+                "partition_col",
             ),
-            ProjectionExpr::new(
-                col("int_col", partitioned_schema.as_ref())?,
-                "int_col".to_string(),
-            ),
+            ProjectionExpr::new(col("int_col", partitioned_schema.as_ref())?, "int_col"),
         ],
         source,
     )?);
@@ -1653,10 +1632,7 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
-        @r"
-    ProjectionExec: expr=[string_col@1 as string_col, partition_col@2 as partition_col, int_col@0 as int_col]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[int_col, string_col, partition_col], file_type=csv, has_header=false
-    "
+        @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[string_col, partition_col, int_col], file_type=csv, has_header=false"
     );
 
     Ok(())
@@ -1671,7 +1647,7 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
         vec![
             ProjectionExpr::new(
                 col("string_col", partitioned_schema.as_ref())?,
-                "string_col".to_string(),
+                "string_col",
             ),
             ProjectionExpr::new(
                 // CAST(partition_col, Utf8View)
@@ -1680,12 +1656,9 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
                     partitioned_schema.as_ref(),
                     DataType::Utf8View,
                 )?,
-                "partition_col".to_string(),
+                "partition_col",
             ),
-            ProjectionExpr::new(
-                col("int_col", partitioned_schema.as_ref())?,
-                "int_col".to_string(),
-            ),
+            ProjectionExpr::new(col("int_col", partitioned_schema.as_ref())?, "int_col"),
         ],
         source,
     )?);
@@ -1699,10 +1672,7 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
     let actual = after_optimize_string.trim();
     assert_snapshot!(
         actual,
-        @r"
-    ProjectionExec: expr=[string_col@1 as string_col, CAST(partition_col@2 AS Utf8View) as partition_col, int_col@0 as int_col]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[int_col, string_col, partition_col], file_type=csv, has_header=false
-    "
+        @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[string_col, CAST(partition_col@2 AS Utf8View) as partition_col, int_col], file_type=csv, has_header=false"
     );
 
     Ok(())

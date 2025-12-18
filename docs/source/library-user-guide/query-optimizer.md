@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion Query Optimizer
+# Query Optimizer
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
 format.
@@ -25,8 +25,11 @@ format.
 DataFusion has modular design, allowing individual crates to be re-used in other projects.
 
 This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
-contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so
+contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRules`] that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.
+
+[`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
+[`physicaloptimizerrules`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
 
 ## Running the Optimizer
 
@@ -68,7 +71,7 @@ fn observer(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
 ## Writing Optimization Rules
 
 Please refer to the
-[optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/optimizer_rule.rs)
+[optimizer_rule.rs](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/optimizer_rule.rs)
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.
 
@@ -478,13 +481,10 @@ fn analyze_filter_example() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![age]));
 
     // Define column statistics
-    let column_stats = ColumnStatistics {
-        null_count: Precision::Exact(0),
-        max_value: Precision::Exact(ScalarValue::Int64(Some(79))),
-        min_value: Precision::Exact(ScalarValue::Int64(Some(14))),
-        distinct_count: Precision::Absent,
-        sum_value: Precision::Absent,
-    };
+    let column_stats = ColumnStatistics::default()
+        .with_min_value(Precision::Exact(ScalarValue::Int64(Some(14))))
+        .with_max_value(Precision::Exact(ScalarValue::Int64(Some(79))))
+        .with_null_count(Precision::Exact(0));
 
     // Create expression: age > 18 AND age <= 25
     let expr = col("age")

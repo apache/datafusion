@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, ops::Deref};
-
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
     StableAbi,
+    std_types::{RResult, RVec},
 };
 use arrow::{array::ArrayRef, error::ArrowError};
 use datafusion::{
@@ -28,7 +26,10 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use prost::Message;
+use std::ptr::null_mut;
+use std::{ffi::c_void, ops::Deref};
 
+use crate::util::FFIResult;
 use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`Accumulator`] across FFI boundaries.
@@ -41,26 +42,24 @@ pub struct FFI_Accumulator {
     pub update_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
         values: RVec<WrappedArray>,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     // Evaluate and return a ScalarValues as protobuf bytes
-    pub evaluate:
-        unsafe extern "C" fn(accumulator: &mut Self) -> RResult<RVec<u8>, RString>,
+    pub evaluate: unsafe extern "C" fn(accumulator: &mut Self) -> FFIResult<RVec<u8>>,
 
     pub size: unsafe extern "C" fn(accumulator: &Self) -> usize,
 
-    pub state:
-        unsafe extern "C" fn(accumulator: &mut Self) -> RResult<RVec<RVec<u8>>, RString>,
+    pub state: unsafe extern "C" fn(accumulator: &mut Self) -> FFIResult<RVec<RVec<u8>>>,
 
     pub merge_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
         states: RVec<WrappedArray>,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     pub retract_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
         values: RVec<WrappedArray>,
-    ) -> RResult<(), RString>,
+    ) -> FFIResult<()>,
 
     pub supports_retract_batch: bool,
 
@@ -70,6 +69,11 @@ pub struct FFI_Accumulator {
     /// Internal data. This is only to be accessed by the provider of the accumulator.
     /// A [`ForeignAccumulator`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_Accumulator {}
@@ -82,100 +86,121 @@ pub struct AccumulatorPrivateData {
 impl FFI_Accumulator {
     #[inline]
     unsafe fn inner_mut(&mut self) -> &mut Box<dyn Accumulator> {
-        let private_data = self.private_data as *mut AccumulatorPrivateData;
-        &mut (*private_data).accumulator
+        unsafe {
+            let private_data = self.private_data as *mut AccumulatorPrivateData;
+            &mut (*private_data).accumulator
+        }
     }
 
     #[inline]
     unsafe fn inner(&self) -> &dyn Accumulator {
-        let private_data = self.private_data as *const AccumulatorPrivateData;
-        (*private_data).accumulator.deref()
+        unsafe {
+            let private_data = self.private_data as *const AccumulatorPrivateData;
+            (*private_data).accumulator.deref()
+        }
     }
 }
 
 unsafe extern "C" fn update_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
-) -> RResult<(), RString> {
-    let accumulator = accumulator.inner_mut();
+) -> FFIResult<()> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
+        let values_arrays = values
+            .into_iter()
+            .map(|v| v.try_into().map_err(DataFusionError::from))
+            .collect::<Result<Vec<ArrayRef>>>();
+        let values_arrays = rresult_return!(values_arrays);
 
-    rresult!(accumulator.update_batch(&values_arrays))
+        rresult!(accumulator.update_batch(&values_arrays))
+    }
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
-) -> RResult<RVec<u8>, RString> {
-    let accumulator = accumulator.inner_mut();
+) -> FFIResult<RVec<u8>> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let scalar_result = rresult_return!(accumulator.evaluate());
-    let proto_result: datafusion_proto::protobuf::ScalarValue =
-        rresult_return!((&scalar_result).try_into());
+        let scalar_result = rresult_return!(accumulator.evaluate());
+        let proto_result: datafusion_proto::protobuf::ScalarValue =
+            rresult_return!((&scalar_result).try_into());
 
-    RResult::ROk(proto_result.encode_to_vec().into())
+        RResult::ROk(proto_result.encode_to_vec().into())
+    }
 }
 
 unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_Accumulator) -> usize {
-    accumulator.inner().size()
+    unsafe { accumulator.inner().size() }
 }
 
 unsafe extern "C" fn state_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
-) -> RResult<RVec<RVec<u8>>, RString> {
-    let accumulator = accumulator.inner_mut();
+) -> FFIResult<RVec<RVec<u8>>> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let state = rresult_return!(accumulator.state());
-    let state = state
-        .into_iter()
-        .map(|state_val| {
-            datafusion_proto::protobuf::ScalarValue::try_from(&state_val)
-                .map_err(DataFusionError::from)
-                .map(|v| RVec::from(v.encode_to_vec()))
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(|state_vec| state_vec.into());
+        let state = rresult_return!(accumulator.state());
+        let state = state
+            .into_iter()
+            .map(|state_val| {
+                datafusion_proto::protobuf::ScalarValue::try_from(&state_val)
+                    .map_err(DataFusionError::from)
+                    .map(|v| RVec::from(v.encode_to_vec()))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|state_vec| state_vec.into());
 
-    rresult!(state)
+        rresult!(state)
+    }
 }
 
 unsafe extern "C" fn merge_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     states: RVec<WrappedArray>,
-) -> RResult<(), RString> {
-    let accumulator = accumulator.inner_mut();
+) -> FFIResult<()> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let states = rresult_return!(states
-        .into_iter()
-        .map(|state| ArrayRef::try_from(state).map_err(DataFusionError::from))
-        .collect::<Result<Vec<_>>>());
+        let states = rresult_return!(
+            states
+                .into_iter()
+                .map(|state| ArrayRef::try_from(state).map_err(DataFusionError::from))
+                .collect::<Result<Vec<_>>>()
+        );
 
-    rresult!(accumulator.merge_batch(&states))
+        rresult!(accumulator.merge_batch(&states))
+    }
 }
 
 unsafe extern "C" fn retract_batch_fn_wrapper(
     accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
-) -> RResult<(), RString> {
-    let accumulator = accumulator.inner_mut();
+) -> FFIResult<()> {
+    unsafe {
+        let accumulator = accumulator.inner_mut();
 
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
+        let values_arrays = values
+            .into_iter()
+            .map(|v| v.try_into().map_err(DataFusionError::from))
+            .collect::<Result<Vec<ArrayRef>>>();
+        let values_arrays = rresult_return!(values_arrays);
 
-    rresult!(accumulator.retract_batch(&values_arrays))
+        rresult!(accumulator.retract_batch(&values_arrays))
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
-    let private_data =
-        Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
-    drop(private_data);
+    unsafe {
+        if !accumulator.private_data.is_null() {
+            let private_data =
+                Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
+            drop(private_data);
+            accumulator.private_data = null_mut();
+        }
+    }
 }
 
 impl From<Box<dyn Accumulator>> for FFI_Accumulator {
@@ -193,6 +218,7 @@ impl From<Box<dyn Accumulator>> for FFI_Accumulator {
             supports_retract_batch,
             release: release_fn_wrapper,
             private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -214,12 +240,20 @@ pub struct ForeignAccumulator {
     accumulator: FFI_Accumulator,
 }
 
-unsafe impl Send for ForeignAccumulator {}
-unsafe impl Sync for ForeignAccumulator {}
-
-impl From<FFI_Accumulator> for ForeignAccumulator {
-    fn from(accumulator: FFI_Accumulator) -> Self {
-        Self { accumulator }
+impl From<FFI_Accumulator> for Box<dyn Accumulator> {
+    fn from(mut accumulator: FFI_Accumulator) -> Self {
+        if (accumulator.library_marker_id)() == crate::get_library_marker_id() {
+            unsafe {
+                let private_data = Box::from_raw(
+                    accumulator.private_data as *mut AccumulatorPrivateData,
+                );
+                // We must set this to null to avoid a double free
+                accumulator.private_data = null_mut();
+                private_data.accumulator
+            }
+        } else {
+            Box::new(ForeignAccumulator { accumulator })
+        }
     }
 }
 
@@ -306,14 +340,13 @@ impl Accumulator for ForeignAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{make_array, Array};
+    use super::{FFI_Accumulator, ForeignAccumulator};
+    use arrow::array::{Array, make_array};
     use datafusion::{
         common::create_array, error::Result,
         functions_aggregate::average::AvgAccumulator, logical_expr::Accumulator,
         scalar::ScalarValue,
     };
-
-    use super::{FFI_Accumulator, ForeignAccumulator};
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
@@ -322,8 +355,9 @@ mod tests {
         let original_supports_retract = original_accum.supports_retract_batch();
 
         let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
-        let ffi_accum: FFI_Accumulator = boxed_accum.into();
-        let mut foreign_accum: ForeignAccumulator = ffi_accum.into();
+        let mut ffi_accum: FFI_Accumulator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
+        let mut foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
 
         // Send in an array to average. There are 5 values and it should average to 30.0
         let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
@@ -360,6 +394,37 @@ mod tests {
             original_supports_retract,
             foreign_accum.supports_retract_batch()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_accumulator_local_bypass() -> Result<()> {
+        let original_accum = AvgAccumulator::default();
+        let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
+        let original_size = boxed_accum.size();
+
+        let ffi_accum: FFI_Accumulator = boxed_accum.into();
+
+        // Verify local libraries can be downcast to their original
+        let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
+                as *const AvgAccumulator);
+            assert_eq!(original_size, concrete.size());
+        }
+
+        // Verify different library markers generate foreign accumulator
+        let original_accum = AvgAccumulator::default();
+        let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
+        let mut ffi_accum: FFI_Accumulator = boxed_accum.into();
+        ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
+        unsafe {
+            let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
+                as *const ForeignAccumulator);
+            assert_eq!(original_size, concrete.size());
+        }
 
         Ok(())
     }

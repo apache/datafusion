@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::datetime::common::*;
+use arrow::compute::cast_with_options;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
-use datafusion_common::error::DataFusionError;
-use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+use datafusion_common::{Result, arrow_err, exec_err, internal_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -31,7 +32,7 @@ use std::any::Any;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r"Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
@@ -53,7 +54,7 @@ Note: `to_date` returns Date32, which represents its values as the number of day
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     standard_argument(name = "expression", prefix = "String"),
     argument(
@@ -145,8 +146,41 @@ impl ScalarUDFImpl for ToDateFunc {
         }
 
         match args[0].data_type() {
-            Int32 | Int64 | Null | Float64 | Date32 | Date64 => {
+            Null | Int32 | Int64 | Date32 | Date64 | Timestamp(_, _) => {
                 args[0].cast_to(&Date32, None)
+            }
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 => {
+                // Arrow cast doesn't support direct casting of these types to date32
+                // as it only supports Int32 and Int64. To work around that limitation,
+                // use cast_with_options to cast to Int32 and then cast the result of
+                // that to Date32.
+                match &args[0] {
+                    ColumnarValue::Array(array) => {
+                        Ok(ColumnarValue::Array(cast_with_options(
+                            &cast_with_options(&array, &Int32, &DEFAULT_CAST_OPTIONS)?,
+                            &Date32,
+                            &DEFAULT_CAST_OPTIONS,
+                        )?))
+                    }
+                    ColumnarValue::Scalar(scalar) => {
+                        let sv =
+                            scalar.cast_to_with_options(&Int32, &DEFAULT_CAST_OPTIONS)?;
+                        Ok(ColumnarValue::Scalar(
+                            sv.cast_to_with_options(&Date32, &DEFAULT_CAST_OPTIONS)?,
+                        ))
+                    }
+                }
+            }
+            Float16
+            | Float32
+            | Float64
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
+                // The only way this makes sense is to get the Int64 value of the float
+                // or decimal and then cast that to Date32.
+                args[0].cast_to(&Int64, None)?.cast_to(&Date32, None)
             }
             Utf8View | LargeUtf8 | Utf8 => self.to_date(&args),
             other => {
@@ -352,7 +386,11 @@ mod tests {
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
                     let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
-                    assert_eq!(date_val, expected, "{}: to_date created wrong value for date '{}' with format string '{}'", tc.name, tc.formatted_date, tc.format_str);
+                    assert_eq!(
+                        date_val, expected,
+                        "{}: to_date created wrong value for date '{}' with format string '{}'",
+                        tc.name, tc.formatted_date, tc.format_str
+                    );
                 }
                 _ => panic!(
                     "Could not convert '{}' with format string '{}'to Date",
@@ -386,7 +424,8 @@ mod tests {
                     builder.append_value(expected.unwrap());
 
                     assert_eq!(
-                        &builder.finish() as &dyn Array, a.as_ref(),
+                        &builder.finish() as &dyn Array,
+                        a.as_ref(),
                         "{}: to_date created wrong value for date '{}' with format string '{}'",
                         tc.name,
                         tc.formatted_date,

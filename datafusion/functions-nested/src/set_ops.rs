@@ -19,8 +19,8 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericListArray, LargeListArray, ListArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, GenericListArray, LargeListArray, ListArray, OffsetSizeTrait,
+    new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
@@ -30,8 +30,7 @@ use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
-    DataFusionError, Result,
+    Result, assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -501,13 +500,11 @@ fn general_set_op(
     }
 }
 
-/// Array_union SQL function
 fn array_union_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_union", args)?;
     general_set_op(array1, array2, SetOp::Union)
 }
 
-/// array_intersect SQL function
 fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_intersect", args)?;
     general_set_op(array1, array2, SetOp::Intersect)
@@ -541,7 +538,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         let array = match arrays.first() {
             Some(array) => Arc::clone(array),
             None => {
-                return internal_err!("array_distinct: failed to get array from rows")
+                return internal_err!("array_distinct: failed to get array from rows");
             }
         };
         new_arrays.push(array);
@@ -570,14 +567,14 @@ mod tests {
         buffer::OffsetBuffer,
         datatypes::{DataType, Field},
     };
-    use datafusion_common::{config::ConfigOptions, DataFusionError};
+    use datafusion_common::{DataFusionError, config::ConfigOptions};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 
     use crate::set_ops::array_distinct_udf;
 
     #[test]
-    fn test_array_distinct_inner_nullability_result_type_match_return_type(
-    ) -> Result<(), DataFusionError> {
+    fn test_array_distinct_inner_nullability_result_type_match_return_type()
+    -> Result<(), DataFusionError> {
         let udf = array_distinct_udf();
 
         for inner_nullable in [true, false] {

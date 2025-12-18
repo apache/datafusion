@@ -39,6 +39,7 @@ workspace = true
 
 [features]
 force_hash_collisions = []
+test_utils = ["arrow/test_utils"]
 tokio_coop = []
 tokio_coop_fallback = []
 
@@ -51,11 +52,11 @@ arrow = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
@@ -99,3 +100,4 @@ name = "sort_preserving_merge"
 [[bench]]
 harness = false
 name = "aggregate_vectorized"
+required-features = ["test_utils"]

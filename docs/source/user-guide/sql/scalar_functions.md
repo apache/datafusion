@@ -2125,7 +2125,7 @@ upper(str)
 
 ### `uuid`
 
-Returns [`UUID v4`](<https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)>) string value which is unique per row.
+Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_%28random%29) string value which is unique per row.
 
 ```sql
 uuid()
@@ -2294,7 +2294,7 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 +--------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ### `regexp_match`
 
@@ -2333,7 +2333,7 @@ regexp_match(str, regexp[, flags])
             +---------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ### `regexp_replace`
 
@@ -2374,7 +2374,7 @@ SELECT regexp_replace('aBc', '(b|d)', 'Ab\\1a', 'i');
 +-------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 
 ## Time and Date Functions
 
@@ -2389,6 +2389,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [datetrunc](#datetrunc)
 - [from_unixtime](#from_unixtime)
 - [make_date](#make_date)
+- [make_time](#make_time)
 - [now](#now)
 - [to_char](#to_char)
 - [to_date](#to_date)
@@ -2625,7 +2626,40 @@ make_date(year, month, day)
 +-----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
+
+### `make_time`
+
+Make a time from hour/minute/second component parts.
+
+```sql
+make_time(hour, minute, second)
+```
+
+#### Arguments
+
+- **hour**: Hour to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **minute**: Minute to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+- **second**: Second to use when making the time. Can be a constant, column or function, and any combination of arithmetic operators.
+
+#### Example
+
+```sql
+> select make_time(13, 23, 1);
++-------------------------------------------+
+| make_time(Int64(13),Int64(23),Int64(1))   |
++-------------------------------------------+
+| 13:23:01                                  |
++-------------------------------------------+
+> select make_time('23', '01', '31');
++-----------------------------------------------+
+| make_time(Utf8("23"),Utf8("01"),Utf8("31"))   |
++-----------------------------------------------+
+| 23:01:31                                      |
++-----------------------------------------------+
+```
+
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `now`
 
@@ -2666,7 +2700,7 @@ to_char(expression, format)
 +----------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 #### Aliases
 
@@ -2675,7 +2709,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ### `to_date`
 
 Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
@@ -2710,7 +2744,7 @@ to_date('2017-05-31', '%Y-%m-%d')
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_local_time`
 
@@ -2805,7 +2839,7 @@ to_timestamp(expression[, ..., format_n])
 +--------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_micros`
 
@@ -2837,7 +2871,7 @@ to_timestamp_micros(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_millis`
 
@@ -2869,7 +2903,7 @@ to_timestamp_millis(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_nanos`
 
@@ -2901,7 +2935,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 +---------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_timestamp_seconds`
 
@@ -2933,7 +2967,7 @@ to_timestamp_seconds(expression[, ..., format_n])
 +----------------------------------------------------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/date_time_functions.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 
 ### `to_unixtime`
 
@@ -4767,11 +4801,11 @@ digest(expression, algorithm)
 
 ```sql
 > select digest('foo', 'sha256');
-+------------------------------------------+
-| digest(Utf8("foo"), Utf8("sha256"))      |
-+------------------------------------------+
-| <binary_hash_result>                     |
-+------------------------------------------+
++------------------------------------------------------------------+
+| digest(Utf8("foo"),Utf8("sha256"))                               |
++------------------------------------------------------------------+
+| 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae |
++------------------------------------------------------------------+
 ```
 
 ### `md5`
@@ -4790,11 +4824,11 @@ md5(expression)
 
 ```sql
 > select md5('foo');
-+-------------------------------------+
-| md5(Utf8("foo"))                    |
-+-------------------------------------+
-| <md5_checksum_result>               |
-+-------------------------------------+
++----------------------------------+
+| md5(Utf8("foo"))                 |
++----------------------------------+
+| acbd18db4cc2f85cedef654fccc4a4d8 |
++----------------------------------+
 ```
 
 ### `sha224`
@@ -4813,11 +4847,11 @@ sha224(expression)
 
 ```sql
 > select sha224('foo');
-+------------------------------------------+
-| sha224(Utf8("foo"))                      |
-+------------------------------------------+
-| <sha224_hash_result>                     |
-+------------------------------------------+
++----------------------------------------------------------+
+| sha224(Utf8("foo"))                                      |
++----------------------------------------------------------+
+| 0808f64e60d58979fcb676c96ec938270dea42445aeefcd3a4e6f8db |
++----------------------------------------------------------+
 ```
 
 ### `sha256`
@@ -4836,11 +4870,11 @@ sha256(expression)
 
 ```sql
 > select sha256('foo');
-+--------------------------------------+
-| sha256(Utf8("foo"))                  |
-+--------------------------------------+
-| <sha256_hash_result>                 |
-+--------------------------------------+
++------------------------------------------------------------------+
+| sha256(Utf8("foo"))                                              |
++------------------------------------------------------------------+
+| 2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae |
++------------------------------------------------------------------+
 ```
 
 ### `sha384`
@@ -4859,11 +4893,11 @@ sha384(expression)
 
 ```sql
 > select sha384('foo');
-+-----------------------------------------+
-| sha384(Utf8("foo"))                     |
-+-----------------------------------------+
-| <sha384_hash_result>                    |
-+-----------------------------------------+
++--------------------------------------------------------------------------------------------------+
+| sha384(Utf8("foo"))                                                                              |
++--------------------------------------------------------------------------------------------------+
+| 98c11ffdfdd540676b1a137cb1a22b2a70350c9a44171d6b1180c6be5cbb2ee3f79d532c8a1dd9ef2e8e08e752a3babb |
++--------------------------------------------------------------------------------------------------+
 ```
 
 ### `sha512`
@@ -4882,11 +4916,11 @@ sha512(expression)
 
 ```sql
 > select sha512('foo');
-+-------------------------------------------+
-| sha512(Utf8("foo"))                       |
-+-------------------------------------------+
-| <sha512_hash_result>                      |
-+-------------------------------------------+
++----------------------------------------------------------------------------------------------------------------------------------+
+| sha512(Utf8("foo"))                                                                                                              |
++----------------------------------------------------------------------------------------------------------------------------------+
+| f7fbba6e0636f890e56fbbf3283e524c6fa3204ae298382d624741d0dc6638326e282c41be5e4254d8820772c5518a2c5a8c0c7f7eda19594a7eb539453e1ed7 |
++----------------------------------------------------------------------------------------------------------------------------------+
 ```
 
 ## Union Functions

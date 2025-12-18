@@ -17,7 +17,7 @@
 
 //! Rewrite expressions based on external expression value range guarantees.
 
-use crate::{expr::InList, lit, Between, BinaryExpr, Expr};
+use crate::{Between, BinaryExpr, Expr, expr::InList, lit};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, HashMap, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{Interval, NullableInterval};
@@ -102,10 +102,10 @@ fn rewrite_expr(
     guarantees: &HashMap<&Expr, &NullableInterval>,
 ) -> Result<Transformed<Expr>> {
     // If an expression collapses to a single value, replace it with a literal
-    if let Some(interval) = guarantees.get(&expr) {
-        if let Some(value) = interval.single_value() {
-            return Ok(Transformed::yes(lit(value)));
-        }
+    if let Some(interval) = guarantees.get(&expr)
+        && let Some(value) = interval.single_value()
+    {
+        return Ok(Transformed::yes(lit(value)));
     }
 
     let result = match expr {
@@ -302,9 +302,9 @@ fn rewrite_inlist(
 mod tests {
     use super::*;
 
-    use crate::{col, Operator};
-    use datafusion_common::tree_node::TransformedResult;
+    use crate::{Operator, col};
     use datafusion_common::ScalarValue;
+    use datafusion_common::tree_node::TransformedResult;
 
     #[test]
     fn test_not_null_guarantee() {

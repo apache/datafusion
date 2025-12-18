@@ -18,17 +18,17 @@
 //! [`DiskManager`]: Manages files generated during query execution
 
 use datafusion_common::{
-    config_err, resources_datafusion_err, resources_err, DataFusionError, Result,
+    DataFusionError, Result, config_err, resources_datafusion_err, resources_err,
 };
 use log::debug;
 use parking_lot::Mutex;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::{Builder, NamedTempFile, TempDir};
 
-use crate::memory_pool::human_readable_size;
+use datafusion_common::human_readable_size;
 
 pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 
@@ -115,9 +115,10 @@ pub enum DiskManagerMode {
 }
 
 /// Configuration for temporary disk access
-#[allow(deprecated)]
 #[deprecated(since = "48.0.0", note = "Use DiskManagerBuilder instead")]
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::allow_attributes)]
+#[allow(deprecated)]
 pub enum DiskManagerConfig {
     /// Use the provided [DiskManager] instance
     Existing(Arc<DiskManager>),
@@ -135,7 +136,7 @@ pub enum DiskManagerConfig {
     Disabled,
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl DiskManagerConfig {
     /// Create temporary files in a temporary directory chosen by the OS
     pub fn new() -> Self {
@@ -177,7 +178,7 @@ impl DiskManager {
     }
 
     /// Create a DiskManager given the configuration
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[deprecated(since = "48.0.0", note = "Use DiskManager::builder() instead")]
     pub fn try_new(config: DiskManagerConfig) -> Result<Arc<Self>> {
         match config {
@@ -508,7 +509,10 @@ mod tests {
         );
         assert!(!manager.tmp_files_enabled());
         assert_eq!(
-            manager.create_tmp_file("Testing").unwrap_err().strip_backtrace(),
+            manager
+                .create_tmp_file("Testing")
+                .unwrap_err()
+                .strip_backtrace(),
             "Resources exhausted: Memory Exhausted while Testing (DiskManager is disabled)",
         )
     }

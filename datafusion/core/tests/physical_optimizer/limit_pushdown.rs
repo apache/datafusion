@@ -27,16 +27,16 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{col, lit, BinaryExpr};
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, get_plan_string};
 
 fn create_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -96,51 +96,51 @@ fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> 
 
     let initial = get_plan_string(&global_limit);
     let expected_initial = [
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "GlobalLimitExec: skip=0, fetch=5",
+        "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(initial, expected_initial);
 
     let after_optimize =
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-            "StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true, fetch=5"
-        ];
+        "StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true, fetch=5",
+    ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())
 }
 
 #[test]
-fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_limit_when_skip_is_nonzero(
-) -> Result<()> {
+fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_limit_when_skip_is_nonzero()
+-> Result<()> {
     let schema = create_schema();
     let streaming_table = stream_exec(&schema);
     let global_limit = global_limit_exec(streaming_table, 2, Some(5));
 
     let initial = get_plan_string(&global_limit);
     let expected_initial = [
-            "GlobalLimitExec: skip=2, fetch=5",
-            "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "GlobalLimitExec: skip=2, fetch=5",
+        "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(initial, expected_initial);
 
     let after_optimize =
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-            "GlobalLimitExec: skip=2, fetch=5",
-            "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true, fetch=7"
-        ];
+        "GlobalLimitExec: skip=2, fetch=5",
+        "  StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true, fetch=7",
+    ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())
 }
 
 #[test]
-fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit(
-) -> Result<()> {
+fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit()
+-> Result<()> {
     let schema = create_schema();
     let streaming_table = stream_exec(&schema);
     let repartition = repartition_exec(streaming_table)?;
@@ -152,14 +152,14 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
 
     let initial = get_plan_string(&global_limit);
     let expected_initial = [
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  CoalescePartitionsExec",
-            "    LocalLimitExec: fetch=5",
-            "      CoalesceBatchesExec: target_batch_size=8192",
-            "        FilterExec: c3@2 > 0",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "GlobalLimitExec: skip=0, fetch=5",
+        "  CoalescePartitionsExec",
+        "    LocalLimitExec: fetch=5",
+        "      CoalesceBatchesExec: target_batch_size=8192",
+        "        FilterExec: c3@2 > 0",
+        "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(initial, expected_initial);
 
     let after_optimize =
@@ -170,8 +170,8 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
         "  CoalesceBatchesExec: target_batch_size=8192, fetch=5",
         "    FilterExec: c3@2 > 0",
         "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-        "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())
@@ -187,29 +187,29 @@ fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
 
     let initial = get_plan_string(&global_limit);
     let expected_initial = [
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-            "    FilterExec: c3@2 > 0",
-            "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "GlobalLimitExec: skip=0, fetch=5",
+        "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+        "    FilterExec: c3@2 > 0",
+        "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(initial, expected_initial);
 
     let after_optimize =
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-            "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-            "  FilterExec: c3@2 > 0, fetch=5",
-            "    StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+        "  FilterExec: c3@2 > 0, fetch=5",
+        "    StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())
 }
 
 #[test]
-fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version(
-) -> Result<()> {
+fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version()
+-> Result<()> {
     let schema = create_schema();
     let streaming_table = stream_exec(&schema);
     let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
@@ -218,11 +218,11 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
 
     let initial = get_plan_string(&global_limit);
     let expected_initial = [
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-            "    CoalesceBatchesExec: target_batch_size=8192",
-            "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "GlobalLimitExec: skip=0, fetch=5",
+        "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+        "    CoalesceBatchesExec: target_batch_size=8192",
+        "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
 
     assert_eq!(initial, expected_initial);
 
@@ -230,10 +230,10 @@ fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batc
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-            "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-            "  CoalesceBatchesExec: target_batch_size=8192, fetch=5",
-            "    StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+        "  CoalesceBatchesExec: target_batch_size=8192, fetch=5",
+        "    StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())
@@ -257,14 +257,14 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
 
     let initial = get_plan_string(&global_limit);
     let expected_initial = [
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  SortPreservingMergeExec: [c1@0 ASC]",
-            "    SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-            "          CoalesceBatchesExec: target_batch_size=8192",
-            "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "GlobalLimitExec: skip=0, fetch=5",
+        "  SortPreservingMergeExec: [c1@0 ASC]",
+        "    SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]",
+        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "        ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+        "          CoalesceBatchesExec: target_batch_size=8192",
+        "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
 
     assert_eq!(initial, expected_initial);
 
@@ -272,13 +272,13 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-            "SortPreservingMergeExec: [c1@0 ASC], fetch=5",
-            "  SortExec: TopK(fetch=5), expr=[c1@0 ASC], preserve_partitioning=[false]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-            "        CoalesceBatchesExec: target_batch_size=8192",
-            "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "SortPreservingMergeExec: [c1@0 ASC], fetch=5",
+        "  SortExec: TopK(fetch=5), expr=[c1@0 ASC], preserve_partitioning=[false]",
+        "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "      ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
+        "        CoalesceBatchesExec: target_batch_size=8192",
+        "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())
@@ -296,23 +296,23 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> R
 
     let initial = get_plan_string(&global_limit);
     let expected_initial = [
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  CoalescePartitionsExec",
-            "    FilterExec: c3@2 > 0",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "GlobalLimitExec: skip=0, fetch=5",
+        "  CoalescePartitionsExec",
+        "    FilterExec: c3@2 > 0",
+        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(initial, expected_initial);
 
     let after_optimize =
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-            "CoalescePartitionsExec: fetch=5",
-            "  FilterExec: c3@2 > 0, fetch=5",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
-        ];
+        "CoalescePartitionsExec: fetch=5",
+        "  FilterExec: c3@2 > 0, fetch=5",
+        "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+    ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
     Ok(())

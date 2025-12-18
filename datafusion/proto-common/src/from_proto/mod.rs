@@ -25,12 +25,14 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::buffer::Buffer;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{
-    i256, DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    Schema, TimeUnit, UnionFields, UnionMode,
+    DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
+    TimeUnit, UnionFields, UnionMode, i256,
 };
 use arrow::ipc::{reader::read_record_batch, root_as_message};
 
 use datafusion_common::{
+    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
         CsvOptions, JsonOptions, ParquetColumnOptions, ParquetOptions,
@@ -40,8 +42,6 @@ use datafusion_common::{
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
     stats::Precision,
-    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
 };
 
 #[derive(Debug)]
@@ -699,6 +699,11 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
             } else {
                 Precision::Absent
             },
+            byte_size: if let Some(sbs) = &cs.byte_size {
+                sbs.clone().into()
+            } else {
+                Precision::Absent
+            },
         }
     }
 }
@@ -900,9 +905,10 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             quote: proto_opts.quote[0],
             terminator: proto_opts.terminator.first().copied(),
             escape: proto_opts.escape.first().copied(),
-            double_quote: proto_opts.has_header.first().map(|h| *h != 0),
+            double_quote: proto_opts.double_quote.first().map(|h| *h != 0),
             newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
+            compression_level: proto_opts.compression_level,
             schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
             date_format: (!proto_opts.date_format.is_empty())
                 .then(|| proto_opts.date_format.clone()),
@@ -930,7 +936,6 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     fn try_from(
         value: &protobuf::ParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
@@ -943,6 +948,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 .unwrap_or(None),
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
+            force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as usize,
             write_batch_size: value.write_batch_size as usize,
             writer_version: value.writer_version.clone(),
@@ -1014,7 +1020,6 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
     fn try_from(
         value: &protobuf::ParquetColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),
@@ -1091,6 +1096,7 @@ impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
         let compression: protobuf::CompressionTypeVariant = proto_opts.compression();
         Ok(JsonOptions {
             compression: compression.into(),
+            compression_level: proto_opts.compression_level,
             schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
         })
     }

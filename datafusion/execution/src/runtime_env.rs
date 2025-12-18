@@ -18,7 +18,7 @@
 //! Execution [`RuntimeEnv`] environment that manages access to object
 //! store, memory manager, disk manager.
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 use crate::disk_manager::DiskManagerConfig;
 use crate::{
     disk_manager::{DiskManager, DiskManagerBuilder, DiskManagerMode},
@@ -31,14 +31,14 @@ use crate::{
 use crate::cache::cache_manager::{CacheManager, CacheManagerConfig};
 #[cfg(feature = "parquet_encryption")]
 use crate::parquet_encryption::{EncryptionFactory, EncryptionFactoryRegistry};
-use datafusion_common::{config::ConfigEntry, Result};
+use datafusion_common::{Result, config::ConfigEntry};
 use object_store::ObjectStore;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::{
     fmt::{Debug, Formatter},
     num::NonZeroUsize,
 };
+use std::{path::PathBuf, time::Duration};
 use url::Url;
 
 #[derive(Clone)]
@@ -101,6 +101,8 @@ fn create_runtime_config_entries(
     max_temp_directory_size: Option<String>,
     temp_directory: Option<String>,
     metadata_cache_limit: Option<String>,
+    list_files_cache_limit: Option<String>,
+    list_files_cache_ttl: Option<String>,
 ) -> Vec<ConfigEntry> {
     vec![
         ConfigEntry {
@@ -122,7 +124,17 @@ fn create_runtime_config_entries(
             key: "datafusion.runtime.metadata_cache_limit".to_string(),
             value: metadata_cache_limit,
             description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
-        }
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.list_files_cache_limit".to_string(),
+            value: list_files_cache_limit,
+            description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.list_files_cache_ttl".to_string(),
+            value: list_files_cache_ttl,
+            description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
+        },
     ]
 }
 
@@ -227,6 +239,14 @@ impl RuntimeEnv {
             }
         }
 
+        fn format_duration(duration: Duration) -> String {
+            let total = duration.as_secs();
+            let mins = total / 60;
+            let secs = total % 60;
+
+            format!("{mins}m{secs}s")
+        }
+
         let memory_limit_value = match self.memory_pool.memory_limit() {
             MemoryLimit::Finite(size) => Some(format_byte_size(
                 size.try_into()
@@ -259,11 +279,25 @@ impl RuntimeEnv {
                 .expect("Metadata cache size conversion failed"),
         );
 
+        let list_files_cache_limit = self.cache_manager.get_list_files_cache_limit();
+        let list_files_cache_value = format_byte_size(
+            list_files_cache_limit
+                .try_into()
+                .expect("List files cache size conversion failed"),
+        );
+
+        let list_files_cache_ttl = self
+            .cache_manager
+            .get_list_files_cache_ttl()
+            .map(format_duration);
+
         create_runtime_config_entries(
             memory_limit_value,
             Some(max_temp_dir_value),
             temp_dir_value,
             Some(metadata_cache_value),
+            Some(list_files_cache_value),
+            list_files_cache_ttl,
         )
     }
 }
@@ -279,7 +313,7 @@ impl Default for RuntimeEnv {
 /// See example on [`RuntimeEnv`]
 #[derive(Clone)]
 pub struct RuntimeEnvBuilder {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
     /// DiskManager builder to manager temporary disk file usage
@@ -317,7 +351,7 @@ impl RuntimeEnvBuilder {
         }
     }
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[deprecated(since = "48.0.0", note = "Use with_disk_manager_builder instead")]
     /// Customize disk manager
     pub fn with_disk_manager(mut self, disk_manager: DiskManagerConfig) -> Self {
@@ -387,6 +421,18 @@ impl RuntimeEnvBuilder {
         self
     }
 
+    /// Specifies the memory limit for the object list cache, in bytes.
+    pub fn with_object_list_cache_limit(mut self, limit: usize) -> Self {
+        self.cache_manager = self.cache_manager.with_list_files_cache_limit(limit);
+        self
+    }
+
+    /// Specifies the duration entries in the object list cache will be considered valid.
+    pub fn with_object_list_cache_ttl(mut self, ttl: Option<Duration>) -> Self {
+        self.cache_manager = self.cache_manager.with_list_files_cache_ttl(ttl);
+        self
+    }
+
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
         let Self {
@@ -406,7 +452,7 @@ impl RuntimeEnvBuilder {
             disk_manager: if let Some(builder) = disk_manager_builder {
                 Arc::new(builder.build()?)
             } else {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 DiskManager::try_new(disk_manager)?
             },
             cache_manager: CacheManager::try_new(&cache_manager)?,
@@ -428,6 +474,10 @@ impl RuntimeEnvBuilder {
                 .cache_manager
                 .get_file_statistic_cache(),
             list_files_cache: runtime_env.cache_manager.get_list_files_cache(),
+            list_files_cache_limit: runtime_env
+                .cache_manager
+                .get_list_files_cache_limit(),
+            list_files_cache_ttl: runtime_env.cache_manager.get_list_files_cache_ttl(),
             file_metadata_cache: Some(
                 runtime_env.cache_manager.get_file_metadata_cache(),
             ),
@@ -435,7 +485,7 @@ impl RuntimeEnvBuilder {
         };
 
         Self {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             disk_manager: DiskManagerConfig::Existing(Arc::clone(
                 &runtime_env.disk_manager,
             )),
@@ -457,6 +507,8 @@ impl RuntimeEnvBuilder {
             Some("100G".to_string()),
             None,
             Some("50M".to_owned()),
+            Some("1M".to_owned()),
+            None,
         )
     }
 

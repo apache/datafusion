@@ -21,10 +21,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example udf -- [adv_udaf|adv_udf|adv_udwf|async_udf|udaf|udf|udtf|udwf]
+//! cargo run --example udf -- [all|adv_udaf|adv_udf|adv_udwf|async_udf|udaf|udf|udtf|udwf]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `adv_udaf` — user defined aggregate function example
 //! - `adv_udf` — user defined scalar function example
 //! - `adv_udwf` — user defined window function example
@@ -43,11 +44,14 @@ mod simple_udf;
 mod simple_udtf;
 mod simple_udwf;
 
-use std::str::FromStr;
-
 use datafusion::error::{DataFusionError, Result};
+use strum::{IntoEnumIterator, VariantNames};
+use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
+#[derive(EnumIter, EnumString, Display, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 enum ExampleKind {
+    All,
     AdvUdaf,
     AdvUdf,
     AdvUdwf,
@@ -58,55 +62,32 @@ enum ExampleKind {
     Udtf,
 }
 
-impl AsRef<str> for ExampleKind {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::AdvUdaf => "adv_udaf",
-            Self::AdvUdf => "adv_udf",
-            Self::AdvUdwf => "adv_udwf",
-            Self::AsyncUdf => "async_udf",
-            Self::Udf => "udf",
-            Self::Udaf => "udaf",
-            Self::Udwf => "udwt",
-            Self::Udtf => "udtf",
-        }
-    }
-}
-
-impl FromStr for ExampleKind {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "adv_udaf" => Ok(Self::AdvUdaf),
-            "adv_udf" => Ok(Self::AdvUdf),
-            "adv_udwf" => Ok(Self::AdvUdwf),
-            "async_udf" => Ok(Self::AsyncUdf),
-            "udaf" => Ok(Self::Udaf),
-            "udf" => Ok(Self::Udf),
-            "udtf" => Ok(Self::Udtf),
-            "udwf" => Ok(Self::Udwf),
-            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
-        }
-    }
-}
-
 impl ExampleKind {
-    const ALL: [Self; 8] = [
-        Self::AdvUdaf,
-        Self::AdvUdf,
-        Self::AdvUdwf,
-        Self::AsyncUdf,
-        Self::Udaf,
-        Self::Udf,
-        Self::Udtf,
-        Self::Udwf,
-    ];
-
     const EXAMPLE_NAME: &str = "udf";
 
-    fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+    fn runnable() -> impl Iterator<Item = ExampleKind> {
+        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::All => {
+                for example in ExampleKind::runnable() {
+                    println!("Running example: {example}");
+                    Box::pin(example.run()).await?;
+                }
+            }
+            ExampleKind::AdvUdaf => advanced_udaf::advanced_udaf().await?,
+            ExampleKind::AdvUdf => advanced_udf::advanced_udf().await?,
+            ExampleKind::AdvUdwf => advanced_udwf::advanced_udwf().await?,
+            ExampleKind::AsyncUdf => async_udf::async_udf().await?,
+            ExampleKind::Udaf => simple_udaf::simple_udaf().await?,
+            ExampleKind::Udf => simple_udf::simple_udf().await?,
+            ExampleKind::Udtf => simple_udtf::simple_udtf().await?,
+            ExampleKind::Udwf => simple_udwf::simple_udwf().await?,
+        }
+
+        Ok(())
     }
 }
 
@@ -115,24 +96,14 @@ async fn main() -> Result<()> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::variants().join("|")
+        ExampleKind::VARIANTS.join("|")
     );
 
-    let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{usage}");
-        DataFusionError::Execution("Missing argument".to_string())
-    })?;
+    let example: ExampleKind = std::env::args()
+        .nth(1)
+        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .parse()
+        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::AdvUdaf => advanced_udaf::advanced_udaf().await?,
-        ExampleKind::AdvUdf => advanced_udf::advanced_udf().await?,
-        ExampleKind::AdvUdwf => advanced_udwf::advanced_udwf().await?,
-        ExampleKind::AsyncUdf => async_udf::async_udf().await?,
-        ExampleKind::Udaf => simple_udaf::simple_udaf().await?,
-        ExampleKind::Udf => simple_udf::simple_udf().await?,
-        ExampleKind::Udtf => simple_udtf::simple_udtf().await?,
-        ExampleKind::Udwf => simple_udwf::simple_udwf().await?,
-    }
-
-    Ok(())
+    example.run().await
 }

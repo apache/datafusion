@@ -18,26 +18,25 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::{config::ConfigOptions, internal_err, Result};
+use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
-    file::FileSource, file_scan_config::FileScanConfig,
+    PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, schema_adapter::DefaultSchemaAdapterFactory,
-    schema_adapter::SchemaAdapterFactory, source::DataSourceExec, PartitionedFile,
+    schema_adapter::SchemaAdapterFactory, source::DataSourceExec,
 };
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
 use datafusion_physical_plan::{
-    displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, displayable,
     filter::FilterExec,
     filter_pushdown::{
         ChildFilterDescription, ChildPushdownResult, FilterDescription,
         FilterPushdownPropagation,
     },
     metrics::ExecutionPlanMetricsSet,
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 use futures::StreamExt;
 use futures::{FutureExt, Stream};
@@ -141,14 +140,14 @@ impl FileSource for TestSource {
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        Arc::new(TestOpener {
+    ) -> Result<Arc<dyn FileOpener>> {
+        Ok(Arc::new(TestOpener {
             batches: self.batches.clone(),
             batch_size: self.batch_size,
             schema: Arc::clone(&self.schema),
             projection: self.projection.clone(),
             predicate: self.predicate.clone(),
-        })
+        }))
     }
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
@@ -162,13 +161,6 @@ impl FileSource for TestSource {
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         Arc::new(TestSource {
             batch_size: Some(batch_size),
-            ..self.clone()
-        })
-    }
-
-    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(TestSource {
-            projection: config.projection_exprs.as_ref().map(|p| p.column_indices()),
             ..self.clone()
         })
     }

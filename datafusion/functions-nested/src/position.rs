@@ -31,14 +31,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    types::UInt64Type, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
-    UInt64Array,
+    Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
+    types::UInt64Type,
 };
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
 use datafusion_common::{
-    assert_or_internal_err, exec_err, utils::take_function_args, DataFusionError, Result,
+    Result, assert_or_internal_err, exec_err, utils::take_function_args,
 };
 use itertools::Itertools;
 
@@ -141,8 +141,7 @@ impl ScalarUDFImpl for ArrayPosition {
     }
 }
 
-/// Array_position SQL function
-pub fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!("array_position expects two or three arguments");
     }
@@ -152,6 +151,7 @@ pub fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         array_type => exec_err!("array_position does not support type '{array_type}'."),
     }
 }
+
 fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let list_array = as_generic_list_array::<O>(&args[0])?;
     let element_array = &args[1];
@@ -292,8 +292,7 @@ impl ScalarUDFImpl for ArrayPositions {
     }
 }
 
-/// Array_positions SQL function
-pub fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, element] = take_function_args("array_positions", args)?;
 
     match &array.data_type() {

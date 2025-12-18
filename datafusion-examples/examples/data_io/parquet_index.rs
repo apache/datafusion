@@ -27,19 +27,19 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{
-    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
+    DFSchema, DataFusionError, Result, ScalarValue, internal_datafusion_err,
 };
+use datafusion::datasource::TableProvider;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{
-    utils::conjunction, TableProviderFilterPushDown, TableType,
+    TableProviderFilterPushDown, TableType, utils::conjunction,
 };
 use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use datafusion::parquet::arrow::{
-    arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
+    ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
 };
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
@@ -52,8 +52,8 @@ use std::fs;
 use std::fs::{DirEntry, File};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 use url::Url;
 
@@ -247,7 +247,7 @@ impl TableProvider for IndexTableProvider {
             Arc::new(ParquetSource::new(self.schema()).with_predicate(predicate));
         let mut file_scan_config_builder =
             FileScanConfigBuilder::new(object_store_url, source)
-                .with_projection_indices(projection.cloned())
+                .with_projection_indices(projection.cloned())?
                 .with_limit(limit);
 
         // Transform to the format needed to pass to DataSourceExec

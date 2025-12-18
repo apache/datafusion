@@ -17,17 +17,17 @@
 
 //! Tree node implementation for Logical Expressions
 
+use crate::Expr;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
     GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest,
     WindowFunction, WindowFunctionParams,
 };
-use crate::Expr;
 
+use datafusion_common::Result;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
 };
-use datafusion_common::Result;
 
 /// Implementation of the [`TreeNode`] trait
 ///

@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// https://github.com/apache/datafusion/issues/18881
+#![deny(clippy::allow_attributes)]
 
 //! Physical expression schema adaptation utilities for DataFusion
 
@@ -30,5 +30,5 @@ pub mod schema_rewriter;
 
 pub use schema_rewriter::{
     DefaultPhysicalExprAdapter, DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
-    PhysicalExprAdapterFactory,
+    PhysicalExprAdapterFactory, replace_columns_with_literals,
 };

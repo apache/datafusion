@@ -16,7 +16,7 @@
 // under the License.
 
 use super::EquivalenceProperties;
-use crate::{equivalence::OrderingEquivalenceClass, PhysicalExprRef};
+use crate::{PhysicalExprRef, equivalence::OrderingEquivalenceClass};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{JoinSide, JoinType, Result};

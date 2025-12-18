@@ -23,18 +23,15 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, plan_err, project_schema, Constraints, DataFusionError,
-    SchemaExt, Statistics,
+    Constraints, SchemaExt, Statistics, internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
-use datafusion_datasource::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
-};
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
-    compute_all_files_statistics, ListingTableUrl, PartitionedFile, TableSchema,
+    ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
@@ -44,13 +41,24 @@ use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_expr::create_lex_ordering;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::ExecutionPlan;
-use futures::{future, stream, Stream, StreamExt, TryStreamExt};
+use datafusion_physical_plan::empty::EmptyExec;
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Result of a file listing operation from [`ListingTable::list_files_for_scan`].
+#[derive(Debug)]
+pub struct ListFilesResult {
+    /// File groups organized by the partitioning strategy.
+    pub file_groups: Vec<FileGroup>,
+    /// Aggregated statistics for all files.
+    pub statistics: Statistics,
+    /// Whether files are grouped by partition values (enables Hash partitioning).
+    pub grouped_by_partition: bool,
+}
 
 /// Built in [`TableProvider`] that reads data from one or more files as a single table.
 ///
@@ -178,7 +186,7 @@ pub struct ListingTable {
     /// The SQL definition for this table, if any
     definition: Option<String>,
     /// Cache for collected file statistics
-    collected_statistics: FileStatisticsCache,
+    collected_statistics: Arc<dyn FileStatisticsCache>,
     /// Constraints applied to this table
     constraints: Constraints,
     /// Column default expressions for columns that are not physically present in the data files
@@ -255,7 +263,7 @@ impl ListingTable {
     /// multiple times in the same session.
     ///
     /// If `None`, creates a new [`DefaultFileStatisticsCache`] scoped to this query.
-    pub fn with_cache(mut self, cache: Option<FileStatisticsCache>) -> Self {
+    pub fn with_cache(mut self, cache: Option<Arc<dyn FileStatisticsCache>>) -> Self {
         self.collected_statistics =
             cache.unwrap_or_else(|| Arc::new(DefaultFileStatisticsCache::default()));
         self
@@ -320,20 +328,6 @@ impl ListingTable {
         self.schema_adapter_factory.as_ref()
     }
 
-    /// Creates a schema adapter for mapping between file and table schemas
-    ///
-    /// Uses the configured schema adapter factory if available, otherwise falls back
-    /// to the default implementation.
-    fn create_schema_adapter(&self) -> Box<dyn SchemaAdapter> {
-        let table_schema = self.schema();
-        match &self.schema_adapter_factory {
-            Some(factory) => {
-                factory.create_with_projected_schema(Arc::clone(&table_schema))
-            }
-            None => DefaultSchemaAdapterFactory::from_schema(Arc::clone(&table_schema)),
-        }
-    }
-
     /// Creates a file source and applies schema adapter factory if available
     fn create_file_source_with_schema_adapter(
         &self,
@@ -348,10 +342,8 @@ impl ListingTable {
         );
 
         let mut source = self.options.format.file_source(table_schema);
-        // Apply schema adapter to source if available
-        //
+        // Apply schema adapter to source if available.
         // The source will use this SchemaAdapter to adapt data batches as they flow up the plan.
-        // Note: ListingTable also creates a SchemaAdapter in `scan()` but that is only used to adapt collected statistics.
         if let Some(factory) = &self.schema_adapter_factory {
             source = source.with_schema_adapter_factory(Arc::clone(factory))?;
         }
@@ -446,7 +438,11 @@ impl TableProvider for ListingTable {
         // at the same time. This is because the limit should be applied after the filters are applied.
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
-        let (mut partitioned_file_lists, statistics) = self
+        let ListFilesResult {
+            file_groups: mut partitioned_file_lists,
+            statistics,
+            grouped_by_partition: partitioned_by_file_group,
+        } = self
             .list_files_for_scan(state, &partition_filters, statistic_file_limit)
             .await?;
 
@@ -478,7 +474,9 @@ impl TableProvider for ListingTable {
                 if new_groups.len() <= self.options.target_partitions {
                     partitioned_file_lists = new_groups;
                 } else {
-                    log::debug!("attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered")
+                    log::debug!(
+                        "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
+                    )
                 }
             }
             None => {} // no ordering required
@@ -504,10 +502,11 @@ impl TableProvider for ListingTable {
                     .with_file_groups(partitioned_file_lists)
                     .with_constraints(self.constraints.clone())
                     .with_statistics(statistics)
-                    .with_projection_indices(projection)
+                    .with_projection_indices(projection)?
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())
+                    .with_partitioned_by_file_group(partitioned_by_file_group)
                     .build(),
             )
             .await?;
@@ -578,6 +577,11 @@ impl TableProvider for ListingTable {
         let keep_partition_by_columns =
             state.config_options().execution.keep_partition_by_columns;
 
+        // Invalidate cache entries for this table if they exist
+        if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
+            let _ = lfc.remove(table_path.prefix());
+        }
+
         // Sink related option, apart from format
         let config = FileSinkConfig {
             original_url: String::default(),
@@ -615,11 +619,15 @@ impl ListingTable {
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> datafusion_common::Result<(Vec<FileGroup>, Statistics)> {
+    ) -> datafusion_common::Result<ListFilesResult> {
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
-            return Ok((vec![], Statistics::new_unknown(&self.file_schema)));
+            return Ok(ListFilesResult {
+                file_groups: vec![],
+                statistics: Statistics::new_unknown(&self.file_schema),
+                grouped_by_partition: false,
+            });
         };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -653,27 +661,51 @@ impl ListingTable {
         let (file_group, inexact_stats) =
             get_files_with_limit(files, limit, self.options.collect_stat).await?;
 
-        let file_groups = file_group.split_files(self.options.target_partitions);
-        let (mut file_groups, mut stats) = compute_all_files_statistics(
+        // Threshold: 0 = disabled, N > 0 = enabled when distinct_keys >= N
+        //
+        // When enabled, files are grouped by their Hive partition column values, allowing
+        // FileScanConfig to declare Hash partitioning. This enables the optimizer to skip
+        // hash repartitioning for aggregates and joins on partition columns.
+        let threshold = ctx.config_options().optimizer.preserve_file_partitions;
+
+        let (file_groups, grouped_by_partition) = if threshold > 0
+            && !self.options.table_partition_cols.is_empty()
+        {
+            let grouped =
+                file_group.group_by_partition_values(self.options.target_partitions);
+            if grouped.len() >= threshold {
+                (grouped, true)
+            } else {
+                let all_files: Vec<_> =
+                    grouped.into_iter().flat_map(|g| g.into_inner()).collect();
+                (
+                    FileGroup::new(all_files).split_files(self.options.target_partitions),
+                    false,
+                )
+            }
+        } else {
+            (
+                file_group.split_files(self.options.target_partitions),
+                false,
+            )
+        };
+
+        let (file_groups, stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
             self.options.collect_stat,
             inexact_stats,
         )?;
 
-        let schema_adapter = self.create_schema_adapter();
-        let (schema_mapper, _) = schema_adapter.map_schema(self.file_schema.as_ref())?;
-
-        stats.column_statistics =
-            schema_mapper.map_column_statistics(&stats.column_statistics)?;
-        file_groups.iter_mut().try_for_each(|file_group| {
-            if let Some(stat) = file_group.statistics_mut() {
-                stat.column_statistics =
-                    schema_mapper.map_column_statistics(&stat.column_statistics)?;
-            }
-            Ok::<_, DataFusionError>(())
-        })?;
-        Ok((file_groups, stats))
+        // Note: Statistics already include both file columns and partition columns.
+        // PartitionedFile::with_statistics automatically appends exact partition column
+        // statistics (min=max=partition_value, null_count=0, distinct_count=1) computed
+        // from partition_values.
+        Ok(ListFilesResult {
+            file_groups,
+            statistics: stats,
+            grouped_by_partition,
+        })
     }
 
     /// Collects statistics for a given partitioned file.
@@ -760,28 +792,25 @@ async fn get_files_with_limit(
         let file = file_result?;
 
         // Update file statistics regardless of state
-        if collect_stats {
-            if let Some(file_stats) = &file.statistics {
-                num_rows = if file_group.is_empty() {
-                    // For the first file, just take its row count
-                    file_stats.num_rows
-                } else {
-                    // For subsequent files, accumulate the counts
-                    num_rows.add(&file_stats.num_rows)
-                };
-            }
+        if collect_stats && let Some(file_stats) = &file.statistics {
+            num_rows = if file_group.is_empty() {
+                // For the first file, just take its row count
+                file_stats.num_rows
+            } else {
+                // For subsequent files, accumulate the counts
+                num_rows.add(&file_stats.num_rows)
+            };
         }
 
         // Always add the file to our group
         file_group.push(file);
 
         // Check if we've hit the limit (if one was specified)
-        if let Some(limit) = limit {
-            if let Precision::Exact(row_count) = num_rows {
-                if row_count > limit {
-                    state = ProcessingState::ReachedLimit;
-                }
-            }
+        if let Some(limit) = limit
+            && let Precision::Exact(row_count) = num_rows
+            && row_count > limit
+        {
+            state = ProcessingState::ReachedLimit;
         }
     }
     // If we still have files in the stream, it means that the limit kicked

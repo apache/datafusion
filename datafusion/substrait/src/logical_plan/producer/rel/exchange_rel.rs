@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    try_to_substrait_field_reference, SubstraitProducer,
+    SubstraitProducer, try_to_substrait_field_reference,
 };
 use datafusion::common::not_impl_err;
 use datafusion::logical_expr::{Partitioning, Repartition};
@@ -35,7 +35,7 @@ pub fn from_repartition(
         Partitioning::DistributeBy(_) => {
             return not_impl_err!(
                 "Physical plan does not support DistributeBy partitioning"
-            )
+            );
         }
     };
     // ref: https://substrait.io/relations/physical_relations/#exchange-types
@@ -53,7 +53,7 @@ pub fn from_repartition(
         Partitioning::DistributeBy(_) => {
             return not_impl_err!(
                 "Physical plan does not support DistributeBy partitioning"
-            )
+            );
         }
     };
     let exchange_rel = ExchangeRel {

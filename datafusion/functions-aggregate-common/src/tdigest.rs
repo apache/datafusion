@@ -31,9 +31,8 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Float64Type;
-use datafusion_common::cast::as_primitive_array;
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::cast::as_primitive_array;
 use std::cmp::Ordering;
 use std::mem::{size_of, size_of_val};
 
@@ -60,41 +59,6 @@ macro_rules! cast_scalar_u64 {
         }
     };
 }
-
-/// This trait is implemented for each type a [`TDigest`] can operate on,
-/// allowing it to support both numerical rust types (obtained from
-/// `PrimitiveArray` instances), and [`ScalarValue`] instances.
-pub trait TryIntoF64 {
-    /// A fallible conversion of a possibly null `self` into a [`f64`].
-    ///
-    /// If `self` is null, this method must return `Ok(None)`.
-    ///
-    /// If `self` cannot be coerced to the desired type, this method must return
-    /// an `Err` variant.
-    fn try_as_f64(&self) -> Result<Option<f64>>;
-}
-
-/// Generate an infallible conversion from `type` to an [`f64`].
-macro_rules! impl_try_ordered_f64 {
-    ($type:ty) => {
-        impl TryIntoF64 for $type {
-            fn try_as_f64(&self) -> Result<Option<f64>> {
-                Ok(Some(*self as f64))
-            }
-        }
-    };
-}
-
-impl_try_ordered_f64!(f64);
-impl_try_ordered_f64!(f32);
-impl_try_ordered_f64!(i64);
-impl_try_ordered_f64!(i32);
-impl_try_ordered_f64!(i16);
-impl_try_ordered_f64!(i8);
-impl_try_ordered_f64!(u64);
-impl_try_ordered_f64!(u32);
-impl_try_ordered_f64!(u16);
-impl_try_ordered_f64!(u8);
 
 /// Centroid implementation to the cluster mentioned in the paper.
 #[derive(Debug, PartialEq, Clone)]
@@ -229,7 +193,11 @@ impl TDigest {
         if lo.is_nan() || hi.is_nan() {
             return v;
         }
-        v.clamp(lo, hi)
+
+        // Handle the case where floating point precision causes min > max.
+        let (min, max) = if lo > hi { (hi, lo) } else { (lo, hi) };
+
+        v.clamp(min, max)
     }
 
     // public for testing in other modules
@@ -779,5 +747,23 @@ mod tests {
         let t = t.merge_unsorted_f64(vec![0.0, 1.0]);
 
         assert_eq!(t.size(), 96);
+    }
+
+    #[test]
+    fn test_identical_values_floating_point_precision() {
+        // Regression test for https://github.com/apache/datafusion/issues/14855
+        // When all values are the same, floating-point arithmetic during centroid
+        // merging can cause slight precision differences between min and max,
+        // which previously caused a panic in clamp().
+
+        let t = TDigest::new(100);
+        let values: Vec<_> = (0..215).map(|_| 15.699999988079073_f64).collect();
+
+        let t = t.merge_unsorted_f64(values);
+
+        // This should not panic
+        let result = t.estimate_quantile(0.99);
+        // The result should be approximately equal to the input value
+        assert!((result - 15.699999988079073).abs() < 1e-10);
     }
 }

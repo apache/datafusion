@@ -71,7 +71,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
-edition = "2021"
+edition = "2024"
 homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
@@ -91,25 +91,26 @@ ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "57.0.0", features = [
+arrow = { version = "57.1.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-buffer = { version = "57.0.0", default-features = false }
-arrow-flight = { version = "57.0.0", features = [
+arrow-buffer = { version = "57.1.0", default-features = false }
+arrow-flight = { version = "57.1.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "57.0.0", default-features = false, features = [
+arrow-ipc = { version = "57.1.0", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { version = "57.0.0", default-features = false }
-arrow-schema = { version = "57.0.0", default-features = false }
+arrow-ord = { version = "57.1.0", default-features = false }
+arrow-schema = { version = "57.1.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
+bzip2 = "0.6.1"
 chrono = { version = "0.4.42", default-features = false }
-criterion = "0.7"
-ctor = "0.6.1"
+criterion = "0.8"
+ctor = "0.6.3"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "51.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "51.0.0" }
@@ -151,23 +152,26 @@ datafusion-substrait = { path = "datafusion/substrait", version = "51.0.0" }
 
 doc-comment = "0.3"
 env_logger = "0.11"
+flate2 = "1.1.5"
 futures = "0.3"
+glob = "0.3.0"
 half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
-indexmap = "2.12.0"
-insta = { version = "1.43.2", features = ["glob", "filters"] }
+indexmap = "2.12.1"
+insta = { version = "1.44.3", features = ["glob", "filters"] }
 itertools = "0.14"
 liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
 num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "57.0.0", default-features = false, features = [
+parquet = { version = "57.1.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
 ] }
+paste = "1.0.15"
 pbjson = { version = "0.8.0" }
 pbjson-types = "0.8"
 # Should match arrow-flight's version of prost.
@@ -178,11 +182,14 @@ regex = "1.12"
 rstest = "0.26.1"
 serde_json = "1"
 sqlparser = { version = "0.59.0", default-features = false, features = ["std", "visitor"] }
+strum = "0.27.2"
+strum_macros = "0.27.2"
 tempfile = "3"
 testcontainers = { version = "0.25.2", features = ["default"] }
 testcontainers-modules = { version = "0.13" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
+zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
@@ -192,6 +199,8 @@ or_fun_call = "warn"
 unnecessary_lazy_evaluations = "warn"
 uninlined_format_args = "warn"
 inefficient_to_string = "warn"
+# https://github.com/apache/datafusion/issues/18503
+needless_pass_by_value = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
