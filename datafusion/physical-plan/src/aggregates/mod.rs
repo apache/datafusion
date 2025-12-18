@@ -2486,7 +2486,7 @@ mod tests {
         ] {
             let n_aggr = aggregates.len();
             let partial_aggregate = Arc::new(AggregateExec::try_new(
-                AggregateMode::Partial,
+                AggregateMode::Single,
                 groups,
                 aggregates,
                 vec![None; n_aggr],
