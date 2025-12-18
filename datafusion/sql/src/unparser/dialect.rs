@@ -229,7 +229,6 @@ pub trait Dialect: Send + Sync {
     /// # Supported Databases
     ///
     /// - **PostgreSQL**: Fully supported. Returns rows with zero columns.
-    /// - **DataFusion**: Supported natively.
     ///
     /// # Unsupported Databases
     ///
