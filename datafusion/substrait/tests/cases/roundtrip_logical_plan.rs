@@ -2138,10 +2138,10 @@ async fn roundtrip_recursive_query() -> Result<()> {
     let plan2 = plan_to_substrait_and_back(&plan, &ctx).await?;
 
     // The deserialized plan may have projection wrappers, unwrap to find RecursiveQuery
-    let recursive_query = match plan2 {
-        LogicalPlan::RecursiveQuery(ref rq) => rq,
-        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
-            LogicalPlan::RecursiveQuery(ref rq) => rq,
+    let recursive_query = match &plan2 {
+        LogicalPlan::RecursiveQuery(rq) => rq,
+        LogicalPlan::Projection(proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(rq) => rq,
             _ => panic!("Expected RecursiveQuery inside Projection, got: {plan2:?}"),
         },
         _ => panic!("Expected RecursiveQuery or Projection, got: {plan2:?}"),
@@ -2237,10 +2237,10 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
     let plan2 = plan_to_substrait_and_back(&plan, &ctx).await?;
 
     // The deserialized plan may have projection wrappers, unwrap to find RecursiveQuery
-    let recursive_query = match plan2 {
-        LogicalPlan::RecursiveQuery(ref rq) => rq,
-        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
-            LogicalPlan::RecursiveQuery(ref rq) => rq,
+    let recursive_query = match &plan2 {
+        LogicalPlan::RecursiveQuery(rq) => rq,
+        LogicalPlan::Projection(proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(rq) => rq,
             _ => panic!("Expected RecursiveQuery inside Projection, got: {plan2:?}"),
         },
         _ => panic!("Expected RecursiveQuery or Projection, got: {plan2:?}"),
@@ -2282,10 +2282,10 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
     let roundtrip_plan = plan_to_substrait_and_back(&original_plan, &ctx).await?;
 
     // Extract the RecursiveQuery from potential projection wrapper
-    let roundtrip_rq = match roundtrip_plan {
-        LogicalPlan::RecursiveQuery(ref rq) => rq,
-        LogicalPlan::Projection(ref proj) => match proj.input.as_ref() {
-            LogicalPlan::RecursiveQuery(ref rq) => rq,
+    let roundtrip_rq = match &roundtrip_plan {
+        LogicalPlan::RecursiveQuery(rq) => rq,
+        LogicalPlan::Projection(proj) => match proj.input.as_ref() {
+            LogicalPlan::RecursiveQuery(rq) => rq,
             _ => panic!(
                 "Expected RecursiveQuery inside Projection, got: {roundtrip_plan:?}"
             ),
