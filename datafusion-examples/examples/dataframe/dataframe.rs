@@ -20,18 +20,18 @@
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::MemTable;
+use datafusion::common::ScalarValue;
 use datafusion::common::config::CsvOptions;
 use datafusion::common::parsers::CompressionTypeVariant;
-use datafusion::common::ScalarValue;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
-use std::fs::{create_dir_all, File};
+use std::fs::{File, create_dir_all};
 use std::io::Write;
 use std::sync::Arc;
-use tempfile::{tempdir, TempDir};
+use tempfile::{TempDir, tempdir};
 
 /// This example demonstrates using DataFusion's DataFrame API
 ///

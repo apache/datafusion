@@ -34,7 +34,7 @@ use datafusion::sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparse
 use datafusion::sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
 };
-use datafusion::sql::unparser::{plan_to_sql, Unparser};
+use datafusion::sql::unparser::{Unparser, plan_to_sql};
 use std::fmt;
 use std::sync::Arc;
 

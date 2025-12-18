@@ -26,7 +26,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     util::bit_util,
 };
-use datafusion_common::{internal_datafusion_err, internal_err, Result};
+use datafusion_common::{Result, internal_datafusion_err, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
     DynHash, PhysicalExpr, PhysicalExprRef,
@@ -42,7 +42,7 @@ use crate::{hash_utils::create_hashes, joins::utils::JoinHashMapType};
 /// This is used for:
 /// - Computing routing hashes (with RepartitionExec's 0,0,0,0 seeds)
 /// - Computing lookup hashes (with HashJoin's 'J','O','I','N' seeds)
-pub(super) struct HashExpr {
+pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
     /// Random state for hashing
@@ -179,7 +179,11 @@ impl HashTableLookupExpr {
     /// * `hash_expr` - Expression that computes hash values
     /// * `hash_map` - Hash table to check membership
     /// * `description` - Description for debugging
-    pub(super) fn new(
+    ///
+    /// # Note
+    /// This is public for internal testing purposes only and is not
+    /// guaranteed to be stable across versions.
+    pub fn new(
         hash_expr: PhysicalExprRef,
         hash_map: Arc<dyn JoinHashMapType>,
         description: String,

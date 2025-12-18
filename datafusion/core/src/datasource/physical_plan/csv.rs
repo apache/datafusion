@@ -40,10 +40,10 @@ mod tests {
     use datafusion_common::config::CsvOptions;
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{assert_batches_eq, Result};
+    use datafusion_common::{Result, assert_batches_eq};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_physical_plan::metrics::MetricsSet;
     use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::metrics::MetricsSet;
 
     #[cfg(feature = "compression")]
     use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -621,7 +621,10 @@ mod tests {
             .collect()
             .await
             .unwrap_err();
-        assert_eq!(e.strip_backtrace(), "Arrow error: Csv error: incorrect number of fields for line 1, expected 2 got more than 2")
+        assert_eq!(
+            e.strip_backtrace(),
+            "Arrow error: Csv error: incorrect number of fields for line 1, expected 2 got more than 2"
+        )
     }
 
     #[tokio::test]
@@ -656,8 +659,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_external_table_with_terminator_with_newlines_in_values(
-    ) -> Result<()> {
+    async fn test_create_external_table_with_terminator_with_newlines_in_values()
+    -> Result<()> {
         let ctx = SessionContext::new();
         ctx.sql(r#"
             CREATE EXTERNAL TABLE t1 (
@@ -707,7 +710,10 @@ mod tests {
             )
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'");
+        assert_eq!(
+            e.strip_backtrace(),
+            "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'"
+        );
         Ok(())
     }
 

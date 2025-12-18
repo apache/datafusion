@@ -37,16 +37,16 @@ pub use read_rel::*;
 pub use set_rel::*;
 pub use sort_rel::*;
 
-use crate::logical_plan::consumer::utils::NameTracker;
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::utils::NameTracker;
 use async_recursion::async_recursion;
-use datafusion::common::{not_impl_err, substrait_datafusion_err, substrait_err, Column};
+use datafusion::common::{Column, not_impl_err, substrait_datafusion_err, substrait_err};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::{Expr, LogicalPlan, Projection};
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
 use substrait::proto::rel_common::{Emit, EmitKind};
-use substrait::proto::{rel_common, Rel, RelCommon};
+use substrait::proto::{Rel, RelCommon, rel_common};
 
 /// Convert Substrait Rel to DataFusion DataFrame
 #[async_recursion]

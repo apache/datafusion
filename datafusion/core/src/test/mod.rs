@@ -25,9 +25,9 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::datasource::file_format::FileFormat;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::file_format::FileFormat;
 
 use crate::datasource::physical_plan::CsvSource;
 use crate::datasource::{MemTable, TableProvider};
@@ -42,20 +42,20 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "compression")]
 use datafusion_common::DataFusionError;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::TableSchema;
+use datafusion_datasource::source::DataSourceExec;
 
 #[cfg(feature = "compression")]
-use bzip2::write::BzEncoder;
-#[cfg(feature = "compression")]
 use bzip2::Compression as BzCompression;
+#[cfg(feature = "compression")]
+use bzip2::write::BzEncoder;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource_csv::partitioned_csv_config;
 #[cfg(feature = "compression")]
-use flate2::write::GzEncoder;
-#[cfg(feature = "compression")]
 use flate2::Compression as GzCompression;
+#[cfg(feature = "compression")]
+use flate2::write::GzEncoder;
 #[cfg(feature = "compression")]
 use liblzma::write::XzEncoder;
 use object_store::local_unpartitioned_file;
