@@ -583,7 +583,10 @@ impl GroupedHashAggregateStream {
 
         let group_values = new_group_values(group_schema, &group_ordering)?;
         let reservation = MemoryConsumer::new(name)
-            .with_can_spill(oom_mode == OutOfMemoryMode::Spill)
+            // We interpret 'can spill' as 'can handle memory back pressure'.
+            // This value needs to be set to true for the default memory pool implementations
+            // to ensure fair application of back pressure amongst the memory consumers.
+            .with_can_spill(oom_mode != OutOfMemoryMode::ReportError)
             .register(context.memory_pool());
         timer.done();
 
@@ -1027,11 +1030,16 @@ impl GroupedHashAggregateStream {
                 self.update_memory_reservation()?;
                 Ok(None)
             }
-            OutOfMemoryMode::EmitEarly
-                if self.group_values.len() >= self.batch_size
-                    && self.group_values.len() > 1 =>
+            OutOfMemoryMode::EmitEarly if self.group_values.len() > 1 =>
             {
-                let n = self.group_values.len() / self.batch_size * self.batch_size;
+                let n = if self.group_values.len() >= self.batch_size {
+                    // Try to emit an integer multiple of batch size if possible
+                    self.group_values.len() / self.batch_size * self.batch_size
+                }  else {
+                    // Otherwise emit whatever we can
+                    self.group_values.len()
+                };
+
                 if let Some(batch) = self.emit(EmitTo::First(n), false)? {
                     Ok(Some(ExecutionState::ProducingOutput(batch)))
                 } else {
