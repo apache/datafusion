@@ -27,19 +27,22 @@ use arrow::datatypes::*;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
 
 use super::array_filter::{ArrayStaticFilter, StaticFilter};
+use super::primitive::{U8Config, U16Config};
+use super::transform::make_bitmap_filter;
 
 pub(crate) fn instantiate_static_filter(
     in_array: ArrayRef,
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
     match in_array.data_type() {
-        // Integer primitive types
-        DataType::Int8 => Ok(Arc::new(Int8StaticFilter::try_new(&in_array)?)),
-        DataType::Int16 => Ok(Arc::new(Int16StaticFilter::try_new(&in_array)?)),
+        // 1-byte types: use bitmap (256 bits = 32 bytes)
+        DataType::Int8 | DataType::UInt8 => make_bitmap_filter::<U8Config>(&in_array),
+        // 2-byte types: use bitmap (65536 bits = 8 KB)
+        DataType::Int16 | DataType::UInt16 => make_bitmap_filter::<U16Config>(&in_array),
+        // 4-byte integer types
         DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
-        DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
-        DataType::UInt8 => Ok(Arc::new(UInt8StaticFilter::try_new(&in_array)?)),
-        DataType::UInt16 => Ok(Arc::new(UInt16StaticFilter::try_new(&in_array)?)),
         DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
+        // 8-byte integer types
+        DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
         DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
         // Float primitive types (use ordered wrappers for Hash/Eq)
         DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),
@@ -228,13 +231,10 @@ macro_rules! primitive_static_filter {
     };
 }
 
-// Generate specialized filters for all integer primitive types
-primitive_static_filter!(Int8StaticFilter, Int8Type);
-primitive_static_filter!(Int16StaticFilter, Int16Type);
+// Generate specialized filters for 4-byte and 8-byte integer primitive types
+// (1-byte and 2-byte types use BitmapFilter instead)
 primitive_static_filter!(Int32StaticFilter, Int32Type);
 primitive_static_filter!(Int64StaticFilter, Int64Type);
-primitive_static_filter!(UInt8StaticFilter, UInt8Type);
-primitive_static_filter!(UInt16StaticFilter, UInt16Type);
 primitive_static_filter!(UInt32StaticFilter, UInt32Type);
 primitive_static_filter!(UInt64StaticFilter, UInt64Type);
 
