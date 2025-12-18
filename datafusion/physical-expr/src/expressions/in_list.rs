@@ -62,7 +62,6 @@ impl Debug for InListExpr {
     }
 }
 
-
 /// Evaluates the list of expressions into an array, flattening any dictionaries
 fn evaluate_list(
     list: &[Arc<dyn PhysicalExpr>],

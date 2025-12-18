@@ -24,6 +24,7 @@
 //! - 4-byte types (Int32/Float32): branchless (≤16) or hash (>16)
 //! - 8-byte types (Int64/Float64): branchless (≤16) or hash (>16)
 //! - 16-byte types (Decimal128): branchless (≤4) or hash (>4)
+//! - Utf8View (short strings): branchless (≤4) or hash (>4)
 //! - Other types: generic ArrayStaticFilter
 
 use std::hash::Hash;
@@ -36,7 +37,10 @@ use datafusion_common::Result;
 use super::array_filter::ArrayStaticFilter;
 use super::array_filter::StaticFilter;
 use super::primitive::{PrimitiveFilter, U8Config, U16Config};
-use super::transform::{make_bitmap_filter, make_branchless_filter, make_primitive_filter};
+use super::transform::{
+    make_bitmap_filter, make_branchless_filter, make_primitive_filter,
+    make_utf8view_branchless_filter, make_utf8view_hash_filter, utf8view_all_short_strings,
+};
 
 // =============================================================================
 // LOOKUP STRATEGY THRESHOLDS (tuned via microbenchmarks)
@@ -127,6 +131,15 @@ pub(crate) fn instantiate_static_filter(
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
     let len = in_array.len();
     let dt = in_array.data_type();
+
+    // Special case: Utf8View with short strings can be reinterpreted as i128
+    if matches!(dt, DataType::Utf8View) && utf8view_all_short_strings(in_array.as_ref()) {
+        return if len <= BRANCHLESS_MAX_16B {
+            make_utf8view_branchless_filter(&in_array)
+        } else {
+            make_utf8view_hash_filter(&in_array)
+        };
+    }
 
     match select_strategy(dt, len) {
         FilterStrategy::Bitmap1B => dispatch_bitmap_u8(&in_array),
