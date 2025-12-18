@@ -79,9 +79,14 @@ SELECT substr(Str => 'hello world', Start_Pos => 7);
 ----
 world
 
-# Test case-insensitive matching works even with quoted identifiers
-query T
+# Error: quoted identifiers are case-sensitive per SQL standards
+# "STR" does not match parameter "str" (case mismatch)
+query error DataFusion error: Error during planning: Unknown parameter name 'STR'
 SELECT substr("STR" => 'hello world', "start_pos" => 7);
+
+# Test quoted identifiers with correct case work
+query T
+SELECT substr("str" => 'hello world', "start_pos" => 7);
 ----
 world
 
