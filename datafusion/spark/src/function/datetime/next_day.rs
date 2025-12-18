@@ -18,10 +18,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayType};
+use arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType, new_null_array};
 use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use chrono::{Datelike, Duration, Weekday};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -264,9 +264,10 @@ mod tests {
         let err = func
             .return_type(&[DataType::Date32, DataType::Utf8])
             .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("return_field_from_args should be used instead"));
+        assert!(
+            err.to_string()
+                .contains("return_field_from_args should be used instead")
+        );
     }
 
     #[test]
