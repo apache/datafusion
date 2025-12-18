@@ -187,6 +187,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Convert a SQL interval expression to a DataFusion logical plan
     /// expression
     pub(super) fn sql_interval_to_expr(
+        &self,
         negative: bool,
         interval: Interval,
     ) -> Result<Expr> {
@@ -219,7 +220,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("Unsupported interval operator: {op:?}");
                 }
             };
-            let left_expr = Self::sql_interval_to_expr(
+            let left_expr = self.sql_interval_to_expr(
                 negative,
                 Interval {
                     value: left,
@@ -229,7 +230,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     fractional_seconds_precision: None,
                 },
             )?;
-            let right_expr = Self::sql_interval_to_expr(
+            let right_expr = self.sql_interval_to_expr(
                 false,
                 Interval {
                     value: right,
