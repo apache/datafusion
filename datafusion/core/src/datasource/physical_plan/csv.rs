@@ -128,7 +128,6 @@ mod tests {
         let config =
             FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
                 .with_file_compression_type(file_compression_type)
-                .with_newlines_in_values(false)
                 .with_projection_indices(Some(vec![0, 2, 4]))?
                 .build();
 
@@ -200,7 +199,6 @@ mod tests {
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
             FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
-                .with_newlines_in_values(false)
                 .with_file_compression_type(file_compression_type.to_owned())
                 .with_projection_indices(Some(vec![4, 0, 2]))?
                 .build();
@@ -272,7 +270,6 @@ mod tests {
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
             FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
-                .with_newlines_in_values(false)
                 .with_file_compression_type(file_compression_type.to_owned())
                 .with_limit(Some(5))
                 .build();
@@ -343,7 +340,6 @@ mod tests {
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
             FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
-                .with_newlines_in_values(false)
                 .with_file_compression_type(file_compression_type.to_owned())
                 .with_limit(Some(5))
                 .build();
@@ -412,7 +408,6 @@ mod tests {
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
             FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
-                .with_newlines_in_values(false)
                 .with_file_compression_type(file_compression_type.to_owned())
                 // We should be able to project on the partition column
                 // Which is supposed to be after the file fields
@@ -518,7 +513,6 @@ mod tests {
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
         let config =
             FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
-                .with_newlines_in_values(false)
                 .with_file_compression_type(file_compression_type.to_owned())
                 .build();
         let csv = DataSourceExec::from_data_source(config);
