@@ -39,7 +39,8 @@ use super::array_filter::StaticFilter;
 use super::primitive::{PrimitiveFilter, U8Config, U16Config};
 use super::transform::{
     make_bitmap_filter, make_branchless_filter, make_primitive_filter,
-    make_utf8view_branchless_filter, make_utf8view_hash_filter, utf8view_all_short_strings,
+    make_utf8view_branchless_filter, make_utf8view_hash_filter,
+    utf8view_all_short_strings,
 };
 
 // =============================================================================

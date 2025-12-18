@@ -56,7 +56,8 @@ impl StaticFilter for ArrayStaticFilter {
     /// Checks if values in `v` are contained in the `in_array` using this hash set for lookup.
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
         // Null type comparisons always return null (SQL three-valued logic)
-        if v.data_type() == &DataType::Null || self.in_array.data_type() == &DataType::Null
+        if v.data_type() == &DataType::Null
+            || self.in_array.data_type() == &DataType::Null
         {
             let nulls = NullBuffer::new_null(v.len());
             return Ok(BooleanArray::new(

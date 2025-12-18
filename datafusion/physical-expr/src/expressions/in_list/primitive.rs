@@ -142,13 +142,9 @@ impl<C: BitmapFilterConfig> BitmapFilter<C> {
         nulls: Option<&arrow::buffer::NullBuffer>,
         negated: bool,
     ) -> BooleanArray {
-        build_in_list_result(
-            values.len(),
-            nulls,
-            self.null_count > 0,
-            negated,
-            |i| self.check(unsafe { *values.get_unchecked(i) }),
-        )
+        build_in_list_result(values.len(), nulls, self.null_count > 0, negated, |i| {
+            self.check(unsafe { *values.get_unchecked(i) })
+        })
     }
 }
 
@@ -227,13 +223,9 @@ where
         nulls: Option<&arrow::buffer::NullBuffer>,
         negated: bool,
     ) -> BooleanArray {
-        build_in_list_result(
-            values.len(),
-            nulls,
-            self.null_count > 0,
-            negated,
-            |i| self.check(unsafe { *values.get_unchecked(i) }),
-        )
+        build_in_list_result(values.len(), nulls, self.null_count > 0, negated, |i| {
+            self.check(unsafe { *values.get_unchecked(i) })
+        })
     }
 }
 

@@ -33,8 +33,8 @@ use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::SortOptions;
+use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::datatypes::*;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
