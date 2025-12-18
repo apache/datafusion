@@ -35,7 +35,7 @@ use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_common::Result;
 
 use super::array_filter::StaticFilter;
-use super::primitive::{BitmapFilter, BitmapFilterConfig, PrimitiveFilter};
+use super::primitive::{BitmapFilter, BitmapFilterConfig, BranchlessFilter, PrimitiveFilter};
 use super::result::handle_dictionary;
 
 // =============================================================================
@@ -88,6 +88,30 @@ where
     }
 }
 
+/// Reinterpreting filter for branchless lookups.
+struct ReinterpretedBranchless<T: ArrowPrimitiveType, const N: usize> {
+    inner: BranchlessFilter<T, N>,
+}
+
+impl<T, const N: usize> StaticFilter for ReinterpretedBranchless<T, N>
+where
+    T: ArrowPrimitiveType + 'static,
+    T::Native: Copy + PartialEq + Send + Sync + 'static,
+{
+    fn null_count(&self) -> usize {
+        self.inner.null_count()
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        let data = v.to_data();
+        let values: &[T::Native] = data.buffers()[0].typed_data();
+
+        Ok(self.inner.contains_slice(values, data.nulls(), negated))
+    }
+}
+
 /// Reinterprets any primitive-like array as the target primitive type T by extracting
 /// the underlying buffer.
 ///
@@ -132,4 +156,37 @@ where
     let reinterpreted = reinterpret_any_primitive_to::<D>(in_array.as_ref());
     let inner = PrimitiveFilter::<D>::try_new(&reinterpreted)?;
     Ok(Arc::new(ReinterpretedPrimitive { inner }))
+}
+
+/// Creates a branchless filter for small lists (≤16 elements), reinterpreting if needed.
+pub(crate) fn make_branchless_filter<D>(
+    in_array: &ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>>
+where
+    D: ArrowPrimitiveType + 'static,
+    D::Native: Copy + PartialEq + Send + Sync + 'static,
+{
+    let reinterpreted = if in_array.data_type() == &D::DATA_TYPE {
+        Arc::clone(in_array)
+    } else {
+        reinterpret_any_primitive_to::<D>(in_array.as_ref())
+    };
+
+    macro_rules! try_branchless {
+        ($($n:literal),*) => {
+            $(if let Some(Ok(inner)) = BranchlessFilter::<D, $n>::try_new(&reinterpreted) {
+                if in_array.data_type() == &D::DATA_TYPE {
+                    return Ok(Arc::new(inner));
+                } else {
+                    return Ok(Arc::new(ReinterpretedBranchless { inner }));
+                }
+            })*
+        };
+    }
+    try_branchless!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
+
+    datafusion_common::exec_err!(
+        "Branchless filter only supports 0-16 elements, got {}",
+        in_array.len() - in_array.null_count()
+    )
 }
