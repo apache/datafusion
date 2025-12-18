@@ -570,17 +570,15 @@ impl GroupedHashAggregateStream {
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
         let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
-        let oom_mode = match agg.mode {
+        let oom_mode = match (agg.mode, &group_ordering) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
-            AggregateMode::Partial => OutOfMemoryMode::EmitEarly,
-            _ => match group_ordering {
-                // For non-partial aggregation modes, don't use spilling if the input
-                // of fully sorted by the grouping expressions. Regular emission of completed
-                // group values will handle memory pressure.
-                GroupOrdering::Full(_) => OutOfMemoryMode::ReportError,
-                // For unsorted or partially sorted inputs, use disk spilling
-                GroupOrdering::None | GroupOrdering::Partial(_) => OutOfMemoryMode::Spill,
-            },
+            (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
+            // For non-partial aggregation modes, don't use spilling if the input
+            // of fully sorted by the grouping expressions. Regular emission of completed
+            // group values will handle memory pressure.
+            (_, GroupOrdering::Full(_)) => OutOfMemoryMode::ReportError,
+            // For unsorted or partially sorted inputs, use disk spilling
+            (_, GroupOrdering::None | GroupOrdering::Partial(_)) => OutOfMemoryMode::Spill,
         };
 
         let group_values = new_group_values(group_schema, &group_ordering)?;
