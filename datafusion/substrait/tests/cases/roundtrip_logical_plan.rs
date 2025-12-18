@@ -47,6 +47,11 @@ use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{Plan, Rel, plan_rel};
 
+use datafusion::catalog::cte_worktable::CteWorkTable;
+use datafusion::catalog::default_table_source::DefaultTableSource;
+use datafusion::common::TableReference;
+use datafusion::logical_expr::TableScan;
+
 #[derive(Debug)]
 struct MockSerializerRegistry;
 
@@ -2110,6 +2115,24 @@ async fn create_all_type_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
+/// Helper to create a TableScan that references a CteWorkTable.
+/// This is needed for testing RecursiveQuery plans, where the recursive_term
+/// must reference a work table.
+fn create_work_table_scan(name: &str, schema: Arc<Schema>) -> Result<LogicalPlan> {
+    let provider = Arc::new(CteWorkTable::new(name, Arc::clone(&schema)));
+    let source = Arc::new(DefaultTableSource::new(provider));
+    let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+
+    Ok(LogicalPlan::TableScan(TableScan {
+        table_name: TableReference::bare(name),
+        source,
+        projection: None,
+        projected_schema: Arc::new(df_schema),
+        filters: vec![],
+        fetch: None,
+    }))
+}
+
 #[tokio::test]
 async fn roundtrip_recursive_query() -> Result<()> {
     let ctx = create_context().await?;
@@ -2120,11 +2143,12 @@ async fn roundtrip_recursive_query() -> Result<()> {
         .project(vec![lit(1i64).alias("id")])?
         .build()?;
 
-    // Create a simple scan from the data table
-    let table = ctx.table("data").await?;
-    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
-        .filter(col("a").lt(lit(10i64)))?
-        .project(vec![col("a").add(lit(1i64)).alias("id")])?
+    // Create a work table scan for the recursive term
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+    let work_table_scan = create_work_table_scan("nodes", schema)?;
+    let recursive_term = LogicalPlanBuilder::from(work_table_scan)
+        .filter(col("id").lt(lit(10i64)))?
+        .project(vec![col("id").add(lit(1i64)).alias("id")])?
         .build()?;
 
     let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
@@ -2219,11 +2243,12 @@ async fn roundtrip_recursive_query_distinct() -> Result<()> {
         .project(vec![lit(1i64).alias("id")])?
         .build()?;
 
-    // Create a simple scan from the data table
-    let table = ctx.table("data").await?;
-    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
-        .filter(col("a").lt(lit(5i64)))?
-        .project(vec![col("a").add(lit(1i64)).alias("id")])?
+    // Create a work table scan for the recursive term
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+    let work_table_scan = create_work_table_scan("cte", schema)?;
+    let recursive_term = LogicalPlanBuilder::from(work_table_scan)
+        .filter(col("id").lt(lit(5i64)))?
+        .project(vec![col("id").add(lit(1i64)).alias("id")])?
         .build()?;
 
     let plan = LogicalPlan::RecursiveQuery(RecursiveQuery {
@@ -2262,12 +2287,17 @@ async fn roundtrip_recursive_query_preserves_child_plans() -> Result<()> {
         .project(vec![lit(42i64).alias("value")])? // Use specific value
         .build()?;
 
-    // Create a more complex recursive term with filter and projection
-    let table = ctx.table("data").await?;
-    let recursive_term = LogicalPlanBuilder::from(table.into_unoptimized_plan())
-        .filter(col("a").gt(lit(5i64)))? // Specific filter condition
+    // Create a work table scan for the recursive term with filter and projection
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        true,
+    )]));
+    let work_table_scan = create_work_table_scan("test_cte", schema)?;
+    let recursive_term = LogicalPlanBuilder::from(work_table_scan)
+        .filter(col("value").gt(lit(5i64)))? // Specific filter condition
         .project(vec![
-            (col("a") * lit(2i64)).alias("value"), // Specific projection
+            (col("value") * lit(2i64)).alias("value"), // Specific projection
         ])?
         .build()?;
 
