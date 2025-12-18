@@ -175,20 +175,64 @@ impl DefaultListFilesCacheState {
         }
     }
 
-    /// Returns the respective entry from the cache, if it exists and the entry
-    /// has not expired by `now`.
+    /// Performs a prefix-aware cache lookup.
     ///
-    /// If the entry exists it becomes the most recently used. If the entry has expired it is
-    /// removed from the cache
-    fn get(&mut self, key: &Path, now: Instant) -> Option<Arc<Vec<ObjectMeta>>> {
-        let entry = self.lru_queue.get(key)?;
+    /// # Arguments
+    /// * `table_base` - The table's base path (the cache key)
+    /// * `prefix` - Optional prefix filter relative to the table base path
+    /// * `now` - Current time for expiration checking
+    ///
+    /// # Behavior
+    /// - Fetches the cache entry for `table_base`
+    /// - If `prefix` is `Some`, filters results to only files matching `table_base/prefix`
+    /// - Returns the (potentially filtered) results
+    ///
+    /// # Example
+    /// ```text
+    /// get_with_prefix("my_table", Some("a=1"), now)
+    ///   → Fetch cache entry for "my_table"
+    ///   → Filter to files matching "my_table/a=1/*"
+    ///   → Return filtered results
+    /// ```
+    fn get_with_prefix(
+        &mut self,
+        table_base: &Path,
+        prefix: Option<&Path>,
+        now: Instant,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
+        let entry = self.lru_queue.get(table_base)?;
 
-        match entry.expires {
-            Some(exp) if now > exp => {
-                self.remove(key);
-                None
-            }
-            _ => Some(Arc::clone(&entry.metas)),
+        // Check expiration
+        if let Some(exp) = entry.expires
+            && now > exp
+        {
+            self.remove(table_base);
+            return None;
+        }
+
+        // Early return if no prefix filter - return all files
+        let Some(prefix) = prefix else {
+            return Some(Arc::clone(&entry.metas));
+        };
+
+        // Build the full prefix path: table_base/prefix
+        let mut parts: Vec<_> = table_base.parts().collect();
+        parts.extend(prefix.parts());
+        let full_prefix = Path::from_iter(parts);
+        let full_prefix_str = full_prefix.as_ref();
+
+        // Filter files to only those matching the prefix
+        let filtered: Vec<ObjectMeta> = entry
+            .metas
+            .iter()
+            .filter(|meta| meta.location.as_ref().starts_with(full_prefix_str))
+            .cloned()
+            .collect();
+
+        if filtered.is_empty() {
+            None
+        } else {
+            Some(Arc::new(filtered))
         }
     }
 
@@ -306,16 +350,36 @@ impl ListFilesCache for DefaultListFilesCache {
 }
 
 impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
-    type Extra = ObjectMeta;
+    type Extra = Option<Path>;
 
+    /// Gets all files for the given table base path.
+    ///
+    /// This is equivalent to calling `get_with_extra(k, &None)`.
     fn get(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
-        let mut state = self.state.lock().unwrap();
-        let now = self.time_provider.now();
-        state.get(k, now)
+        self.get_with_extra(k, &None)
     }
 
-    fn get_with_extra(&self, k: &Path, _e: &Self::Extra) -> Option<Arc<Vec<ObjectMeta>>> {
-        self.get(k)
+    /// Performs a prefix-aware cache lookup.
+    ///
+    /// # Arguments
+    /// * `table_base` - The table's base path (the cache key)
+    /// * `prefix` - Optional prefix filter (relative to table base) for partition filtering
+    ///
+    /// # Behavior
+    /// - Fetches the cache entry for `table_base`
+    /// - If `prefix` is `Some`, filters results to only files matching `table_base/prefix`
+    /// - Returns the (potentially filtered) results
+    ///
+    /// This enables efficient partition pruning - a single cached listing of the full table
+    /// can serve queries for any partition subset without additional storage calls.
+    fn get_with_extra(
+        &self,
+        table_base: &Path,
+        prefix: &Self::Extra,
+    ) -> Option<Arc<Vec<ObjectMeta>>> {
+        let mut state = self.state.lock().unwrap();
+        let now = self.time_provider.now();
+        state.get_with_prefix(table_base, prefix.as_ref(), now)
     }
 
     fn put(
@@ -806,5 +870,203 @@ mod tests {
             let state = cache.state.lock().unwrap();
             assert_eq!(state.memory_used, 0);
         }
+    }
+
+    // Prefix-aware cache tests
+
+    /// Helper function to create ObjectMeta with a specific location path
+    fn create_object_meta_with_path(location: &str) -> ObjectMeta {
+        ObjectMeta {
+            location: Path::from(location),
+            last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
+                .unwrap()
+                .into(),
+            size: 1024,
+            e_tag: None,
+            version: None,
+        }
+    }
+
+    #[test]
+    fn test_prefix_aware_cache_hit() {
+        // Scenario: Cache has full table listing, query for partition returns filtered results
+        let cache = DefaultListFilesCache::new(100000, None);
+
+        // Create files for a partitioned table
+        let table_base = Path::from("my_table");
+        let files = Arc::new(vec![
+            create_object_meta_with_path("my_table/a=1/file1.parquet"),
+            create_object_meta_with_path("my_table/a=1/file2.parquet"),
+            create_object_meta_with_path("my_table/a=2/file3.parquet"),
+            create_object_meta_with_path("my_table/a=2/file4.parquet"),
+        ]);
+
+        // Cache the full table listing
+        cache.put(&table_base, files);
+
+        // Query for partition a=1 using get_with_extra
+        // New API: get_with_extra(table_base, Some(relative_prefix))
+        let prefix_a1 = Some(Path::from("a=1"));
+        let result = cache.get_with_extra(&table_base, &prefix_a1);
+
+        // Should return filtered results (only files from a=1)
+        assert!(result.is_some());
+        let filtered = result.unwrap();
+        assert_eq!(filtered.len(), 2);
+        assert!(
+            filtered
+                .iter()
+                .all(|m| m.location.as_ref().starts_with("my_table/a=1"))
+        );
+
+        // Query for partition a=2
+        let prefix_a2 = Some(Path::from("a=2"));
+        let result_2 = cache.get_with_extra(&table_base, &prefix_a2);
+
+        assert!(result_2.is_some());
+        let filtered_2 = result_2.unwrap();
+        assert_eq!(filtered_2.len(), 2);
+        assert!(
+            filtered_2
+                .iter()
+                .all(|m| m.location.as_ref().starts_with("my_table/a=2"))
+        );
+    }
+
+    #[test]
+    fn test_prefix_aware_cache_no_filter_returns_all() {
+        // Scenario: Query with no prefix filter should return all files
+        let cache = DefaultListFilesCache::new(100000, None);
+
+        let table_base = Path::from("my_table");
+
+        // Cache full table listing with 4 files
+        let full_files = Arc::new(vec![
+            create_object_meta_with_path("my_table/a=1/file1.parquet"),
+            create_object_meta_with_path("my_table/a=1/file2.parquet"),
+            create_object_meta_with_path("my_table/a=2/file3.parquet"),
+            create_object_meta_with_path("my_table/a=2/file4.parquet"),
+        ]);
+        cache.put(&table_base, full_files);
+
+        // Query with no prefix filter (None) should return all 4 files
+        let result = cache.get_with_extra(&table_base, &None);
+        assert!(result.is_some());
+        let files = result.unwrap();
+        assert_eq!(files.len(), 4);
+
+        // Also test using get() which delegates to get_with_extra(&None)
+        let result_get = cache.get(&table_base);
+        assert!(result_get.is_some());
+        assert_eq!(result_get.unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_prefix_aware_cache_miss_no_entry() {
+        // Scenario: Table not cached, query should miss
+        let cache = DefaultListFilesCache::new(100000, None);
+
+        let table_base = Path::from("my_table");
+
+        // Query for full table should miss (nothing cached)
+        let result = cache.get_with_extra(&table_base, &None);
+        assert!(result.is_none());
+
+        // Query with prefix should also miss
+        let prefix = Some(Path::from("a=1"));
+        let result_2 = cache.get_with_extra(&table_base, &prefix);
+        assert!(result_2.is_none());
+    }
+
+    #[test]
+    fn test_prefix_aware_cache_no_matching_files() {
+        // Scenario: Cache has table listing but no files match the requested partition
+        let cache = DefaultListFilesCache::new(100000, None);
+
+        let table_base = Path::from("my_table");
+        let files = Arc::new(vec![
+            create_object_meta_with_path("my_table/a=1/file1.parquet"),
+            create_object_meta_with_path("my_table/a=2/file2.parquet"),
+        ]);
+        cache.put(&table_base, files);
+
+        // Query for partition a=3 which doesn't exist
+        let prefix_a3 = Some(Path::from("a=3"));
+        let result = cache.get_with_extra(&table_base, &prefix_a3);
+
+        // Should return None since no files match
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_prefix_aware_nested_partitions() {
+        // Scenario: Table with multiple partition levels (e.g., year/month/day)
+        let cache = DefaultListFilesCache::new(100000, None);
+
+        let table_base = Path::from("events");
+        let files = Arc::new(vec![
+            create_object_meta_with_path(
+                "events/year=2024/month=01/day=01/file1.parquet",
+            ),
+            create_object_meta_with_path(
+                "events/year=2024/month=01/day=02/file2.parquet",
+            ),
+            create_object_meta_with_path(
+                "events/year=2024/month=02/day=01/file3.parquet",
+            ),
+            create_object_meta_with_path(
+                "events/year=2025/month=01/day=01/file4.parquet",
+            ),
+        ]);
+        cache.put(&table_base, files);
+
+        // Query for year=2024/month=01 (should get 2 files)
+        let prefix_month = Some(Path::from("year=2024/month=01"));
+        let result = cache.get_with_extra(&table_base, &prefix_month);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), 2);
+
+        // Query for year=2024 (should get 3 files)
+        let prefix_year = Some(Path::from("year=2024"));
+        let result_year = cache.get_with_extra(&table_base, &prefix_year);
+        assert!(result_year.is_some());
+        assert_eq!(result_year.unwrap().len(), 3);
+
+        // Query for specific day (should get 1 file)
+        let prefix_day = Some(Path::from("year=2024/month=01/day=01"));
+        let result_day = cache.get_with_extra(&table_base, &prefix_day);
+        assert!(result_day.is_some());
+        assert_eq!(result_day.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_prefix_aware_different_tables() {
+        // Scenario: Multiple tables cached, queries should not cross-contaminate
+        let cache = DefaultListFilesCache::new(100000, None);
+
+        let table_a = Path::from("table_a");
+        let table_b = Path::from("table_b");
+
+        let files_a = Arc::new(vec![create_object_meta_with_path(
+            "table_a/part=1/file1.parquet",
+        )]);
+        let files_b = Arc::new(vec![
+            create_object_meta_with_path("table_b/part=1/file1.parquet"),
+            create_object_meta_with_path("table_b/part=2/file2.parquet"),
+        ]);
+
+        cache.put(&table_a, files_a);
+        cache.put(&table_b, files_b);
+
+        // Query table_a should only return table_a files
+        let result_a = cache.get(&table_a);
+        assert!(result_a.is_some());
+        assert_eq!(result_a.unwrap().len(), 1);
+
+        // Query table_b with prefix should only return matching table_b files
+        let prefix = Some(Path::from("part=1"));
+        let result_b = cache.get_with_extra(&table_b, &prefix);
+        assert!(result_b.is_some());
+        assert_eq!(result_b.unwrap().len(), 1);
     }
 }
