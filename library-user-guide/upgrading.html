@@ -434,6 +434,34 @@ those changes until the <code class="docutils literal notranslate"><span class="
 <p>See <a class="github reference external" href="https://github.com/apache/datafusion/issues/19056">apache/datafusion#19056</a> for more details.</p>
 <p>Note that the internal API has changed to use a trait <code class="docutils literal notranslate"><span class="pre">ListFilesCache</span></code> instead of a type alias.</p>
 </section>
+<section id="newlines-in-values-moved-from-filescanconfig-to-csvoptions">
+<h3><code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code><a class="headerlink" href="#newlines-in-values-moved-from-filescanconfig-to-csvoptions" title="Link to this heading">#</a></h3>
+<p>The CSV-specific <code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> configuration option has been moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code>, as it only applies to CSV file parsing.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who set <code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> via <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_newlines_in_values()</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Set <code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> in <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code> instead of on <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">CsvSource</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">file_schema</span><span class="p">.</span><span class="n">clone</span><span class="p">()));</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FileScanConfigBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">object_store_url</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_newlines_in_values</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">newlines_in_values</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+<span class="w">    </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="p">};</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">CsvSource</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">file_schema</span><span class="p">.</span><span class="n">clone</span><span class="p">())</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_csv_options</span><span class="p">(</span><span class="n">options</span><span class="p">));</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FileScanConfigBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">object_store_url</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
 <section id="removal-of-pyarrow-feature">
 <h3>Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature<a class="headerlink" href="#removal-of-pyarrow-feature" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature flag has been removed. This feature has been migrated to
@@ -2037,6 +2065,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changes-to-dfschema-api">Changes to DFSchema API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingtableprovider-now-caches-list-commands">ListingTableProvider now caches <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newlines-in-values-moved-from-filescanconfig-to-csvoptions"><code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#removal-of-pyarrow-feature">Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptive-filter-representation-in-parquet-filter-pushdown">Adaptive filter representation in Parquet filter pushdown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
