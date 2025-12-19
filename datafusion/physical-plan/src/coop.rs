@@ -79,6 +79,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::projection::ProjectionExec;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
@@ -296,6 +297,16 @@ impl ExecutionPlan for CooperativeExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         Equal
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.input.try_swapping_with_projection(projection)? {
+            Some(new_input) => Ok(Some(Arc::new(CooperativeExec::new(new_input)))),
+            None => Ok(None),
+        }
     }
 
     fn gather_filters_for_pushdown(
