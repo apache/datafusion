@@ -1030,10 +1030,7 @@ impl GroupedHashAggregateStream {
         };
 
         match self.oom_mode {
-            OutOfMemoryMode::Spill
-                if !self.group_values.is_empty()
-                    && !self.spill_state.is_stream_merging =>
-            {
+            OutOfMemoryMode::Spill if !self.group_values.is_empty() => {
                 self.spill()?;
                 self.clear_shrink(self.batch_size);
                 self.update_memory_reservation()?;
@@ -1167,37 +1164,6 @@ impl GroupedHashAggregateStream {
         self.clear_shrink(0);
     }
 
-    /// At this point, all the inputs are read and there are some spills.
-    /// Emit the remaining rows and create a batch.
-    /// Conduct a streaming merge sort between the batch and spilled data. Since the stream is fully
-    /// sorted, set `self.group_ordering` to Full, then later we can read with [`EmitTo::First`].
-    fn update_merged_stream(&mut self) -> Result<()> {
-        // Spill the last remaining rows (if any) to free up as much memory as possible.
-        // Since we're already spilling, we can be sure we're memory constrained.
-        // The possible cost of creating an extra spill is deemed acceptable.
-        self.spill()?;
-
-        self.spill_state.is_stream_merging = true;
-        self.input = StreamingMergeBuilder::new()
-            .with_schema(Arc::clone(&self.spill_state.spill_schema))
-            .with_spill_manager(self.spill_state.spill_manager.clone())
-            .with_sorted_spill_files(std::mem::take(&mut self.spill_state.spills))
-            .with_expressions(&self.spill_state.spill_expr)
-            .with_metrics(self.baseline_metrics.clone())
-            .with_batch_size(self.batch_size)
-            .with_reservation(self.reservation.new_empty())
-            .build()?;
-        self.input_done = false;
-
-        // Reset the group collectors for streaming_merge
-        self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
-        self.clear_all();
-
-        self.update_memory_reservation()?;
-
-        Ok(())
-    }
-
     /// returns true if there is a soft groups limit and the number of distinct
     /// groups we have seen is over that limit
     fn hit_soft_group_limit(&self) -> bool {
@@ -1207,18 +1173,60 @@ impl GroupedHashAggregateStream {
         group_values_soft_limit <= self.group_values.len()
     }
 
-    /// common function for signalling end of processing of the input stream
+    /// Finalizes reading of the input stream and prepares for producing output values.
+    ///
+    /// This method is called both when the original input stream and,
+    /// in case of disk spilling, the SPM stream have been drained.
     fn set_input_done_and_produce_output(&mut self) -> Result<()> {
         self.input_done = true;
         self.group_ordering.input_done();
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
+            // Input has been entirely processed without spilling to disk.
+
+            // Flush any remaining group values.
             let batch = self.emit(EmitTo::All, false)?;
+
+            // If there are none, we're done; otherwise switch to emitting them
             batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
         } else {
-            // If spill files exist, stream-merge them.
-            self.update_merged_stream()?;
+            // Spill any remaining data to disk. There is some performance overhead in
+            // writing out this last chunk of data and reading it back. The benefit of
+            // doing this is that memory usage for this stream is reduced, and the more
+            // sophisticated memory handling in `MultiLevelMergeBuilder` can take over
+            // instead.
+            // Spilling to disk and reading back also ensures batch size is consistent
+            // rather than potentially having one significantly larger last batch.
+            self.spill()?;
+
+            // Mark that we're switching to stream merging mode.
+            self.spill_state.is_stream_merging = true;
+
+            self.input = StreamingMergeBuilder::new()
+                .with_schema(Arc::clone(&self.spill_state.spill_schema))
+                .with_spill_manager(self.spill_state.spill_manager.clone())
+                .with_sorted_spill_files(std::mem::take(&mut self.spill_state.spills))
+                .with_expressions(&self.spill_state.spill_expr)
+                .with_metrics(self.baseline_metrics.clone())
+                .with_batch_size(self.batch_size)
+                .with_reservation(self.reservation.new_empty())
+                .build()?;
+            self.input_done = false;
+
+            // Reset the group values collectors.
+            self.clear_all();
+
+            // We can now use `GroupOrdering::Full` since the spill files are sorted
+            // on the grouping columns.
+            self.group_ordering = GroupOrdering::Full(GroupOrderingFull::new());
+
+            // Use `OutOfMemoryMode::ReportError` from this point on
+            // to ensure we don't spill the spilled data to disk again.
+            self.oom_mode = OutOfMemoryMode::ReportError;
+
+            self.update_memory_reservation()?;
+
             ExecutionState::ReadingInput
         };
         timer.done();
