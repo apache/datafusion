@@ -20,10 +20,10 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, Float32Type,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float32Type,
     Float64Type,
 };
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -110,7 +110,7 @@ impl ScalarUDFImpl for FloorFunc {
                     .unary::<_, Float32Type>(f32::floor),
             ),
             DataType::Null => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+                return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
             }
             DataType::Decimal32(precision, scale) => {
                 apply_decimal_op::<Decimal32Type, _>(
@@ -152,7 +152,7 @@ impl ScalarUDFImpl for FloorFunc {
                 return exec_err!(
                     "Unsupported data type {other:?} for function {}",
                     self.name()
-                )
+                );
             }
         };
 
