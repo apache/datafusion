@@ -70,26 +70,26 @@ use sqlparser::parser::Parser;
 #[test]
 fn test_roundtrip_expr_1() {
     let expr = roundtrip_expr(TableReference::bare("person"), "age > 35").unwrap();
-    assert_snapshot!(expr, @r#"(age > 35)"#);
+    assert_snapshot!(expr, @"(age > 35)");
 }
 
 #[test]
 fn test_roundtrip_expr_2() {
     let expr = roundtrip_expr(TableReference::bare("person"), "id = '10'").unwrap();
-    assert_snapshot!(expr, @r#"(id = '10')"#);
+    assert_snapshot!(expr, @"(id = '10')");
 }
 
 #[test]
 fn test_roundtrip_expr_3() {
     let expr =
         roundtrip_expr(TableReference::bare("person"), "CAST(id AS VARCHAR)").unwrap();
-    assert_snapshot!(expr, @r#"CAST(id AS VARCHAR)"#);
+    assert_snapshot!(expr, @"CAST(id AS VARCHAR)");
 }
 
 #[test]
 fn test_roundtrip_expr_4() {
     let expr = roundtrip_expr(TableReference::bare("person"), "sum((age * 2))").unwrap();
-    assert_snapshot!(expr, @r#"sum((age * 2))"#);
+    assert_snapshot!(expr, @"sum((age * 2))");
 }
 
 fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
@@ -400,7 +400,7 @@ fn roundtrip_statement_with_dialect_7() -> Result<(), DataFusionError> {
         sql: "select ta.j1_id from j1 ta order by j1_id limit 10;",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10"#,
+        expected: @"SELECT ta.j1_id FROM j1 AS ta ORDER BY ta.j1_id ASC NULLS LAST LIMIT 10",
     );
     Ok(())
 }
@@ -415,7 +415,7 @@ fn roundtrip_statement_with_dialect_8() -> Result<(), DataFusionError> {
                   LIMIT 10;",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10"#,
+        expected: @"SELECT j1.j1_id FROM j1 UNION ALL SELECT tb.j2_id AS j1_id FROM j2 AS tb ORDER BY j1_id ASC NULLS LAST LIMIT 10",
     );
     Ok(())
 }
@@ -427,7 +427,7 @@ fn roundtrip_statement_with_dialect_9() -> Result<(), DataFusionError> {
         sql: "SELECT j1_string from j1 order by j1_id",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT j1.j1_string FROM j1 ORDER BY j1.j1_id ASC NULLS LAST"#,
+        expected: @"SELECT j1.j1_string FROM j1 ORDER BY j1.j1_id ASC NULLS LAST",
     );
     Ok(())
 }
@@ -438,7 +438,7 @@ fn roundtrip_statement_with_dialect_10() -> Result<(), DataFusionError> {
         sql: "SELECT j1_string AS a from j1 order by j1_id",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT j1.j1_string AS a FROM j1 ORDER BY j1.j1_id ASC NULLS LAST"#,
+        expected: @"SELECT j1.j1_string AS a FROM j1 ORDER BY j1.j1_id ASC NULLS LAST",
     );
     Ok(())
 }
@@ -449,7 +449,7 @@ fn roundtrip_statement_with_dialect_11() -> Result<(), DataFusionError> {
         sql: "SELECT j1_string from j1 join j2 on j1.j1_id = j2.j2_id order by j1_id",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT j1.j1_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id ASC NULLS LAST"#,
+        expected: @"SELECT j1.j1_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id ASC NULLS LAST",
     );
     Ok(())
 }
@@ -479,7 +479,7 @@ fn roundtrip_statement_with_dialect_12() -> Result<(), DataFusionError> {
                   abc.j2_string",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT abc.j1_string, abc.j2_string FROM (SELECT DISTINCT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+        expected: @"SELECT abc.j1_string, abc.j2_string FROM (SELECT DISTINCT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST",
     );
     Ok(())
 }
@@ -501,7 +501,7 @@ fn roundtrip_statement_with_dialect_13() -> Result<(), DataFusionError> {
             ",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT agg.string_count FROM (SELECT j1.j1_id, min(j2.j2_string) FROM j1 LEFT OUTER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)"#,
+        expected: @"SELECT agg.string_count FROM (SELECT j1.j1_id, min(j2.j2_string) FROM j1 LEFT OUTER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id) AS agg (id, string_count)",
     );
     Ok(())
 }
@@ -535,7 +535,7 @@ fn roundtrip_statement_with_dialect_14() -> Result<(), DataFusionError> {
                   abc.j2_string",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT abc.j1_string, abc.j2_string FROM (SELECT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id, j1.j1_string, j2.j2_string ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+        expected: @"SELECT abc.j1_string, abc.j2_string FROM (SELECT j1.j1_id, j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) GROUP BY j1.j1_id, j1.j1_string, j2.j2_string ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST",
     );
     Ok(())
 }
@@ -565,7 +565,7 @@ fn roundtrip_statement_with_dialect_15() -> Result<(), DataFusionError> {
                   j2_string",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT abc.j1_string FROM (SELECT j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST"#,
+        expected: @"SELECT abc.j1_string FROM (SELECT j1.j1_string, j2.j2_string FROM j1 INNER JOIN j2 ON (j1.j1_id = j2.j2_id) ORDER BY j1.j1_id DESC NULLS FIRST, j2.j2_id DESC NULLS FIRST LIMIT 10) AS abc ORDER BY abc.j2_string ASC NULLS LAST",
     );
     Ok(())
 }
@@ -576,7 +576,7 @@ fn roundtrip_statement_with_dialect_16() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT j1_id from j1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT j1.j1_id FROM j1) AS c (id)",
     );
     Ok(())
 }
@@ -587,7 +587,7 @@ fn roundtrip_statement_with_dialect_17() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT j1_id as id from j1) AS c",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT j1.j1_id AS id FROM j1) AS c"#,
+        expected: @"SELECT c.id FROM (SELECT j1.j1_id AS id FROM j1) AS c",
     );
     Ok(())
 }
@@ -599,7 +599,7 @@ fn roundtrip_statement_with_dialect_18() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT j1_id + 1 * 3 from j1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT (j1.j1_id + (1 * 3)) FROM j1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT (j1.j1_id + (1 * 3)) FROM j1) AS c (id)",
     );
     Ok(())
 }
@@ -611,7 +611,7 @@ fn roundtrip_statement_with_dialect_19() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT distinct (j1_id + 1 * 3) FROM j1 LIMIT 1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT DISTINCT (j1.j1_id + (1 * 3)) FROM j1 LIMIT 1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT DISTINCT (j1.j1_id + (1 * 3)) FROM j1 LIMIT 1) AS c (id)",
     );
     Ok(())
 }
@@ -622,7 +622,7 @@ fn roundtrip_statement_with_dialect_20() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT j1_id + 1 FROM j1 ORDER BY j1_id DESC LIMIT 1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT (j1.j1_id + 1) FROM j1 ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT (j1.j1_id + 1) FROM j1 ORDER BY j1.j1_id DESC NULLS FIRST LIMIT 1) AS c (id)",
     );
     Ok(())
 }
@@ -633,7 +633,7 @@ fn roundtrip_statement_with_dialect_21() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT CAST((CAST(j1_id as BIGINT) + 1) as int) * 10 FROM j1 LIMIT 1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT (CAST((CAST(j1.j1_id AS BIGINT) + 1) AS INTEGER) * 10) FROM j1 LIMIT 1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT (CAST((CAST(j1.j1_id AS BIGINT) + 1) AS INTEGER) * 10) FROM j1 LIMIT 1) AS c (id)",
     );
     Ok(())
 }
@@ -644,7 +644,7 @@ fn roundtrip_statement_with_dialect_22() -> Result<(), DataFusionError> {
         sql: "SELECT id FROM (SELECT CAST(j1_id as BIGINT) + 1 FROM j1 ORDER BY j1_id LIMIT 1) AS c (id)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)"#,
+        expected: @"SELECT c.id FROM (SELECT (CAST(j1.j1_id AS BIGINT) + 1) FROM j1 ORDER BY j1.j1_id ASC NULLS LAST LIMIT 1) AS c (id)",
     );
     Ok(())
 }
@@ -655,7 +655,7 @@ fn roundtrip_statement_with_dialect_23() -> Result<(), DataFusionError> {
         sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
-        expected: @r#"SELECT temp_j.id2 FROM (SELECT j1.j1_id, j1.j1_string FROM j1) AS temp_j (id2, string2)"#,
+        expected: @"SELECT temp_j.id2 FROM (SELECT j1.j1_id, j1.j1_string FROM j1) AS temp_j (id2, string2)",
     );
     Ok(())
 }
@@ -666,7 +666,7 @@ fn roundtrip_statement_with_dialect_24() -> Result<(), DataFusionError> {
         sql: "SELECT temp_j.id2 FROM (SELECT j1_id, j1_string FROM j1) AS temp_j(id2, string2)",
         parser_dialect: GenericDialect {},
         unparser_dialect: SqliteDialect {},
-        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2`, `j1`.`j1_string` AS `string2` FROM `j1`) AS `temp_j`"#,
+        expected: @"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2`, `j1`.`j1_string` AS `string2` FROM `j1`) AS `temp_j`",
     );
     Ok(())
 }
@@ -677,7 +677,7 @@ fn roundtrip_statement_with_dialect_25() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM (SELECT j1_id + 1 FROM j1) AS temp_j(id2)",
         parser_dialect: GenericDialect {},
         unparser_dialect: SqliteDialect {},
-        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`"#,
+        expected: @"SELECT `temp_j`.`id2` FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`",
     );
     Ok(())
 }
@@ -688,7 +688,7 @@ fn roundtrip_statement_with_dialect_26() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM (SELECT j1_id FROM j1 LIMIT 1) AS temp_j(id2)",
         parser_dialect: GenericDialect {},
         unparser_dialect: SqliteDialect {},
-        expected: @r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`"#,
+        expected: @"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`",
     );
     Ok(())
 }
@@ -757,7 +757,7 @@ fn roundtrip_statement_with_dialect_32() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3])",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3])"#,
+        expected: @"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3])",
     );
     Ok(())
 }
@@ -782,7 +782,7 @@ fn roundtrip_statement_with_dialect_34() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+        expected: @"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)",
     );
     Ok(())
 }
@@ -796,7 +796,7 @@ fn roundtrip_statement_with_dialect_35() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]), j1",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
+        expected: @"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) CROSS JOIN j1",
     );
     Ok(())
 }
@@ -810,7 +810,7 @@ fn roundtrip_statement_with_dialect_36() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT u.c1, j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
+        expected: @"SELECT u.c1, j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)",
     );
     Ok(())
 }
@@ -824,7 +824,7 @@ fn roundtrip_statement_with_dialect_37() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT u.c1 FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT u.c1 FROM UNNEST([4, 5, 6]) AS u (c1)"#,
+        expected: @"SELECT u.c1 FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT u.c1 FROM UNNEST([4, 5, 6]) AS u (c1)",
     );
     Ok(())
 }
@@ -838,7 +838,7 @@ fn roundtrip_statement_with_dialect_38() -> Result<(), DataFusionError> {
         sql: "SELECT UNNEST([1,2,3])",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+        expected: @"SELECT * FROM UNNEST([1, 2, 3])",
     );
     Ok(())
 }
@@ -852,7 +852,7 @@ fn roundtrip_statement_with_dialect_39() -> Result<(), DataFusionError> {
         sql: "SELECT UNNEST([1,2,3]) as c1",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST([1, 2, 3]) AS c1"#,
+        expected: @"SELECT UNNEST([1, 2, 3]) AS c1",
     );
     Ok(())
 }
@@ -866,7 +866,7 @@ fn roundtrip_statement_with_dialect_40() -> Result<(), DataFusionError> {
         sql: "SELECT UNNEST([1,2,3]), 1",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))), Int64(1)"#,
+        expected: @"SELECT UNNEST([1, 2, 3]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3))), Int64(1)",
     );
     Ok(())
 }
@@ -880,7 +880,7 @@ fn roundtrip_statement_with_dialect_41() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
+        expected: @"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)",
     );
     Ok(())
 }
@@ -894,7 +894,7 @@ fn roundtrip_statement_with_dialect_42() -> Result<(), DataFusionError> {
         sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)"#,
+        expected: @"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)",
     );
     Ok(())
 }
@@ -908,7 +908,7 @@ fn roundtrip_statement_with_dialect_43() -> Result<(), DataFusionError> {
         sql: "SELECT unnest([1, 2, 3, 4]) from unnest([1, 2, 3]);",
         parser_dialect: GenericDialect {},
         unparser_dialect: unparser,
-        expected: @r#"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3])"#,
+        expected: @"SELECT UNNEST([1, 2, 3, 4]) AS UNNEST(make_array(Int64(1),Int64(2),Int64(3),Int64(4))) FROM UNNEST([1, 2, 3])",
     );
     Ok(())
 }
@@ -930,25 +930,25 @@ fn roundtrip_statement_with_dialect_special_char_alias() -> Result<(), DataFusio
         sql: "select min(a) as \"min(a)\" from (select 1 as a)",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT min(`a`) AS `min_40a_41` FROM (SELECT 1 AS `a`)"#,
+        expected: @"SELECT min(`a`) AS `min_40a_41` FROM (SELECT 1 AS `a`)",
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)"#,
+        expected: @"SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)",
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select a as \"a*\", b , c as \"c@\" from (select 1 as a , 2 as b, 3 as c)",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT `a` AS `a_42`, `b`, `c` AS `c_64` FROM (SELECT 1 AS `a`, 2 AS `b`, 3 AS `c`)"#,
+        expected: @"SELECT `a` AS `a_42`, `b`, `c` AS `c_64` FROM (SELECT 1 AS `a`, 2 AS `b`, 3 AS `c`)",
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select * from (select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)) where \"a*\" = 1",
         parser_dialect: GenericDialect {},
         unparser_dialect: BigQueryDialect {},
-        expected: @r#"SELECT `a_42`, `b_64` FROM (SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)) WHERE (`a_42` = 1)"#,
+        expected: @"SELECT `a_42`, `b_64` FROM (SELECT `a` AS `a_42`, `b` AS `b_64` FROM (SELECT 1 AS `a`, 2 AS `b`)) WHERE (`a_42` = 1)",
     );
     roundtrip_statement_with_dialect_helper!(
         sql: "select * from (select a as \"a*\", b as \"b@\" from (select 1 as a , 2 as b)) where \"a*\" = 1",
@@ -975,11 +975,12 @@ fn test_unnest_logical_plan() -> Result<()> {
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
     assert_snapshot!(
         plan,
-        @r#"
-Projection: __unnest_placeholder(unnest_table.struct_col).field1, __unnest_placeholder(unnest_table.struct_col).field2, __unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
-  Unnest: lists[__unnest_placeholder(unnest_table.array_col)|depth=1] structs[__unnest_placeholder(unnest_table.struct_col)]
-    Projection: unnest_table.struct_col AS __unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS __unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
-      TableScan: unnest_table"#
+        @r"
+    Projection: __unnest_placeholder(unnest_table.struct_col).field1, __unnest_placeholder(unnest_table.struct_col).field2, __unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+      Unnest: lists[__unnest_placeholder(unnest_table.array_col)|depth=1] structs[__unnest_placeholder(unnest_table.struct_col)]
+        Projection: unnest_table.struct_col AS __unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS __unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+          TableScan: unnest_table
+    "
     );
 
     Ok(())
@@ -1386,7 +1387,7 @@ fn test_table_scan_alias() -> Result<()> {
     let sql = plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM (SELECT t1.id FROM t1 WHERE (t1.id > 5)) AS a"#
+        @"SELECT * FROM (SELECT t1.id FROM t1 WHERE (t1.id > 5)) AS a"
     );
 
     let table_scan_with_two_filter = table_scan_with_filters(
@@ -1401,7 +1402,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
     assert_snapshot!(
         table_scan_with_two_filter,
-        @r#"SELECT a.id FROM t1 AS a WHERE ((a.id > 1) AND (a.age < 2))"#
+        @"SELECT a.id FROM t1 AS a WHERE ((a.id > 1) AND (a.age < 2))"
     );
 
     let table_scan_with_fetch =
@@ -1412,7 +1413,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_fetch = plan_to_sql(&table_scan_with_fetch)?;
     assert_snapshot!(
         table_scan_with_fetch,
-        @r#"SELECT a.id FROM (SELECT * FROM t1 LIMIT 10) AS a"#
+        @"SELECT a.id FROM (SELECT * FROM t1 LIMIT 10) AS a"
     );
 
     let table_scan_with_pushdown_all = table_scan_with_filter_and_fetch(
@@ -1428,7 +1429,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_pushdown_all = plan_to_sql(&table_scan_with_pushdown_all)?;
     assert_snapshot!(
         table_scan_with_pushdown_all,
-        @r#"SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"#
+        @"SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"
     );
     Ok(())
 }
@@ -1444,21 +1445,21 @@ fn test_table_scan_pushdown() -> Result<()> {
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_snapshot!(
         scan_with_projection,
-        @r#"SELECT t1.id, t1.age FROM t1"#
+        @"SELECT t1.id, t1.age FROM t1"
     );
 
     let scan_with_projection = table_scan(Some("t1"), &schema, Some(vec![1]))?.build()?;
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_snapshot!(
         scan_with_projection,
-        @r#"SELECT t1.age FROM t1"#
+        @"SELECT t1.age FROM t1"
     );
 
     let scan_with_no_projection = table_scan(Some("t1"), &schema, None)?.build()?;
     let scan_with_no_projection = plan_to_sql(&scan_with_no_projection)?;
     assert_snapshot!(
         scan_with_no_projection,
-        @r#"SELECT * FROM t1"#
+        @"SELECT * FROM t1"
     );
 
     let table_scan_with_projection_alias =
@@ -1469,7 +1470,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_snapshot!(
         table_scan_with_projection_alias,
-        @r#"SELECT ta.id, ta.age FROM t1 AS ta"#
+        @"SELECT ta.id, ta.age FROM t1 AS ta"
     );
 
     let table_scan_with_projection_alias =
@@ -1480,7 +1481,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_alias)?;
     assert_snapshot!(
         table_scan_with_projection_alias,
-        @r#"SELECT ta.age FROM t1 AS ta"#
+        @"SELECT ta.age FROM t1 AS ta"
     );
 
     let table_scan_with_no_projection_alias = table_scan(Some("t1"), &schema, None)?
@@ -1490,7 +1491,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_no_projection_alias)?;
     assert_snapshot!(
         table_scan_with_no_projection_alias,
-        @r#"SELECT * FROM t1 AS ta"#
+        @"SELECT * FROM t1 AS ta"
     );
 
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
@@ -1502,7 +1503,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&query_from_table_scan_with_projection)?;
     assert_snapshot!(
         query_from_table_scan_with_projection,
-        @r#"SELECT t1.id, t1.age FROM t1"#
+        @"SELECT t1.id, t1.age FROM t1"
     );
 
     let query_from_table_scan_with_two_projections = LogicalPlanBuilder::from(
@@ -1515,7 +1516,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&query_from_table_scan_with_two_projections)?;
     assert_snapshot!(
         query_from_table_scan_with_two_projections,
-        @r#"SELECT t1.id, t1.age FROM (SELECT t1.id, t1.age FROM t1)"#
+        @"SELECT t1.id, t1.age FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
     let table_scan_with_filter = table_scan_with_filters(
@@ -1528,7 +1529,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_filter = plan_to_sql(&table_scan_with_filter)?;
     assert_snapshot!(
         table_scan_with_filter,
-        @r#"SELECT * FROM t1 WHERE (t1.id > t1.age)"#
+        @"SELECT * FROM t1 WHERE (t1.id > t1.age)"
     );
 
     let table_scan_with_two_filter = table_scan_with_filters(
@@ -1541,7 +1542,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_two_filter = plan_to_sql(&table_scan_with_two_filter)?;
     assert_snapshot!(
         table_scan_with_two_filter,
-        @r#"SELECT * FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))"#
+        @"SELECT * FROM t1 WHERE ((t1.id > 1) AND (t1.age < 2))"
     );
 
     let table_scan_with_filter_alias = table_scan_with_filters(
@@ -1555,7 +1556,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_filter_alias = plan_to_sql(&table_scan_with_filter_alias)?;
     assert_snapshot!(
         table_scan_with_filter_alias,
-        @r#"SELECT * FROM t1 AS ta WHERE (ta.id > ta.age)"#
+        @"SELECT * FROM t1 AS ta WHERE (ta.id > ta.age)"
     );
 
     let table_scan_with_projection_and_filter = table_scan_with_filters(
@@ -1569,7 +1570,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_and_filter)?;
     assert_snapshot!(
         table_scan_with_projection_and_filter,
-        @r#"SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age)"#
+        @"SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age)"
     );
 
     let table_scan_with_projection_and_filter = table_scan_with_filters(
@@ -1583,7 +1584,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_and_filter)?;
     assert_snapshot!(
         table_scan_with_projection_and_filter,
-        @r#"SELECT t1.age FROM t1 WHERE (t1.id > t1.age)"#
+        @"SELECT t1.age FROM t1 WHERE (t1.id > t1.age)"
     );
 
     let table_scan_with_inline_fetch =
@@ -1592,7 +1593,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_inline_fetch = plan_to_sql(&table_scan_with_inline_fetch)?;
     assert_snapshot!(
         table_scan_with_inline_fetch,
-        @r#"SELECT * FROM t1 LIMIT 10"#
+        @"SELECT * FROM t1 LIMIT 10"
     );
 
     let table_scan_with_projection_and_inline_fetch = table_scan_with_filter_and_fetch(
@@ -1607,7 +1608,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&table_scan_with_projection_and_inline_fetch)?;
     assert_snapshot!(
         table_scan_with_projection_and_inline_fetch,
-        @r#"SELECT t1.id, t1.age FROM t1 LIMIT 10"#
+        @"SELECT t1.id, t1.age FROM t1 LIMIT 10"
     );
 
     let table_scan_with_all = table_scan_with_filter_and_fetch(
@@ -1621,7 +1622,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_all = plan_to_sql(&table_scan_with_all)?;
     assert_snapshot!(
         table_scan_with_all,
-        @r#"SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age) LIMIT 10"#
+        @"SELECT t1.id, t1.age FROM t1 WHERE (t1.id > t1.age) LIMIT 10"
     );
 
     let table_scan_with_additional_filter = table_scan_with_filters(
@@ -1635,7 +1636,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_filter = plan_to_sql(&table_scan_with_additional_filter)?;
     assert_snapshot!(
         table_scan_with_filter,
-        @r#"SELECT * FROM t1 WHERE (t1.id = 5) AND (t1.id > t1.age)"#
+        @"SELECT * FROM t1 WHERE (t1.id = 5) AND (t1.id > t1.age)"
     );
 
     Ok(())
@@ -1656,7 +1657,7 @@ fn test_sort_with_push_down_fetch() -> Result<()> {
     let sql = plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT t1.id, t1.age FROM t1 ORDER BY t1.age ASC NULLS FIRST LIMIT 10"#
+        @"SELECT t1.id, t1.age FROM t1 ORDER BY t1.age ASC NULLS FIRST LIMIT 10"
     );
     Ok(())
 }
@@ -1786,7 +1787,7 @@ fn test_interval_lhs_eq() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')"#
+        @"SELECT (INTERVAL '2.000000000 SECS' = INTERVAL '2.000000000 SECS')"
     )
 }
 
@@ -1798,7 +1799,7 @@ fn test_interval_lhs_lt() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')"#
+        @"SELECT (INTERVAL '2.000000000 SECS' < INTERVAL '2.000000000 SECS')"
     )
 }
 
@@ -1807,7 +1808,7 @@ fn test_without_offset() {
     let statement = generate_round_trip_statement(MySqlDialect {}, "select 1");
     assert_snapshot!(
         statement,
-        @r#"SELECT 1"#
+        @"SELECT 1"
     )
 }
 
@@ -1816,7 +1817,7 @@ fn test_with_offset0() {
     let statement = generate_round_trip_statement(MySqlDialect {}, "select 1 offset 0");
     assert_snapshot!(
         statement,
-        @r#"SELECT 1 OFFSET 0"#
+        @"SELECT 1 OFFSET 0"
     )
 }
 
@@ -1825,7 +1826,7 @@ fn test_with_offset95() {
     let statement = generate_round_trip_statement(MySqlDialect {}, "select 1 offset 95");
     assert_snapshot!(
         statement,
-        @r#"SELECT 1 OFFSET 95"#
+        @"SELECT 1 OFFSET 95"
     )
 }
 
@@ -1838,7 +1839,7 @@ fn test_order_by_to_sql_1() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#
+        @"SELECT person.id, person.first_name, sum(person.id) FROM person GROUP BY person.id, person.first_name ORDER BY sum(person.id) ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"
     );
 }
 
@@ -1851,7 +1852,7 @@ fn test_order_by_to_sql_2() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"#
+        @"SELECT person.id, person.first_name, sum(person.id) AS total_sum FROM person GROUP BY person.id, person.first_name ORDER BY total_sum ASC NULLS LAST, person.first_name DESC NULLS FIRST, person.id ASC NULLS LAST, person.first_name ASC NULLS LAST LIMIT 10"
     );
 }
 
@@ -1863,7 +1864,7 @@ fn test_order_by_to_sql_3() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"#
+        @"SELECT person.id, person.first_name, substr(person.first_name, 0, 5) FROM person ORDER BY person.id ASC NULLS LAST, substr(person.first_name, 0, 5) ASC NULLS LAST"
     );
 }
 
@@ -1905,7 +1906,7 @@ fn test_complex_order_by_with_grouping() -> Result<()> {
     }, {
         assert_snapshot!(
             sql,
-            @r#"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN ((grouping(j1.j1_id) + grouping(j1.j1_string)) = 0) THEN j1.j1_id END ASC NULLS LAST) LIMIT 100"#
+            @"SELECT j1.j1_id, j1.j1_string, lochierarchy FROM (SELECT j1.j1_id, j1.j1_string, (grouping(j1.j1_id) + grouping(j1.j1_string)) AS lochierarchy, grouping(j1.j1_string), grouping(j1.j1_id) FROM j1 GROUP BY ROLLUP (j1.j1_id, j1.j1_string) ORDER BY lochierarchy DESC NULLS FIRST, CASE WHEN ((grouping(j1.j1_id) + grouping(j1.j1_string)) = 0) THEN j1.j1_id END ASC NULLS LAST) LIMIT 100"
         );
     });
 
@@ -1938,7 +1939,7 @@ fn test_unnest_to_sql_1() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"#
+        @"SELECT UNNEST(unnest_table.array_col) AS u1, unnest_table.struct_col, unnest_table.array_col FROM unnest_table WHERE (unnest_table.array_col <> NULL) ORDER BY unnest_table.struct_col ASC NULLS LAST, unnest_table.array_col ASC NULLS LAST"
     );
 }
 
@@ -1950,7 +1951,7 @@ fn test_unnest_to_sql_2() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"#
+        @"SELECT UNNEST([1, 2, 2, 5, NULL]) AS u1"
     );
 }
 
@@ -1962,7 +1963,7 @@ fn test_join_with_no_conditions() {
     );
     assert_snapshot!(
         statement,
-        @r#"SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2"#
+        @"SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2"
     );
 }
 
@@ -2065,7 +2066,7 @@ fn test_unparse_extension_to_statement() -> Result<()> {
     let sql = unparser.plan_to_sql(&extension)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT j1.j1_id, j1.j1_string FROM j1"#
+        @"SELECT j1.j1_id, j1.j1_string FROM j1"
     );
 
     if let Some(err) = plan_to_sql(&extension).err() {
@@ -2131,7 +2132,7 @@ fn test_unparse_extension_to_sql() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT j1.j1_id AS user_id FROM (SELECT j1.j1_id, j1.j1_string FROM j1)"#
+        @"SELECT j1.j1_id AS user_id FROM (SELECT j1.j1_id, j1.j1_string FROM j1)"
     );
 
     if let Some(err) = plan_to_sql(&plan).err() {
@@ -2172,7 +2173,7 @@ fn test_unparse_optimized_multi_union() -> Result<()> {
     });
     assert_snapshot!(
         unparser.plan_to_sql(&plan)?,
-        @r#"SELECT 1 AS x, 'a' AS y UNION ALL SELECT 1 AS x, 'b' AS y UNION ALL SELECT 2 AS x, 'a' AS y UNION ALL SELECT 2 AS x, 'c' AS y"#
+        @"SELECT 1 AS x, 'a' AS y UNION ALL SELECT 1 AS x, 'b' AS y UNION ALL SELECT 2 AS x, 'a' AS y UNION ALL SELECT 2 AS x, 'c' AS y"
     );
 
     let plan = LogicalPlan::Union(Union {
@@ -2251,7 +2252,7 @@ fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT customer_view.c_custkey, customer_view.c_name, customer_view.custkey_plus FROM (SELECT customer.c_custkey, (CAST(customer.c_custkey AS BIGINT) + 1) AS custkey_plus, customer.c_name FROM (SELECT customer.c_custkey, customer.c_name FROM customer AS customer) AS customer) AS customer_view"#
+        @"SELECT customer_view.c_custkey, customer_view.c_name, customer_view.custkey_plus FROM (SELECT customer.c_custkey, (CAST(customer.c_custkey AS BIGINT) + 1) AS custkey_plus, customer.c_name FROM (SELECT customer.c_custkey, customer.c_name FROM customer AS customer) AS customer) AS customer_view"
     );
     Ok(())
 }
@@ -2562,21 +2563,21 @@ fn test_unparse_window() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"#
+        @"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"
     );
 
     let unparser = Unparser::new(&SqliteDialect {});
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"#
+        @"SELECT `test`.`k`, `test`.`v`, `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM (SELECT `test`.`k` AS `k`, `test`.`v` AS `v`, rank() OVER (PARTITION BY `test`.`k` ORDER BY `test`.`v` ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS `rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` FROM `test`) AS `test` WHERE (`rank() PARTITION BY [test.k] ORDER BY [test.v ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING` = 1)"
     );
 
     let unparser = Unparser::new(&DefaultDialect {});
     let sql = unparser.plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT test.k, test.v, rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM test QUALIFY (rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) = 1)"#
+        @"SELECT test.k, test.v, rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM test QUALIFY (rank() OVER (PARTITION BY test.k ORDER BY test.v ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) = 1)"
     );
 
     // without table qualifier

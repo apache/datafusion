@@ -23,16 +23,13 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    Constraints, DataFusionError, SchemaExt, Statistics, internal_datafusion_err,
-    plan_err, project_schema,
+    Constraints, SchemaExt, Statistics, internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
-use datafusion_datasource::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
-};
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
@@ -331,20 +328,6 @@ impl ListingTable {
         self.schema_adapter_factory.as_ref()
     }
 
-    /// Creates a schema adapter for mapping between file and table schemas
-    ///
-    /// Uses the configured schema adapter factory if available, otherwise falls back
-    /// to the default implementation.
-    fn create_schema_adapter(&self) -> Box<dyn SchemaAdapter> {
-        let table_schema = self.schema();
-        match &self.schema_adapter_factory {
-            Some(factory) => {
-                factory.create_with_projected_schema(Arc::clone(&table_schema))
-            }
-            None => DefaultSchemaAdapterFactory::from_schema(Arc::clone(&table_schema)),
-        }
-    }
-
     /// Creates a file source and applies schema adapter factory if available
     fn create_file_source_with_schema_adapter(
         &self,
@@ -359,10 +342,8 @@ impl ListingTable {
         );
 
         let mut source = self.options.format.file_source(table_schema);
-        // Apply schema adapter to source if available
-        //
+        // Apply schema adapter to source if available.
         // The source will use this SchemaAdapter to adapt data batches as they flow up the plan.
-        // Note: ListingTable also creates a SchemaAdapter in `scan()` but that is only used to adapt collected statistics.
         if let Some(factory) = &self.schema_adapter_factory {
             source = source.with_schema_adapter_factory(Arc::clone(factory))?;
         }
@@ -709,25 +690,17 @@ impl ListingTable {
             )
         };
 
-        let (mut file_groups, mut stats) = compute_all_files_statistics(
+        let (file_groups, stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
             self.options.collect_stat,
             inexact_stats,
         )?;
 
-        let schema_adapter = self.create_schema_adapter();
-        let (schema_mapper, _) = schema_adapter.map_schema(self.file_schema.as_ref())?;
-
-        stats.column_statistics =
-            schema_mapper.map_column_statistics(&stats.column_statistics)?;
-        file_groups.iter_mut().try_for_each(|file_group| {
-            if let Some(stat) = file_group.statistics_mut() {
-                stat.column_statistics =
-                    schema_mapper.map_column_statistics(&stat.column_statistics)?;
-            }
-            Ok::<_, DataFusionError>(())
-        })?;
+        // Note: Statistics already include both file columns and partition columns.
+        // PartitionedFile::with_statistics automatically appends exact partition column
+        // statistics (min=max=partition_value, null_count=0, distinct_count=1) computed
+        // from partition_values.
         Ok(ListFilesResult {
             file_groups,
             statistics: stats,

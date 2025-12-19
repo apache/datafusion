@@ -65,14 +65,13 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
-use datafusion_common::{plan_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, plan_datafusion_err};
 use datafusion_expr::{
-    case, col, lit,
+    Expr, case, col, lit,
     logical_plan::builder::LogicalPlanBuilder,
     planner::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
-    Expr,
 };
 use datafusion_sql::sqlparser::ast::{NullInclusion, PivotValueSource, TableFactor};
 use insta::assert_snapshot;

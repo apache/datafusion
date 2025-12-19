@@ -16,8 +16,8 @@
 // under the License.
 
 use abi_stable::{
-    std_types::{ROption, RVec},
     StableAbi,
+    std_types::{ROption, RVec},
 };
 use arrow_schema::FieldRef;
 use datafusion::{

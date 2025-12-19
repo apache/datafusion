@@ -75,7 +75,9 @@ pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
     let encrypted_parquet_df = ctx.read_parquet(tempfile_str, read_options).await?;
 
     // Show information from the dataframe
-    println!("\n\n===============================================================================");
+    println!(
+        "\n\n==============================================================================="
+    );
     println!("Encrypted Parquet DataFrame:");
     query_dataframe(&encrypted_parquet_df).await?;
 
