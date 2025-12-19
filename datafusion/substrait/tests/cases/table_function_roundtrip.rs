@@ -24,7 +24,7 @@ use datafusion_substrait::logical_plan::{
 use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
-use substrait::proto::{plan_rel, read_rel::ReadType, Rel};
+use substrait::proto::{Rel, plan_rel, read_rel::ReadType};
 
 #[tokio::test]
 async fn table_function_round_trip_generate_series() -> Result<()> {
