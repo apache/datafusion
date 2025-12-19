@@ -295,8 +295,6 @@ impl ScalarUDFImpl for LogFunc {
             return plan_err!("Expected log to have 1 or 2 arguments, got {num_args}");
         }
 
-        // TODO: ScalarValue doesn't support negative scale, remove when it does
-        // See: https://github.com/apache/datafusion/issues/19354
         match arg_types.last().unwrap() {
             DataType::Decimal32(_, scale)
             | DataType::Decimal64(_, scale)
