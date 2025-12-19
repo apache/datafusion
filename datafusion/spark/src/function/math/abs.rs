@@ -78,7 +78,10 @@ impl ScalarUDFImpl for SparkAbs {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         if args.arg_fields.is_empty() {
-            return internal_err!("abs takes exactly 1 argument, but got: {}", args.arg_fields.len());
+            return internal_err!(
+                "abs takes exactly 1 argument, but got: {}",
+                args.arg_fields.len()
+            );
         }
 
         let input_field = &args.arg_fields[0];
@@ -470,9 +473,10 @@ mod tests {
 
         // Non-nullable field with non-null scalar argument -> non-nullable result
         let non_nullable: FieldRef = Arc::new(Field::new("col", DataType::Int32, false));
+        let non_null_scalar = ScalarValue::Int32(Some(1));
         let out = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&non_nullable)],
-            scalar_arguments: &[Some(ScalarValue::Int32(Some(1)))],
+            scalar_arguments: &[Some(&non_null_scalar)],
         })?;
         assert!(!out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Int32);
