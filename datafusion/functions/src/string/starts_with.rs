@@ -119,14 +119,7 @@ impl ScalarUDFImpl for StartsWithFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        match args.args[0].data_type() {
-            DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
-                make_scalar_function(starts_with, vec![])(&args.args)
-            }
-            _ => internal_err!(
-                "Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View"
-            )?,
-        }
+        make_scalar_function(starts_with, vec![])(&args.args)
     }
 
     fn simplify(
