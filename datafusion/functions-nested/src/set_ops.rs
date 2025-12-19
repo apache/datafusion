@@ -368,13 +368,13 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
         let l_values = if let Some(first_arr) = first_arr {
             converter.convert_columns(&[first_arr])?
         } else {
-            converter.convert_columns(&[])?
+            converter.empty_rows(0, 0)
         };
 
         let r_values = if let Some(second_arr) = second_arr {
             converter.convert_columns(&[second_arr])?
         } else {
-            converter.convert_columns(&[])?
+            converter.empty_rows(0, 0)
         };
 
         let l_iter = l_values.iter().sorted().dedup();
