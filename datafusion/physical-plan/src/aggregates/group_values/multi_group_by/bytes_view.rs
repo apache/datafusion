@@ -118,6 +118,9 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         self.do_append_val_inner(arr, row);
     }
 
+    // Don't inline to keep the code small and give LLVM the best chance of
+    // vectorizing the inner loop
+    #[inline(never)]
     fn vectorized_equal_to_inner<const HAS_NULLS: bool, const HAS_BUFFERS: bool>(
         &self,
         lhs_rows: &[usize],
@@ -221,6 +224,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     ///
     /// Templated so that the inner compare loop can be
     /// specialized based on the input array
+    #[inline(always)]
     fn do_equal_to_inner<const HAS_NULLS: bool, const HAS_BUFFERS: bool>(
         &self,
         lhs_row: usize,
