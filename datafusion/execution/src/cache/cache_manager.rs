@@ -196,7 +196,10 @@ impl CacheManager {
             .inspect(|c| {
                 // the cache memory limit or ttl might have changed, ensure they are updated
                 c.update_cache_limit(config.list_files_cache_limit);
-                c.update_cache_ttl(config.list_files_cache_ttl);
+                // Only update TTL if explicitly set in config, otherwise preserve the cache's existing TTL
+                if let Some(ttl) = config.list_files_cache_ttl {
+                    c.update_cache_ttl(Some(ttl));
+                }
             })
             .map(Arc::clone);
 
@@ -348,5 +351,79 @@ impl CacheManagerConfig {
     pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
         self.metadata_cache_limit = limit;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::DefaultListFilesCache;
+
+    /// Test to verify that TTL is preserved when not explicitly set in config.
+    /// This fixes issue #19396 where TTL was being unset from DefaultListFilesCache
+    /// when CacheManagerConfig::list_files_cache_ttl was not set explicitly.
+    #[test]
+    fn test_ttl_preserved_when_not_set_in_config() {
+        use std::time::Duration;
+
+        // Create a cache with TTL = 1 second
+        let list_file_cache =
+            DefaultListFilesCache::new(1024, Some(Duration::from_secs(1)));
+
+        // Verify the cache has TTL set initially
+        assert_eq!(
+            list_file_cache.cache_ttl(),
+            Some(Duration::from_secs(1)),
+            "Cache should have TTL = 1 second initially"
+        );
+
+        // Put cache in config WITHOUT setting list_files_cache_ttl
+        let config = CacheManagerConfig::default()
+            .with_list_files_cache(Some(Arc::new(list_file_cache)));
+
+        // Create CacheManager from config
+        let cache_manager = CacheManager::try_new(&config).unwrap();
+
+        // Verify TTL is preserved (not unset)
+        let cache_ttl = cache_manager.get_list_files_cache().unwrap().cache_ttl();
+
+        assert!(
+            cache_ttl.is_some(),
+            "TTL should be preserved when not set in config. Expected Some(Duration::from_secs(1)), got {cache_ttl:?}"
+        );
+
+        // Verify it's the correct TTL value
+        assert_eq!(
+            cache_ttl,
+            Some(Duration::from_secs(1)),
+            "TTL should be exactly 1 second"
+        );
+    }
+
+    /// Test to verify that TTL can still be overridden when explicitly set in config.
+    #[test]
+    fn test_ttl_overridden_when_set_in_config() {
+        use std::time::Duration;
+
+        // Create a cache with TTL = 1 second
+        let list_file_cache =
+            DefaultListFilesCache::new(1024, Some(Duration::from_secs(1)));
+
+        // Put cache in config WITH a different TTL set
+        let config = CacheManagerConfig::default()
+            .with_list_files_cache(Some(Arc::new(list_file_cache)))
+            .with_list_files_cache_ttl(Some(Duration::from_secs(60)));
+
+        // Create CacheManager from config
+        let cache_manager = CacheManager::try_new(&config).unwrap();
+
+        // Verify TTL is overridden to the config value
+        let cache_ttl = cache_manager.get_list_files_cache().unwrap().cache_ttl();
+
+        assert_eq!(
+            cache_ttl,
+            Some(Duration::from_secs(60)),
+            "TTL should be overridden to 60 seconds when set in config"
+        );
     }
 }
