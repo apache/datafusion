@@ -18,8 +18,8 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use abi_stable::StableAbi;
+use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use datafusion_common::error::Result;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
@@ -242,9 +242,12 @@ unsafe extern "C" fn try_encode_udwf_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_PhysicalExtensionCodec) {
-    let private_data =
-        Box::from_raw(provider.private_data as *mut PhysicalExtensionCodecPrivateData);
-    drop(private_data);
+    unsafe {
+        let private_data = Box::from_raw(
+            provider.private_data as *mut PhysicalExtensionCodecPrivateData,
+        );
+        drop(private_data);
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
@@ -412,7 +415,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, Result};
+    use datafusion_common::{Result, exec_err};
     use datafusion_execution::TaskContext;
     use datafusion_expr::ptr_eq::arc_ptr_eq;
     use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF, WindowUDFImpl};

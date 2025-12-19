@@ -20,7 +20,7 @@ name = "datafusion-substrait"
 description = "DataFusion Substrait Producer and Consumer"
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }

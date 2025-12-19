@@ -422,14 +422,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                             Arc::new(json)
                         }
-                        #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
                         FileFormatType::Avro(..) => {
                             #[cfg(feature = "avro")]
                             {
                                 Arc::new(AvroFormat)
                             }
                             #[cfg(not(feature = "avro"))]
-                            panic!("Unable to process avro file since `avro` feature is not enabled");
+                            {
+                                panic!(
+                                    "Unable to process avro file since `avro` feature is not enabled"
+                                );
+                            }
                         }
                         FileFormatType::Arrow(..) => {
                             Arc::new(ArrowFormat)

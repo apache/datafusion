@@ -424,6 +424,13 @@ impl SessionConfig {
         self.options.optimizer.enable_round_robin_repartition
     }
 
+    /// Enables or disables sort pushdown optimization, and currently only
+    /// applies to Parquet data source.
+    pub fn with_enable_sort_pushdown(mut self, enabled: bool) -> Self {
+        self.options_mut().optimizer.enable_sort_pushdown = enabled;
+        self
+    }
+
     /// Set the size of [`sort_spill_reservation_bytes`] to control
     /// memory pre-reservation
     ///

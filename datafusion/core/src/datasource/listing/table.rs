@@ -875,13 +875,13 @@ mod tests {
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
-            +-------+
-            | count |
-            +-------+
-            | 20    |
-            +-------+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r"
+        +-------+
+        | count |
+        +-------+
+        | 20    |
+        +-------+
+        ");}
 
         // Read the records in the table
         let batches = session_ctx
@@ -890,13 +890,13 @@ mod tests {
             .collect()
             .await?;
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
-            +-------+
-            | count |
-            +-------+
-            | 20    |
-            +-------+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r"
+        +-------+
+        | count |
+        +-------+
+        | 20    |
+        +-------+
+        ");}
 
         // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -911,13 +911,13 @@ mod tests {
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
-            +-------+
-            | count |
-            +-------+
-            | 20    |
-            +-------+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r"
+        +-------+
+        | count |
+        +-------+
+        | 20    |
+        +-------+
+        ");}
 
         // Read the contents of the table
         let batches = session_ctx
@@ -926,13 +926,13 @@ mod tests {
             .collect()
             .await?;
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
-            +-------+
-            | count |
-            +-------+
-            | 40    |
-            +-------+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r"
+        +-------+
+        | count |
+        +-------+
+        | 40    |
+        +-------+
+        ");}
 
         // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -990,15 +990,15 @@ mod tests {
             .collect()
             .await?;
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
-            +-----+-----+---+
-            | a   | b   | c |
-            +-----+-----+---+
-            | foo | bar | 1 |
-            | foo | bar | 2 |
-            | foo | bar | 3 |
-            +-----+-----+---+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r"
+        +-----+-----+---+
+        | a   | b   | c |
+        +-----+-----+---+
+        | foo | bar | 1 |
+        | foo | bar | 2 |
+        | foo | bar | 3 |
+        +-----+-----+---+
+        ");}
 
         Ok(())
     }
@@ -1453,11 +1453,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_statistics_mapping_with_default_factory() -> Result<()> {
+    async fn test_basic_table_scan() -> Result<()> {
         let ctx = SessionContext::new();
 
-        // Create a table without providing a custom schema adapter factory
-        // This should fall back to using DefaultSchemaAdapterFactory
+        // Test basic table creation and scanning
         let path = "table/file.json";
         register_test_store(&ctx, &[(path, 10)]);
 
@@ -1469,25 +1468,18 @@ mod tests {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
-        // Note: NOT calling .with_schema_adapter_factory() to test default behavior
 
         let table = ListingTable::try_new(config)?;
 
-        // Verify that no custom schema adapter factory is set
-        assert!(table.schema_adapter_factory().is_none());
-
-        // The scan should work correctly with the default schema adapter
+        // The scan should work correctly
         let scan_result = table.scan(&ctx.state(), None, &[], None).await;
-        assert!(
-            scan_result.is_ok(),
-            "Scan should succeed with default schema adapter"
-        );
+        assert!(scan_result.is_ok(), "Scan should succeed");
 
-        // Verify that the default adapter handles basic schema compatibility
+        // Verify file listing works
         let result = table.list_files_for_scan(&ctx.state(), &[], None).await?;
         assert!(
             !result.file_groups.is_empty(),
-            "Should list files successfully with default adapter"
+            "Should list files successfully"
         );
 
         Ok(())

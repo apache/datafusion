@@ -18,8 +18,8 @@
 use std::{ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult, RVec},
     StableAbi,
+    std_types::{RResult, RVec},
 };
 
 use datafusion::error::Result;
@@ -29,7 +29,7 @@ use datafusion::{
 };
 use datafusion_proto::{
     logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
+        DefaultLogicalExtensionCodec, from_proto::parse_exprs, to_proto::serialize_exprs,
     },
     protobuf::LogicalExprList,
 };
@@ -106,10 +106,13 @@ unsafe extern "C" fn call_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
-    debug_assert!(!udtf.private_data.is_null());
-    let private_data = Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
-    drop(private_data);
-    udtf.private_data = std::ptr::null_mut();
+    unsafe {
+        debug_assert!(!udtf.private_data.is_null());
+        let private_data =
+            Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
+        drop(private_data);
+        udtf.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udtf: &FFI_TableFunction) -> FFI_TableFunction {
@@ -206,7 +209,7 @@ mod tests {
     use super::*;
     use arrow::{
         array::{
-            record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
+            ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array, record_batch,
         },
         datatypes::{DataType, Field, Schema},
     };

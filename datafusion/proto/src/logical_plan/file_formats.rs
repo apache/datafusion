@@ -62,6 +62,7 @@ impl CsvOptionsProto {
                     .newlines_in_values
                     .map_or(vec![], |v| vec![v as u8]),
                 truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
+                compression_level: options.compression_level,
             }
         } else {
             CsvOptionsProto::default()
@@ -152,6 +153,7 @@ impl From<&CsvOptionsProto> for CsvOptions {
             } else {
                 Some(proto.truncated_rows[0] != 0)
             },
+            compression_level: proto.compression_level,
         }
     }
 }
@@ -238,6 +240,7 @@ impl JsonOptionsProto {
             JsonOptionsProto {
                 compression: options.compression as i32,
                 schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
+                compression_level: options.compression_level,
             }
         } else {
             JsonOptionsProto::default()
@@ -256,6 +259,7 @@ impl From<&JsonOptionsProto> for JsonOptions {
                 _ => CompressionTypeVariant::UNCOMPRESSED,
             },
             schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
+            compression_level: proto.compression_level,
         }
     }
 }
@@ -364,8 +368,7 @@ mod parquet {
             };
 
             let column_specific_options = global_options.column_specific_options;
-            #[allow(deprecated)] // max_statistics_size
-        TableParquetOptionsProto {
+            TableParquetOptionsProto {
             global: Some(ParquetOptionsProto {
                 enable_page_index: global_options.global.enable_page_index,
                 pruning: global_options.global.pruning,
@@ -462,8 +465,7 @@ mod parquet {
 
     impl From<&ParquetOptionsProto> for ParquetOptions {
         fn from(proto: &ParquetOptionsProto) -> Self {
-            #[allow(deprecated)] // max_statistics_size
-        ParquetOptions {
+            ParquetOptions {
             enable_page_index: proto.enable_page_index,
             pruning: proto.pruning,
             skip_metadata: proto.skip_metadata,
@@ -524,8 +526,7 @@ mod parquet {
 
     impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
         fn from(proto: ParquetColumnOptionsProto) -> Self {
-            #[allow(deprecated)] // max_statistics_size
-        ParquetColumnOptions {
+            ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,
             ),

@@ -297,6 +297,7 @@ datafusion.optimizer.enable_dynamic_filter_pushdown true
 datafusion.optimizer.enable_join_dynamic_filter_pushdown true
 datafusion.optimizer.enable_piecewise_merge_join false
 datafusion.optimizer.enable_round_robin_repartition true
+datafusion.optimizer.enable_sort_pushdown true
 datafusion.optimizer.enable_topk_aggregation true
 datafusion.optimizer.enable_topk_dynamic_filter_pushdown true
 datafusion.optimizer.enable_window_limits true
@@ -430,6 +431,7 @@ datafusion.optimizer.enable_dynamic_filter_pushdown true When set to true attemp
 datafusion.optimizer.enable_join_dynamic_filter_pushdown true When set to true, the optimizer will attempt to push down Join dynamic filters into the file scan phase.
 datafusion.optimizer.enable_piecewise_merge_join false When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently experimental. Physical planner will opt for PiecewiseMergeJoin when there is only one range filter.
 datafusion.optimizer.enable_round_robin_repartition true When set to true, the physical plan optimizer will try to add round robin repartitioning to increase parallelism to leverage more CPU cores
+datafusion.optimizer.enable_sort_pushdown true Enable sort pushdown optimization. When enabled, attempts to push sort requirements down to data sources that can natively handle them (e.g., by reversing file/row group read order). Returns **inexact ordering**: Sort operator is kept for correctness, but optimized input enables early termination for TopK queries (ORDER BY ... LIMIT N), providing significant speedup. Memory: No additional overhead (only changes read order). Future: Will add option to detect perfectly sorted data and eliminate Sort completely. Default: true
 datafusion.optimizer.enable_topk_aggregation true When set to true, the optimizer will attempt to perform limit operations during aggregations, if possible
 datafusion.optimizer.enable_topk_dynamic_filter_pushdown true When set to true, the optimizer will attempt to push down TopK dynamic filters into the file scan phase.
 datafusion.optimizer.enable_window_limits true When set to true, the optimizer will attempt to push limit operations past window functions, if possible

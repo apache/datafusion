@@ -22,7 +22,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 
-use abi_stable::library::{development_utils::compute_library_path, RootModule};
+use abi_stable::library::{RootModule, development_utils::compute_library_path};
 use datafusion::datasource::TableProvider;
 use ffi_module_interface::TableProviderModuleRef;
 

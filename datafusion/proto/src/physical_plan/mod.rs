@@ -155,11 +155,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             PhysicalPlanType::JsonScan(scan) => {
                 self.try_into_json_scan_physical_plan(scan, ctx, extension_codec)
             }
-            #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
                 self.try_into_parquet_scan_physical_plan(scan, ctx, extension_codec)
             }
-            #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
             PhysicalPlanType::AvroScan(scan) => {
                 self.try_into_avro_scan_physical_plan(scan, ctx, extension_codec)
             }
@@ -633,6 +631,7 @@ impl protobuf::PhysicalPlanNode {
             has_header: Some(scan.has_header),
             delimiter: str_to_byte(&scan.delimiter, "delimiter")?,
             quote: str_to_byte(&scan.quote, "quote")?,
+            newlines_in_values: Some(scan.newlines_in_values),
             ..Default::default()
         };
         let source = Arc::new(
@@ -648,7 +647,6 @@ impl protobuf::PhysicalPlanNode {
             extension_codec,
             source,
         )?)
-        .with_newlines_in_values(scan.newlines_in_values)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
         .build();
         Ok(DataSourceExec::from_data_source(conf))
@@ -672,7 +670,7 @@ impl protobuf::PhysicalPlanNode {
         Ok(DataSourceExec::from_data_source(scan_conf))
     }
 
-    #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
     fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
@@ -740,7 +738,7 @@ impl protobuf::PhysicalPlanNode {
         )
     }
 
-    #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
+    #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
     fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
@@ -759,6 +757,7 @@ impl protobuf::PhysicalPlanNode {
             )?;
             Ok(DataSourceExec::from_data_source(conf))
         }
+
         #[cfg(not(feature = "avro"))]
         panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
     }
@@ -2632,7 +2631,7 @@ impl protobuf::PhysicalPlanNode {
                             } else {
                                 None
                             },
-                            newlines_in_values: maybe_csv.newlines_in_values(),
+                            newlines_in_values: csv_config.newlines_in_values(),
                             truncate_rows: csv_config.truncate_rows(),
                         },
                     )),
