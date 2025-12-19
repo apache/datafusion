@@ -24,6 +24,7 @@
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 //! DataFusion execution configuration and runtime structures
 
@@ -31,6 +32,7 @@ pub mod cache;
 pub mod config;
 pub mod disk_manager;
 pub mod memory_pool;
+pub mod metrics;
 pub mod object_store;
 #[cfg(feature = "parquet_encryption")]
 pub mod parquet_encryption;

@@ -24,14 +24,14 @@ use arrow::datatypes::DataType::Utf8;
 use rand::Rng;
 use uuid::Uuid;
 
-use datafusion_common::{assert_or_internal_err, Result};
+use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.",
+    description = "Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_%28random%29) string value which is unique per row.",
     syntax_example = "uuid()",
     sql_example = r#"```sql
 > select uuid();

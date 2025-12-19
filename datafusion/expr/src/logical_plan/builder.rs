@@ -1352,6 +1352,15 @@ impl LogicalPlanBuilder {
             );
         }
 
+        // Requalify sides if needed to avoid duplicate qualified field names
+        // (e.g., when both sides reference the same table)
+        let left_builder = LogicalPlanBuilder::from(left_plan);
+        let right_builder = LogicalPlanBuilder::from(right_plan);
+        let (left_builder, right_builder, _requalified) =
+            requalify_sides_if_needed(left_builder, right_builder)?;
+        let left_plan = left_builder.build()?;
+        let right_plan = right_builder.build()?;
+
         let join_keys = left_plan
             .schema()
             .fields()
@@ -1731,23 +1740,61 @@ pub fn requalify_sides_if_needed(
 ) -> Result<(LogicalPlanBuilder, LogicalPlanBuilder, bool)> {
     let left_cols = left.schema().columns();
     let right_cols = right.schema().columns();
-    if left_cols.iter().any(|l| {
-        right_cols.iter().any(|r| {
-            l == r || (l.name == r.name && (l.relation.is_none() || r.relation.is_none()))
-        })
-    }) {
-        // These names have no connection to the original plan, but they'll make the columns
-        // (mostly) unique.
-        Ok((
-            left.alias(TableReference::bare("left"))?,
-            right.alias(TableReference::bare("right"))?,
-            true,
-        ))
-    } else {
-        Ok((left, right, false))
-    }
-}
 
+    // Requalify if merging the schemas would cause an error during join.
+    // This can happen in several cases:
+    // 1. Duplicate qualified fields: both sides have same relation.name
+    // 2. Duplicate unqualified fields: both sides have same unqualified name
+    // 3. Ambiguous reference: one side qualified, other unqualified, same name
+    //
+    // Implementation note: This uses a simple O(n*m) nested loop rather than
+    // a HashMap-based O(n+m) approach. The nested loop is preferred because:
+    // - Schemas are typically small (in TPCH benchmark, max is 16 columns),
+    //   so n*m is negligible
+    // - Early return on first conflict makes common case very fast
+    // - Code is simpler and easier to reason about
+    // - Called only during plan construction, not in execution hot path
+    for l in &left_cols {
+        for r in &right_cols {
+            if l.name != r.name {
+                continue;
+            }
+
+            // Same name - check if this would cause a conflict
+            match (&l.relation, &r.relation) {
+                // Both qualified with same relation - duplicate qualified field
+                (Some(l_rel), Some(r_rel)) if l_rel == r_rel => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // Both unqualified - duplicate unqualified field
+                (None, None) => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // One qualified, one not - ambiguous reference
+                (Some(_), None) | (None, Some(_)) => {
+                    return Ok((
+                        left.alias(TableReference::bare("left"))?,
+                        right.alias(TableReference::bare("right"))?,
+                        true,
+                    ));
+                }
+                // Different qualifiers - OK, no conflict
+                _ => {}
+            }
+        }
+    }
+
+    // No conflicts found
+    Ok((left, right, false))
+}
 /// Add additional "synthetic" group by expressions based on functional
 /// dependencies.
 ///

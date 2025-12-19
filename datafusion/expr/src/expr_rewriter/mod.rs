@@ -260,7 +260,11 @@ fn coerce_exprs_for_schema(
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
-                    _ => expr.cast_to(new_type, src_schema),
+                    _ => {
+                        // maintain the original name when casting
+                        let name = dst_schema.field(idx).name();
+                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                    }
                 }
             } else {
                 Ok(expr)

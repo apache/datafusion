@@ -389,8 +389,8 @@ mod tests {
     use crate::equivalence::tests::{
         convert_to_sort_reqs, create_test_params, create_test_schema, parse_sort_expr,
     };
-    use crate::equivalence::{convert_to_sort_exprs, ProjectionMapping};
-    use crate::expressions::{col, BinaryExpr, CastExpr, Column};
+    use crate::equivalence::{ProjectionMapping, convert_to_sort_exprs};
+    use crate::expressions::{BinaryExpr, CastExpr, Column, col};
     use crate::projection::tests::output_schema;
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
@@ -398,8 +398,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Constraint, Constraints, Result};
-    use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::Operator;
+    use datafusion_expr::sort_properties::SortProperties;
     use datafusion_functions::string::concat;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{

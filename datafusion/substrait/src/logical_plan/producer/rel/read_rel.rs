@@ -16,21 +16,29 @@
 // under the License.
 
 use crate::logical_plan::producer::{
-    to_substrait_literal, to_substrait_named_struct, SubstraitProducer,
+    SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
+<<<<<<< HEAD
 use datafusion::catalog::default_table_source::DefaultTableSource;
 use datafusion::common::{substrait_datafusion_err, DFSchema, ToDFSchema};
+=======
+use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
+>>>>>>> refs/rewritten/test-16279
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use datafusion::scalar::ScalarValue;
 use pbjson_types::Any;
 use prost::Message;
 use std::sync::Arc;
+use substrait::proto::expression::MaskExpression;
 use substrait::proto::expression::literal::Struct as LiteralStruct;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
+<<<<<<< HEAD
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::extensions::AdvancedExtension;
+=======
+>>>>>>> refs/rewritten/test-16279
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
 use substrait::proto::{ReadRel, Rel};
@@ -227,13 +235,13 @@ pub fn from_empty_relation(
             // nested expression support (RexType::Nested) is not yet implemented.
             // The 'values' field uses literal::Struct which the consumer can properly
             // deserialize with field name preservation.
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             values: vec![LiteralStruct { fields }],
             expressions: vec![],
         })
     } else {
         ReadType::VirtualTable(VirtualTable {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             values: vec![],
             expressions: vec![],
         })
@@ -274,7 +282,6 @@ pub fn from_values(
             convert_expression_rows(producer, &v.values, schema_len, &empty_schema)?;
         (vec![], expressions)
     };
-    #[allow(deprecated)]
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
@@ -283,8 +290,8 @@ pub fn from_values(
             best_effort_filter: None,
             projection: None,
             advanced_extension: None,
+            #[expect(deprecated)]
             read_type: Some(ReadType::VirtualTable(VirtualTable {
-                #[allow(deprecated)]
                 values,
                 expressions,
             })),

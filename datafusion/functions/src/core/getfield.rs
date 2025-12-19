@@ -16,16 +16,16 @@
 // under the License.
 
 use arrow::array::{
-    make_array, make_comparator, Array, BooleanArray, Capacities, MutableArrayData,
-    Scalar,
+    Array, BooleanArray, Capacities, MutableArrayData, Scalar, make_array,
+    make_comparator,
 };
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
-    ScalarValue,
+    Result, ScalarValue, exec_err, internal_err, plan_datafusion_err,
+    utils::take_function_args,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -137,7 +137,10 @@ impl ScalarUDFImpl for GetFieldFunc {
         // Length check handled in the signature
         debug_assert_eq!(args.scalar_arguments.len(), 2);
 
-        match (&args.arg_fields[0].data_type(), args.scalar_arguments[1].as_ref()) {
+        match (
+            &args.arg_fields[0].data_type(),
+            args.scalar_arguments[1].as_ref(),
+        ) {
             (DataType::Map(fields, _), _) => {
                 match fields.data_type() {
                     DataType::Struct(fields) if fields.len() == 2 => {
@@ -145,35 +148,48 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // often named "key", and "value", but we don't require any specific naming here;
                         // instead, we assume that the second column is the "value" column both here and in
                         // execution.
-                        let value_field = fields.get(1).expect("fields should have exactly two members");
+                        let value_field = fields
+                            .get(1)
+                            .expect("fields should have exactly two members");
 
                         Ok(value_field.as_ref().clone().with_nullable(true).into())
-                    },
-                    _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
+                    }
+                    _ => exec_err!(
+                        "Map fields must contain a Struct with exactly 2 fields"
+                    ),
                 }
             }
-            (DataType::Struct(fields),sv) => {
+            (DataType::Struct(fields), sv) => {
                 sv.and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
-                .map_or_else(
-                    || exec_err!("Field name must be a non-empty string"),
-                    |field_name| {
-                    fields.iter().find(|f| f.name() == field_name)
-                    .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
-                    .map(|f| {
-                        let mut child_field = f.as_ref().clone();
+                    .map_or_else(
+                        || exec_err!("Field name must be a non-empty string"),
+                        |field_name| {
+                            fields
+                                .iter()
+                                .find(|f| f.name() == field_name)
+                                .ok_or(plan_datafusion_err!(
+                                    "Field {field_name} not found in struct"
+                                ))
+                                .map(|f| {
+                                    let mut child_field = f.as_ref().clone();
 
-                        // If the parent is nullable, then getting the child must be nullable,
-                        // so potentially override the return value
+                                    // If the parent is nullable, then getting the child must be nullable,
+                                    // so potentially override the return value
 
-                        if args.arg_fields[0].is_nullable() {
-                            child_field = child_field.with_nullable(true);
-                        }
-                        Arc::new(child_field)
-                    })
-                })
-            },
-            (DataType::Null, _) => Ok(Field::new(self.name(), DataType::Null, true).into()),
-            (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
+                                    if args.arg_fields[0].is_nullable() {
+                                        child_field = child_field.with_nullable(true);
+                                    }
+                                    Arc::new(child_field)
+                                })
+                        },
+                    )
+            }
+            (DataType::Null, _) => {
+                Ok(Field::new(self.name(), DataType::Null, true).into())
+            }
+            (other, _) => exec_err!(
+                "The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"
+            ),
         }
     }
 

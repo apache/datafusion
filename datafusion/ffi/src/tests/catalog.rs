@@ -163,7 +163,9 @@ impl CatalogProvider for FixedCatalogProvider {
         schema: Arc<dyn SchemaProvider>,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         if !["apple", "banana", "cherry", "date"].contains(&name) {
-            return exec_err!("FixedCatalogProvider only provides four schemas: apple, banana, cherry, date");
+            return exec_err!(
+                "FixedCatalogProvider only provides four schemas: apple, banana, cherry, date"
+            );
         }
 
         self.inner.register_schema(name, schema)
@@ -222,7 +224,9 @@ impl CatalogProviderList for FixedCatalogProviderList {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         if !["blue", "red", "green", "yellow"].contains(&name.as_str()) {
-            log::warn!("FixedCatalogProviderList only provides four catalogs: blue, red, green, yellow");
+            log::warn!(
+                "FixedCatalogProviderList only provides four catalogs: blue, red, green, yellow"
+            );
             return None;
         }
 

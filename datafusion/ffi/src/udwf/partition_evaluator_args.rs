@@ -18,7 +18,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::arrow_wrappers::WrappedSchema;
-use abi_stable::{std_types::RVec, StableAbi};
+use abi_stable::{StableAbi, std_types::RVec};
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::ArrowError,
@@ -28,14 +28,14 @@ use arrow_schema::FieldRef;
 use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::function::PartitionEvaluatorArgs,
-    physical_plan::{expressions::Column, PhysicalExpr},
+    physical_plan::{PhysicalExpr, expressions::Column},
     prelude::SessionContext,
 };
 use datafusion_common::ffi_datafusion_err;
 use datafusion_proto::{
     physical_plan::{
-        from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,
-        DefaultPhysicalExtensionCodec,
+        DefaultPhysicalExtensionCodec, from_proto::parse_physical_expr,
+        to_proto::serialize_physical_exprs,
     },
     protobuf::PhysicalExprNode,
 };
