@@ -1057,9 +1057,7 @@ mod test {
         fn with_table_schema(mut self, table_schema: TableSchema) -> Self {
             let file_schema = Arc::clone(table_schema.file_schema());
             self.table_schema = Some(table_schema);
-            if self.file_schema.is_none() {
-                self.file_schema = Some(file_schema);
-            }
+            self.file_schema = Some(file_schema);
             self
         }
 
