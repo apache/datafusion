@@ -29,8 +29,8 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{Column, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
-use datafusion_common::{Result, not_impl_err, plan_err};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
@@ -1054,7 +1054,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             && alias.expr.as_ref() == &rewritten_expr
                         {
                             // Use the alias name
-                            return Some(Expr::Column(alias.name.clone().into()));
+                            return Some(Expr::Column(Column::new_unqualified(
+                                alias.name.clone(),
+                            )));
                         }
                         None
                     })
@@ -1069,7 +1071,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .cloned()
             .chain(select_exprs_post_aggr.iter().filter_map(|e| {
                 if let Expr::Alias(alias) = e {
-                    Some(Expr::Column(alias.name.clone().into()))
+                    Some(Expr::Column(Column::new_unqualified(alias.name.clone())))
                 } else {
                     None
                 }
