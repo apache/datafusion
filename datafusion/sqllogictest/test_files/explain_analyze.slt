@@ -25,3 +25,23 @@ Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_serie
 
 statement ok
 reset datafusion.explain.analyze_level;
+
+
+# test auto_explain
+
+statement ok
+set datafusion.explain.auto_explain_output = 'test_files/scratch/auto_explain.txt';
+
+statement ok
+set datafusion.explain.auto_explain = true;
+
+query TI
+SELECT 'k' k, 1 v;
+----
+k 1
+
+statement ok
+reset datafusion.explain.auto_explain;
+
+statement ok
+reset datafusion.explain.auto_explain_output;
