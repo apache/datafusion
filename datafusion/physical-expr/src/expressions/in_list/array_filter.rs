@@ -22,11 +22,11 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{SortOptions, take};
 use arrow::datatypes::DataType;
 use arrow::util::bit_iterator::BitIndexIterator;
+use datafusion_common::Result;
 use datafusion_common::hash_utils::with_hashes;
-use datafusion_common::{HashMap, Result};
 
 use ahash::RandomState;
-use hashbrown::hash_map::RawEntryMut;
+use hashbrown::HashTable;
 
 /// Trait for InList static filters
 pub(crate) trait StaticFilter {
@@ -41,11 +41,11 @@ pub(crate) trait StaticFilter {
 pub(crate) struct ArrayStaticFilter {
     in_array: ArrayRef,
     state: RandomState,
-    /// Used to provide a lookup from value to in list index
+    /// Stores indices into `in_array` for O(1) lookups.
     ///
-    /// Note: usize::hash is not used, instead the raw entry
-    /// API is used to store entries w.r.t their value
-    map: HashMap<usize, (), ()>,
+    /// Uses pre-computed hashes and custom equality based on array values
+    /// rather than the indices themselves.
+    table: HashTable<usize>,
 }
 
 impl StaticFilter for ArrayStaticFilter {
@@ -89,11 +89,8 @@ impl StaticFilter for ArrayStaticFilter {
                     }
 
                     let hash = hashes[i];
-                    let contains = self
-                        .map
-                        .raw_entry()
-                        .from_hash(hash, |idx| cmp(i, *idx).is_eq())
-                        .is_some();
+                    let contains =
+                        self.table.find(hash, |idx| cmp(i, *idx).is_eq()).is_some();
 
                     match contains {
                         true => Some(!negated),
@@ -119,23 +116,21 @@ impl ArrayStaticFilter {
             return Ok(ArrayStaticFilter {
                 in_array,
                 state: RandomState::new(),
-                map: HashMap::with_hasher(()),
+                table: HashTable::new(),
             });
         }
 
         let state = RandomState::new();
-        let mut map: HashMap<usize, (), ()> = HashMap::with_hasher(());
+        let mut table = HashTable::new();
 
         with_hashes([&in_array], &state, |hashes| -> Result<()> {
             let cmp = make_comparator(&in_array, &in_array, SortOptions::default())?;
 
             let insert_value = |idx| {
                 let hash = hashes[idx];
-                if let RawEntryMut::Vacant(v) = map
-                    .raw_entry_mut()
-                    .from_hash(hash, |x| cmp(*x, idx).is_eq())
-                {
-                    v.insert_with_hasher(hash, idx, (), |x| hashes[*x]);
+                // Only insert if not already present
+                if table.find(hash, |x| cmp(*x, idx).is_eq()).is_none() {
+                    table.insert_unique(hash, idx, |x| hashes[*x]);
                 }
             };
 
@@ -153,7 +148,7 @@ impl ArrayStaticFilter {
         Ok(Self {
             in_array,
             state,
-            map,
+            table,
         })
     }
 }
