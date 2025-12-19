@@ -1069,13 +1069,6 @@ mod test {
             self
         }
 
-        /// Set a custom projection expression.
-        fn with_projection(mut self, projection: ProjectionExprs) -> Self {
-            self.projection = Some(projection);
-            self.projection_indices = None;
-            self
-        }
-
         /// Set the predicate.
         fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
             self.predicate = Some(predicate);
