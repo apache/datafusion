@@ -1866,12 +1866,15 @@ if let Some(predicate) = logical_filter {
 # */
 ```
 
-New code should use `FileScanConfig` to build the appropriate `DataSourceExec`:
+New code should use `FileScanConfigBuilder` to build the appropriate `DataSourceExec`:
 
 ```rust
 # /* comment to avoid running
-let mut file_source = ParquetSource::new(parquet_options)
-    .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
+// Create table schema with file schema and partition columns
+let table_schema = TableSchema::new(file_schema, table_partition_cols);
+
+let mut file_source = ParquetSource::new(table_schema)
+    .with_table_parquet_options(parquet_options);
 
 // Add filter
 if let Some(predicate) = logical_filter {
@@ -1880,18 +1883,18 @@ if let Some(predicate) = logical_filter {
     }
 };
 
-let file_scan_config = FileScanConfig::new(
+let file_scan_config = FileScanConfigBuilder::new(
     self.log_store.object_store_url(),
-    file_schema,
     Arc::new(file_source),
 )
 .with_statistics(stats)
-.with_projection(self.projection.cloned())
+.with_projection_indices(self.projection.cloned())
+.expect("Failed to push down projection")
 .with_limit(self.limit)
-.with_table_partition_cols(table_partition_cols);
+.build();
 
 // Build the actual scan like this
-parquet_scan: file_scan_config.build(),
+let parquet_scan = DataSourceExec::from_data_source(file_scan_config);
 # */
 ```
 
