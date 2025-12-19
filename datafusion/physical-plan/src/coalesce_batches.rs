@@ -232,10 +232,9 @@ impl ExecutionPlan for CoalesceBatchesExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(Arc::new(
-                CoalesceBatchesExec::new(new_input, self.target_batch_size)
-                    .with_fetch(self.fetch),
-            ))),
+            Some(new_input) => Ok(Some(
+                Arc::new(self.clone()).with_new_children(vec![new_input])?,
+            )),
             None => Ok(None),
         }
     }

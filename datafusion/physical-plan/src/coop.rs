@@ -208,7 +208,7 @@ where
 /// An execution plan decorator that enables cooperative multitasking.
 /// It wraps the streams produced by its input execution plan using the [`make_cooperative`] function,
 /// which makes the stream participate in Tokio cooperative scheduling.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CooperativeExec {
     input: Arc<dyn ExecutionPlan>,
     properties: PlanProperties,
@@ -304,7 +304,9 @@ impl ExecutionPlan for CooperativeExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(Arc::new(CooperativeExec::new(new_input)))),
+            Some(new_input) => Ok(Some(
+                Arc::new(self.clone()).with_new_children(vec![new_input])?,
+            )),
             None => Ok(None),
         }
     }
