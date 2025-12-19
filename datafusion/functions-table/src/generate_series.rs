@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
+use datafusion_common::scalar::NANOS_PER_DAY;
 use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
@@ -35,8 +36,6 @@ use std::any::Any;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
-
-const NANOS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000_000;
 
 /// Empty generator that produces no rows - used when series arguments contain null values
 #[derive(Debug, Clone)]
