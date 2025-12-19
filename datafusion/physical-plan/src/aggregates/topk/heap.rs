@@ -66,6 +66,47 @@ impl Comparable for Arc<str> {
     }
 }
 
+/// A trait for types that can be lazily converted into heap values.
+///
+/// This allows checking if a borrowed value would improve the heap before
+/// committing to allocating and storing it. This is particularly useful for
+/// expensive conversions like string interning where we only want to allocate
+/// if the value actually replaces something in the heap.
+///
+/// The typical usage pattern is:
+/// 1. Call `check_comparison()` to get a comparison result without allocating
+/// 2. Only if the comparison indicates improvement, call `into_heap_value()` to
+///    perform the expensive conversion (allocation, interning, etc.)
+pub trait IntoHeapValue<T: ValueType> {
+    /// Returns a comparison result against an existing heap value.
+    ///
+    /// This method performs the comparison without incurring allocation costs,
+    /// allowing early exit if the value doesn't improve the heap.
+    fn check_comparison(&self, existing: &T, desc: bool) -> bool;
+
+    /// Converts this value into the heap representation.
+    ///
+    /// Takes the StringHeap as an immutable reference since interning
+    /// should not require exclusive access.
+    fn into_heap_value(&self, heap: &mut StringHeap) -> T;
+}
+
+/// Implement for borrowed strings that convert to Arc<str> with interning.
+impl IntoHeapValue<Arc<str>> for &str {
+    fn check_comparison(&self, existing: &Arc<str>, desc: bool) -> bool {
+        let existing_str = existing.as_ref();
+        if !desc {
+            self < &existing_str
+        } else {
+            self > &existing_str
+        }
+    }
+
+    fn into_heap_value(&self, heap: &mut StringHeap) -> Arc<str> {
+        heap.intern_string(self)
+    }
+}
+
 /// A "type alias" for Values which are stored in our heap
 pub trait ValueType: Comparable + Clone + Debug {}
 
@@ -301,9 +342,8 @@ impl ArrowHeap for StringHeap {
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
-        // Copy the string to avoid borrow checker issues
         let new_str = self.value(row_idx).to_string();
-        let new_val = self.intern_string(&new_str);
+        let new_val = new_str.as_str().into_heap_value(self);
         self.heap.append_or_replace(new_val, map_idx, map);
     }
 
@@ -313,23 +353,20 @@ impl ArrowHeap for StringHeap {
         row_idx: usize,
         map: &mut Vec<(usize, usize)>,
     ) {
-        // Compare borrowed &str before allocating to avoid unnecessary allocations
-        // when the new value doesn't improve the heap
         let new_str = self.value(row_idx);
         let existing = self.heap.heap[heap_idx]
             .as_ref()
             .expect("Missing heap item");
 
-        // Early exit if new value doesn't improve existing value
-        if (!self.desc && new_str.cmp(existing.val.as_ref()) != Ordering::Less)
-            || (self.desc && new_str.cmp(existing.val.as_ref()) != Ordering::Greater)
-        {
+        // Early exit if new value doesn't improve existing value.
+        // We use the borrowed reference for cheap comparison before allocating.
+        if !new_str.check_comparison(&existing.val, self.desc) {
             return;
         }
 
-        // Copy and intern only when we know we'll update the heap
+        // Only convert to heap value after confirming improvement
         let new_str_owned = new_str.to_string();
-        let new_val = self.intern_string(&new_str_owned);
+        let new_val = new_str_owned.as_str().into_heap_value(self);
         self.heap.replace_if_better(heap_idx, new_val, map);
     }
 

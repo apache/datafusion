@@ -20,15 +20,15 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::aggregates::{AggregateExec, topk_types_supported};
+use datafusion_physical_plan::aggregates::{topk_types_supported, AggregateExec};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::ExecutionPlan;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
