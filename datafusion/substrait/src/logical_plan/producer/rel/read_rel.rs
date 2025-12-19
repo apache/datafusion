@@ -18,6 +18,7 @@
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
+use crate::logical_plan::utils::convert_literal_rows_to_substrait;
 use datafusion::catalog::default_table_source::DefaultTableSource;
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
 use datafusion::logical_expr::utils::conjunction;
@@ -72,39 +73,6 @@ fn table_function_extension_for_scan(
             value: extension.encode_to_vec().into(),
         }),
     }))
-}
-
-/// Converts rows of literal expressions into Substrait literal structs.
-///
-/// Each row is expected to contain only `Expr::Literal` or `Expr::Alias` wrapping literals.
-/// Aliases are unwrapped and the underlying literal is converted.
-fn convert_literal_rows(
-    producer: &mut impl SubstraitProducer,
-    rows: &[Vec<Expr>],
-) -> datafusion::common::Result<Vec<LiteralStruct>> {
-    rows.iter()
-        .map(|row| {
-            let fields = row
-                .iter()
-                .map(|expr| match expr {
-                    Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
-                    Expr::Alias(alias) => match alias.expr.as_ref() {
-                        // The schema gives us the names, so we can skip aliases
-                        Expr::Literal(sv, _) => to_substrait_literal(producer, sv),
-                        _ => Err(substrait_datafusion_err!(
-                            "Only literal types can be aliased in Virtual Tables, got: {}",
-                            alias.expr.variant_name()
-                        )),
-                    },
-                    _ => Err(substrait_datafusion_err!(
-                        "Only literal types and aliases are supported in Virtual Tables, got: {}",
-                        expr.variant_name()
-                    )),
-                })
-                .collect::<datafusion::common::Result<_>>()?;
-            Ok(LiteralStruct { fields })
-        })
-        .collect()
 }
 
 /// Converts rows of arbitrary expressions into Substrait nested structs.
@@ -267,7 +235,7 @@ pub fn from_values(
     });
 
     let (values, expressions) = if use_literals {
-        let values = convert_literal_rows(producer, &v.values)?;
+        let values = convert_literal_rows_to_substrait(producer, &v.values)?;
         (values, vec![])
     } else {
         let expressions =

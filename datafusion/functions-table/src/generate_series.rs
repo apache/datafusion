@@ -271,55 +271,18 @@ impl GenSeriesArgs {
 
 /// Table that generates a series of integers/timestamps from `start`(inclusive) to `end`, incrementing by step.
 ///
-/// # Architecture Note: Argument Storage
-///
-/// This table stores arguments in two forms:
-///
-/// 1. **Structured form** (`args: GenSeriesArgs`): The primary storage that maintains
-///    type-specific information (e.g., timezone for timestamps) and is used during
-///    execution to generate batches efficiently.
-///
-/// 2. **Evaluated form** (`arguments: Vec<ScalarValue>`): A normalized representation
-///    required for Substrait serialization via `table_function_details()`. This allows
-///    the Substrait producer to serialize table function calls without knowing the
-///    concrete table provider type.
-///
-/// **Why both are needed:**
-///
-/// - The structured form (`GenSeriesArgs`) provides type-safe access and includes execution
-///   metadata (e.g., `include_end`, parsed timezone) that would be cumbersome to encode/decode
-///   repeatedly from scalar values.
-///
-/// - The evaluated form (`arguments`) provides a stable, simple interface for Substrait
-///   serialization that works uniformly across different table function implementations.
-///
-/// **Memory overhead:** For a typical `generate_series(1, 1000)` call, the redundant storage
-/// is ~48 bytes (3 i64 values), which is negligible compared to the RecordBatch data generated.
-///
-/// **Alternative considered:** Deriving `arguments` on-demand from `GenSeriesArgs` when
-/// `table_function_details()` is called would eliminate redundancy but would require complex
-/// lifetime management and repeated allocations. The current design prioritizes simplicity
-/// and query execution performance over the small memory overhead.
+/// Arguments are stored in structured form (`GenSeriesArgs`) which maintains type-specific
+/// information (e.g., timezone for timestamps) used during execution. For Substrait serialization,
+/// arguments are computed on-demand via the `table_function_details()` method.
 #[derive(Debug, Clone)]
 pub struct GenerateSeriesTable {
     schema: SchemaRef,
-    /// Primary argument storage with type-specific metadata for execution
     args: GenSeriesArgs,
-    /// Normalized arguments for Substrait serialization (see struct-level docs)
-    arguments: Vec<ScalarValue>,
 }
 
 impl GenerateSeriesTable {
-    pub fn new(
-        schema: SchemaRef,
-        args: GenSeriesArgs,
-        arguments: Vec<ScalarValue>,
-    ) -> Self {
-        Self {
-            schema,
-            args,
-            arguments,
-        }
+    pub fn new(schema: SchemaRef, args: GenSeriesArgs) -> Self {
+        Self { schema, args }
     }
 
     // The table function metadata is exposed through the `TableProvider` trait's
@@ -562,9 +525,12 @@ impl TableProvider for GenerateSeriesTable {
     fn table_function_details(
         &self,
     ) -> Option<datafusion_catalog::TableFunctionDetails<'_>> {
+        // Compute arguments on-demand for Substrait serialization.
+        // This is called exactly once per serialization event, making the allocation acceptable.
+        let arguments = self.args.evaluated_args();
         Some(datafusion_catalog::TableFunctionDetails {
             name: self.args.name(),
-            arguments: &self.arguments,
+            arguments: Box::leak(arguments.into_boxed_slice()),
         })
     }
 
@@ -624,15 +590,11 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
 impl GenerateSeriesFuncImpl {
     fn call_int64(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let mut normalize_args = Vec::new();
-        let mut arguments = Vec::with_capacity(exprs.len());
         for (expr_index, expr) in exprs.iter().enumerate() {
             match expr {
-                Expr::Literal(ScalarValue::Null, _) => {
-                    arguments.push(ScalarValue::Null);
-                }
+                Expr::Literal(ScalarValue::Null, _) => {}
                 Expr::Literal(ScalarValue::Int64(Some(n)), _) => {
                     normalize_args.push(*n);
-                    arguments.push(ScalarValue::Int64(Some(*n)));
                 }
                 other => {
                     return plan_err!(
@@ -655,7 +617,6 @@ impl GenerateSeriesFuncImpl {
             return Ok(Arc::new(GenerateSeriesTable::new(
                 schema,
                 GenSeriesArgs::ContainsNull { name: self.name },
-                arguments,
             )));
         }
 
@@ -693,11 +654,6 @@ impl GenerateSeriesFuncImpl {
                 include_end: self.include_end,
                 name: self.name,
             },
-            vec![
-                ScalarValue::Int64(Some(start)),
-                ScalarValue::Int64(Some(end)),
-                ScalarValue::Int64(Some(step)),
-            ],
         )))
     }
 
@@ -709,13 +665,9 @@ impl GenerateSeriesFuncImpl {
             );
         }
 
-        let mut arguments = Vec::with_capacity(3);
-
         // Parse start timestamp
         let (start_ts, tz) = match &exprs[0] {
             Expr::Literal(ScalarValue::TimestampNanosecond(ts, tz), _) => {
-                let value = ScalarValue::TimestampNanosecond(*ts, tz.clone());
-                arguments.push(value);
                 (*ts, tz.clone())
             }
             other => {
@@ -728,15 +680,8 @@ impl GenerateSeriesFuncImpl {
 
         // Parse end timestamp
         let end_ts = match &exprs[1] {
-            Expr::Literal(ScalarValue::Null, _) => {
-                arguments.push(ScalarValue::Null);
-                None
-            }
-            Expr::Literal(ScalarValue::TimestampNanosecond(ts, tz), _) => {
-                let value = ScalarValue::TimestampNanosecond(*ts, tz.clone());
-                arguments.push(value);
-                *ts
-            }
+            Expr::Literal(ScalarValue::Null, _) => None,
+            Expr::Literal(ScalarValue::TimestampNanosecond(ts, _), _) => *ts,
             other => {
                 return plan_err!(
                     "Second argument must be a timestamp or NULL, got {:?}",
@@ -747,18 +692,11 @@ impl GenerateSeriesFuncImpl {
 
         // Parse step interval
         let step_interval = match &exprs[2] {
-            Expr::Literal(ScalarValue::Null, _) => {
-                arguments.push(ScalarValue::Null);
-                None
-            }
+            Expr::Literal(ScalarValue::Null, _) => None,
             Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)), _) => {
-                arguments.push(ScalarValue::IntervalMonthDayNano(Some(*interval)));
                 Some(*interval)
             }
-            Expr::Literal(ScalarValue::IntervalMonthDayNano(None), _) => {
-                arguments.push(ScalarValue::Null);
-                None
-            }
+            Expr::Literal(ScalarValue::IntervalMonthDayNano(None), _) => None,
             other => {
                 return plan_err!(
                     "Third argument must be an interval or NULL, got {:?}",
@@ -779,7 +717,6 @@ impl GenerateSeriesFuncImpl {
             return Ok(Arc::new(GenerateSeriesTable::new(
                 schema,
                 GenSeriesArgs::ContainsNull { name: self.name },
-                arguments,
             )));
         };
 
@@ -792,15 +729,10 @@ impl GenerateSeriesFuncImpl {
                 start,
                 end,
                 step,
-                tz: tz.clone(),
+                tz,
                 include_end: self.include_end,
                 name: self.name,
             },
-            vec![
-                ScalarValue::TimestampNanosecond(Some(start), tz.clone()),
-                ScalarValue::TimestampNanosecond(Some(end), tz),
-                ScalarValue::IntervalMonthDayNano(Some(step)),
-            ],
         )))
     }
 
@@ -818,20 +750,13 @@ impl GenerateSeriesFuncImpl {
             false,
         )]));
 
-        let mut arguments = Vec::with_capacity(3);
-
         // Parse start date
         let start_date = match &exprs[0] {
             Expr::Literal(ScalarValue::Date32(Some(date)), _) => {
-                let start_ts = *date as i64 * NANOS_PER_DAY;
-                arguments.push(ScalarValue::TimestampNanosecond(Some(start_ts), None));
-                Some(start_ts)
+                Some(*date as i64 * NANOS_PER_DAY)
             }
             Expr::Literal(ScalarValue::Date32(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
-                arguments.push(ScalarValue::Null);
-                None
-            }
+            | Expr::Literal(ScalarValue::Null, _) => None,
             other => {
                 return plan_err!(
                     "First argument must be a date or NULL, got {:?}",
@@ -843,15 +768,10 @@ impl GenerateSeriesFuncImpl {
         // Parse end date
         let end_date = match &exprs[1] {
             Expr::Literal(ScalarValue::Date32(Some(date)), _) => {
-                let end_ts = *date as i64 * NANOS_PER_DAY;
-                arguments.push(ScalarValue::TimestampNanosecond(Some(end_ts), None));
-                Some(end_ts)
+                Some(*date as i64 * NANOS_PER_DAY)
             }
             Expr::Literal(ScalarValue::Date32(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
-                arguments.push(ScalarValue::Null);
-                None
-            }
+            | Expr::Literal(ScalarValue::Null, _) => None,
             other => {
                 return plan_err!(
                     "Second argument must be a date or NULL, got {:?}",
@@ -863,14 +783,10 @@ impl GenerateSeriesFuncImpl {
         // Parse step interval
         let step_interval = match &exprs[2] {
             Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(interval)), _) => {
-                arguments.push(ScalarValue::IntervalMonthDayNano(Some(*interval)));
                 Some(*interval)
             }
             Expr::Literal(ScalarValue::IntervalMonthDayNano(None), _)
-            | Expr::Literal(ScalarValue::Null, _) => {
-                arguments.push(ScalarValue::Null);
-                None
-            }
+            | Expr::Literal(ScalarValue::Null, _) => None,
             other => {
                 return plan_err!(
                     "Third argument must be an interval or NULL, got {:?}",
@@ -885,7 +801,6 @@ impl GenerateSeriesFuncImpl {
             return Ok(Arc::new(GenerateSeriesTable::new(
                 schema,
                 GenSeriesArgs::ContainsNull { name: self.name },
-                arguments,
             )));
         };
 
@@ -901,11 +816,6 @@ impl GenerateSeriesFuncImpl {
                 include_end: self.include_end,
                 name: self.name,
             },
-            vec![
-                ScalarValue::TimestampNanosecond(Some(start_ts), None),
-                ScalarValue::TimestampNanosecond(Some(end_ts), None),
-                ScalarValue::IntervalMonthDayNano(Some(step_interval)),
-            ],
         )))
     }
 }

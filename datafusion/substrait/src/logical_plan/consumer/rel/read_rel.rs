@@ -19,6 +19,7 @@ use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
+use crate::logical_plan::utils::convert_literal_rows_from_substrait;
 use datafusion::catalog::TableProvider;
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
@@ -190,7 +191,7 @@ pub async fn from_read_rel(
                 }
                 exprs
             } else {
-                convert_literal_rows(consumer, vt, named_struct)?
+                convert_literal_rows_from_substrait(consumer, vt, named_struct)?
             };
 
             Ok(LogicalPlan::Values(Values {
@@ -292,46 +293,6 @@ async fn resolve_table_function(
     }
 
     table_function.create_table_provider(&args)
-}
-
-/// Converts Substrait literal rows from a VirtualTable into DataFusion expressions.
-///
-/// This function processes the deprecated `values` field of VirtualTable, converting
-/// each literal value into a `Expr::Literal` while tracking and validating the name
-/// indices against the provided named struct schema.
-fn convert_literal_rows(
-    consumer: &impl SubstraitConsumer,
-    vt: &substrait::proto::read_rel::VirtualTable,
-    named_struct: &substrait::proto::NamedStruct,
-) -> datafusion::common::Result<Vec<Vec<Expr>>> {
-    #[expect(deprecated)]
-    vt.values
-        .iter()
-        .map(|row| {
-            let mut name_idx = 0;
-            let lits = row
-                .fields
-                .iter()
-                .map(|lit| {
-                    name_idx += 1; // top-level names are provided through schema
-                    Ok(Expr::Literal(from_substrait_literal(
-                        consumer,
-                        lit,
-                        &named_struct.names,
-                        &mut name_idx,
-                    )?, None))
-                })
-                .collect::<datafusion::common::Result<_>>()?;
-            if name_idx != named_struct.names.len() {
-                return substrait_err!(
-                    "Names list must match exactly to nested schema, but found {} uses for {} names",
-                    name_idx,
-                    named_struct.names.len()
-                );
-            }
-            Ok(lits)
-        })
-        .collect::<datafusion::common::Result<_>>()
 }
 
 pub fn apply_masking(
