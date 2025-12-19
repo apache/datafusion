@@ -166,13 +166,18 @@ fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> 
         )));
     }
 
-    let unscaled_value = decimal128_to_i128(value, scale)?;
-    if unscaled_value > 0 {
+    if value <= 0 {
+        // Reflect f64::log behaviour
+        return Ok(f64::NAN);
+    }
+
+    if scale < 0 {
+        let actual_value = (value as f64) * 10.0_f64.powi(-(scale as i32));
+        Ok(actual_value.log(base))
+    } else {
+        let unscaled_value = decimal128_to_i128(value, scale)?;
         let log_value: u32 = unscaled_value.ilog(base as i128);
         Ok(log_value as f64)
-    } else {
-        // Reflect f64::log behaviour
-        Ok(f64::NAN)
     }
 }
 
@@ -342,6 +347,19 @@ impl ScalarUDFImpl for LogFunc {
         if num_args != 1 && num_args != 2 {
             return plan_err!("Expected log to have 1 or 2 arguments, got {num_args}");
         }
+
+        match arg_types.last().unwrap() {
+            DataType::Decimal32(_, scale)
+            | DataType::Decimal64(_, scale)
+            | DataType::Decimal128(_, scale)
+            | DataType::Decimal256(_, scale)
+                if *scale < 0 =>
+            {
+                return Ok(ExprSimplifyResult::Original(args));
+            }
+            _ => (),
+        };
+
         let number = args.pop().unwrap();
         let number_datatype = arg_types.pop().unwrap();
         // default to base 10
