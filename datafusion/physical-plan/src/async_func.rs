@@ -96,7 +96,6 @@ impl AsyncFuncExec {
         })
     }
 
-    // TODO(feniljain): Should these accept &mut?
     pub fn with_batch_size(&mut self, batch_size: usize) {
         self.batch_size = batch_size;
     }
@@ -212,7 +211,7 @@ impl ExecutionPlan for AsyncFuncExec {
         let coalesced_input_stream = CoalesceInputStream {
             input_stream,
             batch_coalescer: LimitedBatchCoalescer::new(
-                Arc::clone(&schema_captured),
+                Arc::clone(&self.input.schema()),
                 self.batch_size,
                 self.fetch,
             ),
