@@ -277,11 +277,18 @@ impl GenSeriesArgs {
 pub struct GenerateSeriesTable {
     schema: SchemaRef,
     args: GenSeriesArgs,
+    /// Cached evaluated arguments for Substrait serialization
+    evaluated_args: Vec<ScalarValue>,
 }
 
 impl GenerateSeriesTable {
     pub fn new(schema: SchemaRef, args: GenSeriesArgs) -> Self {
-        Self { schema, args }
+        let evaluated_args = args.evaluated_args();
+        Self {
+            schema,
+            args,
+            evaluated_args,
+        }
     }
 
     // The table function metadata is exposed through the `TableProvider` trait's
@@ -524,12 +531,10 @@ impl TableProvider for GenerateSeriesTable {
     fn table_function_details(
         &self,
     ) -> Option<datafusion_catalog::TableFunctionDetails<'_>> {
-        // Compute arguments on-demand for Substrait serialization.
-        // This is called exactly once per serialization event, making the allocation acceptable.
-        let arguments = self.args.evaluated_args();
+        // Return cached evaluated arguments for Substrait serialization.
         Some(datafusion_catalog::TableFunctionDetails {
             name: self.args.name(),
-            arguments: Box::leak(arguments.into_boxed_slice()),
+            arguments: &self.evaluated_args,
         })
     }
 
