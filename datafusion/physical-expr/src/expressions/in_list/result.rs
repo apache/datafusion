@@ -55,12 +55,23 @@ pub(crate) fn build_in_list_result<C>(
 where
     C: FnMut(usize) -> bool,
 {
-    // Pass closure by value to avoid indirection on each call
-    let contains_buf = BooleanBuffer::collect_bool(len, contains);
+    // Skip expensive contains check for null needle positions - the result
+    // will be masked to null anyway. This is a significant optimization when
+    // the needle array has nulls.
+    let contains_buf = if let Some(nulls) = needle_nulls {
+        let mut contains = contains;
+        BooleanBuffer::collect_bool(len, |i| nulls.is_valid(i) && contains(i))
+    } else {
+        BooleanBuffer::collect_bool(len, contains)
+    };
     build_result_from_contains(needle_nulls, haystack_has_nulls, negated, contains_buf)
 }
 
 /// Builds a BooleanArray result from a pre-computed contains buffer.
+///
+/// IMPORTANT: This function assumes `contains_buf[i] = false` for null needle positions.
+/// This invariant is maintained by `build_in_list_result` which short-circuits the
+/// contains check for null positions.
 #[inline]
 pub(crate) fn build_result_from_contains(
     needle_nulls: Option<&NullBuffer>,
@@ -68,25 +79,28 @@ pub(crate) fn build_result_from_contains(
     negated: bool,
     contains_buf: BooleanBuffer,
 ) -> BooleanArray {
+    // Since contains_buf is pre-masked (false at null positions), we can simplify:
+    // - `v.inner() & contains_buf` = `contains_buf` (already 0 where v is 0)
+    // - Cases (Some(v), true, _) merge with (None, true, _) for the contains logic
     match (needle_nulls, haystack_has_nulls, negated) {
-        (Some(v), true, false) => {
-            let buf = v.inner() & &contains_buf;
-            BooleanArray::new(buf.clone(), Some(NullBuffer::new(buf)))
-        }
-        (None, true, false) => {
+        // Haystack has nulls: result is null unless value is found
+        (_, true, false) => {
             BooleanArray::new(contains_buf.clone(), Some(NullBuffer::new(contains_buf)))
         }
         (Some(v), true, true) => {
-            let nulls = v.inner() & &contains_buf;
-            BooleanArray::new(v.inner() ^ &nulls, Some(NullBuffer::new(nulls)))
+            // NOT IN with nulls: true if valid and not found, null if found or needle null
+            BooleanArray::new(
+                v.inner() ^ &contains_buf,
+                Some(NullBuffer::new(contains_buf)),
+            )
         }
         (None, true, true) => {
             BooleanArray::new(!&contains_buf, Some(NullBuffer::new(contains_buf)))
         }
-        (Some(v), false, false) => {
-            BooleanArray::new(v.inner() & &contains_buf, Some(v.clone()))
-        }
+        // Haystack has no nulls: result validity follows needle validity
+        (Some(v), false, false) => BooleanArray::new(contains_buf, Some(v.clone())),
         (Some(v), false, true) => {
+            // Need AND because !contains_buf is 1 at null positions
             BooleanArray::new(v.inner() & &(!&contains_buf), Some(v.clone()))
         }
         (None, false, false) => BooleanArray::new(contains_buf, None),

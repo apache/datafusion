@@ -25,8 +25,8 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
 
-use super::array_filter::StaticFilter;
 use super::result::{build_in_list_result, handle_dictionary};
+use super::static_filter::StaticFilter;
 
 // =============================================================================
 // BITMAP FILTERS (O(1) lookup for u8/u16 via bit test)

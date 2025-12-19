@@ -27,18 +27,23 @@
 //! byte width, reducing code duplication.
 
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{ArrowPrimitiveType, Decimal128Type};
-use datafusion_common::Result;
+use arrow::datatypes::{ArrowPrimitiveType, ByteViewType, Decimal128Type};
+use arrow::util::bit_iterator::BitIndexIterator;
+use datafusion_common::hash_utils::with_hashes;
+use datafusion_common::{HashSet, Result};
+use hashbrown::HashTable;
 
-use super::array_filter::StaticFilter;
-use super::primitive::{
+use super::primitive_filter::{
     BitmapFilter, BitmapFilterConfig, BranchlessFilter, PrimitiveFilter,
 };
-use super::result::handle_dictionary;
+use super::result::{build_in_list_result, handle_dictionary};
+use super::static_filter::StaticFilter;
 
 /// Maximum length for inline strings in Utf8View (stored in 16-byte view).
 pub(crate) const UTF8VIEW_INLINE_LEN: usize = 12;
@@ -186,37 +191,103 @@ where
     Ok(Arc::new(ReinterpretedBitmap { inner }))
 }
 
-/// Creates a branchless filter for small lists (≤16 elements), reinterpreting if needed.
+// =============================================================================
+// BRANCHLESS FILTER CREATION (const generic dispatch)
+// =============================================================================
+
+/// Creates a branchless filter for primitive types.
+///
+/// Dispatches based on byte width and element count:
+/// - 4-byte types (Int32, Float32, etc.): supports 0-32 elements
+/// - 8-byte types (Int64, Float64, Timestamp, etc.): supports 0-16 elements
+/// - 16-byte types (Decimal128): supports 0-4 elements
 pub(crate) fn make_branchless_filter<D>(
     in_array: &ArrayRef,
+    width: usize,
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>>
 where
     D: ArrowPrimitiveType + 'static,
     D::Native: Copy + PartialEq + Send + Sync + 'static,
 {
-    let reinterpreted = if in_array.data_type() == &D::DATA_TYPE {
+    let is_native = in_array.data_type() == &D::DATA_TYPE;
+    let arr = if is_native {
         Arc::clone(in_array)
     } else {
         reinterpret_any_primitive_to::<D>(in_array.as_ref())
     };
+    let n = arr.len() - arr.null_count();
 
-    macro_rules! try_branchless {
-        ($($n:literal),*) => {
-            $(if let Some(Ok(inner)) = BranchlessFilter::<D, $n>::try_new(&reinterpreted) {
-                if in_array.data_type() == &D::DATA_TYPE {
-                    return Ok(Arc::new(inner));
-                } else {
-                    return Ok(Arc::new(ReinterpretedBranchless { inner }));
-                }
-            })*
-        };
+    // Helper to create the filter for a known size N
+    #[inline]
+    fn create<D: ArrowPrimitiveType + 'static, const N: usize>(
+        arr: &ArrayRef,
+        is_native: bool,
+    ) -> Result<Arc<dyn StaticFilter + Send + Sync>>
+    where
+        D::Native: Copy + PartialEq + Send + Sync + 'static,
+    {
+        let inner = BranchlessFilter::<D, N>::try_new(arr)
+            .expect("size verified")
+            .expect("type verified");
+        if is_native {
+            Ok(Arc::new(inner))
+        } else {
+            Ok(Arc::new(ReinterpretedBranchless { inner }))
+        }
     }
-    try_branchless!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
 
-    datafusion_common::exec_err!(
-        "Branchless filter only supports 0-16 elements, got {}",
-        in_array.len() - in_array.null_count()
-    )
+    // Match on (width, count) - shared sizes use or-patterns to avoid duplication
+    match (width, n) {
+        // All widths: 0-4
+        (4 | 8 | 16, 0) => create::<D, 0>(&arr, is_native),
+        (4 | 8 | 16, 1) => create::<D, 1>(&arr, is_native),
+        (4 | 8 | 16, 2) => create::<D, 2>(&arr, is_native),
+        (4 | 8 | 16, 3) => create::<D, 3>(&arr, is_native),
+        (4 | 8 | 16, 4) => create::<D, 4>(&arr, is_native),
+        // 4-byte and 8-byte: 5-16
+        (4 | 8, 5) => create::<D, 5>(&arr, is_native),
+        (4 | 8, 6) => create::<D, 6>(&arr, is_native),
+        (4 | 8, 7) => create::<D, 7>(&arr, is_native),
+        (4 | 8, 8) => create::<D, 8>(&arr, is_native),
+        (4 | 8, 9) => create::<D, 9>(&arr, is_native),
+        (4 | 8, 10) => create::<D, 10>(&arr, is_native),
+        (4 | 8, 11) => create::<D, 11>(&arr, is_native),
+        (4 | 8, 12) => create::<D, 12>(&arr, is_native),
+        (4 | 8, 13) => create::<D, 13>(&arr, is_native),
+        (4 | 8, 14) => create::<D, 14>(&arr, is_native),
+        (4 | 8, 15) => create::<D, 15>(&arr, is_native),
+        (4 | 8, 16) => create::<D, 16>(&arr, is_native),
+        // 4-byte only: 17-32
+        (4, 17) => create::<D, 17>(&arr, is_native),
+        (4, 18) => create::<D, 18>(&arr, is_native),
+        (4, 19) => create::<D, 19>(&arr, is_native),
+        (4, 20) => create::<D, 20>(&arr, is_native),
+        (4, 21) => create::<D, 21>(&arr, is_native),
+        (4, 22) => create::<D, 22>(&arr, is_native),
+        (4, 23) => create::<D, 23>(&arr, is_native),
+        (4, 24) => create::<D, 24>(&arr, is_native),
+        (4, 25) => create::<D, 25>(&arr, is_native),
+        (4, 26) => create::<D, 26>(&arr, is_native),
+        (4, 27) => create::<D, 27>(&arr, is_native),
+        (4, 28) => create::<D, 28>(&arr, is_native),
+        (4, 29) => create::<D, 29>(&arr, is_native),
+        (4, 30) => create::<D, 30>(&arr, is_native),
+        (4, 31) => create::<D, 31>(&arr, is_native),
+        (4, 32) => create::<D, 32>(&arr, is_native),
+        // Error cases
+        (4, n) => datafusion_common::exec_err!(
+            "Branchless filter for 4-byte types supports 0-32 elements, got {n}"
+        ),
+        (8, n) => datafusion_common::exec_err!(
+            "Branchless filter for 8-byte types supports 0-16 elements, got {n}"
+        ),
+        (16, n) => datafusion_common::exec_err!(
+            "Branchless filter for 16-byte types supports 0-4 elements, got {n}"
+        ),
+        (w, _) => datafusion_common::exec_err!(
+            "Branchless filter not supported for {w}-byte types"
+        ),
+    }
 }
 
 // =============================================================================
@@ -294,4 +365,184 @@ impl<const N: usize> StaticFilter for Utf8ViewBranchless<N> {
 
         Ok(self.inner.contains_slice(values, sv.nulls(), negated))
     }
+}
+
+// =============================================================================
+// UTF8VIEW TWO-STAGE FILTER (masked view pre-check + full verification)
+// =============================================================================
+
+/// Mask to extract len + prefix from a Utf8View view (zeroes out buffer_index and offset).
+///
+/// View layout (16 bytes, little-endian i128):
+/// - Bytes 0-3 (low): length (u32)
+/// - Bytes 4-7: prefix (long strings) or inline data bytes 0-3 (short strings)
+/// - Bytes 8-11: buffer_index (long) or inline data bytes 4-7 (short)
+/// - Bytes 12-15 (high): offset (long) or inline data bytes 8-11 (short)
+///
+/// For long strings (>12 bytes), buffer_index and offset are array-specific,
+/// so we mask them out, keeping only len + prefix for comparison.
+const VIEW_MASK_LONG: i128 = (1_i128 << 64) - 1; // Keep low 64 bits
+
+/// Computes the masked view for comparison.
+///
+/// - Short strings (≤12 bytes): returns full view (all data is inline)
+/// - Long strings (>12 bytes): returns only len + prefix (masks out buffer_index/offset)
+#[inline(always)]
+fn masked_view(view: i128) -> i128 {
+    let len = (view as u32) as usize;
+    if len <= UTF8VIEW_INLINE_LEN {
+        view // Short string: all 16 bytes are meaningful data
+    } else {
+        view & VIEW_MASK_LONG // Long string: keep only len + prefix
+    }
+}
+
+/// Two-stage filter for ByteView arrays (Utf8View, BinaryView) with mixed lengths.
+///
+/// Stage 1: Quick rejection using masked views (len + prefix as i128)
+/// - Non-matches rejected without any hashing
+/// - Short value matches (≤12 bytes) accepted immediately
+///
+/// Stage 2: Full verification for long value matches
+/// - Only reached when masked view matches AND value is long (>12 bytes)
+/// - Uses HashTable lookup with indices into haystack array
+pub(crate) struct ByteViewMaskedFilter<T: ByteViewType> {
+    /// The haystack array containing values to match against.
+    in_array: ArrayRef,
+    /// Set of masked views for O(1) quick rejection
+    masked_view_set: HashSet<i128>,
+    /// HashTable storing indices of long strings for Stage 2 verification
+    long_value_table: HashTable<usize>,
+    /// Random state for consistent hashing between haystack and needles
+    state: RandomState,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: ByteViewType> ByteViewMaskedFilter<T>
+where
+    T::Native: PartialEq,
+{
+    pub(crate) fn try_new(in_array: ArrayRef) -> Result<Self> {
+        let bv = in_array.as_byte_view::<T>();
+        let views: &[i128] = bv.views().inner().typed_data();
+
+        let mut masked_view_set = HashSet::default();
+        let state = RandomState::new();
+        let mut long_value_table = HashTable::new();
+
+        // Build hash table for long strings using batch hashing
+        with_hashes([in_array.as_ref()], &state, |hashes| {
+            let mut process_idx = |idx: usize| {
+                let view = views[idx];
+                masked_view_set.insert(masked_view(view));
+
+                // For long strings, store index in hash table
+                let len = (view as u32) as usize;
+                if len > UTF8VIEW_INLINE_LEN {
+                    let hash = hashes[idx];
+                    // SAFETY: idx is valid from iterator
+                    let val = unsafe { bv.value_unchecked(idx) };
+                    let bytes: &[u8] = val.as_ref();
+
+                    // Only insert if not already present (deduplication)
+                    if long_value_table
+                        .find(hash, |&stored_idx| {
+                            let stored: &[u8] =
+                                unsafe { bv.value_unchecked(stored_idx) }.as_ref();
+                            stored == bytes
+                        })
+                        .is_none()
+                    {
+                        long_value_table.insert_unique(hash, idx, |&i| hashes[i]);
+                    }
+                }
+            };
+
+            match bv.nulls() {
+                Some(nulls) => {
+                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                        .for_each(&mut process_idx);
+                }
+                None => {
+                    (0..in_array.len()).for_each(&mut process_idx);
+                }
+            }
+            Ok::<_, datafusion_common::DataFusionError>(())
+        })?;
+
+        Ok(Self {
+            in_array,
+            masked_view_set,
+            long_value_table,
+            state,
+            _phantom: PhantomData,
+        })
+    }
+}
+
+impl<T: ByteViewType + 'static> StaticFilter for ByteViewMaskedFilter<T>
+where
+    T::Native: PartialEq,
+{
+    fn null_count(&self) -> usize {
+        self.in_array.null_count()
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        let needle_bv = v.as_byte_view::<T>();
+        let needle_views: &[i128] = needle_bv.views().inner().typed_data();
+        let haystack_has_nulls = self.in_array.null_count() > 0;
+        let haystack_bv = self.in_array.as_byte_view::<T>();
+
+        // Single pass with lazy hashing - only hash long values that pass Stage 1
+        Ok(build_in_list_result(
+            v.len(),
+            needle_bv.nulls(),
+            haystack_has_nulls,
+            negated,
+            #[inline(always)]
+            |i| {
+                let needle_view = needle_views[i];
+                let masked = masked_view(needle_view);
+
+                // Stage 1: Quick rejection via masked view
+                if !self.masked_view_set.contains(&masked) {
+                    return false;
+                }
+
+                // Masked view found in set
+                let needle_len = (needle_view as u32) as usize;
+                if needle_len <= UTF8VIEW_INLINE_LEN {
+                    // Short value: masked view = full view, true match
+                    return true;
+                }
+
+                // Stage 2: Long value - hash lazily and lookup in hash table
+                // SAFETY: i is in bounds from build_in_list_result iteration
+                let needle_val = unsafe { needle_bv.value_unchecked(i) };
+                let needle_bytes: &[u8] = needle_val.as_ref();
+                let hash = self.state.hash_one(needle_bytes);
+
+                self.long_value_table
+                    .find(hash, |&idx| {
+                        let haystack_val: &[u8] =
+                            unsafe { haystack_bv.value_unchecked(idx) }.as_ref();
+                        haystack_val == needle_bytes
+                    })
+                    .is_some()
+            },
+        ))
+    }
+}
+
+/// Creates a two-stage filter for ByteView arrays (Utf8View, BinaryView).
+pub(crate) fn make_byte_view_masked_filter<T: ByteViewType + 'static>(
+    in_array: ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>>
+where
+    T::Native: PartialEq,
+{
+    Ok(Arc::new(ByteViewMaskedFilter::<T>::try_new(in_array)?))
 }

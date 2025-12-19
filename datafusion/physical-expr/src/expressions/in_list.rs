@@ -17,9 +17,11 @@
 
 //! Implementation of `InList` expressions: [`InListExpr`]
 
-mod array_filter;
-mod primitive;
+mod byte_filter;
+mod nested_filter;
+mod primitive_filter;
 mod result;
+mod static_filter;
 mod strategy;
 mod transform;
 
@@ -41,7 +43,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
-use array_filter::StaticFilter;
+use static_filter::StaticFilter;
 use strategy::instantiate_static_filter;
 
 /// InList
