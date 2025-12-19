@@ -21,11 +21,13 @@ use std::any::Any;
 
 use super::power::PowerFunc;
 
-use crate::utils::{calculate_binary_math, decimal128_to_i128};
+use crate::utils::{
+    calculate_binary_math, decimal32_to_i32, decimal64_to_i64, decimal128_to_i128,
+};
 use arrow::array::{Array, ArrayRef};
-use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float16Type,
+    Float32Type, Float64Type,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
@@ -99,6 +101,54 @@ impl LogFunc {
                 Volatility::Immutable,
             ),
         }
+    }
+}
+
+/// Binary function to calculate logarithm of Decimal32 `value` using `base` base
+/// Returns error if base is invalid
+fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if !base.is_finite() || base.trunc() != base {
+        return Err(ArrowError::ComputeError(format!(
+            "Log cannot use non-integer base: {base}"
+        )));
+    }
+    if (base as u32) < 2 {
+        return Err(ArrowError::ComputeError(format!(
+            "Log base must be greater than 1: {base}"
+        )));
+    }
+
+    let unscaled_value = decimal32_to_i32(value, scale)?;
+    if unscaled_value > 0 {
+        let log_value: u32 = unscaled_value.ilog(base as i32);
+        Ok(log_value as f64)
+    } else {
+        // Reflect f64::log behaviour
+        Ok(f64::NAN)
+    }
+}
+
+/// Binary function to calculate logarithm of Decimal64 `value` using `base` base
+/// Returns error if base is invalid
+fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if !base.is_finite() || base.trunc() != base {
+        return Err(ArrowError::ComputeError(format!(
+            "Log cannot use non-integer base: {base}"
+        )));
+    }
+    if (base as u32) < 2 {
+        return Err(ArrowError::ComputeError(format!(
+            "Log base must be greater than 1: {base}"
+        )));
+    }
+
+    let unscaled_value = decimal64_to_i64(value, scale)?;
+    if unscaled_value > 0 {
+        let log_value: u32 = unscaled_value.ilog(base as i64);
+        Ok(log_value as f64)
+    } else {
+        // Reflect f64::log behaviour
+        Ok(f64::NAN)
     }
 }
 
@@ -223,15 +273,18 @@ impl ScalarUDFImpl for LogFunc {
                     |value, base| Ok(value.log(base)),
                 )?
             }
-            // TODO: native log support for decimal 32 & 64; right now upcast
-            //       to decimal128 to calculate
-            //       https://github.com/apache/datafusion/issues/17555
-            DataType::Decimal32(precision, scale)
-            | DataType::Decimal64(precision, scale) => {
-                calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
-                    &cast(&value, &DataType::Decimal128(*precision, *scale))?,
+            DataType::Decimal32(_, scale) => {
+                calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
+                    &value,
                     &base,
-                    |value, base| log_decimal128(value, *scale, base),
+                    |value, base| log_decimal32(value, *scale, base),
+                )?
+            }
+            DataType::Decimal64(_, scale) => {
+                calculate_binary_math::<Decimal64Type, Float64Type, Float64Type, _>(
+                    &value,
+                    &base,
+                    |value, base| log_decimal64(value, *scale, base),
                 )?
             }
             DataType::Decimal128(_, scale) => {
