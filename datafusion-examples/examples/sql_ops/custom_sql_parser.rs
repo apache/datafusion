@@ -50,7 +50,7 @@ use datafusion::sql::{
         tokenizer::Token,
     },
 };
-use datafusion_common::{DFSchema, TableReference};
+use datafusion_common::{DFSchema, TableReference, plan_datafusion_err, plan_err};
 use datafusion_expr::CreateExternalTable;
 use futures::StreamExt;
 use insta::assert_snapshot;
@@ -90,7 +90,7 @@ pub async fn custom_sql_parser() -> Result<()> {
     let err = ctx_standard
         .sql(&create_catalog_sql)
         .await
-        .expect_err("Standard parser should reject CREATE EXTERNAL CATALOG");
+        .expect_err("Expected the standard parser to reject CREATE EXTERNAL CATALOG (custom DDL syntax)");
 
     println!("Error: {err}\n");
     assert_snapshot!(err.to_string(), @r#"SQL error: ParserError("Expected: TABLE, found: CATALOG at Line: 1, Column: 17")"#);
@@ -216,9 +216,14 @@ async fn handle_create_external_catalog(
             .with_options(table_options.clone())
             .build();
 
-            if let Ok(table) = factory.create(&ctx.state(), &cmd).await {
-                schema.register_table(name, table)?;
-                table_count += 1;
+            match factory.create(&ctx.state(), &cmd).await {
+                Ok(table) => {
+                    schema.register_table(name, table)?;
+                    table_count += 1;
+                }
+                Err(e) => {
+                    eprintln!("Failed to create table {name}: {e}");
+                }
             }
         }
     }
@@ -332,6 +337,9 @@ impl<'a> CustomParser<'a> {
         ]) {
             match keyword {
                 Keyword::STORED => {
+                    if catalog_type.is_some() {
+                        return plan_err!("Duplicate STORED AS");
+                    }
                     self.df_parser
                         .parser
                         .expect_keyword(Keyword::AS)
@@ -345,6 +353,9 @@ impl<'a> CustomParser<'a> {
                     );
                 }
                 Keyword::LOCATION => {
+                    if location.is_some() {
+                        return plan_err!("Duplicate LOCATION");
+                    }
                     location = Some(
                         self.df_parser
                             .parser
@@ -353,6 +364,9 @@ impl<'a> CustomParser<'a> {
                     );
                 }
                 Keyword::OPTIONS => {
+                    if !options.is_empty() {
+                        return plan_err!("Duplicate OPTIONS");
+                    }
                     options = self.parse_value_options()?;
                 }
                 _ => unreachable!(),
@@ -362,12 +376,10 @@ impl<'a> CustomParser<'a> {
         Ok(CustomStatement::CreateExternalCatalog(
             CreateExternalCatalog {
                 name,
-                catalog_type: catalog_type.ok_or_else(|| {
-                    DataFusionError::Plan("Missing STORED AS".to_string())
-                })?,
-                location: location.ok_or_else(|| {
-                    DataFusionError::Plan("Missing LOCATION".to_string())
-                })?,
+                catalog_type: catalog_type
+                    .ok_or_else(|| plan_datafusion_err!("Missing STORED AS"))?,
+                location: location
+                    .ok_or_else(|| plan_datafusion_err!("Missing LOCATION"))?,
                 options,
             },
         ))
@@ -392,9 +404,7 @@ impl<'a> CustomParser<'a> {
             if self.df_parser.parser.consume_token(&Token::RParen) {
                 break;
             } else if !comma {
-                return Err(DataFusionError::Plan(
-                    "Expected ',' or ')' in OPTIONS".to_string(),
-                ));
+                return plan_err!("Expected ',' or ')' in OPTIONS");
             }
         }
         Ok(options)
