@@ -18,12 +18,8 @@
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
-<<<<<<< HEAD
 use datafusion::catalog::default_table_source::DefaultTableSource;
-use datafusion::common::{substrait_datafusion_err, DFSchema, ToDFSchema};
-=======
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
->>>>>>> refs/rewritten/test-16279
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use datafusion::scalar::ScalarValue;
@@ -34,11 +30,7 @@ use substrait::proto::expression::MaskExpression;
 use substrait::proto::expression::literal::Struct as LiteralStruct;
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
-<<<<<<< HEAD
-use substrait::proto::expression::MaskExpression;
 use substrait::proto::extensions::AdvancedExtension;
-=======
->>>>>>> refs/rewritten/test-16279
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
 use substrait::proto::{ReadRel, Rel};
@@ -306,7 +298,7 @@ mod tests {
     use crate::logical_plan::producer::to_substrait_plan;
     use datafusion::prelude::SessionContext;
     use prost::Message;
-    use substrait::proto::{plan_rel, rel, ReadRel, Rel};
+    use substrait::proto::{ReadRel, Rel, plan_rel, rel};
 
     #[tokio::test]
     async fn captures_generate_series_table_function() {

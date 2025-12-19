@@ -25,7 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_common::{not_impl_err, Constraints, Statistics};
+use datafusion_common::{Constraints, Statistics, not_impl_err};
 use datafusion_expr::Expr;
 
 use datafusion_expr::dml::InsertOp;

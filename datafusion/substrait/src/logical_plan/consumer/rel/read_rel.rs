@@ -19,11 +19,7 @@ use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
-<<<<<<< HEAD
-use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::catalog::TableProvider;
-=======
->>>>>>> refs/rewritten/test-16279
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
@@ -41,7 +37,6 @@ use substrait::proto::read_rel::local_files::file_or_files::PathType::UriFile;
 use substrait::proto::{Expression, ReadRel};
 use url::Url;
 
-<<<<<<< HEAD
 use crate::logical_plan::constants::TABLE_FUNCTION_TYPE_URL;
 use crate::logical_plan::table_function_extension::TableFunctionReadRelExtension;
 
@@ -50,10 +45,7 @@ struct TableFunctionInvocation {
     arguments: Vec<substrait::proto::expression::Literal>,
 }
 
-#[allow(deprecated)]
-=======
 #[expect(deprecated)]
->>>>>>> refs/rewritten/test-16279
 pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
