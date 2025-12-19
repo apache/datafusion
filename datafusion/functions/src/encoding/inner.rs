@@ -30,8 +30,8 @@ use base64::{
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
-    internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+    not_impl_err, plan_err,
     types::{NativeType, logical_string},
     utils::take_function_args,
 };
@@ -436,16 +436,15 @@ impl Encoding {
             // only write input / 2 bytes to buf
             let out_len = input.len() / 2;
             let buf = &mut buf[..out_len];
-            hex::decode_to_slice(input, buf).map_err(|e| {
-                internal_datafusion_err!("Failed to decode from hex: {e}")
-            })?;
+            hex::decode_to_slice(input, buf)
+                .map_err(|e| exec_datafusion_err!("Failed to decode from hex: {e}"))?;
             Ok(out_len)
         }
 
         fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
-            BASE64_ENGINE.decode_slice(input, buf).map_err(|e| {
-                internal_datafusion_err!("Failed to decode from base64: {e}")
-            })
+            BASE64_ENGINE
+                .decode_slice(input, buf)
+                .map_err(|e| exec_datafusion_err!("Failed to decode from base64: {e}"))
         }
 
         match self {
@@ -473,16 +472,15 @@ impl Encoding {
             // only write input / 2 bytes to buf
             let out_len = input.len() / 2;
             let buf = &mut buf[..out_len];
-            hex::decode_to_slice(input, buf).map_err(|e| {
-                internal_datafusion_err!("Failed to decode from hex: {e}")
-            })?;
+            hex::decode_to_slice(input, buf)
+                .map_err(|e| exec_datafusion_err!("Failed to decode from hex: {e}"))?;
             Ok(out_len)
         }
 
         fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
-            BASE64_ENGINE.decode_slice(input, buf).map_err(|e| {
-                internal_datafusion_err!("Failed to decode from base64: {e}")
-            })
+            BASE64_ENGINE
+                .decode_slice(input, buf)
+                .map_err(|e| exec_datafusion_err!("Failed to decode from base64: {e}"))
         }
 
         fn delegated_decode<DecodeFunction>(

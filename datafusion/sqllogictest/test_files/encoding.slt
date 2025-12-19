@@ -197,3 +197,9 @@ FROM values
 ----
 0123456789abcdef 0123456789abcdef
 ffffffffffffffff ffffffffffffffff
+
+query error DataFusion error: Execution error: Failed to decode value using base64
+select decode('invalid', 'base64');
+
+query error DataFusion error: Execution error: Failed to decode value using hex
+select decode('invalid', 'hex');
