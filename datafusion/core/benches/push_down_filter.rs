@@ -26,6 +26,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
 use object_store::ObjectStore;
+use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use parquet::arrow::ArrowWriter;

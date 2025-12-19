@@ -51,6 +51,7 @@ use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use object_store::ObjectStoreExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path};
 use parquet::arrow::ArrowWriter;
 

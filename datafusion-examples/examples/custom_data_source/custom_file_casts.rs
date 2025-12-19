@@ -38,6 +38,7 @@ use datafusion::prelude::SessionConfig;
 use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
+use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, PutPayload};

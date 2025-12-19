@@ -1779,19 +1779,20 @@ fn round_trip_datatype() {
             ),
         ])),
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![7, 5, 3],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         DataType::Union(
-            UnionFields::new(
-                vec![5, 8, 1],
+            UnionFields::try_new(
+                vec![5, 8, 1, 100],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
@@ -1806,7 +1807,8 @@ fn round_trip_datatype() {
                         true,
                     ),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         DataType::Dictionary(

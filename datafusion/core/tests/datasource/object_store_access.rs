@@ -31,13 +31,14 @@ use datafusion::prelude::{CsvReadOptions, ParquetReadOptions, SessionContext};
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_csv::CsvFormat;
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use insta::assert_snapshot;
+use object_store::ObjectStoreExt;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use parking_lot::Mutex;
 use std::fmt;
@@ -77,7 +78,7 @@ async fn query_single_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 2
     - HEAD path=csv_table.csv
-    - GET  (opts) path=csv_table.csv
+    - GET  path=csv_table.csv
     "
     );
 }
@@ -119,9 +120,9 @@ async fn multi_query_multi_file_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
-    - GET  (opts) path=data/file_0.csv
-    - GET  (opts) path=data/file_1.csv
-    - GET  (opts) path=data/file_2.csv
+    - GET  path=data/file_0.csv
+    - GET  path=data/file_1.csv
+    - GET  path=data/file_2.csv
     "
     );
 
@@ -172,9 +173,9 @@ async fn query_multi_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
-    - GET  (opts) path=data/file_0.csv
-    - GET  (opts) path=data/file_1.csv
-    - GET  (opts) path=data/file_2.csv
+    - GET  path=data/file_0.csv
+    - GET  path=data/file_1.csv
+    - GET  path=data/file_2.csv
     "
     );
 }
@@ -200,9 +201,9 @@ async fn query_partitioned_csv_file() {
     RequestCountingObjectStore()
     Total Requests: 4
     - LIST prefix=data
-    - GET  (opts) path=data/a=1/b=10/c=100/file_1.csv
-    - GET  (opts) path=data/a=2/b=20/c=200/file_2.csv
-    - GET  (opts) path=data/a=3/b=30/c=300/file_3.csv
+    - GET  path=data/a=1/b=10/c=100/file_1.csv
+    - GET  path=data/a=2/b=20/c=200/file_2.csv
+    - GET  path=data/a=3/b=30/c=300/file_3.csv
     "
     );
 
@@ -310,7 +311,7 @@ async fn create_single_parquet_file_default() {
     RequestCountingObjectStore()
     Total Requests: 2
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=0-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=0-2994
     "
     );
 }
@@ -329,7 +330,7 @@ async fn create_single_parquet_file_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=1994-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=1994-2994
     "
     );
 }
@@ -358,9 +359,9 @@ async fn create_single_parquet_file_too_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 4
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=2494-2994 path=parquet_table.parquet
-    - GET  (range) range=2264-2986 path=parquet_table.parquet
-    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=2494-2994
+    - GET  (opts) path=parquet_table.parquet range=2264-2986
+    - GET  (opts) path=parquet_table.parquet range=2124-2264
     "
     );
 }
@@ -390,8 +391,8 @@ async fn create_single_parquet_file_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 3
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=2254-2994 path=parquet_table.parquet
-    - GET  (range) range=2124-2264 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=2254-2994
+    - GET  (opts) path=parquet_table.parquet range=2124-2264
     "
     );
 }
@@ -414,7 +415,7 @@ async fn create_single_parquet_file_no_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - HEAD path=parquet_table.parquet
-    - GET  (range) range=0-2994 path=parquet_table.parquet
+    - GET  (opts) path=parquet_table.parquet range=0-2994
     "
     );
 }
@@ -713,7 +714,6 @@ enum RequestDetails {
     Get { path: Path },
     GetOpts { path: Path, get_options: GetOptions },
     GetRanges { path: Path, ranges: Vec<Range<u64>> },
-    GetRange { path: Path, range: Range<u64> },
     Head { path: Path },
     List { prefix: Option<Path> },
     ListWithDelimiter { prefix: Option<Path> },
@@ -771,10 +771,6 @@ impl Display for RequestDetails {
                     }
                 }
                 Ok(())
-            }
-            RequestDetails::GetRange { path, range } => {
-                let range = display_range(range);
-                write!(f, "GET  (range) range={range} path={path}")
             }
             RequestDetails::Head { path } => {
                 write!(f, "HEAD path={path}")
@@ -843,6 +839,24 @@ impl RequestCountingObjectStore {
     }
 }
 
+fn not_implemented(operation: &str) -> object_store::Error {
+    object_store::Error::NotImplemented {
+        operation: operation.to_string(),
+        implementer: "RequestCountingObjectStore".to_string(),
+    }
+}
+
+fn is_default_get_options(options: &GetOptions) -> bool {
+    !options.head
+        && options.if_match.is_none()
+        && options.if_none_match.is_none()
+        && options.if_modified_since.is_none()
+        && options.if_unmodified_since.is_none()
+        && options.range.is_none()
+        && options.version.is_none()
+        && options.extensions.is_empty()
+}
+
 #[async_trait]
 impl ObjectStore for RequestCountingObjectStore {
     async fn put_opts(
@@ -851,7 +865,7 @@ impl ObjectStore for RequestCountingObjectStore {
         _payload: PutPayload,
         _opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        Err(object_store::Error::NotImplemented)
+        Err(not_implemented("put_opts"))
     }
 
     async fn put_multipart_opts(
@@ -859,15 +873,7 @@ impl ObjectStore for RequestCountingObjectStore {
         _location: &Path,
         _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        Err(object_store::Error::NotImplemented)
-    }
-
-    async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-        let result = self.inner.get(location).await?;
-        self.requests.lock().push(RequestDetails::Get {
-            path: location.to_owned(),
-        });
-        Ok(result)
+        Err(not_implemented("put_multipart_opts"))
     }
 
     async fn get_opts(
@@ -876,23 +882,21 @@ impl ObjectStore for RequestCountingObjectStore {
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
         let result = self.inner.get_opts(location, options.clone()).await?;
-        self.requests.lock().push(RequestDetails::GetOpts {
-            path: location.to_owned(),
-            get_options: options,
-        });
-        Ok(result)
-    }
-
-    async fn get_range(
-        &self,
-        location: &Path,
-        range: Range<u64>,
-    ) -> object_store::Result<Bytes> {
-        let result = self.inner.get_range(location, range.clone()).await?;
-        self.requests.lock().push(RequestDetails::GetRange {
-            path: location.to_owned(),
-            range: range.clone(),
-        });
+        let request = if options.head {
+            RequestDetails::Head {
+                path: location.to_owned(),
+            }
+        } else if is_default_get_options(&options) {
+            RequestDetails::Get {
+                path: location.to_owned(),
+            }
+        } else {
+            RequestDetails::GetOpts {
+                path: location.to_owned(),
+                get_options: options,
+            }
+        };
+        self.requests.lock().push(request);
         Ok(result)
     }
 
@@ -907,18 +911,6 @@ impl ObjectStore for RequestCountingObjectStore {
             ranges: ranges.to_vec(),
         });
         Ok(result)
-    }
-
-    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        let result = self.inner.head(location).await?;
-        self.requests.lock().push(RequestDetails::Head {
-            path: location.to_owned(),
-        });
-        Ok(result)
-    }
-
-    async fn delete(&self, _location: &Path) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
     }
 
     fn list(
@@ -956,15 +948,21 @@ impl ObjectStore for RequestCountingObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
+    fn delete_stream(
+        &self,
+        _locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        Box::pin(stream::once(async {
+            Err(not_implemented("delete_stream"))
+        }))
     }
 
-    async fn copy_if_not_exists(
+    async fn copy_opts(
         &self,
         _from: &Path,
         _to: &Path,
+        _options: CopyOptions,
     ) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
+        Err(not_implemented("copy_opts"))
     }
 }

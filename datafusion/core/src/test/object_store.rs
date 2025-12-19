@@ -20,13 +20,14 @@
 use crate::{
     execution::{context::SessionState, session_state::SessionStateBuilder},
     object_store::{
-        Error, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-        ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartUpload,
+        ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
         memory::InMemory, path::Path,
     },
     prelude::SessionContext,
 };
 use futures::{FutureExt, stream::BoxStream};
+use object_store::ObjectStoreExt;
 use std::{
     fmt::{Debug, Display, Formatter},
     sync::Arc,
@@ -106,7 +107,8 @@ impl Display for BlockingObjectStore {
 }
 
 /// All trait methods are forwarded to the inner object store, except for
-/// the `head` method which waits until the expected number of concurrent calls is reached.
+/// metadata requests (`head`) which wait until the expected number of concurrent
+/// calls is reached.
 #[async_trait::async_trait]
 impl ObjectStore for BlockingObjectStore {
     async fn put_opts(
@@ -130,39 +132,40 @@ impl ObjectStore for BlockingObjectStore {
         location: &Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
-        self.inner.get_opts(location, options).await
-    }
-
-    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        println!(
-            "{} received head call for {location}",
-            BlockingObjectStore::NAME
-        );
-        // Wait until the expected number of concurrent calls is reached, but timeout after 1 second to avoid hanging failing tests.
-        let wait_result = timeout(Duration::from_secs(1), self.barrier.wait()).await;
-        match wait_result {
-            Ok(_) => println!(
-                "{} barrier reached for {location}",
+        if options.head {
+            println!(
+                "{} received head call for {location}",
                 BlockingObjectStore::NAME
-            ),
-            Err(_) => {
-                let error_message = format!(
-                    "{} barrier wait timed out for {location}",
+            );
+            // Wait until the expected number of concurrent calls is reached, but timeout after 1 second to avoid hanging failing tests.
+            let wait_result = timeout(Duration::from_secs(1), self.barrier.wait()).await;
+            match wait_result {
+                Ok(_) => println!(
+                    "{} barrier reached for {location}",
                     BlockingObjectStore::NAME
-                );
-                log::error!("{error_message}");
-                return Err(Error::Generic {
-                    store: BlockingObjectStore::NAME,
-                    source: error_message.into(),
-                });
+                ),
+                Err(_) => {
+                    let error_message = format!(
+                        "{} barrier wait timed out for {location}",
+                        BlockingObjectStore::NAME
+                    );
+                    log::error!("{error_message}");
+                    return Err(Error::Generic {
+                        store: BlockingObjectStore::NAME,
+                        source: error_message.into(),
+                    });
+                }
             }
         }
         // Forward the call to the inner object store.
-        self.inner.head(location).await
+        self.inner.get_opts(location, options).await
     }
 
-    async fn delete(&self, location: &Path) -> object_store::Result<()> {
-        self.inner.delete(location).await
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
     }
 
     fn list(
@@ -179,15 +182,12 @@ impl ObjectStore for BlockingObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(
+    async fn copy_opts(
         &self,
         from: &Path,
         to: &Path,
+        options: CopyOptions,
     ) -> object_store::Result<()> {
-        self.inner.copy_if_not_exists(from, to).await
+        self.inner.copy_opts(from, to, options).await
     }
 }

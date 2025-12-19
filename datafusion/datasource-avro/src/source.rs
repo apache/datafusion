@@ -33,7 +33,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 
 /// AvroSource holds the extra configuration that is necessary for opening avro files
 #[derive(Clone)]

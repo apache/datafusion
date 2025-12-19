@@ -164,7 +164,7 @@ itertools = "0.14"
 liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
 num-traits = { version = "0.2" }
-object_store = { version = "0.12.4", default-features = false }
+object_store = { version = "0.13.0", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "57.1.0", default-features = false, features = [
     "arrow",
@@ -272,3 +272,35 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+## Temporary arrow-rs patch until 57.2.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/upgrade_object_store" }
+
+object_store = {  git = "https://github.com/alamb/arrow-rs-object-store.git", branch="alamb/prepare_0.13.0" }
+
+
+#arrow = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow" }
+#arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-array" }
+#arrow-buffer = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-buffer" }
+#arrow-cast = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-cast" }
+#arrow-data = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-data" }
+#arrow-ipc = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-ipc" }
+#arrow-schema = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-schema" }
+#arrow-select = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-select" }
+#arrow-string = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-string" }
+#arrow-ord = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-ord" }
+#arrow-flight = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-flight" }
+#parquet = { path= "/Users/andrewlamb/Software/arrow-rs2/parquet" }

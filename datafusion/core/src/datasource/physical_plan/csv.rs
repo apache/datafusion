@@ -56,6 +56,7 @@ mod tests {
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
     use insta::assert_snapshot;
+    use object_store::ObjectStoreExt;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;

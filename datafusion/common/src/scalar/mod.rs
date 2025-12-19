@@ -8894,7 +8894,7 @@ mod tests {
             .unwrap(),
             ScalarValue::try_new_null(&DataType::Map(map_field_ref, false)).unwrap(),
             ScalarValue::try_new_null(&DataType::Union(
-                UnionFields::new(vec![42], vec![field_ref]),
+                UnionFields::try_new(vec![42], vec![field_ref]).unwrap(),
                 UnionMode::Dense,
             ))
             .unwrap(),
@@ -8997,13 +8997,14 @@ mod tests {
         }
 
         // Test union type
-        let union_fields = UnionFields::new(
+        let union_fields = UnionFields::try_new(
             vec![0, 1],
             vec![
                 Field::new("i32", DataType::Int32, false),
                 Field::new("f64", DataType::Float64, false),
             ],
-        );
+        )
+        .unwrap();
         let union_result = ScalarValue::new_default(&DataType::Union(
             union_fields.clone(),
             UnionMode::Sparse,

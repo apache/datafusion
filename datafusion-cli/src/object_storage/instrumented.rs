@@ -35,11 +35,14 @@ use datafusion::{
     error::DataFusionError,
     execution::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
 };
-use futures::stream::{BoxStream, Stream};
+use futures::{
+    StreamExt,
+    stream::{BoxStream, Stream},
+};
 use object_store::{
-    GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    path::Path,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    Result, path::Path,
 };
 use parking_lot::{Mutex, RwLock};
 use url::Url;
@@ -228,6 +231,11 @@ impl InstrumentedObjectStore {
         options: GetOptions,
     ) -> Result<GetResult> {
         let timestamp = Utc::now();
+        let operation = if options.head {
+            Operation::Head
+        } else {
+            Operation::Get
+        };
         let range = options.range.clone();
 
         let start = Instant::now();
@@ -235,11 +243,12 @@ impl InstrumentedObjectStore {
         let elapsed = start.elapsed();
 
         self.requests.lock().push(RequestDetails {
-            op: Operation::Get,
+            op: operation,
             path: location.clone(),
             timestamp,
             duration: Some(elapsed),
-            size: Some((ret.range.end - ret.range.start) as usize),
+            size: (operation == Operation::Get)
+                .then_some((ret.range.end - ret.range.start) as usize),
             range,
             extra_display: None,
         });
@@ -247,23 +256,31 @@ impl InstrumentedObjectStore {
         Ok(ret)
     }
 
-    async fn instrumented_delete(&self, location: &Path) -> Result<()> {
+    fn instrumented_delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         let timestamp = Utc::now();
         let start = Instant::now();
-        self.inner.delete(location).await?;
-        let elapsed = start.elapsed();
+        let requests = Arc::clone(&self.requests);
 
-        self.requests.lock().push(RequestDetails {
-            op: Operation::Delete,
-            path: location.clone(),
-            timestamp,
-            duration: Some(elapsed),
-            size: None,
-            range: None,
-            extra_display: None,
-        });
-
-        Ok(())
+        self.inner
+            .delete_stream(locations)
+            .inspect(move |result| {
+                if let Ok(path) = result {
+                    let elapsed = start.elapsed();
+                    requests.lock().push(RequestDetails {
+                        op: Operation::Delete,
+                        path: path.clone(),
+                        timestamp,
+                        duration: Some(elapsed),
+                        size: None,
+                        range: None,
+                        extra_display: None,
+                    });
+                }
+            })
+            .boxed()
     }
 
     fn instrumented_list(
@@ -320,33 +337,15 @@ impl InstrumentedObjectStore {
         Ok(ret)
     }
 
-    async fn instrumented_copy(&self, from: &Path, to: &Path) -> Result<()> {
-        let timestamp = Utc::now();
-        let start = Instant::now();
-        self.inner.copy(from, to).await?;
-        let elapsed = start.elapsed();
-
-        self.requests.lock().push(RequestDetails {
-            op: Operation::Copy,
-            path: from.clone(),
-            timestamp,
-            duration: Some(elapsed),
-            size: None,
-            range: None,
-            extra_display: Some(format!("copy_to: {to}")),
-        });
-
-        Ok(())
-    }
-
-    async fn instrumented_copy_if_not_exists(
+    async fn instrumented_copy_opts(
         &self,
         from: &Path,
         to: &Path,
+        options: CopyOptions,
     ) -> Result<()> {
         let timestamp = Utc::now();
         let start = Instant::now();
-        self.inner.copy_if_not_exists(from, to).await?;
+        self.inner.copy_opts(from, to, options).await?;
         let elapsed = start.elapsed();
 
         self.requests.lock().push(RequestDetails {
@@ -360,25 +359,6 @@ impl InstrumentedObjectStore {
         });
 
         Ok(())
-    }
-
-    async fn instrumented_head(&self, location: &Path) -> Result<ObjectMeta> {
-        let timestamp = Utc::now();
-        let start = Instant::now();
-        let ret = self.inner.head(location).await?;
-        let elapsed = start.elapsed();
-
-        self.requests.lock().push(RequestDetails {
-            op: Operation::Head,
-            path: location.clone(),
-            timestamp,
-            duration: Some(elapsed),
-            size: None,
-            range: None,
-            extra_display: None,
-        });
-
-        Ok(ret)
     }
 }
 
@@ -429,14 +409,6 @@ impl ObjectStore for InstrumentedObjectStore {
         self.inner.get_opts(location, options).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        if self.enabled() {
-            return self.instrumented_delete(location).await;
-        }
-
-        self.inner.delete(location).await
-    }
-
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         if self.enabled() {
             return self.instrumented_list(prefix);
@@ -453,28 +425,28 @@ impl ObjectStore for InstrumentedObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         if self.enabled() {
-            return self.instrumented_copy(from, to).await;
+            return self.instrumented_delete_stream(locations);
         }
 
-        self.inner.copy(from, to).await
+        self.inner.delete_stream(locations)
     }
 
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> Result<()> {
         if self.enabled() {
-            return self.instrumented_copy_if_not_exists(from, to).await;
+            return self.instrumented_copy_opts(from, to, options).await;
         }
 
-        self.inner.copy_if_not_exists(from, to).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        if self.enabled() {
-            return self.instrumented_head(location).await;
-        }
-
-        self.inner.head(location).await
+        self.inner.copy_opts(from, to, options).await
     }
 }
 
@@ -824,6 +796,7 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
 #[cfg(test)]
 mod tests {
     use futures::StreamExt;
+    use object_store::ObjectStoreExt;
     use object_store::WriteMultipart;
 
     use super::*;

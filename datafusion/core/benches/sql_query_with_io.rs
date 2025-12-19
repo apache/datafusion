@@ -30,6 +30,7 @@ use datafusion::{
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use itertools::Itertools;
+use object_store::ObjectStoreExt;
 use object_store::{
     ObjectStore,
     memory::InMemory,
