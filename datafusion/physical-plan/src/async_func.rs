@@ -39,8 +39,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
-const ASYNC_FN_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
-
 /// This structure evaluates a set of async expressions on a record
 /// batch producing a new record batch
 ///
@@ -53,10 +51,6 @@ pub struct AsyncFuncExec {
     input: Arc<dyn ExecutionPlan>,
     cache: PlanProperties,
     metrics: ExecutionPlanMetricsSet,
-    /// Target batch size for output batches
-    batch_size: usize,
-    /// Number of rows to fetch
-    fetch: Option<usize>,
 }
 
 impl AsyncFuncExec {
@@ -91,17 +85,7 @@ impl AsyncFuncExec {
             async_exprs,
             cache,
             metrics: ExecutionPlanMetricsSet::new(),
-            batch_size: ASYNC_FN_EXEC_DEFAULT_BATCH_SIZE,
-            fetch: None,
         })
-    }
-
-    pub fn with_batch_size(&mut self, batch_size: usize) {
-        self.batch_size = batch_size;
-    }
-
-    pub fn with_fetch(&mut self, fetch: usize) {
-        self.fetch = Some(fetch);
     }
 
     /// This function creates the cache object that stores the plan properties
@@ -212,8 +196,8 @@ impl ExecutionPlan for AsyncFuncExec {
             input_stream,
             batch_coalescer: LimitedBatchCoalescer::new(
                 Arc::clone(&self.input.schema()),
-                self.batch_size,
-                self.fetch,
+                config_options_ref.execution.batch_size,
+                None,
             ),
         };
 
