@@ -32,6 +32,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
+use crate::util::PhysicalColumnRewriter;
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
 use std::any::Any;
 use std::collections::HashMap;
@@ -45,7 +46,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{JoinSide, Result, internal_err};
+use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
@@ -191,6 +192,30 @@ impl ProjectionExec {
             input.pipeline_behavior(),
             input.boundedness(),
         ))
+    }
+
+    /// Collect reverse alias mapping from projection expressions.
+    /// The result hash map is a map from aliased Column in parent to original Column.
+    fn collect_reverse_alias(&self) -> Result<datafusion_common::HashMap<Column, Column>> {
+        let mut alias_map = datafusion_common::HashMap::new();
+        for projection in self.projection_expr().iter() {
+            if let Some(col_expr) = projection.expr.as_any().downcast_ref::<Column>() {
+                // FIXME: not sure if two physical column somehow have the same name, what will happen
+                let (aliased_index, _output_field) = self
+                    .projector
+                    .output_schema()
+                    .column_with_name(&projection.alias)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "Column {:?} with alias {} not found in output schema",
+                            col_expr, projection.alias
+                        ))
+                    })?;
+                let aliased_col = Column::new(&projection.alias, aliased_index);
+                alias_map.insert(aliased_col, col_expr.clone());
+            }
+        }
+        Ok(alias_map)
     }
 }
 
@@ -350,7 +375,18 @@ impl ExecutionPlan for ProjectionExec {
         // TODO: In future, we can try to handle inverting aliases here.
         // For the time being, we pass through untransformed filters, so filters on aliases are not handled.
         // https://github.com/apache/datafusion/issues/17246
-        FilterDescription::from_children(parent_filters, &self.children())
+
+        // FIXME: statically change is not enough, need to add projection at the inner most child?
+        let invert_alias_map = self.collect_reverse_alias()?;
+        let mut rewriter = PhysicalColumnRewriter::new(invert_alias_map);
+        let rewrited_filters = parent_filters
+            .into_iter()
+            .map(|filter| {
+                filter.rewrite(&mut rewriter).map(|t|t.data)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        FilterDescription::from_children(rewrited_filters, &self.children())
     }
 
     fn handle_child_pushdown_result(
