@@ -118,13 +118,18 @@ fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
         )));
     }
 
-    let unscaled_value = decimal32_to_i32(value, scale)?;
-    if unscaled_value > 0 {
+    // Match f64::log behaviour
+    if value <= 0 {
+        return Ok(f64::NAN);
+    }
+
+    if scale < 0 {
+        let actual_value = (value as f64) * 10.0_f64.powi(-(scale as i32));
+        Ok(actual_value.log(base))
+    } else {
+        let unscaled_value = decimal32_to_i32(value, scale)?;
         let log_value: u32 = unscaled_value.ilog(base as i32);
         Ok(log_value as f64)
-    } else {
-        // Reflect f64::log behaviour
-        Ok(f64::NAN)
     }
 }
 
@@ -142,13 +147,17 @@ fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
         )));
     }
 
-    let unscaled_value = decimal64_to_i64(value, scale)?;
-    if unscaled_value > 0 {
+    if value <= 0 {
+        return Ok(f64::NAN);
+    }
+
+    if scale < 0 {
+        let actual_value = (value as f64) * 10.0_f64.powi(-(scale as i32));
+        Ok(actual_value.log(base))
+    } else {
+        let unscaled_value = decimal64_to_i64(value, scale)?;
         let log_value: u32 = unscaled_value.ilog(base as i64);
         Ok(log_value as f64)
-    } else {
-        // Reflect f64::log behaviour
-        Ok(f64::NAN)
     }
 }
 

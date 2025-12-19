@@ -996,6 +996,11 @@ SELECT power(2.5, 0)
 ----
 1
 
+query R
+SELECT power(1e4 ,2)
+----
+100000000
+
 # int64 base with decimal exponent (coerced to float computation)
 query R
 SELECT power(10, -2.0)
