@@ -1969,8 +1969,7 @@ impl protobuf::PhysicalPlanNode {
             None => return internal_err!("Missing args in GenerateSeriesNode"),
         };
 
-        let arguments = args.evaluated_args();
-        let table = GenerateSeriesTable::new(Arc::clone(&schema), args, arguments);
+        let table = GenerateSeriesTable::new(Arc::clone(&schema), args);
         let generator = table.as_generator(generate_series.target_batch_size as usize)?;
 
         Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
