@@ -259,12 +259,26 @@ impl Hash for HashTableLookupExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.hash_expr.dyn_hash(state);
         self.description.hash(state);
+        // Note that we compare hash_map by pointer equality.
+        // Actually comparing the contents of the hash maps would be expensive.
+        // The way these hash maps are used in actuality is that HashJoinExec creates
+        // one per partition per query execution, thus it is never possible for two different
+        // hash maps to have the same content in practice.
+        // Theoretically this is a public API and users could create identical hash maps,
+        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
         Arc::as_ptr(&self.hash_map).hash(state);
     }
 }
 
 impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
+        // Note that we compare hash_map by pointer equality.
+        // Actually comparing the contents of the hash maps would be expensive.
+        // The way these hash maps are used in actuality is that HashJoinExec creates
+        // one per partition per query execution, thus it is never possible for two different
+        // hash maps to have the same content in practice.
+        // Theoretically this is a public API and users could create identical hash maps,
+        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
         self.hash_expr.as_ref() == other.hash_expr.as_ref()
             && self.description == other.description
             && Arc::ptr_eq(&self.hash_map, &other.hash_map)
