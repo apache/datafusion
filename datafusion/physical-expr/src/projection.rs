@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`ProjectionExpr`] and [`ProjectionExprs`] for representing projections.
+
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -35,7 +37,7 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
-/// A projection expression as used by projection operations.
+/// An expression used by projection operations.
 ///
 /// The expression is evaluated and the result is stored in a column
 /// with the name specified by `alias`.
@@ -43,6 +45,8 @@ use itertools::Itertools;
 /// For example, the SQL expression `a + b AS sum_ab` would be represented
 /// as a `ProjectionExpr` where `expr` is the expression `a + b`
 /// and `alias` is the string `sum_ab`.
+///
+/// See [`ProjectionExprs`] for a collection of projection expressions.
 #[derive(Debug, Clone)]
 pub struct ProjectionExpr {
     /// The expression that will be evaluated.
@@ -72,7 +76,8 @@ impl std::fmt::Display for ProjectionExpr {
 
 impl ProjectionExpr {
     /// Create a new projection expression
-    pub fn new(expr: Arc<dyn PhysicalExpr>, alias: String) -> Self {
+    pub fn new(expr: Arc<dyn PhysicalExpr>, alias: impl Into<String>) -> Self {
+        let alias = alias.into();
         Self { expr, alias }
     }
 
@@ -107,11 +112,14 @@ impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
     }
 }
 
-/// A collection of projection expressions.
+/// A collection of  [`ProjectionExpr`] instances, representing a complete
+/// projection operation.
 ///
-/// This struct encapsulates multiple `ProjectionExpr` instances,
-/// representing a complete projection operation and provides
-/// methods to manipulate and analyze the projection as a whole.
+/// Projection operations are used in query plans to select specific columns or
+/// compute new columns based on existing ones.
+///
+/// See [`ProjectionExprs::from_indices`] to select a subset of columns by
+/// indices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionExprs {
     exprs: Vec<ProjectionExpr>,
@@ -504,29 +512,23 @@ impl ProjectionExprs {
     ///         total_byte_size: Precision::Exact(1200),
     ///         column_statistics: vec![
     ///             // Column a stats
-    ///             ColumnStatistics {
-    ///                 null_count: Precision::Exact(0),
-    ///                 distinct_count: Precision::Exact(100),
-    ///                 min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
-    ///                 max_value: Precision::Exact(ScalarValue::Int32(Some(100))),
-    ///                 sum_value: Precision::Absent,
-    ///             },
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(0))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(0))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(100))))
+    ///                 .with_distinct_count(Precision::Exact(100)),
     ///             // Column b stats
-    ///             ColumnStatistics {
-    ///                 null_count: Precision::Exact(0),
-    ///                 distinct_count: Precision::Exact(50),
-    ///                 min_value: Precision::Exact(ScalarValue::Int32(Some(10))),
-    ///                 max_value: Precision::Exact(ScalarValue::Int32(Some(60))),
-    ///                 sum_value: Precision::Absent,
-    ///             },
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(0))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(60))))
+    ///                 .with_distinct_count(Precision::Exact(50)),
     ///             // Column c stats
-    ///             ColumnStatistics {
-    ///                 null_count: Precision::Exact(5),
-    ///                 distinct_count: Precision::Exact(25),
-    ///                 min_value: Precision::Exact(ScalarValue::Int32(Some(-10))),
-    ///                 max_value: Precision::Exact(ScalarValue::Int32(Some(200))),
-    ///                 sum_value: Precision::Absent,
-    ///             },
+    ///             ColumnStatistics::new_unknown()
+    ///                 .with_null_count(Precision::Exact(5))
+    ///                 .with_min_value(Precision::Exact(ScalarValue::Int32(Some(-10))))
+    ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(200))))
+    ///                 .with_distinct_count(Precision::Exact(25)),
     ///         ],
     ///     };
     ///
@@ -1866,6 +1868,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -1873,6 +1876,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -1880,6 +1884,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         }
@@ -1924,6 +1929,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -1931,6 +1937,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -1968,6 +1975,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -1975,6 +1983,7 @@ pub(crate) mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
             ],
         };

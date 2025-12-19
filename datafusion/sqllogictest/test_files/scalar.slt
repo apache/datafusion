@@ -746,26 +746,26 @@ select pi(), pi() / 2, pi() / 3;
 
 ## power
 
-# power scalar function
-query III rowsort
+# power scalar function (always returns Float64, like PostgreSQL)
+query RRR rowsort
 select power(2, 0), power(2, 1), power(2, 2);
 ----
 1 2 4
 
 # power scalar nulls
-query I rowsort
+query R rowsort
 select power(null, 64);
 ----
 NULL
 
 # power scalar nulls #1
-query I rowsort
+query R rowsort
 select power(2, null);
 ----
 NULL
 
 # power scalar nulls #2
-query I rowsort
+query R rowsort
 select power(null, null);
 ----
 NULL
@@ -1775,7 +1775,7 @@ CREATE TABLE test(
 (-14, -14, -14.5, -14.5),
 (NULL, NULL, NULL, NULL);
 
-query IIRRIR rowsort
+query RRRRRR rowsort
 SELECT power(i32, exp_i) as power_i32,
        power(i64, exp_f) as power_i64,
        pow(f32, exp_i) as power_f32,
@@ -1883,7 +1883,7 @@ D false
 
 # test string_temporal_coercion
 query BBBBBBBBBB
-select 
+select
   arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == '2020-01-01T01:01:11',
   arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-03 01:01:11.1234567890Z'), 'Time32(Second)') == '01:01:11',

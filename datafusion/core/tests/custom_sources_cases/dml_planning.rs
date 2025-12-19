@@ -27,8 +27,8 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::Expr;
 use datafusion_catalog::Session;
-use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::empty::EmptyExec;
 
 /// A TableProvider that captures the filters passed to delete_from().
 struct CaptureDeleteProvider {

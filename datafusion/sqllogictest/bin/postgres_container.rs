@@ -16,19 +16,19 @@
 // under the License.
 
 use crate::Options;
+use ContainerCommands::{FetchHost, FetchPort};
 use datafusion::common::Result;
 use log::info;
 use std::env::set_var;
 use std::future::Future;
 use std::sync::LazyLock;
 use std::{env, thread};
+use testcontainers::ImageExt;
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
-use testcontainers::ImageExt;
 use testcontainers_modules::postgres;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{mpsc, Mutex};
-use ContainerCommands::{FetchHost, FetchPort};
+use tokio::sync::{Mutex, mpsc};
 
 #[derive(Debug)]
 pub enum ContainerCommands {
@@ -86,7 +86,9 @@ pub async fn initialize_postgres_container(options: &Options) -> Result<()> {
         let pg_uri = format!("postgresql://postgres:postgres@{db_host}:{db_port}/test");
         info!("Postgres uri is {pg_uri}");
 
-        set_var("PG_URI", pg_uri);
+        unsafe {
+            set_var("PG_URI", pg_uri);
+        }
     } else {
         // close receiver
         POSTGRES_IN.rx.lock().await.close();

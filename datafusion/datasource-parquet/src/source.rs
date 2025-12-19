@@ -21,39 +21,40 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::opener::build_pruning_predicates;
-use crate::opener::ParquetOpener;
-use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use crate::opener::ParquetOpener;
+use crate::opener::build_pruning_predicates;
+use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
-use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 
 use arrow::datatypes::TimeUnit;
-use datafusion_common::config::TableParquetOptions;
 use datafusion_common::DataFusionError;
+use datafusion_common::config::TableParquetOptions;
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::TableSchema;
 use datafusion_physical_expr::conjunction;
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::PushedDown;
 use datafusion_physical_plan::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion_physical_plan::projection::ProjectionExprs;
-use datafusion_physical_plan::DisplayFormatType;
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use object_store::ObjectStore;
 #[cfg(feature = "parquet_encryption")]
@@ -284,10 +285,18 @@ pub struct ParquetSource {
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
     pub(crate) metadata_size_hint: Option<usize>,
-    /// Projection information for column pushdown
-    pub(crate) projection: SplitProjection,
+    /// Projection to apply to the output.
+    pub(crate) projection: ProjectionExprs,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
+    /// The ordering of data within the files
+    /// This is set by FileScanConfig when it knows the file ordering
+    file_ordering: Option<LexOrdering>,
+    /// If true, read files in reverse order and reverse row groups within files.
+    /// But it's not guaranteed that rows within row groups are in reverse order,
+    /// so we still need to sort them after reading, so the reverse scan is inexact.
+    /// Used to optimize ORDER BY ... DESC on sorted data.
+    reverse_row_groups: bool,
 }
 
 impl ParquetSource {
@@ -298,8 +307,11 @@ impl ParquetSource {
     /// To set custom options, use [ParquetSource::with_table_parquet_options`].
     pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         let table_schema = table_schema.into();
+        // Projection over the full table schema (file columns + partition columns)
+        let full_schema = table_schema.table_schema();
+        let indices: Vec<usize> = (0..full_schema.fields().len()).collect();
         Self {
-            projection: SplitProjection::unprojected(&table_schema),
+            projection: ProjectionExprs::from_indices(&indices, full_schema),
             table_schema,
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
@@ -309,6 +321,8 @@ impl ParquetSource {
             metadata_size_hint: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
+            file_ordering: None,
+            reverse_row_groups: false,
         }
     }
 
@@ -381,6 +395,12 @@ impl ParquetSource {
     /// Defaults to false.
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
+        self
+    }
+
+    /// If set, indicates the ordering of data within the files being read.
+    pub fn with_file_ordering(mut self, ordering: Option<LexOrdering>) -> Self {
+        self.file_ordering = ordering;
         self
     }
 
@@ -463,6 +483,15 @@ impl ParquetSource {
             )),
         }
     }
+
+    pub(crate) fn with_reverse_row_groups(mut self, reverse_row_groups: bool) -> Self {
+        self.reverse_row_groups = reverse_row_groups;
+        self
+    }
+    #[cfg(test)]
+    pub(crate) fn reverse_row_groups(&self) -> bool {
+        self.reverse_row_groups
+    }
 }
 
 /// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
@@ -497,12 +526,10 @@ impl FileSource for ParquetSource {
         base_config: &FileScanConfig,
         partition: usize,
     ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
-        let split_projection = self.projection.clone();
-
         let expr_adapter_factory = base_config
             .expr_adapter_factory
             .clone()
-            .or_else(|| Some(Arc::new(DefaultPhysicalExprAdapterFactory) as _));
+            .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory) as _);
 
         let parquet_file_reader_factory =
             self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
@@ -525,9 +552,9 @@ impl FileSource for ParquetSource {
             .as_ref()
             .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
 
-        let mut opener = Arc::new(ParquetOpener {
+        let opener = Arc::new(ParquetOpener {
             partition_index: partition,
-            projection: Arc::from(split_projection.file_indices.clone()),
+            projection: self.projection.clone(),
             batch_size: self
                 .batch_size
                 .expect("Batch size must set before creating ParquetOpener"),
@@ -550,12 +577,8 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
-        }) as Arc<dyn FileOpener>;
-        opener = ProjectionOpener::try_new(
-            split_projection.clone(),
-            Arc::clone(&opener),
-            self.table_schema.file_schema(),
-        )?;
+            reverse_row_groups: self.reverse_row_groups,
+        });
         Ok(opener)
     }
 
@@ -582,15 +605,12 @@ impl FileSource for ParquetSource {
         projection: &ProjectionExprs,
     ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
         let mut source = self.clone();
-        let new_projection = self.projection.source.try_merge(projection)?;
-        let split_projection =
-            SplitProjection::new(self.table_schema.file_schema(), &new_projection);
-        source.projection = split_projection;
+        source.projection = self.projection.try_merge(projection)?;
         Ok(Some(Arc::new(source)))
     }
 
     fn projection(&self) -> Option<&ProjectionExprs> {
-        Some(&self.projection.source)
+        Some(&self.projection)
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
@@ -610,6 +630,11 @@ impl FileSource for ParquetSource {
                     .unwrap_or_default();
 
                 write!(f, "{predicate_string}")?;
+
+                // Add reverse_scan info if enabled
+                if self.reverse_row_groups {
+                    write!(f, ", reverse_row_groups=true")?;
+                }
 
                 // Try to build a the pruning predicates.
                 // These are only generated here because it's useful to have *some*
@@ -718,6 +743,72 @@ impl FileSource for ParquetSource {
         )
         .with_updated_node(source))
     }
+
+    /// Try to optimize the scan to produce data in the requested sort order.
+    ///
+    /// This method receives:
+    /// 1. The query's required ordering (`order` parameter)
+    /// 2. The file's natural ordering (via `self.file_ordering`, set by FileScanConfig)
+    ///
+    /// With both pieces of information, ParquetSource can decide what optimizations to apply.
+    ///
+    /// # Phase 1 Behavior (Current)
+    /// Returns `Inexact` when reversing the row group scan order would help satisfy the
+    /// requested ordering. We still need a Sort operator at a higher level because:
+    /// - We only reverse row group read order, not rows within row groups
+    /// - This provides approximate ordering that benefits limit pushdown
+    ///
+    /// # Phase 2 (Future)
+    /// Could return `Exact` when we can guarantee perfect ordering through techniques like:
+    /// - File reordering based on statistics
+    /// - Detecting already-sorted data
+    ///   This would allow removing the Sort operator entirely.
+    ///
+    /// # Returns
+    /// - `Inexact`: Created an optimized source (e.g., reversed scan) that approximates the order
+    /// - `Unsupported`: Cannot optimize for this ordering
+    fn try_reverse_output(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> datafusion_common::Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        // Check if we have file ordering information
+        let file_ordering = match &self.file_ordering {
+            Some(ordering) => ordering,
+            None => return Ok(SortOrderPushdownResult::Unsupported),
+        };
+
+        // Create a LexOrdering from the requested order to use the is_reverse method
+        let Some(requested_ordering) = LexOrdering::new(order.to_vec()) else {
+            // Empty ordering requested, cannot optimize
+            return Ok(SortOrderPushdownResult::Unsupported);
+        };
+
+        // Check if reversing the file ordering would satisfy the requested ordering
+        if file_ordering.is_reverse(&requested_ordering) {
+            // Phase 1: Enable reverse row group scanning
+            let new_source = self.clone().with_reverse_row_groups(true);
+
+            // Return Inexact because we're only reversing row group order,
+            // not guaranteeing perfect row-level ordering
+            return Ok(SortOrderPushdownResult::Inexact {
+                inner: Arc::new(new_source) as Arc<dyn FileSource>,
+            });
+        }
+
+        // TODO Phase 2: Add support for other optimizations:
+        // - File reordering based on min/max statistics
+        // - Detection of exact ordering (return Exact to remove Sort operator)
+        // - Partial sort pushdown for prefix matches
+
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
+
+    fn with_file_ordering_info(
+        &self,
+        ordering: Option<LexOrdering>,
+    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(self.clone().with_file_ordering(ordering)))
+    }
 }
 
 #[cfg(test)]
@@ -735,5 +826,88 @@ mod tests {
             ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
         // same value. but filter() call Arc::clone internally
         assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+    }
+
+    #[test]
+    fn test_reverse_scan_default_value() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+        let source = ParquetSource::new(schema);
+
+        assert!(!source.reverse_row_groups());
+    }
+
+    #[test]
+    fn test_reverse_scan_with_setter() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema.clone()).with_reverse_row_groups(true);
+        assert!(source.reverse_row_groups());
+
+        let source = source.with_reverse_row_groups(false);
+        assert!(!source.reverse_row_groups());
+    }
+
+    #[test]
+    fn test_reverse_scan_clone_preserves_value() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema).with_reverse_row_groups(true);
+        let cloned = source.clone();
+
+        assert!(cloned.reverse_row_groups());
+        assert_eq!(source.reverse_row_groups(), cloned.reverse_row_groups());
+    }
+
+    #[test]
+    fn test_reverse_scan_with_other_options() {
+        use arrow::datatypes::Schema;
+        use datafusion_common::config::TableParquetOptions;
+
+        let schema = Arc::new(Schema::empty());
+        let options = TableParquetOptions::default();
+
+        let source = ParquetSource::new(schema)
+            .with_table_parquet_options(options)
+            .with_metadata_size_hint(8192)
+            .with_reverse_row_groups(true);
+
+        assert!(source.reverse_row_groups());
+        assert_eq!(source.metadata_size_hint, Some(8192));
+    }
+
+    #[test]
+    fn test_reverse_scan_builder_pattern() {
+        use arrow::datatypes::Schema;
+
+        let schema = Arc::new(Schema::empty());
+
+        let source = ParquetSource::new(schema)
+            .with_reverse_row_groups(true)
+            .with_reverse_row_groups(false)
+            .with_reverse_row_groups(true);
+
+        assert!(source.reverse_row_groups());
+    }
+
+    #[test]
+    fn test_reverse_scan_independent_of_predicate() {
+        use arrow::datatypes::Schema;
+        use datafusion_physical_expr::expressions::lit;
+
+        let schema = Arc::new(Schema::empty());
+        let predicate = lit(true);
+
+        let source = ParquetSource::new(schema)
+            .with_predicate(predicate)
+            .with_reverse_row_groups(true);
+
+        assert!(source.reverse_row_groups());
+        assert!(source.filter().is_some());
     }
 }

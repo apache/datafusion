@@ -36,8 +36,8 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::common::internal_err;
 use datafusion::common::Result;
+use datafusion::common::internal_err;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;

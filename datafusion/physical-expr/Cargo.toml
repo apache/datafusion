@@ -21,7 +21,7 @@ description = "Physical expression implementation for DataFusion query engine"
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -55,6 +55,7 @@ parking_lot = { workspace = true }
 paste = { workspace = true }
 petgraph = "0.8.3"
 tokio = { workspace = true }
+half = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }

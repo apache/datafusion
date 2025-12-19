@@ -41,23 +41,23 @@ use datafusion_physical_expr::utils::collect_columns;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 
-use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
+use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_eq_or_internal_err, not_impl_err, Constraint, Constraints, Result, ScalarValue,
+    Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{lit, Column, DynamicFilterPhysicalExpr};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_expr::{
-    physical_exprs_contains, ConstExpr, EquivalenceProperties,
+    ConstExpr, EquivalenceProperties, physical_exprs_contains,
 };
-use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
@@ -177,6 +177,9 @@ pub struct PhysicalGroupBy {
     /// expression in null_expr. If `groups[i][j]` is true, then the
     /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
     groups: Vec<Vec<bool>>,
+    /// True when GROUPING SETS/CUBE/ROLLUP are used so `__grouping_id` should
+    /// be included in the output schema.
+    has_grouping_set: bool,
 }
 
 impl PhysicalGroupBy {
@@ -185,11 +188,13 @@ impl PhysicalGroupBy {
         expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
         null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
         groups: Vec<Vec<bool>>,
+        has_grouping_set: bool,
     ) -> Self {
         Self {
             expr,
             null_expr,
             groups,
+            has_grouping_set,
         }
     }
 
@@ -201,6 +206,7 @@ impl PhysicalGroupBy {
             expr,
             null_expr: vec![],
             groups: vec![vec![false; num_exprs]],
+            has_grouping_set: false,
         }
     }
 
@@ -215,6 +221,11 @@ impl PhysicalGroupBy {
             })
         }
         exprs_nullable
+    }
+
+    /// Returns true if this has no grouping at all (including no GROUPING SETS)
+    pub fn is_true_no_grouping(&self) -> bool {
+        self.is_empty() && !self.has_grouping_set
     }
 
     /// Returns the group expressions
@@ -232,14 +243,20 @@ impl PhysicalGroupBy {
         &self.groups
     }
 
+    /// Returns true if this grouping uses GROUPING SETS, CUBE or ROLLUP.
+    pub fn has_grouping_set(&self) -> bool {
+        self.has_grouping_set
+    }
+
     /// Returns true if this `PhysicalGroupBy` has no group expressions
     pub fn is_empty(&self) -> bool {
         self.expr.is_empty()
     }
 
-    /// Check whether grouping set is single group
+    /// Returns true if this is a "simple" GROUP BY (not using GROUPING SETS/CUBE/ROLLUP).
+    /// This determines whether the `__grouping_id` column is included in the output schema.
     pub fn is_single(&self) -> bool {
-        self.null_expr.is_empty()
+        !self.has_grouping_set
     }
 
     /// Calculate GROUP BY expressions according to input schema.
@@ -253,7 +270,7 @@ impl PhysicalGroupBy {
     /// The number of expressions in the output schema.
     fn num_output_exprs(&self) -> usize {
         let mut num_exprs = self.expr.len();
-        if !self.is_single() {
+        if self.has_grouping_set {
             num_exprs += 1
         }
         num_exprs
@@ -270,7 +287,7 @@ impl PhysicalGroupBy {
                 .take(num_output_exprs)
                 .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _),
         );
-        if !self.is_single() {
+        if self.has_grouping_set {
             output_exprs.push(Arc::new(Column::new(
                 Aggregate::INTERNAL_GROUPING_ID,
                 self.expr.len(),
@@ -281,11 +298,7 @@ impl PhysicalGroupBy {
 
     /// Returns the number expression as grouping keys.
     pub fn num_group_exprs(&self) -> usize {
-        if self.is_single() {
-            self.expr.len()
-        } else {
-            self.expr.len() + 1
-        }
+        self.expr.len() + usize::from(self.has_grouping_set)
     }
 
     pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
@@ -308,7 +321,7 @@ impl PhysicalGroupBy {
                 .into(),
             );
         }
-        if !self.is_single() {
+        if self.has_grouping_set {
             fields.push(
                 Field::new(
                     Aggregate::INTERNAL_GROUPING_ID,
@@ -344,17 +357,17 @@ impl PhysicalGroupBy {
                 )
                 .collect();
         let num_exprs = expr.len();
-        let groups = if self.expr.is_empty() {
+        let groups = if self.expr.is_empty() && !self.has_grouping_set {
             // No GROUP BY expressions - should have no groups
             vec![]
         } else {
-            // Has GROUP BY expressions - create a single group
             vec![vec![false; num_exprs]]
         };
         Self {
             expr,
             null_expr: vec![],
             groups,
+            has_grouping_set: false,
         }
     }
 }
@@ -374,6 +387,7 @@ impl PartialEq for PhysicalGroupBy {
                 .zip(other.null_expr.iter())
                 .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
             && self.groups == other.groups
+            && self.has_grouping_set == other.has_grouping_set
     }
 }
 
@@ -723,20 +737,19 @@ impl AggregateExec {
         partition: usize,
         context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
-        // no group by at all
-        if self.group_by.expr.is_empty() {
+        if self.group_by.is_true_no_grouping() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
             )?));
         }
 
         // grouping by an expression that has a sort/limit upstream
-        if let Some(limit) = self.limit {
-            if !self.is_unordered_unfiltered_group_by_distinct() {
-                return Ok(StreamType::GroupedPriorityQueue(
-                    GroupedTopKAggregateStream::new(self, context, partition, limit)?,
-                ));
-            }
+        if let Some(limit) = self.limit
+            && !self.is_unordered_unfiltered_group_by_distinct()
+        {
+            return Ok(StreamType::GroupedPriorityQueue(
+                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+            ));
         }
 
         // grouping by something else and we need to just materialize all results
@@ -757,7 +770,7 @@ impl AggregateExec {
     /// on an AggregateExec.
     pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         // ensure there is a group by
-        if self.group_expr().is_empty() {
+        if self.group_expr().is_empty() && !self.group_expr().has_grouping_set() {
             return false;
         }
         // ensure there are no aggregate expressions
@@ -971,15 +984,15 @@ impl AggregateExec {
             };
 
             // 2. arg should be only 1 column reference
-            if let [arg] = aggr_expr.expressions().as_slice() {
-                if arg.as_any().is::<Column>() {
-                    all_cols.push(Arc::clone(arg));
-                    aggr_dyn_filters.push(PerAccumulatorDynFilter {
-                        aggr_type,
-                        aggr_index: i,
-                        shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
-                    });
-                }
+            if let [arg] = aggr_expr.expressions().as_slice()
+                && arg.as_any().is::<Column>()
+            {
+                all_cols.push(Arc::clone(arg));
+                aggr_dyn_filters.push(PerAccumulatorDynFilter {
+                    aggr_type,
+                    aggr_index: i,
+                    shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
+                });
             }
         }
 
@@ -1315,11 +1328,10 @@ impl ExecutionPlan for AggregateExec {
         // Include self dynamic filter when it's possible
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_aggregate_dynamic_filter_pushdown
+            && let Some(self_dyn_filter) = &self.dynamic_filter
         {
-            if let Some(self_dyn_filter) = &self.dynamic_filter {
-                let dyn_filter = Arc::clone(&self_dyn_filter.filter);
-                child_desc = child_desc.with_self_filter(dyn_filter);
-            }
+            let dyn_filter = Arc::clone(&self_dyn_filter.filter);
+            child_desc = child_desc.with_self_filter(dyn_filter);
         }
 
         Ok(FilterDescription::new().with_child(child_desc))
@@ -1790,6 +1802,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::*;
+    use crate::RecordBatchStream;
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
@@ -1797,19 +1810,18 @@ mod tests {
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
-    use crate::test::assert_is_pending;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
-    use crate::RecordBatchStream;
+    use crate::test::assert_is_pending;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
     use arrow::array::{
         DictionaryArray, Float32Array, Float64Array, Int32Array, StructArray,
         UInt32Array, UInt64Array,
     };
-    use arrow::compute::{concat_batches, SortOptions};
+    use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::{DataType, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
-    use datafusion_common::{internal_err, DataFusionError, ScalarValue};
+    use datafusion_common::{DataFusionError, ScalarValue, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1819,11 +1831,11 @@ mod tests {
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::median::median_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::lit;
-    use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr::expressions::lit;
 
     use futures::{FutureExt, Stream};
     use insta::{allow_duplicates, assert_snapshot};
@@ -1955,6 +1967,7 @@ mod tests {
                 vec![true, false],  // (NULL, b)
                 vec![false, false], // (a,b)
             ],
+            true,
         );
 
         let aggregates = vec![Arc::new(
@@ -1989,30 +2002,30 @@ mod tests {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result),
             @r"
-+---+-----+---------------+-----------------+
-| a | b   | __grouping_id | COUNT(1)[count] |
-+---+-----+---------------+-----------------+
-|   | 1.0 | 2             | 1               |
-|   | 1.0 | 2             | 1               |
-|   | 2.0 | 2             | 1               |
-|   | 2.0 | 2             | 1               |
-|   | 3.0 | 2             | 1               |
-|   | 3.0 | 2             | 1               |
-|   | 4.0 | 2             | 1               |
-|   | 4.0 | 2             | 1               |
-| 2 |     | 1             | 1               |
-| 2 |     | 1             | 1               |
-| 2 | 1.0 | 0             | 1               |
-| 2 | 1.0 | 0             | 1               |
-| 3 |     | 1             | 1               |
-| 3 |     | 1             | 2               |
-| 3 | 2.0 | 0             | 2               |
-| 3 | 3.0 | 0             | 1               |
-| 4 |     | 1             | 1               |
-| 4 |     | 1             | 2               |
-| 4 | 3.0 | 0             | 1               |
-| 4 | 4.0 | 0             | 2               |
-+---+-----+---------------+-----------------+
+            +---+-----+---------------+-----------------+
+            | a | b   | __grouping_id | COUNT(1)[count] |
+            +---+-----+---------------+-----------------+
+            |   | 1.0 | 2             | 1               |
+            |   | 1.0 | 2             | 1               |
+            |   | 2.0 | 2             | 1               |
+            |   | 2.0 | 2             | 1               |
+            |   | 3.0 | 2             | 1               |
+            |   | 3.0 | 2             | 1               |
+            |   | 4.0 | 2             | 1               |
+            |   | 4.0 | 2             | 1               |
+            | 2 |     | 1             | 1               |
+            | 2 |     | 1             | 1               |
+            | 2 | 1.0 | 0             | 1               |
+            | 2 | 1.0 | 0             | 1               |
+            | 3 |     | 1             | 1               |
+            | 3 |     | 1             | 2               |
+            | 3 | 2.0 | 0             | 2               |
+            | 3 | 3.0 | 0             | 1               |
+            | 4 |     | 1             | 1               |
+            | 4 |     | 1             | 2               |
+            | 4 | 3.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 2               |
+            +---+-----+---------------+-----------------+
             "
             );
             }
@@ -2020,22 +2033,22 @@ mod tests {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result),
             @r"
-+---+-----+---------------+-----------------+
-| a | b   | __grouping_id | COUNT(1)[count] |
-+---+-----+---------------+-----------------+
-|   | 1.0 | 2             | 2               |
-|   | 2.0 | 2             | 2               |
-|   | 3.0 | 2             | 2               |
-|   | 4.0 | 2             | 2               |
-| 2 |     | 1             | 2               |
-| 2 | 1.0 | 0             | 2               |
-| 3 |     | 1             | 3               |
-| 3 | 2.0 | 0             | 2               |
-| 3 | 3.0 | 0             | 1               |
-| 4 |     | 1             | 3               |
-| 4 | 3.0 | 0             | 1               |
-| 4 | 4.0 | 0             | 2               |
-+---+-----+---------------+-----------------+
+            +---+-----+---------------+-----------------+
+            | a | b   | __grouping_id | COUNT(1)[count] |
+            +---+-----+---------------+-----------------+
+            |   | 1.0 | 2             | 2               |
+            |   | 2.0 | 2             | 2               |
+            |   | 3.0 | 2             | 2               |
+            |   | 4.0 | 2             | 2               |
+            | 2 |     | 1             | 2               |
+            | 2 | 1.0 | 0             | 2               |
+            | 3 |     | 1             | 3               |
+            | 3 | 2.0 | 0             | 2               |
+            | 3 | 3.0 | 0             | 1               |
+            | 4 |     | 1             | 3               |
+            | 4 | 3.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 2               |
+            +---+-----+---------------+-----------------+
             "
             );
             }
@@ -2069,23 +2082,23 @@ mod tests {
         assert_snapshot!(
             batches_to_sort_string(&result),
             @r"
-            +---+-----+---------------+----------+
-            | a | b   | __grouping_id | COUNT(1) |
-            +---+-----+---------------+----------+
-            |   | 1.0 | 2             | 2        |
-            |   | 2.0 | 2             | 2        |
-            |   | 3.0 | 2             | 2        |
-            |   | 4.0 | 2             | 2        |
-            | 2 |     | 1             | 2        |
-            | 2 | 1.0 | 0             | 2        |
-            | 3 |     | 1             | 3        |
-            | 3 | 2.0 | 0             | 2        |
-            | 3 | 3.0 | 0             | 1        |
-            | 4 |     | 1             | 3        |
-            | 4 | 3.0 | 0             | 1        |
-            | 4 | 4.0 | 0             | 2        |
-            +---+-----+---------------+----------+
-            "
+        +---+-----+---------------+----------+
+        | a | b   | __grouping_id | COUNT(1) |
+        +---+-----+---------------+----------+
+        |   | 1.0 | 2             | 2        |
+        |   | 2.0 | 2             | 2        |
+        |   | 3.0 | 2             | 2        |
+        |   | 4.0 | 2             | 2        |
+        | 2 |     | 1             | 2        |
+        | 2 | 1.0 | 0             | 2        |
+        | 3 |     | 1             | 3        |
+        | 3 | 2.0 | 0             | 2        |
+        | 3 | 3.0 | 0             | 1        |
+        | 4 |     | 1             | 3        |
+        | 4 | 3.0 | 0             | 1        |
+        | 4 | 4.0 | 0             | 2        |
+        +---+-----+---------------+----------+
+        "
         );
         }
 
@@ -2104,6 +2117,7 @@ mod tests {
             vec![(col("a", &input_schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
@@ -2135,27 +2149,27 @@ mod tests {
         if spill {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result), @r"
-                +---+---------------+-------------+
-                | a | AVG(b)[count] | AVG(b)[sum] |
-                +---+---------------+-------------+
-                | 2 | 1             | 1.0         |
-                | 2 | 1             | 1.0         |
-                | 3 | 1             | 2.0         |
-                | 3 | 2             | 5.0         |
-                | 4 | 3             | 11.0        |
-                +---+---------------+-------------+
+            +---+---------------+-------------+
+            | a | AVG(b)[count] | AVG(b)[sum] |
+            +---+---------------+-------------+
+            | 2 | 1             | 1.0         |
+            | 2 | 1             | 1.0         |
+            | 3 | 1             | 2.0         |
+            | 3 | 2             | 5.0         |
+            | 4 | 3             | 11.0        |
+            +---+---------------+-------------+
             ");
             }
         } else {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result), @r"
-                +---+---------------+-------------+
-                | a | AVG(b)[count] | AVG(b)[sum] |
-                +---+---------------+-------------+
-                | 2 | 2             | 2.0         |
-                | 3 | 3             | 7.0         |
-                | 4 | 3             | 11.0        |
-                +---+---------------+-------------+
+            +---+---------------+-------------+
+            | a | AVG(b)[count] | AVG(b)[sum] |
+            +---+---------------+-------------+
+            | 2 | 2             | 2.0         |
+            | 3 | 3             | 7.0         |
+            | 4 | 3             | 11.0        |
+            +---+---------------+-------------+
             ");
             }
         };
@@ -2190,14 +2204,14 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_sort_string(&result), @r"
-            +---+--------------------+
-            | a | AVG(b)             |
-            +---+--------------------+
-            | 2 | 1.0                |
-            | 3 | 2.3333333333333335 |
-            | 4 | 3.6666666666666665 |
-            +---+--------------------+
-            ");
+        +---+--------------------+
+        | a | AVG(b)             |
+        +---+--------------------+
+        | 2 | 1.0                |
+        | 3 | 2.3333333333333335 |
+        | 4 | 3.6666666666666665 |
+        +---+--------------------+
+        ");
             // For row 2: 3, (2 + 3 + 2) / 3
             // For row 3: 4, (3 + 4 + 4) / 3
         }
@@ -2449,6 +2463,7 @@ mod tests {
             vec![(col("a", &input_schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         // something that allocates within the aggregator
@@ -2723,26 +2738,26 @@ mod tests {
         if is_first_acc {
             allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+--------------------------------------------+
-                | a | first_value(b) ORDER BY [b ASC NULLS LAST] |
-                +---+--------------------------------------------+
-                | 2 | 0.0                                        |
-                | 3 | 1.0                                        |
-                | 4 | 3.0                                        |
-                +---+--------------------------------------------+
-                ");
+            +---+--------------------------------------------+
+            | a | first_value(b) ORDER BY [b ASC NULLS LAST] |
+            +---+--------------------------------------------+
+            | 2 | 0.0                                        |
+            | 3 | 1.0                                        |
+            | 4 | 3.0                                        |
+            +---+--------------------------------------------+
+            ");
             }
         } else {
             allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+-------------------------------------------+
-                | a | last_value(b) ORDER BY [b ASC NULLS LAST] |
-                +---+-------------------------------------------+
-                | 2 | 3.0                                       |
-                | 3 | 5.0                                       |
-                | 4 | 6.0                                       |
-                +---+-------------------------------------------+
-                ");
+            +---+-------------------------------------------+
+            | a | last_value(b) ORDER BY [b ASC NULLS LAST] |
+            +---+-------------------------------------------+
+            | 2 | 3.0                                       |
+            | 3 | 5.0                                       |
+            | 4 | 6.0                                       |
+            +---+-------------------------------------------+
+            ");
             }
         };
         Ok(())
@@ -2893,14 +2908,16 @@ mod tests {
                 vec![true, false, true],
                 vec![true, true, false],
             ],
+            true,
         );
 
-        let aggregates: Vec<Arc<AggregateFunctionExpr>> =
-            vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
                 .schema(Arc::clone(&schema))
                 .alias("1")
                 .build()
-                .map(Arc::new)?];
+                .map(Arc::new)?,
+        ];
 
         let input_batches = (0..4)
             .map(|_| {
@@ -2929,13 +2946,13 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_sort_string(&output), @r"
-            +-----+-----+-------+---------------+-------+
-            | a   | b   | const | __grouping_id | 1     |
-            +-----+-----+-------+---------------+-------+
-            |     |     | 1     | 6             | 32768 |
-            |     | 0.0 |       | 5             | 32768 |
-            | 0.0 |     |       | 3             | 32768 |
-            +-----+-----+-------+---------------+-------+
+        +-----+-----+-------+---------------+-------+
+        | a   | b   | const | __grouping_id | 1     |
+        +-----+-----+-------+---------------+-------+
+        |     |     | 1     | 6             | 32768 |
+        |     | 0.0 |       | 5             | 32768 |
+        | 0.0 |     |       | 3             | 32768 |
+        +-----+-----+-------+---------------+-------+
         ");
         }
 
@@ -3016,14 +3033,13 @@ mod tests {
             "labels".to_string(),
         )]);
 
-        let aggr_expr = vec![AggregateExprBuilder::new(
-            sum_udaf(),
-            vec![col("value", &batch.schema())?],
-        )
-        .schema(Arc::clone(&batch.schema()))
-        .alias(String::from("SUM(value)"))
-        .build()
-        .map(Arc::new)?];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &batch.schema())?])
+                .schema(Arc::clone(&batch.schema()))
+                .alias(String::from("SUM(value)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input = TestMemoryExec::try_new_exec(
             &[vec![batch.clone()]],
@@ -3045,13 +3061,13 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_string(&output), @r"
-            +--------------+------------+
-            | labels       | SUM(value) |
-            +--------------+------------+
-            | {a: a, b: b} | 2          |
-            | {a: , b: c}  | 1          |
-            +--------------+------------+
-            ");
+        +--------------+------------+
+        | labels       | SUM(value) |
+        +--------------+------------+
+        | {a: a, b: b} | 2          |
+        | {a: , b: c}  | 1          |
+        +--------------+------------+
+        ");
         }
 
         Ok(())
@@ -3067,14 +3083,13 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias(String::from("COUNT(val)"))
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input_data = vec![
             RecordBatch::try_new(
@@ -3147,14 +3162,13 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias(String::from("COUNT(val)"))
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias(String::from("COUNT(val)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let input_data = vec![
             RecordBatch::try_new(
@@ -3233,14 +3247,13 @@ mod tests {
             Field::new("b", DataType::Float32, false),
         ]));
 
-        let aggr_expr =
-            vec![
-                AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
-                    .schema(Arc::clone(&input_schema))
-                    .alias("COUNT(a)")
-                    .build()
-                    .map(Arc::new)?,
-            ];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![col("a", &input_schema)?])
+                .schema(Arc::clone(&input_schema))
+                .alias("COUNT(a)")
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let grouping_set = PhysicalGroupBy::new(
             vec![
@@ -3255,6 +3268,7 @@ mod tests {
                 vec![false, true],  // (a, NULL)
                 vec![false, false], // (a,b)
             ],
+            true,
         );
         let aggr_schema = create_schema(
             &input_schema,
@@ -3306,6 +3320,7 @@ mod tests {
             vec![(col("a", &schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
@@ -3354,13 +3369,13 @@ mod tests {
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+--------+--------+
-                | a | MIN(b) | AVG(b) |
-                +---+--------+--------+
-                | 2 | 1.0    | 1.0    |
-                | 3 | 2.0    | 2.0    |
-                | 4 | 3.0    | 3.5    |
-                +---+--------+--------+
+            +---+--------+--------+
+            | a | MIN(b) | AVG(b) |
+            +---+--------+--------+
+            | 2 | 1.0    | 1.0    |
+            | 3 | 2.0    | 2.0    |
+            | 4 | 3.0    | 3.5    |
+            +---+--------+--------+
             ");
         }
 
@@ -3387,7 +3402,9 @@ mod tests {
                     "Expected spill but SpillCount metric not found or SpillCount was 0."
                 );
             } else if !expect_spill && spill_count > 0 {
-                panic!("Expected no spill but found SpillCount metric with value greater than 0.");
+                panic!(
+                    "Expected no spill but found SpillCount metric with value greater than 0."
+                );
             }
         } else {
             panic!("No metrics returned from the operator; cannot verify spilling.");

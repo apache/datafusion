@@ -22,10 +22,11 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example relation_planner -- [match_recognize|pivot_unpivot|table_sample]
+//! cargo run --example relation_planner -- [all|match_recognize|pivot_unpivot|table_sample]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
 //! - `match_recognize` — MATCH_RECOGNIZE pattern matching on event streams
 //! - `pivot_unpivot` — PIVOT and UNPIVOT operations for reshaping data
 //! - `table_sample` — TABLESAMPLE clause for sampling rows from tables
@@ -42,46 +43,40 @@ mod match_recognize;
 mod pivot_unpivot;
 mod table_sample;
 
-use std::str::FromStr;
-
 use datafusion::error::{DataFusionError, Result};
+use strum::{IntoEnumIterator, VariantNames};
+use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
+#[derive(EnumIter, EnumString, Display, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 enum ExampleKind {
+    All,
     MatchRecognize,
     PivotUnpivot,
     TableSample,
 }
 
-impl AsRef<str> for ExampleKind {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::MatchRecognize => "match_recognize",
-            Self::PivotUnpivot => "pivot_unpivot",
-            Self::TableSample => "table_sample",
-        }
-    }
-}
-
-impl FromStr for ExampleKind {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "match_recognize" => Ok(Self::MatchRecognize),
-            "pivot_unpivot" => Ok(Self::PivotUnpivot),
-            "table_sample" => Ok(Self::TableSample),
-            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
-        }
-    }
-}
-
 impl ExampleKind {
-    const ALL: [Self; 3] = [Self::MatchRecognize, Self::PivotUnpivot, Self::TableSample];
-
     const EXAMPLE_NAME: &str = "relation_planner";
 
-    fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+    fn runnable() -> impl Iterator<Item = ExampleKind> {
+        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
+    }
+
+    async fn run(&self) -> Result<()> {
+        match self {
+            ExampleKind::All => {
+                for example in ExampleKind::runnable() {
+                    println!("Running example: {example}");
+                    Box::pin(example.run()).await?;
+                }
+            }
+            ExampleKind::MatchRecognize => match_recognize::match_recognize().await?,
+            ExampleKind::PivotUnpivot => pivot_unpivot::pivot_unpivot().await?,
+            ExampleKind::TableSample => table_sample::table_sample().await?,
+        }
+
+        Ok(())
     }
 }
 
@@ -90,31 +85,16 @@ async fn main() -> Result<()> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::variants().join("|")
+        ExampleKind::VARIANTS.join("|")
     );
 
-    let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{usage}");
-        DataFusionError::Execution("Missing argument".to_string())
-    })?;
+    let example: ExampleKind = std::env::args()
+        .nth(1)
+        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .parse()
+        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
-    if arg == "all" {
-        for example in ExampleKind::ALL {
-            match example {
-                ExampleKind::MatchRecognize => match_recognize::match_recognize().await?,
-                ExampleKind::PivotUnpivot => pivot_unpivot::pivot_unpivot().await?,
-                ExampleKind::TableSample => table_sample::table_sample().await?,
-            }
-        }
-    } else {
-        match arg.parse::<ExampleKind>()? {
-            ExampleKind::MatchRecognize => match_recognize::match_recognize().await?,
-            ExampleKind::PivotUnpivot => pivot_unpivot::pivot_unpivot().await?,
-            ExampleKind::TableSample => table_sample::table_sample().await?,
-        }
-    }
-
-    Ok(())
+    example.run().await
 }
 
 /// Test wrappers that enable `cargo insta test --example relation_planner --accept`

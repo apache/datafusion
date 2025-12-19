@@ -32,7 +32,7 @@ use arrow::compute::{and, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+use datafusion_common::{Constraints, DFSchema, SchemaExt, not_impl_err, plan_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
@@ -40,13 +40,13 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
-    create_physical_expr, create_physical_sort_exprs, LexOrdering,
+    LexOrdering, create_physical_expr, create_physical_sort_exprs,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, common,
 };
 use datafusion_session::Session;
 

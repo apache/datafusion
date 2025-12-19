@@ -17,16 +17,16 @@
 
 //! See `main.rs` for how to run it.
 
-use arrow::csv::reader::Format;
 use arrow::csv::ReaderBuilder;
+use arrow::csv::reader::Format;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::catalog::TableFunctionImpl;
-use datafusion::common::{plan_err, ScalarValue};
-use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::common::{ScalarValue, plan_err};
 use datafusion::datasource::TableProvider;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -134,8 +134,7 @@ struct LocalCsvTableFunc {}
 
 impl TableFunctionImpl for LocalCsvTableFunc {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let Some(Expr::Literal(ScalarValue::Utf8(Some(ref path)), _)) = exprs.first()
-        else {
+        let Some(Expr::Literal(ScalarValue::Utf8(Some(path)), _)) = exprs.first() else {
             return plan_err!("read_csv requires at least one string argument");
         };
 

@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::{from_substrait_rex_vec, SubstraitConsumer};
+use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_rex_vec};
 use datafusion::common::DFSchema;
-use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::expr::InList;
 use substrait::proto::expression::SingularOrList;
 
 pub async fn from_singular_or_list(

@@ -34,7 +34,7 @@ use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
-use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
+use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
@@ -48,12 +48,12 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
-    assert_or_internal_err, internal_err, ColumnStatistics, DataFusionError, HashMap,
+    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err, internal_err,
 };
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -61,15 +61,17 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::sort_pushdown::SortOrderPushdownResult;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::Stream;
-use futures::{ready, FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt, ready};
 use log::trace;
 use parking_lot::Mutex;
 
 mod distributor_channels;
 use distributor_channels::{
-    channels, partition_aware_channels, DistributionReceiver, DistributionSender,
+    DistributionReceiver, DistributionSender, channels, partition_aware_channels,
 };
 
 /// A batch in the repartition queue - either in memory or spilled to disk.
@@ -276,7 +278,9 @@ impl RepartitionExecState {
                 let RepartitionExecState::InputStreamsInitialized(value) = self else {
                     // This cannot happen, as ensure_input_streams_initialized() was just called,
                     // but the compiler does not know.
-                    return internal_err!("Programming error: RepartitionExecState must be in the InputStreamsInitialized state after calling RepartitionExecState::ensure_input_streams_initialized");
+                    return internal_err!(
+                        "Programming error: RepartitionExecState must be in the InputStreamsInitialized state after calling RepartitionExecState::ensure_input_streams_initialized"
+                    );
                 };
                 value
             }
@@ -1092,6 +1096,27 @@ impl ExecutionPlan for RepartitionExec {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // RepartitionExec only maintains input order if preserve_order is set
+        // or if there's only one partition
+        if !self.maintains_input_order()[0] {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        // Delegate to the child and wrap with a new RepartitionExec
+        self.input.try_pushdown_sort(order)?.try_map(|new_input| {
+            let mut new_repartition =
+                RepartitionExec::try_new(new_input, self.partitioning().clone())?;
+            if self.preserve_order {
+                new_repartition = new_repartition.with_preserve_order();
+            }
+            Ok(Arc::new(new_repartition) as Arc<dyn ExecutionPlan>)
+        })
+    }
+
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -1616,8 +1641,8 @@ mod tests {
         test::{
             assert_is_pending,
             exec::{
-                assert_strong_count_converges_to_zero, BarrierExec, BlockingExec,
-                ErrorExec, MockExec,
+                BarrierExec, BlockingExec, ErrorExec, MockExec,
+                assert_strong_count_converges_to_zero,
             },
         },
         {collect, expressions::col},
@@ -2562,8 +2587,8 @@ mod test {
 
     #[tokio::test]
     async fn test_preserve_order_with_spilling() -> Result<()> {
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
         use datafusion_execution::TaskContext;
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         // Create sorted input data across multiple partitions
         // Partition1: [1,3], [5,7], [9,11]
@@ -2689,8 +2714,8 @@ mod test {
 
     #[tokio::test]
     async fn test_hash_partitioning_with_spilling() -> Result<()> {
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
         use datafusion_execution::TaskContext;
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         // Create input data similar to the round-robin test
         let batch1 = record_batch!(("c0", UInt32, [1, 3])).unwrap();

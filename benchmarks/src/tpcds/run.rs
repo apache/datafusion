@@ -19,7 +19,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -34,7 +34,7 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{plan_err, DEFAULT_PARQUET_EXTENSION};
+use datafusion_common::{DEFAULT_PARQUET_EXTENSION, plan_err};
 
 use log::info;
 use structopt::StructOpt;

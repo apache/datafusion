@@ -18,9 +18,8 @@
 use crate::logical_plan;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{
-    assert_contains,
-    metadata::{format_type_and_metadata, ScalarAndMetadata},
-    ParamValues, ScalarValue,
+    ParamValues, ScalarValue, assert_contains,
+    metadata::{ScalarAndMetadata, format_type_and_metadata},
 };
 use datafusion_expr::{LogicalPlan, Prepare, Statement};
 use insta::assert_snapshot;
@@ -104,9 +103,7 @@ fn test_prepare_statement_to_plan_panic_param_format() {
 
     assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        @r###"
-        Error during planning: Unknown placeholder: $foo
-        "###
+        @"Error during planning: Unknown placeholder: $foo"
     );
 }
 
@@ -118,9 +115,7 @@ fn test_prepare_statement_to_plan_panic_param_zero() {
 
     assert_snapshot!(
         logical_plan(sql).unwrap_err().strip_backtrace(),
-        @r###"
-        Error during planning: Invalid placeholder, zero is not a valid index: $0
-        "###
+        @"Error during planning: Invalid placeholder, zero is not a valid index: $0"
     );
 }
 
@@ -129,10 +124,12 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
-    assert!(logical_plan(sql)
-        .unwrap_err()
-        .strip_backtrace()
-        .contains("Expected: AS, found: SELECT"))
+    assert!(
+        logical_plan(sql)
+            .unwrap_err()
+            .strip_backtrace()
+            .contains("Expected: AS, found: SELECT")
+    )
 }
 
 #[test]
@@ -142,7 +139,7 @@ fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let plan = logical_plan(sql).unwrap_err().strip_backtrace();
     assert_snapshot!(
         plan,
-        @r"Schema error: No field named id."
+        @"Schema error: No field named id."
     );
 }
 
@@ -195,7 +192,7 @@ fn test_prepare_statement_to_plan_no_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int32"#);
+    assert_snapshot!(dt, @"Int32");
 
     ///////////////////
     // replace params with values
@@ -223,7 +220,7 @@ fn test_prepare_statement_to_plan_no_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#""#);
+    assert_snapshot!(dt, @"");
 
     ///////////////////
     // replace params with values
@@ -251,9 +248,7 @@ fn test_prepare_statement_to_plan_one_param_no_value_panic() {
         plan.with_param_values(param_values)
         .unwrap_err()
         .strip_backtrace(),
-        @r###"
-        Error during planning: Expected 1 parameters, got 0
-        "###);
+        @"Error during planning: Expected 1 parameters, got 0");
 }
 
 #[test]
@@ -268,9 +263,7 @@ fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
         plan.with_param_values(param_values)
             .unwrap_err()
             .strip_backtrace(),
-        @r###"
-        Error during planning: Expected parameter of type Int32, got Float64 at index 0
-        "###
+        @"Error during planning: Expected parameter of type Int32, got Float64 at index 0"
     );
 }
 
@@ -286,9 +279,7 @@ fn test_prepare_statement_to_plan_no_param_on_value_panic() {
         plan.with_param_values(param_values)
             .unwrap_err()
             .strip_backtrace(),
-        @r###"
-        Error during planning: Expected 0 parameters, got 1
-        "###
+        @"Error during planning: Expected 0 parameters, got 1"
     );
 }
 
@@ -304,7 +295,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"Int32"#);
+    assert_snapshot!(dt, @"Int32");
 
     ///////////////////
     // replace params with values
@@ -329,7 +320,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"Int32"#);
+    assert_snapshot!(dt, @"Int32");
 
     ///////////////////
     // replace params with values
@@ -354,7 +345,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         EmptyRelation: rows=1
     "#
     );
-    assert_snapshot!(dt, @r#"Int32, Float64"#);
+    assert_snapshot!(dt, @"Int32, Float64");
 
     ///////////////////
     // replace params with values
@@ -375,8 +366,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
 #[test]
 fn test_infer_types_from_join() {
     let test = ParameterTest {
-        sql:
-            "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1",
+        sql: "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1",
         expected_types: vec![("$1", Some(DataType::Int32))],
         param_values: vec![ScalarValue::Int32(Some(10))],
     };
@@ -403,7 +393,7 @@ fn test_prepare_statement_infer_types_from_join() {
     let test = ParameterTest {
         sql: "PREPARE my_plan AS SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1",
         expected_types: vec![("$1", Some(DataType::Int32))],
-        param_values: vec![ScalarValue::Int32(Some(10))]
+        param_values: vec![ScalarValue::Int32(Some(10))],
     };
 
     assert_snapshot!(
@@ -527,7 +517,7 @@ fn test_infer_types_subquery() {
     let test = ParameterTest {
         sql: "SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)",
         expected_types: vec![("$1", Some(DataType::UInt32))],
-        param_values: vec![ScalarValue::UInt32(Some(10))]
+        param_values: vec![ScalarValue::UInt32(Some(10))],
     };
 
     assert_snapshot!(
@@ -560,7 +550,7 @@ fn test_prepare_statement_infer_types_subquery() {
     let test = ParameterTest {
         sql: "PREPARE my_plan AS SELECT id, age FROM person WHERE age = (select max(age) from person where id = $1)",
         expected_types: vec![("$1", Some(DataType::UInt32))],
-        param_values: vec![ScalarValue::UInt32(Some(10))]
+        param_values: vec![ScalarValue::UInt32(Some(10))],
     };
 
     assert_snapshot!(
@@ -690,7 +680,7 @@ fn test_prepare_statement_insert_infer() {
             ScalarValue::UInt32(Some(1)),
             ScalarValue::from("Alan"),
             ScalarValue::from("Turing"),
-        ]
+        ],
     };
     assert_snapshot!(
         test.run(),
@@ -721,7 +711,7 @@ fn test_prepare_statement_to_plan_one_param() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int32"#);
+    assert_snapshot!(dt, @"Int32");
 
     ///////////////////
     // replace params with values
@@ -788,7 +778,7 @@ fn test_update_infer_with_metadata() {
     let test = ParameterTestWithMetadata {
         sql: "PREPARE my_plan AS update person_with_uuid_extension set last_name=$1 where id=$2",
         expected_types,
-        param_values
+        param_values,
     };
 
     assert_snapshot!(
@@ -839,7 +829,7 @@ fn test_insert_infer_with_metadata() {
     let test = ParameterTestWithMetadata {
         sql: "insert into person_with_uuid_extension (id, first_name, last_name) values ($1, $2, $3)",
         expected_types: expected_types.clone(),
-        param_values: param_values.clone()
+        param_values: param_values.clone(),
     };
 
     assert_snapshot!(
@@ -860,7 +850,7 @@ fn test_insert_infer_with_metadata() {
     let test = ParameterTestWithMetadata {
         sql: "PREPARE my_plan AS insert into person_with_uuid_extension (id, first_name, last_name) values ($1, $2, $3)",
         expected_types,
-        param_values
+        param_values,
     };
 
     assert_snapshot!(
@@ -895,7 +885,7 @@ fn test_prepare_statement_to_plan_data_type() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Float64"#);
+    assert_snapshot!(dt, @"Float64");
 
     ///////////////////
     // replace params with values still succeed and use Float64
@@ -928,7 +918,7 @@ fn test_prepare_statement_to_plan_multi_params() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int32, Utf8View, Float64, Int32, Float64, Utf8View"#);
+    assert_snapshot!(dt, @"Int32, Utf8View, Float64, Int32, Float64, Utf8View");
 
     ///////////////////
     // replace params with values
@@ -973,7 +963,7 @@ fn test_prepare_statement_to_plan_having() {
               TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int32, Float64, Float64, Float64"#);
+    assert_snapshot!(dt, @"Int32, Float64, Float64, Float64");
 
     ///////////////////
     // replace params with values
@@ -987,13 +977,13 @@ fn test_prepare_statement_to_plan_having() {
     let plan_with_params = plan.with_param_values(param_values).unwrap();
     assert_snapshot!(
         plan_with_params,
-        @r#"
+        @r"
     Projection: person.id, sum(person.age)
       Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])
         Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
           Filter: person.salary > Float64(100)
             TableScan: person
-    "#
+    "
     );
 }
 
@@ -1012,18 +1002,18 @@ fn test_prepare_statement_to_plan_limit() {
           TableScan: person
     "#
     );
-    assert_snapshot!(dt, @r#"Int64, Int64"#);
+    assert_snapshot!(dt, @"Int64, Int64");
 
     // replace params with values
     let param_values = vec![ScalarValue::Int64(Some(10)), ScalarValue::Int64(Some(200))];
     let plan_with_params = plan.with_param_values(param_values).unwrap();
     assert_snapshot!(
         plan_with_params,
-        @r#"
+        @r"
     Limit: skip=10, fetch=200
       Projection: person.id
         TableScan: person
-    "#
+    "
     );
 }
 
@@ -1058,5 +1048,8 @@ fn test_prepare_statement_bad_list_idx() {
     let param_values = ParamValues::List(vec![]);
 
     let err = plan.replace_params_with_values(&param_values).unwrap_err();
-    assert_contains!(err.to_string(), "Error during planning: Failed to parse placeholder id: invalid digit found in string");
+    assert_contains!(
+        err.to_string(),
+        "Error during planning: Failed to parse placeholder id: invalid digit found in string"
+    );
 }

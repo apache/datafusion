@@ -18,12 +18,12 @@
 use std::{ffi::c_void, task::Poll};
 
 use abi_stable::{
-    std_types::{ROption, RResult},
     StableAbi,
+    std_types::{ROption, RResult},
 };
 use arrow::array::{Array, RecordBatch};
 use arrow::{
-    array::{make_array, StructArray},
+    array::{StructArray, make_array},
     ffi::{from_ffi, to_ffi},
 };
 use async_ffi::{ContextExt, FfiContext, FfiPoll};
@@ -95,18 +95,22 @@ impl FFI_RecordBatchStream {
 unsafe impl Send for FFI_RecordBatchStream {}
 
 unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> WrappedSchema {
-    let private_data = stream.private_data as *const RecordBatchStreamPrivateData;
-    let stream = &(*private_data).rbs;
+    unsafe {
+        let private_data = stream.private_data as *const RecordBatchStreamPrivateData;
+        let stream = &(*private_data).rbs;
 
-    (*stream).schema().into()
+        (*stream).schema().into()
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
-    debug_assert!(!provider.private_data.is_null());
-    let private_data =
-        Box::from_raw(provider.private_data as *mut RecordBatchStreamPrivateData);
-    drop(private_data);
-    provider.private_data = std::ptr::null_mut();
+    unsafe {
+        debug_assert!(!provider.private_data.is_null());
+        let private_data =
+            Box::from_raw(provider.private_data as *mut RecordBatchStreamPrivateData);
+        drop(private_data);
+        provider.private_data = std::ptr::null_mut();
+    }
 }
 
 pub(crate) fn record_batch_to_wrapped_array(
@@ -138,18 +142,20 @@ unsafe extern "C" fn poll_next_fn_wrapper(
     stream: &FFI_RecordBatchStream,
     cx: &mut FfiContext,
 ) -> FfiPoll<ROption<FFIResult<WrappedArray>>> {
-    let private_data = stream.private_data as *mut RecordBatchStreamPrivateData;
-    let stream = &mut (*private_data).rbs;
+    unsafe {
+        let private_data = stream.private_data as *mut RecordBatchStreamPrivateData;
+        let stream = &mut (*private_data).rbs;
 
-    let _guard = (*private_data).runtime.as_ref().map(|rt| rt.enter());
+        let _guard = (*private_data).runtime.as_ref().map(|rt| rt.enter());
 
-    let poll_result = cx.with_context(|std_cx| {
-        (*stream)
-            .try_poll_next_unpin(std_cx)
-            .map(maybe_record_batch_to_wrapped_stream)
-    });
+        let poll_result = cx.with_context(|std_cx| {
+            (*stream)
+                .try_poll_next_unpin(std_cx)
+                .map(maybe_record_batch_to_wrapped_stream)
+        });
 
-    poll_result.into()
+        poll_result.into()
+    }
 }
 
 impl RecordBatchStream for FFI_RecordBatchStream {
