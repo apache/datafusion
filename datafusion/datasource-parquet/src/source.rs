@@ -264,7 +264,6 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 ///   filled with nulls, but this can be customized via [`PhysicalExprAdapterFactory`].
 ///
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
-/// [`SchemaAdapter`]: datafusion_datasource::schema_adapter::SchemaAdapter
 /// [`ParquetMetadata`]: parquet::file::metadata::ParquetMetaData
 /// [`PhysicalExprAdapterFactory`]: datafusion_physical_expr_adapter::PhysicalExprAdapterFactory
 #[derive(Clone, Debug)]
