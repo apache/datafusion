@@ -38,7 +38,6 @@ async-recursion = "1.0"
 async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true, features = ["sql"] }
-datafusion-functions-table = { workspace = true }
 half = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }

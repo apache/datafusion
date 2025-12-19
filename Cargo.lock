@@ -2757,7 +2757,6 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-functions-aggregate",
- "datafusion-functions-table",
  "half",
  "insta",
  "itertools 0.14.0",
