@@ -536,7 +536,7 @@ impl Unparser<'_> {
                     body: Box::new(self.expr_to_sql_inner(body)?),
                 }))
             }
-            Expr::LambdaColumn(l) => Ok(ast::Expr::Identifier(
+            Expr::LambdaVariable(l) => Ok(ast::Expr::Identifier(
                 self.new_ident_quoted_if_needs(l.name.clone()),
             )),
         }

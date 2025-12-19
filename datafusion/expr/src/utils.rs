@@ -309,7 +309,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. }
             | Expr::Lambda(_)
-            | Expr::LambdaColumn(_) => {}
+            | Expr::LambdaVariable(_) => {}
         }
         Ok(TreeNodeRecursion::Continue)
     })

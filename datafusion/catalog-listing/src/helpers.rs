@@ -88,7 +88,7 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         | Expr::GroupingSet(_)
         | Expr::Case(_)
         | Expr::Lambda(_)
-        | Expr::LambdaColumn(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
 
         Expr::ScalarFunction(scalar_function) => {
             match scalar_function.func.signature().volatility {

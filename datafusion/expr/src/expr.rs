@@ -400,17 +400,17 @@ pub enum Expr {
     Unnest(Unnest),
     /// Lambda expression
     Lambda(Lambda),
-    LambdaColumn(LambdaColumn),
+    LambdaVariable(LambdaVariable),
 }
 
 #[derive(Clone, PartialEq, PartialOrd, Eq, Debug, Hash)]
-pub struct LambdaColumn {
+pub struct LambdaVariable {
     pub name: String,
     pub field: FieldRef,
     pub spans: Spans,
 }
 
-impl LambdaColumn {
+impl LambdaVariable {
     pub fn new(name: String, field: FieldRef) -> Self {
         Self {
             name,
@@ -1567,7 +1567,7 @@ impl Expr {
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
             Expr::Lambda { .. } => "Lambda",
-            Expr::LambdaColumn { .. } => "LambdaColumn",
+            Expr::LambdaVariable { .. } => "LambdaVariable",
         }
     }
 
@@ -2123,7 +2123,7 @@ impl Expr {
             | Expr::Literal(..)
             | Expr::Placeholder(..)
             | Expr::Lambda(..)
-            | Expr::LambdaColumn(..) => false,
+            | Expr::LambdaVariable(..) => false,
         }
     }
 
@@ -2722,7 +2722,7 @@ impl HashNode for Expr {
             Expr::Lambda(Lambda { params, body: _ }) => {
                 params.hash(state);
             }
-            Expr::LambdaColumn(LambdaColumn {
+            Expr::LambdaVariable(LambdaVariable {
                 name,
                 field,
                 spans: _,
@@ -3046,7 +3046,7 @@ impl Display for SchemaDisplay<'_> {
             Expr::Lambda(Lambda { params, body }) => {
                 write!(f, "({}) -> {body}", display_comma_separated(params))
             }
-            Expr::LambdaColumn(c) => {
+            Expr::LambdaVariable(c) => {
                 write!(f, "{}", c.name)
             }
         }
@@ -3542,7 +3542,7 @@ impl Display for Expr {
             Expr::Lambda(Lambda { params, body }) => {
                 write!(f, "({}) -> {body}", params.join(", "))
             }
-            Expr::LambdaColumn(c) => {
+            Expr::LambdaVariable(c) => {
                 write!(f, "{}", c.name)
             }
         }

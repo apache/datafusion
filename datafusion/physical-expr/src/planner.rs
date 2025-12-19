@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::expressions::{lambda_col, LambdaExpr};
+use crate::expressions::{lambda_variable, LambdaExpr};
 use crate::ScalarFunctionExpr;
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
@@ -33,7 +33,7 @@ use datafusion_common::{
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
-    Alias, Cast, InList, Lambda, LambdaColumn, Placeholder, ScalarFunction,
+    Alias, Cast, InList, Lambda, LambdaVariable, Placeholder, ScalarFunction,
 };
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
@@ -392,11 +392,11 @@ pub fn create_physical_expr(
         Expr::Placeholder(Placeholder { id, .. }) => {
             exec_err!("Placeholder '{id}' was not provided a value for execution.")
         }
-        Expr::LambdaColumn(LambdaColumn {
+        Expr::LambdaVariable(LambdaVariable {
             name,
             field,
             spans: _,
-        }) => lambda_col(
+        }) => lambda_variable(
             name,
             Arc::clone(field),
         ),

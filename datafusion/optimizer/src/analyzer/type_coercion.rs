@@ -599,7 +599,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Lambda(_)
-            | Expr::LambdaColumn(_) => Ok(Transformed::no(expr)),
+            | Expr::LambdaVariable(_) => Ok(Transformed::no(expr)),
         }
     }
 }

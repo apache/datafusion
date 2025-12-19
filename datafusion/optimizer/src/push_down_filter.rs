@@ -289,7 +289,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InList { .. }
         | Expr::ScalarFunction(_)
         | Expr::Lambda(_)
-        | Expr::LambdaColumn(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction(_)

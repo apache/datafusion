@@ -81,7 +81,7 @@ impl TreeNode for Expr {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_)
-            | Expr::LambdaColumn(_) => Ok(TreeNodeRecursion::Continue),
+            | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 (left, right).apply_ref_elements(f)
             }
@@ -133,7 +133,7 @@ impl TreeNode for Expr {
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_, _)
-            | Expr::LambdaColumn(_) => Transformed::no(self),
+            | Expr::LambdaVariable(_) => Transformed::no(self),
             Expr::Unnest(Unnest { expr, .. }) => expr
                 .map_elements(f)?
                 .update_data(|expr| Expr::Unnest(Unnest { expr })),

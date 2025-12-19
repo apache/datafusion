@@ -21,7 +21,7 @@ use crate::expr::{
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
-use crate::expr::{FieldMetadata, LambdaColumn};
+use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::type_coercion::functions::{
     fields_with_aggregate_udf, fields_with_window_udf,
 };
@@ -235,7 +235,7 @@ impl ExprSchemable for Expr {
                 Ok(DataType::Null)
             }
             Expr::Lambda(Lambda { params: _, body }) => body.get_type(schema),
-            Expr::LambdaColumn(LambdaColumn { name: _, field, .. }) => {
+            Expr::LambdaVariable(LambdaVariable { name: _, field, .. }) => {
                 Ok(field.data_type().clone())
             }
         }
@@ -357,7 +357,7 @@ impl ExprSchemable for Expr {
                 Ok(true)
             }
             Expr::Lambda(l) => l.body.nullable(input_schema),
-            Expr::LambdaColumn(c) => Ok(c.field.is_nullable()),
+            Expr::LambdaVariable(c) => Ok(c.field.is_nullable()),
         }
     }
 
@@ -625,7 +625,7 @@ impl ExprSchemable for Expr {
                 self.get_type(schema)?,
                 self.nullable(schema)?,
             ))),
-            Expr::LambdaColumn(c) => Ok(Arc::clone(&c.field)),
+            Expr::LambdaVariable(c) => Ok(Arc::clone(&c.field)),
         }?;
 
         Ok((

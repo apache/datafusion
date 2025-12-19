@@ -622,7 +622,7 @@ pub fn serialize_expr(
                     .unwrap_or(HashMap::new()),
             })),
         },
-        Expr::Lambda(_) | Expr::LambdaColumn(_) => {
+        Expr::Lambda(_) | Expr::LambdaVariable(_) => {
             return Err(Error::General(
                 "Proto serialization error: Lambda not implemented".to_string(),
             ))

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical lambda column reference: [`LambdaColumn`]
+//! Physical lambda column reference: [`LambdaVariable`]
 
 use std::any::Any;
 use std::hash::Hash;
@@ -33,28 +33,28 @@ use datafusion_expr::ColumnarValue;
 
 /// Represents the lambda column with a given name and field
 #[derive(Debug, Clone)]
-pub struct LambdaColumn {
+pub struct LambdaVariable {
     name: String,
     field: FieldRef,
     value: Option<ColumnarValue>,
 }
 
-impl Eq for LambdaColumn {}
+impl Eq for LambdaVariable {}
 
-impl PartialEq for LambdaColumn {
+impl PartialEq for LambdaVariable {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.field == other.field
     }
 }
 
-impl Hash for LambdaColumn {
+impl Hash for LambdaVariable {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.field.hash(state);
     }
 }
 
-impl LambdaColumn {
+impl LambdaVariable {
     /// Create a new lambda column expression
     pub fn new(name: &str, field: FieldRef) -> Self {
         Self {
@@ -83,13 +83,13 @@ impl LambdaColumn {
     }
 }
 
-impl std::fmt::Display for LambdaColumn {
+impl std::fmt::Display for LambdaVariable {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}@-1", self.name)
     }
 }
 
-impl PhysicalExpr for LambdaColumn {
+impl PhysicalExpr for LambdaVariable {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -107,7 +107,7 @@ impl PhysicalExpr for LambdaColumn {
 
     /// Evaluate the expression
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        self.value.clone().ok_or_else(|| exec_datafusion_err!("Physical LambdaColumn {} missing value", self.name))
+        self.value.clone().ok_or_else(|| exec_datafusion_err!("Physical LambdaVariable {} missing value", self.name))
     }
 
     fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
@@ -130,7 +130,7 @@ impl PhysicalExpr for LambdaColumn {
     }
 }
 
-/// Create a column expression
-pub fn lambda_col(name: &str, field: FieldRef) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(LambdaColumn::new(name, field)))
+/// Create a lambda variable expression
+pub fn lambda_variable(name: &str, field: FieldRef) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(LambdaVariable::new(name, field)))
 }

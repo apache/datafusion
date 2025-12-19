@@ -694,7 +694,7 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn is_valid(node: &Expr) -> bool {
-        !node.is_volatile_node() && !matches!(node, Expr::LambdaColumn(_))
+        !node.is_volatile_node() && !matches!(node, Expr::LambdaVariable(_))
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
@@ -707,7 +707,7 @@ impl CSEController for ExprCSEController<'_> {
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
                 | Expr::Wildcard { .. }
-                | Expr::LambdaColumn(_)
+                | Expr::LambdaVariable(_)
         );
 
         let is_aggr = matches!(node, Expr::AggregateFunction(..));

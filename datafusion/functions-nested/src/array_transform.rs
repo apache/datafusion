@@ -33,7 +33,7 @@ use datafusion_expr::{
     ValueOrLambda, ValueOrLambdaField, ValueOrLambdaParameter, Volatility,
 };
 use datafusion_macros::user_doc;
-use datafusion_physical_expr::expressions::{LambdaColumn, LambdaExpr};
+use datafusion_physical_expr::expressions::{LambdaVariable, LambdaExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::{any::Any, sync::Arc};
 
@@ -173,7 +173,7 @@ impl ScalarUDFImpl for ArrayTransform {
         let values_param = || Ok(Arc::clone(list_values));
         let indices_param = || elements_indices(&list_array);
 
-        let binded_body = bind_lambda_columns(
+        let binded_body = bind_lambda_variables(
             Arc::clone(&lambda.body),
             &lambda.params,
             &[&values_param, &indices_param],
@@ -275,7 +275,7 @@ impl ScalarUDFImpl for ArrayTransform {
     }
 }
 
-fn bind_lambda_columns(
+fn bind_lambda_variables(
     expr: Arc<dyn PhysicalExpr>,
     params: &[FieldRef],
     args: &[&dyn Fn() -> Result<ArrayRef>],
@@ -284,28 +284,28 @@ fn bind_lambda_columns(
         .map(|(param, arg)| Ok((param.name().as_str(), (arg()?, 0))))
         .collect::<Result<HashMap<_, _>>>()?;
 
-    expr.rewrite(&mut BindLambdaColumn::new(columns)).data()
+    expr.rewrite(&mut BindLambdaVariable::new(columns)).data()
 }
 
-struct BindLambdaColumn<'a> {
+struct BindLambdaVariable<'a> {
     columns: HashMap<&'a str, (ArrayRef, usize)>,
 }
 
-impl<'a> BindLambdaColumn<'a> {
+impl<'a> BindLambdaVariable<'a> {
     fn new(columns: HashMap<&'a str, (ArrayRef, usize)>) -> Self {
         Self { columns }
     }
 }
 
-impl TreeNodeRewriter for BindLambdaColumn<'_> {
+impl TreeNodeRewriter for BindLambdaVariable<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
-        if let Some(lambda_column) = node.as_any().downcast_ref::<LambdaColumn>() {
-            if let Some((value, shadows)) = self.columns.get(lambda_column.name()) {
+        if let Some(lambda_variable) = node.as_any().downcast_ref::<LambdaVariable>() {
+            if let Some((value, shadows)) = self.columns.get(lambda_variable.name()) {
                 if *shadows == 0 {
                     return Ok(Transformed::yes(Arc::new(
-                        lambda_column.clone().with_value(value.clone()),
+                        lambda_variable.clone().with_value(value.clone()),
                     )));
                 }
             }
