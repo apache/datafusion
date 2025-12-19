@@ -778,163 +778,167 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 <td><p>true</p></td>
 <td><p>Should DataFusion execute sorts in a per-partition fashion and merge afterwards instead of coalescing first and sorting globally. With this flag is enabled, plans in the form below <code class="docutils literal notranslate"><span class="pre">text</span> <span class="pre">&quot;SortExec:</span> <span class="pre">[a&#64;0</span> <span class="pre">ASC]&quot;,</span> <span class="pre">&quot;</span> <span class="pre">CoalescePartitionsExec&quot;,</span> <span class="pre">&quot;</span> <span class="pre">RepartitionExec:</span> <span class="pre">partitioning=RoundRobinBatch(8),</span> <span class="pre">input_partitions=1&quot;,</span> </code> would turn into the plan below which performs better in multithreaded environments <code class="docutils literal notranslate"><span class="pre">text</span> <span class="pre">&quot;SortPreservingMergeExec:</span> <span class="pre">[a&#64;0</span> <span class="pre">ASC]&quot;,</span> <span class="pre">&quot;</span> <span class="pre">SortExec:</span> <span class="pre">[a&#64;0</span> <span class="pre">ASC]&quot;,</span> <span class="pre">&quot;</span> <span class="pre">RepartitionExec:</span> <span class="pre">partitioning=RoundRobinBatch(8),</span> <span class="pre">input_partitions=1&quot;,</span> </code></p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.prefer_existing_sort</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.subset_repartition_threshold</p></td>
+<td><p>4</p></td>
+<td><p>Partition count threshold for subset satisfaction optimization. When the current partition count is &gt;= this threshold, DataFusion will skip repartitioning if the required partitioning expression is a subset of the current partition expression such as Hash(a) satisfies Hash(a, b). When the current partition count is &lt; this threshold, DataFusion will repartition to increase parallelism even when subset satisfaction applies. Set to 0 to always repartition (disable subset satisfaction optimization). Set to a high value to always use subset satisfaction. Example (subset_repartition_threshold = 4): <code class="docutils literal notranslate"><span class="pre">text</span> <span class="pre">Hash([a])</span> <span class="pre">satisfies</span> <span class="pre">Hash([a,</span> <span class="pre">b])</span> <span class="pre">because</span> <span class="pre">(Hash([a,</span> <span class="pre">b])</span> <span class="pre">is</span> <span class="pre">subset</span> <span class="pre">of</span> <span class="pre">Hash([a])</span> <span class="pre">If</span> <span class="pre">current</span> <span class="pre">partitions</span> <span class="pre">(3)</span> <span class="pre">&lt;</span> <span class="pre">threshold</span> <span class="pre">(4),</span> <span class="pre">repartition:</span> <span class="pre">AggregateExec:</span> <span class="pre">mode=FinalPartitioned,</span> <span class="pre">gby=[a,</span> <span class="pre">b],</span> <span class="pre">aggr=[SUM(x)]</span> <span class="pre">RepartitionExec:</span> <span class="pre">partitioning=Hash([a,</span> <span class="pre">b],</span> <span class="pre">8),</span> <span class="pre">input_partitions=3</span> <span class="pre">AggregateExec:</span> <span class="pre">mode=Partial,</span> <span class="pre">gby=[a,</span> <span class="pre">b],</span> <span class="pre">aggr=[SUM(x)]</span> <span class="pre">DataSourceExec:</span> <span class="pre">file_groups={...},</span> <span class="pre">output_partitioning=Hash([a],</span> <span class="pre">3)</span> <span class="pre">If</span> <span class="pre">current</span> <span class="pre">partitions</span> <span class="pre">(8)</span> <span class="pre">&gt;=</span> <span class="pre">threshold</span> <span class="pre">(4),</span> <span class="pre">use</span> <span class="pre">subset</span> <span class="pre">satisfaction:</span> <span class="pre">AggregateExec:</span> <span class="pre">mode=SinglePartitioned,</span> <span class="pre">gby=[a,</span> <span class="pre">b],</span> <span class="pre">aggr=[SUM(x)]</span> <span class="pre">DataSourceExec:</span> <span class="pre">file_groups={...},</span> <span class="pre">output_partitioning=Hash([a],</span> <span class="pre">8)</span> </code></p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.optimizer.prefer_existing_sort</p></td>
 <td><p>false</p></td>
 <td><p>When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting <code class="docutils literal notranslate"><span class="pre">preserve_order</span></code> to true on <code class="docutils literal notranslate"><span class="pre">RepartitionExec</span></code> and using <code class="docutils literal notranslate"><span class="pre">SortPreservingMergeExec</span></code>) When false, DataFusion will maximize plan parallelism using <code class="docutils literal notranslate"><span class="pre">RepartitionExec</span></code> even if this requires subsequently resorting data using a <code class="docutils literal notranslate"><span class="pre">SortExec</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.skip_failed_rules</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.skip_failed_rules</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the logical plan optimizer will produce warning messages if any optimization rules produce errors and then proceed to the next rule. When set to false, any rules that produce errors will cause the query to fail</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.max_passes</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.max_passes</p></td>
 <td><p>3</p></td>
 <td><p>Number of times that the optimizer will attempt to optimize the plan</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.top_down_join_key_reordering</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.top_down_join_key_reordering</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, the physical plan optimizer will run a top down process to reorder the join keys</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.prefer_hash_join</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.prefer_hash_join</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.enable_piecewise_merge_join</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.enable_piecewise_merge_join</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently experimental. Physical planner will opt for PiecewiseMergeJoin when there is only one range filter.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.hash_join_single_partition_threshold</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.hash_join_single_partition_threshold</p></td>
 <td><p>1048576</p></td>
 <td><p>The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.hash_join_single_partition_threshold_rows</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.hash_join_single_partition_threshold_rows</p></td>
 <td><p>131072</p></td>
 <td><p>The maximum estimated size in rows for one input side of a HashJoin will be collected into a single partition</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.hash_join_inlist_pushdown_max_size</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.hash_join_inlist_pushdown_max_size</p></td>
 <td><p>131072</p></td>
 <td><p>Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering. Build sides larger than this will use hash table lookups instead. Set to 0 to always use hash table lookups. InList pushdown can be more efficient for small build sides because it can result in better statistics pruning as well as use any bloom filters present on the scan side. InList expressions are also more transparent and easier to serialize over the network in distributed uses of DataFusion. On the other hand InList pushdown requires making a copy of the data and thus adds some overhead to the build side and uses more memory. This setting is per-partition, so we may end up using <code class="docutils literal notranslate"><span class="pre">hash_join_inlist_pushdown_max_size</span></code> * <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> memory. The default is 128kB per partition. This should allow point lookup joins (e.g. joining on a unique primary key) to use InList pushdown in most cases but avoids excessive memory usage or overhead for larger joins.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values</p></td>
 <td><p>150</p></td>
 <td><p>Maximum number of distinct values (rows) in the build side of a hash join to be pushed down as an InList expression for dynamic filtering. Build sides with more rows than this will use hash table lookups instead. Set to 0 to always use hash table lookups. This provides an additional limit beyond <code class="docutils literal notranslate"><span class="pre">hash_join_inlist_pushdown_max_size</span></code> to prevent very large IN lists that might not provide much benefit over hash table lookups. This uses the deduplicated row count once the build side has been evaluated. The default is 150 values per partition. This is inspired by Trino’s <code class="docutils literal notranslate"><span class="pre">max-filter-keys-per-column</span></code> setting. See: <a class="reference external" href="https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds">https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds</a></p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.default_filter_selectivity</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.default_filter_selectivity</p></td>
 <td><p>20</p></td>
 <td><p>The default filter selectivity used by Filter Statistics when an exact selectivity cannot be determined. Valid values are between 0 (no selectivity) and 100 (all rows are selected).</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.prefer_existing_union</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.prefer_existing_union</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the optimizer will not attempt to convert Union to Interleave</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.optimizer.expand_views_at_output</p></td>
+<tr class="row-even"><td><p>datafusion.optimizer.expand_views_at_output</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, if the returned type is a view type then the output will be coerced to a non-view. Coerces <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> to <code class="docutils literal notranslate"><span class="pre">LargeUtf8</span></code>, and <code class="docutils literal notranslate"><span class="pre">BinaryView</span></code> to <code class="docutils literal notranslate"><span class="pre">LargeBinary</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.optimizer.enable_sort_pushdown</p></td>
+<tr class="row-odd"><td><p>datafusion.optimizer.enable_sort_pushdown</p></td>
 <td><p>true</p></td>
 <td><p>Enable sort pushdown optimization. When enabled, attempts to push sort requirements down to data sources that can natively handle them (e.g., by reversing file/row group read order). Returns <strong>inexact ordering</strong>: Sort operator is kept for correctness, but optimized input enables early termination for TopK queries (ORDER BY … LIMIT N), providing significant speedup. Memory: No additional overhead (only changes read order). Future: Will add option to detect perfectly sorted data and eliminate Sort completely. Default: true</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.logical_plan_only</p></td>
+<tr class="row-even"><td><p>datafusion.explain.logical_plan_only</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will only print logical plans</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.physical_plan_only</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.physical_plan_only</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will only print physical plans</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.show_statistics</p></td>
+<tr class="row-even"><td><p>datafusion.explain.show_statistics</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will print operator statistics for physical plans</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.show_sizes</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.show_sizes</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, the explain statement will print the partition sizes</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.show_schema</p></td>
+<tr class="row-even"><td><p>datafusion.explain.show_schema</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will print schema information</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.format</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.format</p></td>
 <td><p>indent</p></td>
 <td><p>Display format of explain. Default is “indent”. When set to “tree”, it will print the plan in a tree-rendered format.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.explain.tree_maximum_render_width</p></td>
+<tr class="row-even"><td><p>datafusion.explain.tree_maximum_render_width</p></td>
 <td><p>240</p></td>
 <td><p>(format=tree only) Maximum total width of the rendered tree. When set to 0, the tree will have no width limit.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.explain.analyze_level</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.analyze_level</p></td>
 <td><p>dev</p></td>
 <td><p>Verbosity level for “EXPLAIN ANALYZE”. Default is “dev” “summary” shows common metrics for high-level insights. “dev” provides deep operator-level introspection for developers.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, SQL parser will parse float as decimal type</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.enable_options_value_normalization</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.enable_options_value_normalization</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.dialect</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.dialect</p></td>
 <td><p>generic</p></td>
 <td><p>Configure the SQL dialect used by DataFusion’s parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.support_varchar_with_length</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.support_varchar_with_length</p></td>
 <td><p>true</p></td>
 <td><p>If true, permit lengths for <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> such as <code class="docutils literal notranslate"><span class="pre">VARCHAR(20)</span></code>, but ignore the length. If false, error if a <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.map_string_types_to_utf8view</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.map_string_types_to_utf8view</p></td>
 <td><p>true</p></td>
 <td><p>If true, string types (VARCHAR, CHAR, Text, and String) are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code> during SQL planning. If false, they are mapped to <code class="docutils literal notranslate"><span class="pre">Utf8</span></code>. Default is true.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.collect_spans</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.collect_spans</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the source locations relative to the original SQL query (i.e. <a class="reference external" href="https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html"><code class="docutils literal notranslate"><span class="pre">Span</span></code></a>) will be collected and recorded in the logical plan nodes.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.recursion_limit</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.recursion_limit</p></td>
 <td><p>50</p></td>
 <td><p>Specifies the recursion depth limit when parsing complex SQL Queries</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.default_null_ordering</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.default_null_ordering</p></td>
 <td><p>nulls_max</p></td>
 <td><p>Specifies the default null ordering for query results. There are 4 options: - <code class="docutils literal notranslate"><span class="pre">nulls_max</span></code>: Nulls appear last in ascending order. - <code class="docutils literal notranslate"><span class="pre">nulls_min</span></code>: Nulls appear first in ascending order. - <code class="docutils literal notranslate"><span class="pre">nulls_first</span></code>: Nulls always be first in any order. - <code class="docutils literal notranslate"><span class="pre">nulls_last</span></code>: Nulls always be last in any order. By default, <code class="docutils literal notranslate"><span class="pre">nulls_max</span></code> is used to follow Postgres’s behavior. postgres rule: <a class="reference external" href="https://www.postgresql.org/docs/current/queries-order.html">https://www.postgresql.org/docs/current/queries-order.html</a></p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.safe</p></td>
+<tr class="row-odd"><td><p>datafusion.format.safe</p></td>
 <td><p>true</p></td>
 <td><p>If set to <code class="docutils literal notranslate"><span class="pre">true</span></code> any formatting errors will be written to the output instead of being converted into a [<code class="docutils literal notranslate"><span class="pre">std::fmt::Error</span></code>]</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.null</p></td>
+<tr class="row-even"><td><p>datafusion.format.null</p></td>
 <td><p></p></td>
 <td><p>Format string for nulls</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.date_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.date_format</p></td>
 <td><p>%Y-%m-%d</p></td>
 <td><p>Date format for date arrays</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.datetime_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.datetime_format</p></td>
 <td><p>%Y-%m-%dT%H:%M:%S%.f</p></td>
 <td><p>Format for DateTime arrays</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.timestamp_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.timestamp_format</p></td>
 <td><p>%Y-%m-%dT%H:%M:%S%.f</p></td>
 <td><p>Timestamp format for timestamp arrays</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.timestamp_tz_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.timestamp_tz_format</p></td>
 <td><p>NULL</p></td>
 <td><p>Timestamp format for timestamp with timezone arrays. When <code class="docutils literal notranslate"><span class="pre">None</span></code>, ISO 8601 format is used.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.time_format</p></td>
+<tr class="row-odd"><td><p>datafusion.format.time_format</p></td>
 <td><p>%H:%M:%S%.f</p></td>
 <td><p>Time format for time arrays</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.format.duration_format</p></td>
+<tr class="row-even"><td><p>datafusion.format.duration_format</p></td>
 <td><p>pretty</p></td>
 <td><p>Duration format. Can be either <code class="docutils literal notranslate"><span class="pre">&quot;pretty&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;ISO8601&quot;</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.format.types_info</p></td>
+<tr class="row-odd"><td><p>datafusion.format.types_info</p></td>
 <td><p>false</p></td>
 <td><p>Show types in visual representation batches</p></td>
 </tr>
