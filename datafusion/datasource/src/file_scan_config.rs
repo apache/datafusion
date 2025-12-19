@@ -78,7 +78,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// # use datafusion_physical_expr::projection::ProjectionExprs;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-/// # use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 /// # let file_schema = Arc::new(Schema::new(vec![
 /// #  Field::new("c1", DataType::Int32, false),
 /// #  Field::new("c2", DataType::Int32, false),
@@ -89,7 +88,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// #[derive(Clone)]
 /// # struct ParquetSource {
 /// #    table_schema: TableSchema,
-/// #    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>
 /// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
@@ -98,13 +96,11 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
 /// #  fn file_type(&self) -> &str { "parquet" }
-/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {table_schema: self.table_schema.clone(), schema_adapter_factory: Some(factory)} )) }
-/// #  fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> { self.schema_adapter_factory.clone() }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
 /// #  }
 /// # impl ParquetSource {
-/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into(), schema_adapter_factory: None} }
+/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();

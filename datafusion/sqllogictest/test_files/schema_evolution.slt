@@ -138,3 +138,147 @@ select * from parquet_table where c > 11.0;
 ----
 bzz 300 13.7
 foo 200 12.6
+
+##########
+# Projection tests - selecting subset of columns
+# These tests verify column reordering and projection work correctly
+# with schema evolution (addresses E2E column reordering concern)
+##########
+
+# Select only column a
+query T rowsort
+select a from parquet_table;
+----
+NULL
+bzz
+foo
+foo
+foo
+foo
+foo
+foo
+foo
+
+# Select columns in different order than table schema (c, a instead of a, b, c)
+query RT rowsort
+select c, a from parquet_table;
+----
+10.5 foo
+12.6 foo
+13.7 bzz
+NULL NULL
+NULL foo
+NULL foo
+NULL foo
+NULL foo
+NULL foo
+
+# Select single column that's missing in some files
+query I rowsort
+select b from parquet_table;
+----
+1
+10
+100
+2
+200
+3
+300
+NULL
+NULL
+
+##########
+# Projection with filter tests
+##########
+
+# Projection with equality filter
+query TI rowsort
+select a, b from parquet_table where a = 'foo';
+----
+foo 1
+foo 100
+foo 2
+foo 200
+foo 3
+foo NULL
+foo NULL
+
+# Projection with range filter on projected column
+query IR rowsort
+select b, c from parquet_table where b > 5;
+----
+10 NULL
+100 10.5
+200 12.6
+300 13.7
+
+# Projection excluding filtered column (filter on c, project a)
+query T rowsort
+select a from parquet_table where c > 11.0;
+----
+bzz
+foo
+
+##########
+# Complex filter tests - OR combinations and IS NOT NULL
+##########
+
+# OR combination
+query TIR rowsort
+select * from parquet_table where a = 'foo' OR b > 100;
+----
+bzz 300 13.7
+foo 1 NULL
+foo 100 10.5
+foo 2 NULL
+foo 200 12.6
+foo 3 NULL
+foo NULL NULL
+foo NULL NULL
+
+# IS NOT NULL on column a
+query TIR rowsort
+select * from parquet_table where a IS NOT NULL;
+----
+bzz 300 13.7
+foo 1 NULL
+foo 100 10.5
+foo 2 NULL
+foo 200 12.6
+foo 3 NULL
+foo NULL NULL
+foo NULL NULL
+
+# IS NOT NULL on column c (missing in most files)
+query TIR rowsort
+select * from parquet_table where c IS NOT NULL;
+----
+bzz 300 13.7
+foo 100 10.5
+foo 200 12.6
+
+# Combined conditions with NULL checks
+query TIR rowsort
+select * from parquet_table where a IS NULL OR (b IS NOT NULL AND b > 5);
+----
+NULL 10 NULL
+bzz 300 13.7
+foo 100 10.5
+foo 200 12.6
+
+##########
+# Multi-column predicates
+##########
+
+# AND across columns with different availability
+query TIR rowsort
+select * from parquet_table where a = 'foo' AND b > 50;
+----
+foo 100 10.5
+foo 200 12.6
+
+# Filter on multiple columns from reordered file (File4 has b, a, c order)
+query TIR rowsort
+select * from parquet_table where b = 100 AND c = 10.5;
+----
+foo 100 10.5
