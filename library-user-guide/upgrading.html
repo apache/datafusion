@@ -815,15 +815,24 @@ that introduced these changes for more examples for how this was handled for the
 </pre></div>
 </div>
 </section>
-<section id="schemaadapterfactory-fully-removed-from-parquet">
-<h3><code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> Fully Removed from Parquet<a class="headerlink" href="#schemaadapterfactory-fully-removed-from-parquet" title="Link to this heading">#</a></h3>
+<section id="schemaadapter-and-schemaadapterfactory-completely-removed">
+<h3><code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code> and <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> completely removed<a class="headerlink" href="#schemaadapter-and-schemaadapterfactory-completely-removed" title="Link to this heading">#</a></h3>
 <p>Following the deprecation announced in <a class="reference internal" href="#deprecating-schemaadapterfactory-and-schemaadapter">DataFusion 49.0.0</a>, <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> has been fully removed from Parquet scanning. This applies to both:</p>
+<p>The following symbols have been deprecated and will be removed in the next release:</p>
 <ul class="simple">
-<li><p><strong>Predicate pushdown / row filtering</strong> (deprecated in 49.0.0)</p></li>
-<li><p><strong>Projections</strong> (newly removed in 52.0.0)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code> trait</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> trait</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SchemaMapper</span></code> trait</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SchemaMapping</span></code> struct</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DefaultSchemaAdapterFactory</span></code> struct</p></li>
 </ul>
-<p>If you were using a custom <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> for schema adaptation (e.g., default column values, type coercion), you should now implement <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> instead.</p>
-<p>See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs">default column values example</a> for how to implement a custom <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code>.</p>
+<p>These types were previously used to adapt record batch schemas during file reading.
+This functionality has been replaced by <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code>, which rewrites expressions at planning time rather than transforming batches at runtime.
+If you were using a custom <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> for schema adaptation (e.g., default column values, type coercion), you should now implement <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code> instead.
+See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs">default column values example</a> for how to implement a custom <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code>.</p>
+<p><strong>Migration guide:</strong></p>
+<p>If you implemented a custom <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code>, migrate to <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapterFactory</span></code>.
+See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs">default column values example</a> for a complete implementation.</p>
 </section>
 </section>
 <section id="datafusion-51-0-0">
@@ -2076,7 +2085,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-cacheaccessor-trait">API change for <code class="docutils literal notranslate"><span class="pre">CacheAccessor</span></code> trait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ffi-crate-updates">FFI crate updates</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#projection-handling-moved-from-filescanconfig-to-filesource">Projection handling moved from FileScanConfig to FileSource</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#schemaadapterfactory-fully-removed-from-parquet"><code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> Fully Removed from Parquet</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#schemaadapter-and-schemaadapterfactory-completely-removed"><code class="docutils literal notranslate"><span class="pre">SchemaAdapter</span></code> and <code class="docutils literal notranslate"><span class="pre">SchemaAdapterFactory</span></code> completely removed</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-51-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">51.0.0</span></code></a><ul class="nav section-nav flex-column">
