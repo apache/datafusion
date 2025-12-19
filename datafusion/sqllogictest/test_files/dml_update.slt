@@ -257,3 +257,30 @@ UPDATE test_update_error SET nonexistent = 'value';
 
 statement ok
 DROP TABLE test_update_error;
+
+# Test UPDATE with expression that would error on non-matching rows
+# Regression test: expressions should only be evaluated on rows that match
+# the WHERE clause, not all rows. This prevents divide-by-zero errors
+# on rows that won't be updated.
+statement ok
+CREATE TABLE test_update_div(id INT, divisor INT, result INT);
+
+statement ok
+INSERT INTO test_update_div VALUES (1, 0, 0), (2, 2, 0), (3, 5, 0);
+
+# This should succeed: 1/divisor is only evaluated where divisor != 0
+# Row 1 (divisor=0) is excluded by WHERE clause and expression is NOT evaluated
+query I
+UPDATE test_update_div SET result = 100 / divisor WHERE divisor != 0;
+----
+2
+
+query III rowsort
+SELECT * FROM test_update_div;
+----
+1 0 0
+2 2 50
+3 5 20
+
+statement ok
+DROP TABLE test_update_div;

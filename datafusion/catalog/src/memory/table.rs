@@ -329,50 +329,35 @@ impl TableProvider for MemTable {
                     continue;
                 }
 
-                let filter_mask = if filters.is_empty() {
-                    BooleanArray::from(vec![true; batch.num_rows()])
-                } else {
-                    let mut combined_mask: Option<BooleanArray> = None;
+                // Evaluate filters - None means "match all rows"
+                let filter_mask = evaluate_filters_to_mask(
+                    &filters,
+                    batch,
+                    &df_schema,
+                    state.execution_props(),
+                )?;
 
-                    for filter_expr in &filters {
-                        let physical_expr = create_physical_expr(
-                            filter_expr,
-                            &df_schema,
-                            state.execution_props(),
-                        )?;
-
-                        let result = physical_expr.evaluate(batch)?;
-                        let array = result.into_array(batch.num_rows())?;
-                        let bool_array = array
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .ok_or_else(|| {
-                                datafusion_common::DataFusionError::Internal(
-                                    "Filter did not evaluate to boolean".to_string(),
-                                )
-                            })?
-                            .clone();
-
-                        combined_mask = Some(match combined_mask {
-                            Some(existing) => and(&existing, &bool_array)?,
-                            None => bool_array,
-                        });
+                let (delete_count, keep_mask) = match filter_mask {
+                    Some(mask) => {
+                        // Count rows where mask is true (will be deleted)
+                        let count = mask.iter().filter(|v| v == &Some(true)).count();
+                        // Keep rows where predicate is false or NULL (SQL three-valued logic)
+                        let keep: BooleanArray =
+                            mask.iter().map(|v| Some(v != Some(true))).collect();
+                        (count, keep)
                     }
-
-                    combined_mask.unwrap_or_else(|| {
-                        BooleanArray::from(vec![true; batch.num_rows()])
-                    })
+                    None => {
+                        // No filters = delete all rows
+                        (
+                            batch.num_rows(),
+                            BooleanArray::from(vec![false; batch.num_rows()]),
+                        )
+                    }
                 };
 
-                let delete_count =
-                    filter_mask.iter().filter(|v| v == &Some(true)).count();
                 total_deleted += delete_count as u64;
 
-                // Keep rows where predicate is false or NULL (SQL three-valued logic)
-                let keep_mask: BooleanArray =
-                    filter_mask.iter().map(|v| Some(v != Some(true))).collect();
                 let filtered_batch = filter_record_batch(batch, &keep_mask)?;
-
                 if filtered_batch.num_rows() > 0 {
                     new_batches.push(filtered_batch);
                 }
@@ -412,15 +397,24 @@ impl TableProvider for MemTable {
             }
         }
 
-        let assignment_map: HashMap<&str, &Expr> = assignments
+        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+
+        // Create physical expressions for assignments upfront (outside batch loop)
+        let physical_assignments: HashMap<
+            String,
+            Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        > = assignments
             .iter()
-            .map(|(name, expr)| (name.as_str(), expr))
-            .collect();
+            .map(|(name, expr)| {
+                let physical_expr =
+                    create_physical_expr(expr, &df_schema, state.execution_props())?;
+                Ok((name.clone(), physical_expr))
+            })
+            .collect::<Result<_>>()?;
 
         *self.sort_order.lock() = vec![];
 
         let mut total_updated: u64 = 0;
-        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
         for partition_data in &self.batches {
             let mut partition = partition_data.write().await;
@@ -431,53 +425,38 @@ impl TableProvider for MemTable {
                     continue;
                 }
 
-                let filter_mask = if filters.is_empty() {
-                    BooleanArray::from(vec![true; batch.num_rows()])
-                } else {
-                    let mut combined_mask: Option<BooleanArray> = None;
+                // Evaluate filters - None means "match all rows"
+                let filter_mask = evaluate_filters_to_mask(
+                    &filters,
+                    batch,
+                    &df_schema,
+                    state.execution_props(),
+                )?;
 
-                    for filter_expr in &filters {
-                        let physical_expr = create_physical_expr(
-                            filter_expr,
-                            &df_schema,
-                            state.execution_props(),
-                        )?;
-
-                        let result = physical_expr.evaluate(batch)?;
-                        let array = result.into_array(batch.num_rows())?;
-                        let bool_array = array
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .ok_or_else(|| {
-                                datafusion_common::DataFusionError::Internal(
-                                    "Filter did not evaluate to boolean".to_string(),
-                                )
-                            })?
-                            .clone();
-
-                        combined_mask = Some(match combined_mask {
-                            Some(existing) => and(&existing, &bool_array)?,
-                            None => bool_array,
-                        });
+                let (update_count, update_mask) = match filter_mask {
+                    Some(mask) => {
+                        // Count rows where mask is true (will be updated)
+                        let count = mask.iter().filter(|v| v == &Some(true)).count();
+                        // Normalize mask: only true (not NULL) triggers update
+                        let normalized: BooleanArray =
+                            mask.iter().map(|v| Some(v == Some(true))).collect();
+                        (count, normalized)
                     }
-
-                    combined_mask.unwrap_or_else(|| {
-                        BooleanArray::from(vec![true; batch.num_rows()])
-                    })
+                    None => {
+                        // No filters = update all rows
+                        (
+                            batch.num_rows(),
+                            BooleanArray::from(vec![true; batch.num_rows()]),
+                        )
+                    }
                 };
 
-                let update_count =
-                    filter_mask.iter().filter(|v| v == &Some(true)).count();
                 total_updated += update_count as u64;
 
                 if update_count == 0 {
                     new_batches.push(batch.clone());
                     continue;
                 }
-
-                // Normalize mask: only true (not NULL) triggers update
-                let update_mask: BooleanArray =
-                    filter_mask.iter().map(|v| Some(v == Some(true))).collect();
 
                 let mut new_columns: Vec<ArrayRef> =
                     Vec::with_capacity(batch.num_columns());
@@ -491,16 +470,15 @@ impl TableProvider for MemTable {
                             ))
                         })?;
 
-                    let new_column = if let Some(value_expr) =
-                        assignment_map.get(column_name.as_str())
+                    let new_column = if let Some(physical_expr) =
+                        physical_assignments.get(column_name.as_str())
                     {
-                        let physical_expr = create_physical_expr(
-                            value_expr,
-                            &df_schema,
-                            state.execution_props(),
-                        )?;
-
-                        let new_values = physical_expr.evaluate(batch)?;
+                        // Use evaluate_selection to only evaluate on matching rows.
+                        // This avoids errors (e.g., divide-by-zero) on rows that won't
+                        // be updated. The result is scattered back with nulls for
+                        // non-matching rows, which zip() will replace with originals.
+                        let new_values =
+                            physical_expr.evaluate_selection(batch, &update_mask)?;
                         let new_array = new_values.into_array(batch.num_rows())?;
 
                         // Convert to &dyn Array which implements Datum
@@ -524,6 +502,46 @@ impl TableProvider for MemTable {
 
         Ok(Arc::new(DmlResultExec::new(total_updated)))
     }
+}
+
+/// Evaluate filter expressions against a batch and return a combined boolean mask.
+/// Returns None if filters is empty (meaning "match all rows").
+/// The returned mask has true for rows that match the filter predicates.
+fn evaluate_filters_to_mask(
+    filters: &[Expr],
+    batch: &RecordBatch,
+    df_schema: &DFSchema,
+    execution_props: &datafusion_expr::execution_props::ExecutionProps,
+) -> Result<Option<BooleanArray>> {
+    if filters.is_empty() {
+        return Ok(None);
+    }
+
+    let mut combined_mask: Option<BooleanArray> = None;
+
+    for filter_expr in filters {
+        let physical_expr =
+            create_physical_expr(filter_expr, df_schema, execution_props)?;
+
+        let result = physical_expr.evaluate(batch)?;
+        let array = result.into_array(batch.num_rows())?;
+        let bool_array = array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(
+                    "Filter did not evaluate to boolean".to_string(),
+                )
+            })?
+            .clone();
+
+        combined_mask = Some(match combined_mask {
+            Some(existing) => and(&existing, &bool_array)?,
+            None => bool_array,
+        });
+    }
+
+    Ok(combined_mask)
 }
 
 /// Returns a single row with the count of affected rows.
