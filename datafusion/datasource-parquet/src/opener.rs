@@ -20,10 +20,11 @@
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
-    apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
 };
 use arrow::array::{RecordBatch, RecordBatchOptions};
+use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -35,24 +36,27 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::{SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
-
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::stats::Precision;
+use datafusion_common::{
+    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics, exec_err,
+};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{
-    is_dynamic_physical_expr, PhysicalExpr,
+    PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics,
 };
-use datafusion_pruning::{build_pruning_predicate, FilePruner, PruningPredicate};
+use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
+use crate::sort::reverse_row_selection;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, ready};
 use log::debug;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
@@ -60,7 +64,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
@@ -112,6 +116,60 @@ pub(super) struct ParquetOpener {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
+    /// Whether to read row groups in reverse order
+    pub reverse_row_groups: bool,
+}
+
+/// Represents a prepared access plan with optional row selection
+struct PreparedAccessPlan {
+    /// Row group indexes to read
+    row_group_indexes: Vec<usize>,
+    /// Optional row selection for filtering within row groups
+    row_selection: Option<parquet::arrow::arrow_reader::RowSelection>,
+}
+
+impl PreparedAccessPlan {
+    /// Create a new prepared access plan from a ParquetAccessPlan
+    fn from_access_plan(
+        access_plan: ParquetAccessPlan,
+        rg_metadata: &[RowGroupMetaData],
+    ) -> Result<Self> {
+        let row_group_indexes = access_plan.row_group_indexes();
+        let row_selection = access_plan.into_overall_row_selection(rg_metadata)?;
+
+        Ok(Self {
+            row_group_indexes,
+            row_selection,
+        })
+    }
+
+    /// Reverse the access plan for reverse scanning
+    fn reverse(
+        mut self,
+        file_metadata: &parquet::file::metadata::ParquetMetaData,
+    ) -> Result<Self> {
+        // Reverse the row group indexes
+        self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
+
+        // If we have a row selection, reverse it to match the new row group order
+        if let Some(row_selection) = self.row_selection {
+            self.row_selection =
+                Some(reverse_row_selection(&row_selection, file_metadata)?);
+        }
+
+        Ok(self)
+    }
+
+    /// Apply this access plan to a ParquetRecordBatchStreamBuilder
+    fn apply_to_builder(
+        self,
+        mut builder: ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>>,
+    ) -> ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>> {
+        if let Some(row_selection) = self.row_selection {
+            builder = builder.with_row_selection(row_selection);
+        }
+        builder.with_row_groups(self.row_group_indexes)
+    }
 }
 
 impl FileOpener for ParquetOpener {
@@ -137,34 +195,6 @@ impl FileOpener for ParquetOpener {
 
         let batch_size = self.batch_size;
 
-        // Build partition values map for replacing partition column references
-        // with their literal values from this file's partition values.
-        //
-        // For example, given
-        // 1. `region` is a partition column,
-        // 2. predicate `host IN ('us-east-1', 'eu-central-1')`:
-        // 3. The file path is `/data/region=us-west-2/...`
-        //    (that is the partition column value is `us-west-2`)
-        //
-        // The predicate would be rewritten to
-        // ```sql
-        // 'us-west-2` IN ('us-east-1', 'eu-central-1')
-        // ```
-        // which can be further simplified to `FALSE`, meaning
-        // the file can be skipped entirely.
-        //
-        // While this particular optimization is done during logical planning,
-        // there are other cases where partition columns may appear in more
-        // complex predicates that cannot be simplified until we are about to
-        // open the file (such as dynamic predicates)
-        let partition_values: HashMap<&str, &ScalarValue> = self
-            .table_schema
-            .table_partition_cols()
-            .iter()
-            .zip(partitioned_file.partition_values.iter())
-            .map(|(field, value)| (field.name().as_str(), value))
-            .collect();
-
         // Calculate the output schema from the original projection (before literal replacement)
         // so we get correct field names from column references
         let logical_file_schema = Arc::clone(self.table_schema.file_schema());
@@ -173,23 +203,52 @@ impl FileOpener for ParquetOpener {
                 .project_schema(self.table_schema.table_schema())?,
         );
 
-        // Apply partition column replacement to projection expressions
+        // Build a combined map for replacing column references with literal values.
+        // This includes:
+        // 1. Partition column values from the file path (e.g., region=us-west-2)
+        // 2. Constant columns detected from file statistics (where min == max)
+        //
+        // Although partition columns *are* constant columns, we don't want to rely on
+        // statistics for them being populated if we can use the partition values
+        // (which are guaranteed to be present).
+        //
+        // For example, given a partition column `region` and predicate
+        // `region IN ('us-east-1', 'eu-central-1')` with file path
+        // `/data/region=us-west-2/...`, the predicate is rewritten to
+        // `'us-west-2' IN ('us-east-1', 'eu-central-1')` which simplifies to FALSE.
+        //
+        // While partition column optimization is done during logical planning,
+        // there are cases where partition columns may appear in more complex
+        // predicates that cannot be simplified until we open the file (such as
+        // dynamic predicates).
+        let mut literal_columns: HashMap<String, ScalarValue> = self
+            .table_schema
+            .table_partition_cols()
+            .iter()
+            .zip(partitioned_file.partition_values.iter())
+            .map(|(field, value)| (field.name().clone(), value.clone()))
+            .collect();
+        // Add constant columns from file statistics.
+        // Note that if there are statistics for partition columns there will be overlap,
+        // but since we use a HashMap, we'll just overwrite the partition values with the
+        // constant values from statistics (which should be the same).
+        literal_columns.extend(constant_columns_from_stats(
+            partitioned_file.statistics.as_deref(),
+            &logical_file_schema,
+        ));
+
+        // Apply literal replacements to projection and predicate
         let mut projection = self.projection.clone();
-        if !partition_values.is_empty() {
+        let mut predicate = self.predicate.clone();
+        if !literal_columns.is_empty() {
             projection = projection.try_map_exprs(|expr| {
-                replace_columns_with_literals(Arc::clone(&expr), &partition_values)
+                replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
             })?;
+            predicate = predicate
+                .map(|p| replace_columns_with_literals(p, &literal_columns))
+                .transpose()?;
         }
 
-        // Apply partition column replacement to predicate
-        let mut predicate = if partition_values.is_empty() {
-            self.predicate.clone()
-        } else {
-            self.predicate
-                .clone()
-                .map(|p| replace_columns_with_literals(p, &partition_values))
-                .transpose()?
-        };
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let force_filter_selections = self.force_filter_selections;
@@ -208,6 +267,7 @@ impl FileOpener for ParquetOpener {
         let encryption_context = self.get_encryption_context();
         let max_predicate_cache_size = self.max_predicate_cache_size;
 
+        let reverse_row_groups = self.reverse_row_groups;
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
@@ -252,12 +312,12 @@ impl FileOpener for ParquetOpener {
                     )
                 });
 
-            if let Some(file_pruner) = &mut file_pruner {
-                if file_pruner.should_prune()? {
-                    // Return an empty stream immediately to skip the work of setting up the actual stream
-                    file_metrics.files_ranges_pruned_statistics.add_pruned(1);
-                    return Ok(futures::stream::empty().boxed());
-                }
+            if let Some(file_pruner) = &mut file_pruner
+                && file_pruner.should_prune()?
+            {
+                // Return an empty stream immediately to skip the work of setting up the actual stream
+                file_metrics.files_ranges_pruned_statistics.add_pruned(1);
+                return Ok(futures::stream::empty().boxed());
             }
 
             file_metrics.files_ranges_pruned_statistics.add_matched(1);
@@ -306,19 +366,19 @@ impl FileOpener for ParquetOpener {
                 )?;
             }
 
-            if let Some(ref coerce) = coerce_int96 {
-                if let Some(merged) = coerce_int96_to_resolution(
+            if let Some(ref coerce) = coerce_int96
+                && let Some(merged) = coerce_int96_to_resolution(
                     reader_metadata.parquet_schema(),
                     &physical_file_schema,
                     coerce,
-                ) {
-                    physical_file_schema = Arc::new(merged);
-                    options = options.with_schema(Arc::clone(&physical_file_schema));
-                    reader_metadata = ArrowReaderMetadata::try_new(
-                        Arc::clone(reader_metadata.metadata()),
-                        options.clone(),
-                    )?;
-                }
+                )
+            {
+                physical_file_schema = Arc::new(merged);
+                options = options.with_schema(Arc::clone(&physical_file_schema));
+                reader_metadata = ArrowReaderMetadata::try_new(
+                    Arc::clone(reader_metadata.metadata()),
+                    options.clone(),
+                )?;
             }
 
             // Adapt the projection & filter predicate to the physical file schema.
@@ -462,24 +522,30 @@ impl FileOpener for ParquetOpener {
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
-            if enable_page_index && !access_plan.is_empty() {
-                if let Some(p) = page_pruning_predicate {
-                    access_plan = p.prune_plan_with_page_index(
-                        access_plan,
-                        &physical_file_schema,
-                        builder.parquet_schema(),
-                        file_metadata.as_ref(),
-                        &file_metrics,
-                    );
-                }
+            if enable_page_index
+                && !access_plan.is_empty()
+                && let Some(p) = page_pruning_predicate
+            {
+                access_plan = p.prune_plan_with_page_index(
+                    access_plan,
+                    &physical_file_schema,
+                    builder.parquet_schema(),
+                    file_metadata.as_ref(),
+                    &file_metrics,
+                );
             }
 
-            let row_group_indexes = access_plan.row_group_indexes();
-            if let Some(row_selection) =
-                access_plan.into_overall_row_selection(rg_metadata)?
-            {
-                builder = builder.with_row_selection(row_selection);
+            // Prepare the access plan (extract row groups and row selection)
+            let mut prepared_plan =
+                PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)?;
+
+            // If reverse scanning is enabled, reverse the prepared plan
+            if reverse_row_groups {
+                prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
             }
+
+            // Apply the prepared plan to the builder
+            builder = prepared_plan.apply_to_builder(builder);
 
             if let Some(limit) = limit {
                 builder = builder.with_limit(limit)
@@ -495,7 +561,6 @@ impl FileOpener for ParquetOpener {
             let stream = builder
                 .with_projection(mask)
                 .with_batch_size(batch_size)
-                .with_row_groups(row_group_indexes)
                 .with_metrics(arrow_reader_metrics.clone())
                 .build()?;
 
@@ -578,6 +643,64 @@ fn copy_arrow_reader_metrics(
     if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
         predicate_cache_records.add(v);
     }
+}
+
+type ConstantColumns = HashMap<String, ScalarValue>;
+
+/// Extract constant column values from statistics, keyed by column name in the logical file schema.
+fn constant_columns_from_stats(
+    statistics: Option<&Statistics>,
+    file_schema: &SchemaRef,
+) -> ConstantColumns {
+    let mut constants = HashMap::new();
+    let Some(statistics) = statistics else {
+        return constants;
+    };
+
+    let num_rows = match statistics.num_rows {
+        Precision::Exact(num_rows) => Some(num_rows),
+        _ => None,
+    };
+
+    for (idx, column_stats) in statistics
+        .column_statistics
+        .iter()
+        .take(file_schema.fields().len())
+        .enumerate()
+    {
+        let field = file_schema.field(idx);
+        if let Some(value) =
+            constant_value_from_stats(column_stats, num_rows, field.data_type())
+        {
+            constants.insert(field.name().clone(), value);
+        }
+    }
+
+    constants
+}
+
+fn constant_value_from_stats(
+    column_stats: &ColumnStatistics,
+    num_rows: Option<usize>,
+    data_type: &DataType,
+) -> Option<ScalarValue> {
+    if let (Precision::Exact(min), Precision::Exact(max)) =
+        (&column_stats.min_value, &column_stats.max_value)
+        && min == max
+        && !min.is_null()
+        && matches!(column_stats.null_count, Precision::Exact(0))
+    {
+        return Some(min.clone());
+    }
+
+    if let (Some(num_rows), Precision::Exact(nulls)) =
+        (num_rows, &column_stats.null_count)
+        && *nulls == num_rows
+    {
+        return ScalarValue::try_new_null(data_type).ok();
+    }
+
+    None
 }
 
 /// Wraps an inner RecordBatchStream and a [`FilePruner`]
@@ -840,25 +963,113 @@ fn should_enable_page_index(
 mod test {
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use super::{ConstantColumns, constant_columns_from_stats};
+    use crate::{DefaultParquetFileReaderFactory, opener::ParquetOpener};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
-        record_batch, stats::Precision, ColumnStatistics, DataFusionError, ScalarValue,
-        Statistics,
+        ColumnStatistics, DataFusionError, ScalarValue, Statistics, record_batch,
+        stats::Precision,
     };
-    use datafusion_datasource::{file_stream::FileOpener, PartitionedFile, TableSchema};
+    use datafusion_datasource::{PartitionedFile, TableSchema, file_stream::FileOpener};
     use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{
-        expressions::DynamicFilterPhysicalExpr, planner::logical2physical,
-        projection::ProjectionExprs, PhysicalExpr,
+        PhysicalExpr,
+        expressions::{Column, DynamicFilterPhysicalExpr, Literal},
+        planner::logical2physical,
+        projection::ProjectionExprs,
     };
-    use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
+    use datafusion_physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
+    };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{Stream, StreamExt};
-    use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
 
-    use crate::{opener::ParquetOpener, DefaultParquetFileReaderFactory};
+    fn constant_int_stats() -> (Statistics, SchemaRef) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(3),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::from(5i32)),
+                    min_value: Precision::Exact(ScalarValue::from(5i32)),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics::new_unknown(),
+            ],
+        };
+        (statistics, schema)
+    }
+
+    #[test]
+    fn extract_constant_columns_non_null() {
+        let (statistics, schema) = constant_int_stats();
+        let constants = constant_columns_from_stats(Some(&statistics), &schema);
+        assert_eq!(constants.len(), 1);
+        assert_eq!(constants.get("a"), Some(&ScalarValue::from(5i32)));
+        assert!(!constants.contains_key("b"));
+    }
+
+    #[test]
+    fn extract_constant_columns_all_null() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(2),
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        let constants = constant_columns_from_stats(Some(&statistics), &schema);
+        assert_eq!(
+            constants.get("a"),
+            Some(&ScalarValue::Utf8(None)),
+            "all-null column should be treated as constant null"
+        );
+    }
+
+    #[test]
+    fn rewrite_projection_to_literals() {
+        let (statistics, schema) = constant_int_stats();
+        let constants = constant_columns_from_stats(Some(&statistics), &schema);
+        let projection = ProjectionExprs::from_indices(&[0, 1], &schema);
+
+        let rewritten = projection
+            .try_map_exprs(|expr| replace_columns_with_literals(expr, &constants))
+            .unwrap();
+        let exprs = rewritten.as_ref();
+        assert!(exprs[0].expr.as_any().downcast_ref::<Literal>().is_some());
+        assert!(exprs[1].expr.as_any().downcast_ref::<Column>().is_some());
+
+        // Only column `b` should remain in the projection mask
+        assert_eq!(rewritten.column_indices(), vec![1]);
+    }
+
+    #[test]
+    fn rewrite_physical_expr_literal() {
+        let mut constants = ConstantColumns::new();
+        constants.insert("a".to_string(), ScalarValue::from(7i32));
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+        let rewritten = replace_columns_with_literals(expr, &constants).unwrap();
+        assert!(rewritten.as_any().downcast_ref::<Literal>().is_some());
+    }
 
     async fn count_batches_and_rows(
         mut stream: std::pin::Pin<
@@ -877,16 +1088,54 @@ mod test {
         (num_batches, num_rows)
     }
 
+    /// Helper to collect all int32 values from the first column of batches
+    async fn collect_int32_values(
+        mut stream: std::pin::Pin<
+            Box<
+                dyn Stream<Item = Result<arrow::array::RecordBatch, DataFusionError>>
+                    + Send,
+            >,
+        >,
+    ) -> Vec<i32> {
+        use arrow::array::Array;
+        let mut values = vec![];
+        while let Some(Ok(batch)) = stream.next().await {
+            let array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .unwrap();
+            for i in 0..array.len() {
+                if !array.is_null(i) {
+                    values.push(array.value(i));
+                }
+            }
+        }
+        values
+    }
+
     async fn write_parquet(
         store: Arc<dyn ObjectStore>,
         filename: &str,
         batch: arrow::record_batch::RecordBatch,
     ) -> usize {
+        write_parquet_batches(store, filename, vec![batch], None).await
+    }
+
+    /// Write multiple batches to a parquet file with optional writer properties
+    async fn write_parquet_batches(
+        store: Arc<dyn ObjectStore>,
+        filename: &str,
+        batches: Vec<arrow::record_batch::RecordBatch>,
+        props: Option<WriterProperties>,
+    ) -> usize {
         let mut out = BytesMut::new().writer();
         {
-            let mut writer =
-                ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
-            writer.write(&batch).unwrap();
+            let schema = batches[0].schema();
+            let mut writer = ArrowWriter::try_new(&mut out, schema, props).unwrap();
+            for batch in batches {
+                writer.write(&batch).unwrap();
+            }
             writer.finish().unwrap();
         }
         let data = out.into_inner().freeze();
@@ -957,6 +1206,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_row_groups: false,
             }
         };
 
@@ -1028,6 +1278,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_row_groups: false,
             }
         };
 
@@ -1115,6 +1366,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_row_groups: false,
             }
         };
 
@@ -1205,6 +1457,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_row_groups: false,
             }
         };
 
@@ -1303,6 +1556,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: None,
+                reverse_row_groups: false,
             }
         };
 
@@ -1343,5 +1597,253 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_row_groups() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Create multiple batches to ensure multiple row groups
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let batch3 =
+            record_batch!(("a", Int32, vec![Some(7), Some(8), Some(9)])).unwrap();
+
+        // Write parquet file with multiple row groups
+        // Force small row groups by setting max_row_group_size
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(3) // Force each batch into its own row group
+            .build();
+
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch1.clone(), batch2, batch3],
+            Some(props),
+        )
+        .await;
+
+        let schema = batch1.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: ProjectionExprs::from_indices(&[0], &schema),
+            batch_size: 1024,
+            limit: None,
+            predicate: None,
+            table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            pushdown_filters: false,
+            reorder_filters: false,
+            force_filter_selections: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_row_groups: reverse_scan,
+        };
+
+        // Test normal scan (forward)
+        let opener = make_opener(false);
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let forward_values = collect_int32_values(stream).await;
+
+        // Test reverse scan
+        let opener = make_opener(true);
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let reverse_values = collect_int32_values(stream).await;
+
+        // The forward scan should return data in the order written
+        assert_eq!(forward_values, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        // With reverse scan, row groups are reversed, so we expect:
+        // Row group 3 (7,8,9), then row group 2 (4,5,6), then row group 1 (1,2,3)
+        assert_eq!(reverse_values, vec![7, 8, 9, 4, 5, 6, 1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_single_row_group() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Create a single batch (single row group)
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "test.parquet", batch.clone()).await;
+
+        let schema = batch.schema();
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: ProjectionExprs::from_indices(&[0], &schema),
+            batch_size: 1024,
+            limit: None,
+            predicate: None,
+            table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            pushdown_filters: false,
+            reorder_filters: false,
+            force_filter_selections: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_row_groups: reverse_scan,
+        };
+
+        // With a single row group, forward and reverse should be the same
+        // (only the row group order is reversed, not the rows within)
+        let opener_forward = make_opener(false);
+        let stream_forward = opener_forward.open(file.clone()).unwrap().await.unwrap();
+        let (batches_forward, _) = count_batches_and_rows(stream_forward).await;
+
+        let opener_reverse = make_opener(true);
+        let stream_reverse = opener_reverse.open(file).unwrap().await.unwrap();
+        let (batches_reverse, _) = count_batches_and_rows(stream_reverse).await;
+
+        // Both should have the same number of batches since there's only one row group
+        assert_eq!(batches_forward, batches_reverse);
+    }
+
+    #[tokio::test]
+    async fn test_reverse_scan_with_row_selection() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Create 3 batches with DIFFERENT selection patterns
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3), Some(4)]))
+                .unwrap(); // 4 rows
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(5), Some(6), Some(7), Some(8)]))
+                .unwrap(); // 4 rows
+        let batch3 =
+            record_batch!(("a", Int32, vec![Some(9), Some(10), Some(11), Some(12)]))
+                .unwrap(); // 4 rows
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(4)
+            .build();
+
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch1.clone(), batch2, batch3],
+            Some(props),
+        )
+        .await;
+
+        let schema = batch1.schema();
+
+        use crate::ParquetAccessPlan;
+        use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+        let mut access_plan = ParquetAccessPlan::new_all(3);
+        // Row group 0: skip first 2, select last 2 (should get: 3, 4)
+        access_plan.scan_selection(
+            0,
+            RowSelection::from(vec![RowSelector::skip(2), RowSelector::select(2)]),
+        );
+        // Row group 1: select all (should get: 5, 6, 7, 8)
+        // Row group 2: select first 2, skip last 2 (should get: 9, 10)
+        access_plan.scan_selection(
+            2,
+            RowSelection::from(vec![RowSelector::select(2), RowSelector::skip(2)]),
+        );
+
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        )
+        .with_extensions(Arc::new(access_plan));
+
+        let make_opener = |reverse_scan: bool| ParquetOpener {
+            partition_index: 0,
+            projection: ProjectionExprs::from_indices(&[0], &schema),
+            batch_size: 1024,
+            limit: None,
+            predicate: None,
+            table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
+            metadata_size_hint: None,
+            metrics: ExecutionPlanMetricsSet::new(),
+            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
+                Arc::clone(&store),
+            )),
+            pushdown_filters: false,
+            reorder_filters: false,
+            force_filter_selections: false,
+            enable_page_index: false,
+            enable_bloom_filter: false,
+            enable_row_group_stats_pruning: false,
+            coerce_int96: None,
+            #[cfg(feature = "parquet_encryption")]
+            file_decryption_properties: None,
+            expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+            #[cfg(feature = "parquet_encryption")]
+            encryption_factory: None,
+            max_predicate_cache_size: None,
+            reverse_row_groups: reverse_scan,
+        };
+
+        // Forward scan: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
+        let opener = make_opener(false);
+        let stream = opener.open(file.clone()).unwrap().await.unwrap();
+        let forward_values = collect_int32_values(stream).await;
+
+        // Forward scan should produce: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
+        assert_eq!(
+            forward_values,
+            vec![3, 4, 5, 6, 7, 8, 9, 10],
+            "Forward scan should select correct rows based on RowSelection"
+        );
+
+        // Reverse scan
+        // CORRECT behavior: reverse row groups AND their corresponding selections
+        // - RG2 is read first, WITH RG2's selection (select 2, skip 2) -> 9, 10
+        // - RG1 is read second, WITH RG1's selection (select all) -> 5, 6, 7, 8
+        // - RG0 is read third, WITH RG0's selection (skip 2, select 2) -> 3, 4
+        let opener = make_opener(true);
+        let stream = opener.open(file).unwrap().await.unwrap();
+        let reverse_values = collect_int32_values(stream).await;
+
+        // Correct expected result: row groups reversed but each keeps its own selection
+        // RG2 with its selection (9,10), RG1 with its selection (5,6,7,8), RG0 with its selection (3,4)
+        assert_eq!(
+            reverse_values,
+            vec![9, 10, 5, 6, 7, 8, 3, 4],
+            "Reverse scan should reverse row group order while maintaining correct RowSelection for each group"
+        );
     }
 }

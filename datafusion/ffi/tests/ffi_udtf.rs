@@ -22,7 +22,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use arrow::array::{create_array, ArrayRef};
+    use arrow::array::{ArrayRef, create_array};
     use datafusion::catalog::TableFunctionImpl;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::prelude::SessionContext;

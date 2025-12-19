@@ -98,8 +98,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
         ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });
 
-    let ctx = ctx_holder.lock().first().unwrap().clone();
-    ctx
+    ctx_holder.lock().first().unwrap().clone()
 }
 
 fn criterion_benchmark(c: &mut Criterion) {

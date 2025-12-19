@@ -27,7 +27,9 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::list_files_cache::DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT;
+pub use super::list_files_cache::{
+    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
+};
 
 /// A cache for [`Statistics`].
 ///
@@ -64,9 +66,21 @@ pub struct FileStatisticsCacheEntry {
 /// command on the local filesystem. This operation can be expensive,
 /// especially when done over remote object stores.
 ///
+/// The cache key is always the table's base path, ensuring a stable cache key.
+/// The `Extra` type is `Option<Path>`, representing an optional prefix filter
+/// (relative to the table base path) for partition-aware lookups.
+///
+/// When `get_with_extra(key, Some(prefix))` is called:
+/// - The cache entry for `key` (table base path) is fetched
+/// - Results are filtered to only include files matching `key/prefix`
+/// - Filtered results are returned without making a storage call
+///
+/// This enables efficient partition pruning: a single cached listing of the
+/// full table can serve queries for any partition subset.
+///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
 pub trait ListFilesCache:
-    CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>
+    CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = Option<Path>>
 {
     /// Returns the cache's memory limit in bytes.
     fn cache_limit(&self) -> usize;
@@ -76,6 +90,9 @@ pub trait ListFilesCache:
 
     /// Updates the cache with a new memory limit in bytes.
     fn update_cache_limit(&self, limit: usize);
+
+    /// Updates the cache with a new TTL (time-to-live).
+    fn update_cache_ttl(&self, ttl: Option<Duration>);
 }
 
 /// Generic file-embedded metadata used with [`FileMetadataCache`].
@@ -173,7 +190,18 @@ impl CacheManager {
         let file_statistic_cache =
             config.table_files_statistics_cache.as_ref().map(Arc::clone);
 
-        let list_files_cache = config.list_files_cache.as_ref().map(Arc::clone);
+        let list_files_cache = config
+            .list_files_cache
+            .as_ref()
+            .inspect(|c| {
+                // the cache memory limit or ttl might have changed, ensure they are updated
+                c.update_cache_limit(config.list_files_cache_limit);
+                // Only update TTL if explicitly set in config, otherwise preserve the cache's existing TTL
+                if let Some(ttl) = config.list_files_cache_ttl {
+                    c.update_cache_ttl(Some(ttl));
+                }
+            })
+            .map(Arc::clone);
 
         let file_metadata_cache = config
             .file_metadata_cache
@@ -262,7 +290,7 @@ impl Default for CacheManagerConfig {
             table_files_statistics_cache: Default::default(),
             list_files_cache: Default::default(),
             list_files_cache_limit: DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
-            list_files_cache_ttl: None,
+            list_files_cache_ttl: DEFAULT_LIST_FILES_CACHE_TTL,
             file_metadata_cache: Default::default(),
             metadata_cache_limit: DEFAULT_METADATA_CACHE_LIMIT,
         }
@@ -303,8 +331,8 @@ impl CacheManagerConfig {
     /// Sets the TTL (time-to-live) for entries in the list files cache.
     ///
     /// Default: None (infinite).
-    pub fn with_list_files_cache_ttl(mut self, ttl: Duration) -> Self {
-        self.list_files_cache_ttl = Some(ttl);
+    pub fn with_list_files_cache_ttl(mut self, ttl: Option<Duration>) -> Self {
+        self.list_files_cache_ttl = ttl;
         self
     }
 
@@ -323,5 +351,79 @@ impl CacheManagerConfig {
     pub fn with_metadata_cache_limit(mut self, limit: usize) -> Self {
         self.metadata_cache_limit = limit;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::DefaultListFilesCache;
+
+    /// Test to verify that TTL is preserved when not explicitly set in config.
+    /// This fixes issue #19396 where TTL was being unset from DefaultListFilesCache
+    /// when CacheManagerConfig::list_files_cache_ttl was not set explicitly.
+    #[test]
+    fn test_ttl_preserved_when_not_set_in_config() {
+        use std::time::Duration;
+
+        // Create a cache with TTL = 1 second
+        let list_file_cache =
+            DefaultListFilesCache::new(1024, Some(Duration::from_secs(1)));
+
+        // Verify the cache has TTL set initially
+        assert_eq!(
+            list_file_cache.cache_ttl(),
+            Some(Duration::from_secs(1)),
+            "Cache should have TTL = 1 second initially"
+        );
+
+        // Put cache in config WITHOUT setting list_files_cache_ttl
+        let config = CacheManagerConfig::default()
+            .with_list_files_cache(Some(Arc::new(list_file_cache)));
+
+        // Create CacheManager from config
+        let cache_manager = CacheManager::try_new(&config).unwrap();
+
+        // Verify TTL is preserved (not unset)
+        let cache_ttl = cache_manager.get_list_files_cache().unwrap().cache_ttl();
+
+        assert!(
+            cache_ttl.is_some(),
+            "TTL should be preserved when not set in config. Expected Some(Duration::from_secs(1)), got {cache_ttl:?}"
+        );
+
+        // Verify it's the correct TTL value
+        assert_eq!(
+            cache_ttl,
+            Some(Duration::from_secs(1)),
+            "TTL should be exactly 1 second"
+        );
+    }
+
+    /// Test to verify that TTL can still be overridden when explicitly set in config.
+    #[test]
+    fn test_ttl_overridden_when_set_in_config() {
+        use std::time::Duration;
+
+        // Create a cache with TTL = 1 second
+        let list_file_cache =
+            DefaultListFilesCache::new(1024, Some(Duration::from_secs(1)));
+
+        // Put cache in config WITH a different TTL set
+        let config = CacheManagerConfig::default()
+            .with_list_files_cache(Some(Arc::new(list_file_cache)))
+            .with_list_files_cache_ttl(Some(Duration::from_secs(60)));
+
+        // Create CacheManager from config
+        let cache_manager = CacheManager::try_new(&config).unwrap();
+
+        // Verify TTL is overridden to the config value
+        let cache_ttl = cache_manager.get_list_files_cache().unwrap().cache_ttl();
+
+        assert_eq!(
+            cache_ttl,
+            Some(Duration::from_secs(60)),
+            "TTL should be overridden to 60 seconds when set in config"
+        );
     }
 }

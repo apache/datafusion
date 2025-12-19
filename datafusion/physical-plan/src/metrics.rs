@@ -15,4 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod schema_adapter_integration_tests;
+//! Metrics live in `datafusion-execution`; this module re-exports them to keep
+//! the public APIs stable.
+
+pub use datafusion_execution::metrics::*;

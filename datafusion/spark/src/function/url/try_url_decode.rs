@@ -26,7 +26,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 
-use crate::function::url::url_decode::{spark_handled_url_decode, UrlDecode};
+use crate::function::url::url_decode::{UrlDecode, spark_handled_url_decode};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TryUrlDecode {
@@ -84,7 +84,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::StringArray;
-    use datafusion_common::{cast::as_string_array, Result};
+    use datafusion_common::{Result, cast::as_string_array};
 
     use super::*;
 
