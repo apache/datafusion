@@ -2,6 +2,7 @@
 # Subtract dates, producing the number of days elapsed
 # date '2001-10-01' - date '2001-09-28' → 3
 
+# note that datafusion returns Duration whereas postgres returns an int
 query ?
 SELECT '2001-10-01'::date - '2001-09-28'::date
 ----

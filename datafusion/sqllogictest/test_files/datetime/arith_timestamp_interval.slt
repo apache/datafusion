@@ -25,3 +25,12 @@ query T
 SELECT arrow_typeof('2001-09-28T23:00:00'::timestamp - interval '23 hours')
 ----
 Timestamp(ns)
+
+query error Cannot coerce arithmetic expression Timestamp\(ns\) \* Interval\(MonthDayNano\) to valid types
+SELECT '2001-09-28T23:00:00'::timestamp * interval '23 hours'
+
+query error Cannot coerce arithmetic expression Timestamp\(ns\) / Interval\(MonthDayNano\) to valid types
+SELECT '2001-09-28T23:00:00'::timestamp / interval '23 hours'
+
+query error Cannot coerce arithmetic expression Timestamp\(ns\) % Interval\(MonthDayNano\) to valid types
+SELECT '2001-09-28T23:00:00'::timestamp % interval '23 hours'

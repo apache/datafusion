@@ -2,18 +2,53 @@
 # Add a number of days to a date
 # date '2001-09-28' + 7 → 2001-10-05
 
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Date32 \+ Int64 to valid types
+query D
 SELECT '2001-09-28'::date + 7
+----
+2001-10-05
 
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Date32 \+ Int64 to valid types
+query D
+SELECT 7 + '2001-09-28'::date
+----
+2001-10-05
+
+query T
 SELECT arrow_typeof('2001-09-28'::date + 7)
+----
+Date32
+
+query D
+SELECT arrow_cast('2001-09-28', 'Date64') + 7
+----
+2001-10-05T00:00:00
+
+query T
+SELECT arrow_typeof(arrow_cast('2001-09-28', 'Date64') + 7)
+----
+Date64
 
 # date - integer → date
 # Subtract a number of days from a date
 # date '2001-10-01' - 7 → 2001-09-24
 
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Date32 \- Int64 to valid types
+query D
 SELECT '2001-10-01'::date - 7
+----
+2001-09-24
 
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Date32 \- Int64 to valid types
+query T
 SELECT arrow_typeof('2001-10-01'::date - 7)
+----
+Date32
+
+query error Invalid arithmetic operation
+SELECT 7 - '2001-10-01'::date
+
+query error Invalid date arithmetic operation
+SELECT '2001-10-01'::date * 7
+
+query error Invalid date arithmetic operation
+SELECT '2001-10-01'::date / 7
+
+query error Invalid date arithmetic operation
+SELECT '2001-10-01'::date % 7

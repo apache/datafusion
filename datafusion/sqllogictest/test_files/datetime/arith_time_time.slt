@@ -2,9 +2,26 @@
 # Subtract times
 # time '05:00' - time '03:00' → 02:00:00
 
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Time64\(ns\) \- Time64\(ns\) to valid types
+query ?
 SELECT '05:00'::time - '03:00'::time
+----
+2 hours
 
-
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Time64\(ns\) \- Time64\(ns\) to valid types
+query T
 SELECT arrow_typeof('05:00'::time - '03:00'::time)
+----
+Interval(MonthDayNano)
+
+query ?
+SELECT '05:00'::time + '03:00'::time
+----
+8 hours
+
+query error Invalid interval arithmetic operation
+SELECT '05:00'::time * '03:00'::time
+
+query error Invalid interval arithmetic operation
+SELECT '05:00'::time / '03:00'::time
+
+query error Invalid interval arithmetic operation
+SELECT '05:00'::time % '03:00'::time
