@@ -55,7 +55,7 @@ pub async fn simple_udtf() -> Result<()> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
-        .join("aggregate_test_100.csv");
+        .join("cars.csv");
 
     // Pass 2 arguments, read csv with at most 2 rows (simplify logic makes 1+1 --> 2)
     let df = ctx

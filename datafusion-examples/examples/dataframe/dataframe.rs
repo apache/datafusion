@@ -65,8 +65,8 @@ pub async fn dataframe_example() -> Result<()> {
     read_memory(&ctx).await?;
     read_memory_macro().await?;
     write_out(&ctx).await?;
-    register_aggregate_test_data("t1", &ctx).await?;
-    register_aggregate_test_data("t2", &ctx).await?;
+    register_cars_test_data("t1", &ctx).await?;
+    register_cars_test_data("t2", &ctx).await?;
     where_scalar_subquery(&ctx).await?;
     where_in_subquery(&ctx).await?;
     where_exist_subquery(&ctx).await?;
@@ -268,7 +268,7 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
 }
 
 /// Use the DataFrame API to execute the following subquery:
-/// select c1,c2 from t1 where (select avg(t2.c2) from t2 where t1.c1 = t2.c1)>0 limit 3;
+/// select car, speed from t1 where (select avg(t2.speed) from t2 where t1.car = t2.car) > 0 limit 3;
 async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
@@ -276,14 +276,14 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
             scalar_subquery(Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
-                    .aggregate(vec![], vec![avg(col("t2.c2"))])?
-                    .select(vec![avg(col("t2.c2"))])?
+                    .filter(out_ref_col(DataType::Utf8, "t1.car").eq(col("t2.car")))?
+                    .aggregate(vec![], vec![avg(col("t2.speed"))])?
+                    .select(vec![avg(col("t2.speed"))])?
                     .into_unoptimized_plan(),
             ))
-            .gt(lit(0u8)),
+            .gt(lit(0.0)),
         )?
-        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .select(vec![col("t1.car"), col("t1.speed")])?
         .limit(0, Some(3))?
         .show()
         .await?;
@@ -291,22 +291,24 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
 }
 
 /// Use the DataFrame API to execute the following subquery:
-/// select t1.c1, t1.c2 from t1 where t1.c2 in (select max(t2.c2) from t2 where t2.c1 > 0 ) limit 3;
+/// select t1.car, t1.speed from t1 where t1.speed in (select max(t2.speed) from t2 where t2.car = 'red') limit 3;
 async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
         .filter(in_subquery(
-            col("t1.c2"),
+            col("t1.speed"),
             Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(col("t2.c1").gt(lit(ScalarValue::UInt8(Some(0)))))?
-                    .aggregate(vec![], vec![max(col("t2.c2"))])?
-                    .select(vec![max(col("t2.c2"))])?
+                    .filter(
+                        col("t2.car").gt(lit(ScalarValue::Utf8(Some("red".to_string())))),
+                    )?
+                    .aggregate(vec![], vec![max(col("t2.speed"))])?
+                    .select(vec![max(col("t2.speed"))])?
                     .into_unoptimized_plan(),
             ),
         ))?
-        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .select(vec![col("t1.car"), col("t1.speed")])?
         .limit(0, Some(3))?
         .show()
         .await?;
@@ -314,29 +316,29 @@ async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
 }
 
 /// Use the DataFrame API to execute the following subquery:
-/// select t1.c1, t1.c2 from t1 where exists (select t2.c2 from t2 where t1.c1 = t2.c1) limit 3;
+/// select t1.car, t1.speed from t1 where exists (select t2.speed from t2 where t1.car = t2.car) limit 3;
 async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
         .filter(exists(Arc::new(
             ctx.table("t2")
                 .await?
-                .filter(out_ref_col(DataType::Utf8, "t1.c1").eq(col("t2.c1")))?
-                .select(vec![col("t2.c2")])?
+                .filter(out_ref_col(DataType::Utf8, "t1.car").eq(col("t2.car")))?
+                .select(vec![col("t2.speed")])?
                 .into_unoptimized_plan(),
         )))?
-        .select(vec![col("t1.c1"), col("t1.c2")])?
+        .select(vec![col("t1.car"), col("t1.speed")])?
         .limit(0, Some(3))?
         .show()
         .await?;
     Ok(())
 }
 
-async fn register_aggregate_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
+async fn register_cars_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
-        .join("aggregate_test_100.csv");
+        .join("cars.csv");
 
     ctx.register_csv(name, path.to_str().unwrap(), CsvReadOptions::default())
         .await?;
