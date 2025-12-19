@@ -32,15 +32,15 @@ use crate::logical_expr::execution_props::ExecutionProps;
 use crate::logical_expr::simplify::SimplifyContext;
 use crate::optimizer::simplify_expressions::ExprSimplifier;
 use crate::physical_expr::create_physical_expr;
+use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::metrics::MetricsSet;
-use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
@@ -203,13 +203,12 @@ impl TestParquetFile {
     /// Recursively searches for DataSourceExec and returns the metrics
     /// on the first one it finds
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
-        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            if data_source_exec
+        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>()
+            && data_source_exec
                 .downcast_to_file_source::<ParquetSource>()
                 .is_some()
-            {
-                return data_source_exec.metrics();
-            }
+        {
+            return data_source_exec.metrics();
         }
 
         for child in plan.children() {

@@ -18,24 +18,24 @@
 use std::{ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult::ROk, RVec},
     StableAbi,
+    std_types::{RResult::ROk, RVec},
 };
 use arrow::datatypes::SchemaRef;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        execution_plan::{Boundedness, EmissionType},
         PlanProperties,
+        execution_plan::{Boundedness, EmissionType},
     },
     prelude::SessionContext,
 };
 use datafusion_proto::{
     physical_plan::{
+        DefaultPhysicalExtensionCodec,
         from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
         to_proto::{serialize_partitioning, serialize_physical_sort_exprs},
-        DefaultPhysicalExtensionCodec,
     },
     protobuf::{Partitioning, PhysicalSortExprNodeCollection},
 };
@@ -141,11 +141,13 @@ unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> Wrapp
 }
 
 unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
-    debug_assert!(!props.private_data.is_null());
-    let private_data =
-        Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
-    drop(private_data);
-    props.private_data = std::ptr::null_mut();
+    unsafe {
+        debug_assert!(!props.private_data.is_null());
+        let private_data =
+            Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
+        drop(private_data);
+        props.private_data = std::ptr::null_mut();
+    }
 }
 
 impl Drop for FFI_PlanProperties {

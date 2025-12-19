@@ -105,7 +105,7 @@ impl CommonOpt {
                     return Err(DataFusionError::Configuration(format!(
                         "Invalid memory pool type: {}",
                         self.mem_pool_type
-                    )))
+                    )));
                 }
             };
             rt_builder = rt_builder

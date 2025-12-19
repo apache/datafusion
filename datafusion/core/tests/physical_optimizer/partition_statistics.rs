@@ -25,16 +25,16 @@ mod test {
     use datafusion::datasource::listing::ListingTable;
     use datafusion::prelude::SessionContext;
     use datafusion_catalog::TableProvider;
-    use datafusion_common::stats::Precision;
     use datafusion_common::Result;
+    use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
-    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_expr_common::operator::Operator;
     use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::{binary, col, lit, Column};
     use datafusion_physical_expr::Partitioning;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::{Column, binary, col, lit};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use datafusion_physical_plan::aggregates::{
@@ -53,8 +53,8 @@ mod test {
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
     use datafusion_physical_plan::{
-        execute_stream_partitioned, get_plan_string, ExecutionPlan,
-        ExecutionPlanProperties,
+        ExecutionPlan, ExecutionPlanProperties, execute_stream_partitioned,
+        get_plan_string,
     };
 
     use futures::TryStreamExt;
@@ -766,11 +766,13 @@ mod test {
             ),
         ]);
 
-        let aggr_expr = vec![AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
-            .schema(Arc::clone(&scan_schema))
-            .alias(String::from("COUNT(c)"))
-            .build()
-            .map(Arc::new)?];
+        let aggr_expr = vec![
+            AggregateExprBuilder::new(count_udaf(), vec![lit(1)])
+                .schema(Arc::clone(&scan_schema))
+                .alias(String::from("COUNT(c)"))
+                .build()
+                .map(Arc::new)?,
+        ];
 
         let aggregate_exec_partial: Arc<dyn ExecutionPlan> =
             Arc::new(AggregateExec::try_new(
@@ -1067,9 +1069,11 @@ mod test {
         let result = repartition.partition_statistics(Some(2));
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("RepartitionExec invalid partition 2 (expected less than 2)"));
+        assert!(
+            error
+                .to_string()
+                .contains("RepartitionExec invalid partition 2 (expected less than 2)")
+        );
 
         let partitions = execute_stream_partitioned(
             repartition.clone(),

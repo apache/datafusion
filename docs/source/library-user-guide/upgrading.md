@@ -57,6 +57,40 @@ See <https://github.com/apache/datafusion/issues/19056> for more details.
 
 Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
 
+### `newlines_in_values` moved from `FileScanConfig` to `CsvOptions`
+
+The CSV-specific `newlines_in_values` configuration option has been moved from `FileScanConfig` to `CsvOptions`, as it only applies to CSV file parsing.
+
+**Who is affected:**
+
+- Users who set `newlines_in_values` via `FileScanConfigBuilder::with_newlines_in_values()`
+
+**Migration guide:**
+
+Set `newlines_in_values` in `CsvOptions` instead of on `FileScanConfigBuilder`:
+
+**Before:**
+
+```rust,ignore
+let source = Arc::new(CsvSource::new(file_schema.clone()));
+let config = FileScanConfigBuilder::new(object_store_url, source)
+    .with_newlines_in_values(true)
+    .build();
+```
+
+**After:**
+
+```rust,ignore
+let options = CsvOptions {
+    newlines_in_values: Some(true),
+    ..Default::default()
+};
+let source = Arc::new(CsvSource::new(file_schema.clone())
+    .with_csv_options(options));
+let config = FileScanConfigBuilder::new(object_store_url, source)
+    .build();
+```
+
 ### Removal of `pyarrow` feature
 
 The `pyarrow` feature flag has been removed. This feature has been migrated to
@@ -479,16 +513,27 @@ let config = FileScanConfigBuilder::new(url, source)
     .build();
 ```
 
-### `SchemaAdapterFactory` Fully Removed from Parquet
+### `SchemaAdapter` and `SchemaAdapterFactory` completely removed
 
 Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaadapterfactory-and-schemaadapter), `SchemaAdapterFactory` has been fully removed from Parquet scanning. This applies to both:
 
-- **Predicate pushdown / row filtering** (deprecated in 49.0.0)
-- **Projections** (newly removed in 52.0.0)
+The following symbols have been deprecated and will be removed in the next release:
 
+- `SchemaAdapter` trait
+- `SchemaAdapterFactory` trait
+- `SchemaMapper` trait
+- `SchemaMapping` struct
+- `DefaultSchemaAdapterFactory` struct
+
+These types were previously used to adapt record batch schemas during file reading.
+This functionality has been replaced by `PhysicalExprAdapterFactory`, which rewrites expressions at planning time rather than transforming batches at runtime.
 If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
-
 See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
+
+**Migration guide:**
+
+If you implemented a custom `SchemaAdapterFactory`, migrate to `PhysicalExprAdapterFactory`.
+See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for a complete implementation.
 
 ## DataFusion `51.0.0`
 

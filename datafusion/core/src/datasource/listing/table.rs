@@ -113,8 +113,8 @@ mod tests {
     use crate::prelude::*;
     use crate::{
         datasource::{
-            file_format::csv::CsvFormat, file_format::json::JsonFormat,
-            provider_as_source, DefaultTableSource, MemTable,
+            DefaultTableSource, MemTable, file_format::csv::CsvFormat,
+            file_format::json::JsonFormat, provider_as_source,
         },
         execution::options::ArrowReadOptions,
         test::{
@@ -129,21 +129,20 @@ mod tests {
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
     };
     use datafusion_common::{
-        assert_contains,
+        DataFusionError, Result, ScalarValue, assert_contains,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
-        DataFusionError, Result, ScalarValue,
     };
+    use datafusion_datasource::ListingTableUrl;
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
-    use datafusion_datasource::ListingTableUrl;
     use datafusion_expr::dml::InsertOp;
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
-    use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::expressions::binary;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use datafusion_physical_plan::empty::EmptyExec;
-    use datafusion_physical_plan::{collect, ExecutionPlanProperties};
+    use datafusion_physical_plan::{ExecutionPlanProperties, collect};
     use std::collections::HashMap;
     use std::io::Write;
     use std::sync::Arc;
@@ -283,32 +282,36 @@ mod tests {
             // sort expr, but non column
             (
                 vec![vec![col("int_col").add(lit(1)).sort(true, true)]],
-                Ok(vec![[PhysicalSortExpr {
-                    expr: binary(
-                        physical_col("int_col", &schema).unwrap(),
-                        Operator::Plus,
-                        physical_lit(1),
-                        &schema,
-                    )
-                    .unwrap(),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: true,
-                    },
-                }]
-                .into()]),
+                Ok(vec![
+                    [PhysicalSortExpr {
+                        expr: binary(
+                            physical_col("int_col", &schema).unwrap(),
+                            Operator::Plus,
+                            physical_lit(1),
+                            &schema,
+                        )
+                        .unwrap(),
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: true,
+                        },
+                    }]
+                    .into(),
+                ]),
             ),
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![[PhysicalSortExpr {
-                    expr: physical_col("string_col", &schema).unwrap(),
-                    options: SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    },
-                }]
-                .into()]),
+                Ok(vec![
+                    [PhysicalSortExpr {
+                        expr: physical_col("string_col", &schema).unwrap(),
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: false,
+                        },
+                    }]
+                    .into(),
+                ]),
             ),
             // ok with two columns, different options
             (
@@ -316,19 +319,21 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![[
-                    PhysicalSortExpr::new_default(
-                        physical_col("string_col", &schema).unwrap(),
-                    )
-                    .asc()
-                    .nulls_last(),
-                    PhysicalSortExpr::new_default(
-                        physical_col("int_col", &schema).unwrap(),
-                    )
-                    .desc()
-                    .nulls_first(),
-                ]
-                .into()]),
+                Ok(vec![
+                    [
+                        PhysicalSortExpr::new_default(
+                            physical_col("string_col", &schema).unwrap(),
+                        )
+                        .asc()
+                        .nulls_last(),
+                        PhysicalSortExpr::new_default(
+                            physical_col("int_col", &schema).unwrap(),
+                        )
+                        .desc()
+                        .nulls_first(),
+                    ]
+                    .into(),
+                ]),
             ),
         ];
 
@@ -725,8 +730,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_into_append_new_parquet_files_invalid_session_fails(
-    ) -> Result<()> {
+    async fn test_insert_into_append_new_parquet_files_invalid_session_fails()
+    -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
         config_map.insert(
             "datafusion.execution.parquet.compression".into(),
@@ -740,7 +745,10 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
-        assert_eq!(e.strip_backtrace(), "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)");
+        assert_eq!(
+            e.strip_backtrace(),
+            "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)"
+        );
 
         Ok(())
     }
@@ -867,13 +875,13 @@ mod tests {
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Insert returns the number of rows written, in our case this would be 6.
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
-            +-------+
-            | count |
-            +-------+
-            | 20    |
-            +-------+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r"
+        +-------+
+        | count |
+        +-------+
+        | 20    |
+        +-------+
+        ");}
 
         // Read the records in the table
         let batches = session_ctx
@@ -882,13 +890,13 @@ mod tests {
             .collect()
             .await?;
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
-            +-------+
-            | count |
-            +-------+
-            | 20    |
-            +-------+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r"
+        +-------+
+        | count |
+        +-------+
+        | 20    |
+        +-------+
+        ");}
 
         // Assert that `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -903,13 +911,13 @@ mod tests {
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r###"
-            +-------+
-            | count |
-            +-------+
-            | 20    |
-            +-------+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&res),@r"
+        +-------+
+        | count |
+        +-------+
+        | 20    |
+        +-------+
+        ");}
 
         // Read the contents of the table
         let batches = session_ctx
@@ -918,13 +926,13 @@ mod tests {
             .collect()
             .await?;
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
-            +-------+
-            | count |
-            +-------+
-            | 40    |
-            +-------+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r"
+        +-------+
+        | count |
+        +-------+
+        | 40    |
+        +-------+
+        ");}
 
         // Assert that another `target_partition_number` many files were added to the table.
         let num_files = tmp_dir.path().read_dir()?.count();
@@ -982,15 +990,15 @@ mod tests {
             .collect()
             .await?;
 
-        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r###"
-            +-----+-----+---+
-            | a   | b   | c |
-            +-----+-----+---+
-            | foo | bar | 1 |
-            | foo | bar | 2 |
-            | foo | bar | 3 |
-            +-----+-----+---+
-        "###);}
+        insta::allow_duplicates! {insta::assert_snapshot!(batches_to_string(&batches),@r"
+        +-----+-----+---+
+        | a   | b   | c |
+        +-----+-----+---+
+        | foo | bar | 1 |
+        | foo | bar | 2 |
+        | foo | bar | 3 |
+        +-----+-----+---+
+        ");}
 
         Ok(())
     }
@@ -1410,7 +1418,9 @@ mod tests {
         ];
 
         for (format, batch_size, soft_max_rows, expected_files) in test_cases {
-            println!("Testing insert with format: {format}, batch_size: {batch_size}, expected files: {expected_files}");
+            println!(
+                "Testing insert with format: {format}, batch_size: {batch_size}, expected files: {expected_files}"
+            );
 
             let mut config_map = HashMap::new();
             config_map.insert(
@@ -1443,11 +1453,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_statistics_mapping_with_default_factory() -> Result<()> {
+    async fn test_basic_table_scan() -> Result<()> {
         let ctx = SessionContext::new();
 
-        // Create a table without providing a custom schema adapter factory
-        // This should fall back to using DefaultSchemaAdapterFactory
+        // Test basic table creation and scanning
         let path = "table/file.json";
         register_test_store(&ctx, &[(path, 10)]);
 
@@ -1459,25 +1468,18 @@ mod tests {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
             .with_schema(Arc::new(schema));
-        // Note: NOT calling .with_schema_adapter_factory() to test default behavior
 
         let table = ListingTable::try_new(config)?;
 
-        // Verify that no custom schema adapter factory is set
-        assert!(table.schema_adapter_factory().is_none());
-
-        // The scan should work correctly with the default schema adapter
+        // The scan should work correctly
         let scan_result = table.scan(&ctx.state(), None, &[], None).await;
-        assert!(
-            scan_result.is_ok(),
-            "Scan should succeed with default schema adapter"
-        );
+        assert!(scan_result.is_ok(), "Scan should succeed");
 
-        // Verify that the default adapter handles basic schema compatibility
+        // Verify file listing works
         let result = table.list_files_for_scan(&ctx.state(), &[], None).await?;
         assert!(
             !result.file_groups.is_empty(),
-            "Should list files successfully with default adapter"
+            "Should list files successfully"
         );
 
         Ok(())

@@ -26,27 +26,27 @@ use std::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};
+use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
 use datafusion_common::{JoinSide, NullEquality};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
+use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::{
-    execution_plan::{Boundedness, EmissionType},
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    execution_plan::{Boundedness, EmissionType},
 };
 
 use futures::Stream;
@@ -949,10 +949,10 @@ impl Stream for UnboundedStream {
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        if let Some(val) = self.batch_produce {
-            if val <= self.count {
-                return Poll::Ready(None);
-            }
+        if let Some(val) = self.batch_produce
+            && val <= self.count
+        {
+            return Poll::Ready(None);
         }
         self.count += 1;
         Poll::Ready(Some(Ok(self.batch.clone())))
@@ -1088,9 +1088,10 @@ pub struct StatisticsExec {
 impl StatisticsExec {
     pub fn new(stats: Statistics, schema: Schema) -> Self {
         assert_eq!(
-                stats.column_statistics.len(), schema.fields().len(),
-                "if defined, the column statistics vector length should be the number of fields"
-            );
+            stats.column_statistics.len(),
+            schema.fields().len(),
+            "if defined, the column statistics vector length should be the number of fields"
+        );
         let cache = Self::compute_properties(Arc::new(schema.clone()));
         Self {
             stats,

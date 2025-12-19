@@ -573,7 +573,7 @@ fn gen_range_iter(
 }
 
 fn parse_tz(tz: &Option<&str>) -> Result<Tz> {
-    let tz = tz.as_ref().map_or_else(|| "+00", |s| s);
+    let tz = tz.unwrap_or_else(|| "+00");
 
     Tz::from_str(tz)
         .map_err(|op| exec_datafusion_err!("failed to parse timezone {tz}: {:?}", op))

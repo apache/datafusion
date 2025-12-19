@@ -35,7 +35,7 @@ use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError};
+use datafusion_common::{DataFusionError, internal_err, not_impl_err};
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
