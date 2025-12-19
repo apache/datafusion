@@ -28,8 +28,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    assert_eq_or_internal_err, assert_or_internal_err, internal_err, plan_err,
-    qualified_name, Column, DFSchema, DataFusionError, Result,
+    Column, DFSchema, Result, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_err, plan_err, qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -38,7 +38,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
+    BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown, and, or,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -766,8 +766,9 @@ impl OptimizerRule for PushDownFilter {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        let _ = config.options();
         if let LogicalPlan::Join(join) = plan {
             return push_down_join(join, None);
         };
@@ -811,8 +812,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input,
                 )?);
-                #[allow(clippy::used_underscore_binding)]
-                self.rewrite(new_filter, _config)
+                self.rewrite(new_filter, config)
             }
             LogicalPlan::Repartition(repartition) => {
                 let new_filter =
@@ -1378,7 +1378,7 @@ fn insert_below(
 }
 
 impl PushDownFilter {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -1435,17 +1435,17 @@ mod tests {
     use datafusion_expr::expr::{ScalarFunction, WindowFunction};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        col, in_list, in_subquery, lit, ColumnarValue, ExprFunctionExt, Extension,
-        LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
-        WindowFunctionDefinition,
+        ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col, in_list,
+        in_subquery, lit,
     };
 
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
-    use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
     use insta::assert_snapshot;
 

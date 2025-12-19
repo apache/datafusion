@@ -67,17 +67,16 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
 
+use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::Result;
-use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
 
@@ -106,8 +105,6 @@ pub(crate) struct DatafusionArrowPredicate {
     rows_matched: metrics::Count,
     /// how long was spent evaluating this predicate
     time: metrics::Time,
-    /// used to perform type coercion while filtering rows
-    schema_mapper: Arc<dyn SchemaMapper>,
 }
 
 impl DatafusionArrowPredicate {
@@ -131,7 +128,6 @@ impl DatafusionArrowPredicate {
             rows_pruned,
             rows_matched,
             time,
-            schema_mapper: candidate.schema_mapper,
         })
     }
 }
@@ -142,8 +138,6 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
-        let batch = self.schema_mapper.map_batch(batch)?;
-
         // scoped timer updates on drop
         let mut timer = self.time.timer();
 
@@ -182,73 +176,32 @@ pub(crate) struct FilterCandidate {
     required_bytes: usize,
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
-    /// The projection to read from the file schema to get the columns
-    /// required to pass through a `SchemaMapper` to the table schema
-    /// upon which we then evaluate the filter expression.
+    /// Column indices into the parquet file schema required to evaluate this filter.
     projection: Vec<usize>,
-    ///  A `SchemaMapper` used to map batches read from the file schema to
-    /// the filter's projection of the table schema.
-    schema_mapper: Arc<dyn SchemaMapper>,
-    /// The projected table schema that this filter references
+    /// The Arrow schema containing only the columns required by this filter,
+    /// projected from the file's Arrow schema.
     filter_schema: SchemaRef,
 }
 
 /// Helper to build a `FilterCandidate`.
 ///
-/// This will do several things
+/// This will do several things:
 /// 1. Determine the columns required to evaluate the expression
 /// 2. Calculate data required to estimate the cost of evaluating the filter
-/// 3. Rewrite column expressions in the predicate which reference columns not
-///    in the particular file schema.
 ///
-/// # Schema Rewrite
-///
-/// When parquet files are read in the context of "schema evolution" there are
-/// potentially wo schemas:
-///
-/// 1. The table schema (the columns of the table that the parquet file is part of)
-/// 2. The file schema (the columns actually in the parquet file)
-///
-/// There are times when the table schema contains columns that are not in the
-/// file schema, such as when new columns have been added in new parquet files
-/// but old files do not have the columns.
-///
-/// When a file is missing a column from the table schema, the value of the
-/// missing column is filled in by a `SchemaAdapter` (by default as `NULL`).
-///
-/// When a predicate is pushed down to the parquet reader, the predicate is
-/// evaluated in the context of the file schema.
-/// For each predicate we build a filter schema which is the projection of the table
-/// schema that contains only the columns that this filter references.
-/// If any columns from the file schema are missing from a particular file they are
-/// added by the `SchemaAdapter`, by default as `NULL`.
+/// Note: This does *not* handle any adaptation of the expression to the file schema.
+/// The expression must already be adapted before being passed in here, generally using
+/// [`PhysicalExprAdapter`](datafusion_physical_expr_adapter::PhysicalExprAdapter).
 struct FilterCandidateBuilder {
     expr: Arc<dyn PhysicalExpr>,
-    /// The schema of this parquet file.
-    /// Columns may have different types from the table schema and there may be
-    /// columns in the file schema that are not in the table schema or columns that
-    /// are in the table schema that are not in the file schema.
+    /// The Arrow schema of this parquet file (the result of converting the
+    /// parquet schema to Arrow, potentially with type coercions applied).
     file_schema: SchemaRef,
-    /// The schema of the table (merged schema) -- columns may be in different
-    /// order than in the file and have columns that are not in the file schema
-    table_schema: SchemaRef,
-    /// A `SchemaAdapterFactory` used to map the file schema to the table schema.
-    schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
 }
 
 impl FilterCandidateBuilder {
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        file_schema: Arc<Schema>,
-        table_schema: Arc<Schema>,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        Self {
-            expr,
-            file_schema,
-            table_schema,
-            schema_adapter_factory,
-        }
+    pub fn new(expr: Arc<dyn PhysicalExpr>, file_schema: Arc<Schema>) -> Self {
+        Self { expr, file_schema }
     }
 
     /// Attempt to build a `FilterCandidate` from the expression
@@ -259,72 +212,64 @@ impl FilterCandidateBuilder {
     /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
     /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
-        let Some(required_indices_into_table_schema) =
-            pushdown_columns(&self.expr, &self.table_schema)?
+        let Some(required_column_indices) =
+            pushdown_columns(&self.expr, &self.file_schema)?
         else {
             return Ok(None);
         };
 
-        let projected_table_schema = Arc::new(
-            self.table_schema
-                .project(&required_indices_into_table_schema)?,
-        );
+        let projected_schema =
+            Arc::new(self.file_schema.project(&required_column_indices)?);
 
-        let (schema_mapper, projection_into_file_schema) = self
-            .schema_adapter_factory
-            .create(Arc::clone(&projected_table_schema), self.table_schema)
-            .map_schema(&self.file_schema)?;
-
-        let required_bytes = size_of_columns(&projection_into_file_schema, metadata)?;
-        let can_use_index = columns_sorted(&projection_into_file_schema, metadata)?;
+        let required_bytes = size_of_columns(&required_column_indices, metadata)?;
+        let can_use_index = columns_sorted(&required_column_indices, metadata)?;
 
         Ok(Some(FilterCandidate {
             expr: self.expr,
             required_bytes,
             can_use_index,
-            projection: projection_into_file_schema,
-            schema_mapper: Arc::clone(&schema_mapper),
-            filter_schema: Arc::clone(&projected_table_schema),
+            projection: required_column_indices,
+            filter_schema: projected_schema,
         }))
     }
 }
 
-// a struct that implements TreeNodeRewriter to traverse a PhysicalExpr tree structure to determine
-// if any column references in the expression would prevent it from being predicate-pushed-down.
-// if non_primitive_columns || projected_columns, it can't be pushed down.
-// can't be reused between calls to `rewrite`; each construction must be used only once.
+/// Traverses a `PhysicalExpr` tree to determine if any column references would
+/// prevent the expression from being pushed down to the parquet decoder.
+///
+/// An expression cannot be pushed down if it references:
+/// - Non-primitive columns (like structs or lists)
+/// - Columns that don't exist in the file schema
 struct PushdownChecker<'schema> {
     /// Does the expression require any non-primitive columns (like structs)?
     non_primitive_columns: bool,
-    /// Does the expression reference any columns that are in the table
-    /// schema but not in the file schema?
-    /// This includes partition columns and projected columns.
+    /// Does the expression reference any columns not present in the file schema?
     projected_columns: bool,
-    // Indices into the table schema of the columns required to evaluate the expression
+    /// Indices into the file schema of columns required to evaluate the expression.
     required_columns: BTreeSet<usize>,
-    table_schema: &'schema Schema,
+    /// The Arrow schema of the parquet file.
+    file_schema: &'schema Schema,
 }
 
 impl<'schema> PushdownChecker<'schema> {
-    fn new(table_schema: &'schema Schema) -> Self {
+    fn new(file_schema: &'schema Schema) -> Self {
         Self {
             non_primitive_columns: false,
             projected_columns: false,
             required_columns: BTreeSet::default(),
-            table_schema,
+            file_schema,
         }
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        if let Ok(idx) = self.table_schema.index_of(column_name) {
+        if let Ok(idx) = self.file_schema.index_of(column_name) {
             self.required_columns.insert(idx);
-            if DataType::is_nested(self.table_schema.field(idx).data_type()) {
+            if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                 self.non_primitive_columns = true;
                 return Some(TreeNodeRecursion::Jump);
             }
         } else {
-            // If the column does not exist in the (un-projected) table schema then
-            // it must be a projected column.
+            // Column does not exist in the file schema, so we can't push this down.
             self.projected_columns = true;
             return Some(TreeNodeRecursion::Jump);
         }
@@ -342,35 +287,44 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        if let Some(column) = node.as_any().downcast_ref::<Column>() {
-            if let Some(recursion) = self.check_single_column(column.name()) {
-                return Ok(recursion);
-            }
+        if let Some(column) = node.as_any().downcast_ref::<Column>()
+            && let Some(recursion) = self.check_single_column(column.name())
+        {
+            return Ok(recursion);
         }
 
         Ok(TreeNodeRecursion::Continue)
     }
 }
 
-// Checks if a given expression can be pushed down into `DataSourceExec` as opposed to being evaluated
-// post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns all the
-// columns in the given expression so that they can be used in the parquet scanning, along with the
-// expression rewritten as defined in [`PushdownChecker::f_up`]
+/// Checks if a given expression can be pushed down to the parquet decoder.
+///
+/// Returns `Some(column_indices)` if the expression can be pushed down,
+/// where `column_indices` are the indices into the file schema of all columns
+/// required to evaluate the expression.
+///
+/// Returns `None` if the expression cannot be pushed down (e.g., references
+/// non-primitive types or columns not in the file).
 fn pushdown_columns(
     expr: &Arc<dyn PhysicalExpr>,
-    table_schema: &Schema,
+    file_schema: &Schema,
 ) -> Result<Option<Vec<usize>>> {
-    let mut checker = PushdownChecker::new(table_schema);
+    let mut checker = PushdownChecker::new(file_schema);
     expr.visit(&mut checker)?;
     Ok((!checker.prevents_pushdown())
         .then_some(checker.required_columns.into_iter().collect()))
 }
 
-/// Recurses through expr as a tree, finds all `column`s, and checks if any of them would prevent
-/// this expression from being predicate pushed down. If any of them would, this returns false.
-/// Otherwise, true.
-/// Note that the schema passed in here is *not* the physical file schema (as it is not available at that point in time);
-/// it is the schema of the table that this expression is being evaluated against minus any projected columns and partition columns.
+/// Checks if a predicate expression can be pushed down to the parquet decoder.
+///
+/// Returns `true` if all columns referenced by the expression:
+/// - Exist in the provided schema
+/// - Are primitive types (not structs, lists, etc.)
+///
+/// # Arguments
+/// * `expr` - The filter expression to check
+/// * `file_schema` - The Arrow schema of the parquet file (or table schema when
+///   the file schema is not yet available during planning)
 pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
@@ -408,28 +362,33 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
     Ok(false)
 }
 
-/// Build a [`RowFilter`] from the given predicate `Expr` if possible
+/// Build a [`RowFilter`] from the given predicate expression if possible.
 ///
-/// # returns
-/// * `Ok(Some(row_filter))` if the expression can be used as RowFilter
-/// * `Ok(None)` if the expression cannot be used as an RowFilter
+/// # Arguments
+/// * `expr` - The filter predicate, already adapted to reference columns in `file_schema`
+/// * `file_schema` - The Arrow schema of the parquet file (the result of converting
+///   the parquet schema to Arrow, potentially with type coercions applied)
+/// * `metadata` - Parquet file metadata used for cost estimation
+/// * `reorder_predicates` - If true, reorder predicates to minimize I/O
+/// * `file_metrics` - Metrics for tracking filter performance
+///
+/// # Returns
+/// * `Ok(Some(row_filter))` if the expression can be used as a RowFilter
+/// * `Ok(None)` if the expression cannot be used as a RowFilter
 /// * `Err(e)` if an error occurs while building the filter
 ///
-/// Note that the returned `RowFilter` may not contains all conjuncts in the
-/// original expression. This is because some conjuncts may not be able to be
-/// evaluated as an `ArrowPredicate` and will be ignored.
+/// Note: The returned `RowFilter` may not contain all conjuncts from the original
+/// expression. Conjuncts that cannot be evaluated as an `ArrowPredicate` are ignored.
 ///
 /// For example, if the expression is `a = 1 AND b = 2 AND c = 3` and `b = 2`
-/// can not be evaluated for some reason, the returned `RowFilter` will contain
-/// `a = 1` and `c = 3`.
+/// cannot be evaluated for some reason, the returned `RowFilter` will contain
+/// only `a = 1` and `c = 3`.
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
-    physical_file_schema: &SchemaRef,
-    predicate_file_schema: &SchemaRef,
+    file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
-    schema_adapter_factory: &Arc<dyn SchemaAdapterFactory>,
 ) -> Result<Option<RowFilter>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
@@ -443,13 +402,8 @@ pub fn build_row_filter(
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .map(|expr| {
-            FilterCandidateBuilder::new(
-                Arc::clone(expr),
-                Arc::clone(physical_file_schema),
-                Arc::clone(predicate_file_schema),
-                Arc::clone(schema_adapter_factory),
-            )
-            .build(metadata)
+            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
+                .build(metadata)
         })
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -470,14 +424,33 @@ pub fn build_row_filter(
         });
     }
 
+    // To avoid double-counting metrics when multiple predicates are used:
+    // - All predicates should count rows_pruned (cumulative pruned rows)
+    // - Only the last predicate should count rows_matched (final result)
+    // This ensures: rows_matched + rows_pruned = total rows processed
+    let total_candidates = candidates.len();
+
     candidates
         .into_iter()
-        .map(|candidate| {
+        .enumerate()
+        .map(|(idx, candidate)| {
+            let is_last = idx == total_candidates - 1;
+
+            // All predicates share the pruned counter (cumulative)
+            let predicate_rows_pruned = rows_pruned.clone();
+
+            // Only the last predicate tracks matched rows (final result)
+            let predicate_rows_matched = if is_last {
+                rows_matched.clone()
+            } else {
+                metrics::Count::new()
+            };
+
             DatafusionArrowPredicate::try_new(
                 candidate,
                 metadata,
-                rows_pruned.clone(),
-                rows_matched.clone(),
+                predicate_rows_pruned,
+                predicate_rows_matched,
                 time.clone(),
             )
             .map(|pred| Box::new(pred) as _)
@@ -492,9 +465,11 @@ mod test {
     use datafusion_common::ScalarValue;
 
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
-    use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
-    use datafusion_expr::{col, Expr};
+    use datafusion_expr::{Expr, col};
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
+    };
     use datafusion_physical_plan::metrics::{Count, Time};
 
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -519,17 +494,11 @@ mod test {
         let expr = col("int64_list").is_not_null();
         let expr = logical2physical(&expr, &table_schema);
 
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
         let table_schema = Arc::new(table_schema.clone());
 
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            table_schema.clone(),
-            table_schema,
-            schema_adapter_factory,
-        )
-        .build(metadata)
-        .expect("building candidate");
+        let candidate = FilterCandidateBuilder::new(expr, table_schema)
+            .build(metadata)
+            .expect("building candidate");
 
         assert!(candidate.is_none());
     }
@@ -559,17 +528,14 @@ mod test {
             None,
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
-        let table_schema = Arc::new(table_schema.clone());
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            file_schema.clone(),
-            table_schema.clone(),
-            schema_adapter_factory,
-        )
-        .build(&metadata)
-        .expect("building candidate")
-        .expect("candidate expected");
+        let expr = DefaultPhysicalExprAdapterFactory {}
+            .create(Arc::new(table_schema.clone()), Arc::clone(&file_schema))
+            .rewrite(expr)
+            .expect("rewriting expression");
+        let candidate = FilterCandidateBuilder::new(expr, file_schema.clone())
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
@@ -600,16 +566,15 @@ mod test {
             None,
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            file_schema,
-            table_schema,
-            schema_adapter_factory,
-        )
-        .build(&metadata)
-        .expect("building candidate")
-        .expect("candidate expected");
+        // Rewrite the expression to add CastExpr for type coercion
+        let expr = DefaultPhysicalExprAdapterFactory {}
+            .create(Arc::new(table_schema), Arc::clone(&file_schema))
+            .rewrite(expr)
+            .expect("rewriting expression");
+        let candidate = FilterCandidateBuilder::new(expr, file_schema)
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,

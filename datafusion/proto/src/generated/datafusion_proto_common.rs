@@ -649,6 +649,9 @@ pub struct CsvOptions {
     /// Indicates if truncated rows are allowed
     #[prost(bytes = "vec", tag = "18")]
     pub truncated_rows: ::prost::alloc::vec::Vec<u8>,
+    /// Optional compression level
+    #[prost(uint32, optional, tag = "19")]
+    pub compression_level: ::core::option::Option<u32>,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -659,6 +662,9 @@ pub struct JsonOptions {
     /// Optional max records for schema inference
     #[prost(uint64, optional, tag = "2")]
     pub schema_infer_max_rec: ::core::option::Option<u64>,
+    /// Optional compression level
+    #[prost(uint32, optional, tag = "3")]
+    pub compression_level: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableParquetOptions {
@@ -763,6 +769,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "6")]
     pub reorder_filters: bool,
+    /// default = false
+    #[prost(bool, tag = "34")]
+    pub force_filter_selections: bool,
     /// default = 1024 * 1024
     #[prost(uint64, tag = "7")]
     pub data_pagesize_limit: u64,
@@ -927,6 +936,8 @@ pub struct ColumnStats {
     pub null_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "4")]
     pub distinct_count: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "6")]
+    pub byte_size: ::core::option::Option<Precision>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

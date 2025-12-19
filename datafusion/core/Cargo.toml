@@ -152,13 +152,12 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
 regex = { workspace = true }
-rstest = { workspace = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.18", features = ["v4", "js"] }
+uuid = { version = "1.19", features = ["v4", "js"] }
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -271,3 +270,8 @@ name = "dataframe"
 [[bench]]
 harness = false
 name = "spm"
+
+[[bench]]
+harness = false
+name = "preserve_file_partitioning"
+required-features = ["parquet"]

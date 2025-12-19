@@ -18,8 +18,8 @@
 use std::{ffi::c_void, pin::Pin, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
     StableAbi,
+    std_types::{RString, RVec},
 };
 use datafusion::{
     error::DataFusionError,
@@ -29,6 +29,7 @@ use datafusion::{
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 use tokio::runtime::Handle;
 
+use crate::util::FFIResult;
 use crate::{
     df_result, plan_properties::FFI_PlanProperties,
     record_batch_stream::FFI_RecordBatchStream, rresult,
@@ -53,7 +54,7 @@ pub struct FFI_ExecutionPlan {
     pub execute: unsafe extern "C" fn(
         plan: &Self,
         partition: usize,
-    ) -> RResult<FFI_RecordBatchStream, RString>,
+    ) -> FFIResult<FFI_RecordBatchStream>,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -97,34 +98,43 @@ unsafe extern "C" fn properties_fn_wrapper(
 unsafe extern "C" fn children_fn_wrapper(
     plan: &FFI_ExecutionPlan,
 ) -> RVec<FFI_ExecutionPlan> {
-    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-    let plan = &(*private_data).plan;
-    let ctx = &(*private_data).context;
-    let runtime = &(*private_data).runtime;
+    unsafe {
+        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+        let plan = &(*private_data).plan;
+        let ctx = &(*private_data).context;
+        let runtime = &(*private_data).runtime;
 
-    let children: Vec<_> = plan
-        .children()
-        .into_iter()
-        .map(|child| {
-            FFI_ExecutionPlan::new(Arc::clone(child), Arc::clone(ctx), runtime.clone())
-        })
-        .collect();
+        let children: Vec<_> = plan
+            .children()
+            .into_iter()
+            .map(|child| {
+                FFI_ExecutionPlan::new(
+                    Arc::clone(child),
+                    Arc::clone(ctx),
+                    runtime.clone(),
+                )
+            })
+            .collect();
 
-    children.into()
+        children.into()
+    }
 }
 
 unsafe extern "C" fn execute_fn_wrapper(
     plan: &FFI_ExecutionPlan,
     partition: usize,
-) -> RResult<FFI_RecordBatchStream, RString> {
-    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-    let plan = &(*private_data).plan;
-    let ctx = &(*private_data).context;
-    let runtime = (*private_data).runtime.clone();
+) -> FFIResult<FFI_RecordBatchStream> {
+    unsafe {
+        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+        let plan = &(*private_data).plan;
+        let ctx = &(*private_data).context;
+        let runtime = (*private_data).runtime.clone();
 
-    rresult!(plan
-        .execute(partition, Arc::clone(ctx))
-        .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime)))
+        rresult!(
+            plan.execute(partition, Arc::clone(ctx))
+                .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime))
+        )
+    }
 }
 
 unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
@@ -132,19 +142,26 @@ unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
 }
 
 unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
-    let private_data = Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
-    drop(private_data);
+    unsafe {
+        debug_assert!(!plan.private_data.is_null());
+        let private_data =
+            Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
+        drop(private_data);
+        plan.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_ExecutionPlan {
-    let private_data = plan.private_data as *const ExecutionPlanPrivateData;
-    let plan_data = &(*private_data);
+    unsafe {
+        let private_data = plan.private_data as *const ExecutionPlanPrivateData;
+        let plan_data = &(*private_data);
 
-    FFI_ExecutionPlan::new(
-        Arc::clone(&plan_data.plan),
-        Arc::clone(&plan_data.context),
-        plan_data.runtime.clone(),
-    )
+        FFI_ExecutionPlan::new(
+            Arc::clone(&plan_data.plan),
+            Arc::clone(&plan_data.context),
+            plan_data.runtime.clone(),
+        )
+    }
 }
 
 impl Clone for FFI_ExecutionPlan {
@@ -298,13 +315,13 @@ impl ExecutionPlan for ForeignExecutionPlan {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
         physical_plan::{
-            execution_plan::{Boundedness, EmissionType},
             Partitioning,
+            execution_plan::{Boundedness, EmissionType},
         },
         prelude::SessionContext,
     };
@@ -465,9 +482,11 @@ mod tests {
         // Verify different library markers generate foreign providers
         ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into().unwrap();
-        assert!(foreign_plan
-            .as_any()
-            .downcast_ref::<ForeignExecutionPlan>()
-            .is_some());
+        assert!(
+            foreign_plan
+                .as_any()
+                .downcast_ref::<ForeignExecutionPlan>()
+                .is_some()
+        );
     }
 }

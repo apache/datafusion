@@ -37,17 +37,17 @@ use std::{any::Any, io::Cursor};
 use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
-use datafusion_datasource::{as_file_source, TableSchema};
+use datafusion_datasource::{TableSchema, as_file_source};
 
 use arrow::buffer::Buffer;
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
+use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
@@ -460,9 +460,7 @@ impl FileSource for ArrowSource {
                 // Use the default trait implementation logic for file format
                 use datafusion_datasource::file_groups::FileGroupPartitioner;
 
-                if config.file_compression_type.is_compressed()
-                    || config.new_lines_in_values
-                {
+                if config.file_compression_type.is_compressed() {
                     return Ok(None);
                 }
 

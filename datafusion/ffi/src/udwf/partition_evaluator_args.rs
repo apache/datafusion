@@ -18,7 +18,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::arrow_wrappers::WrappedSchema;
-use abi_stable::{std_types::RVec, StableAbi};
+use abi_stable::{StableAbi, std_types::RVec};
 use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::ArrowError,
@@ -28,14 +28,14 @@ use arrow_schema::FieldRef;
 use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::function::PartitionEvaluatorArgs,
-    physical_plan::{expressions::Column, PhysicalExpr},
+    physical_plan::{PhysicalExpr, expressions::Column},
     prelude::SessionContext,
 };
-use datafusion_common::exec_datafusion_err;
+use datafusion_common::ffi_datafusion_err;
 use datafusion_proto::{
     physical_plan::{
-        from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,
-        DefaultPhysicalExtensionCodec,
+        DefaultPhysicalExtensionCodec, from_proto::parse_physical_expr,
+        to_proto::serialize_physical_exprs,
     },
     protobuf::PhysicalExprNode,
 };
@@ -146,7 +146,7 @@ impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
             .into_iter()
             .map(|input_expr_bytes| PhysicalExprNode::decode(input_expr_bytes.as_ref()))
             .collect::<std::result::Result<Vec<_>, prost::DecodeError>>()
-            .map_err(|e| exec_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
+            .map_err(|e| ffi_datafusion_err!("Failed to decode PhysicalExprNode: {e}"))?
             .iter()
             .map(|expr_node| {
                 parse_physical_expr(expr_node, &default_ctx.task_ctx(), &schema, &codec)

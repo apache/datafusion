@@ -18,9 +18,12 @@
 
 //! See `main.rs` for how to run it.
 
+use std::{fs::File, io::Write};
+
 use datafusion::common::{assert_batches_eq, assert_contains};
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use tempfile::tempdir;
 
 /// This example demonstrates how to use the regexp_* functions
 ///
@@ -32,12 +35,30 @@ use datafusion::prelude::*;
 /// https://docs.rs/regex/latest/regex/#grouping-and-flags
 pub async fn regexp() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_csv(
-        "examples",
-        "datafusion/physical-expr/tests/data/regex.csv",
-        CsvReadOptions::new(),
-    )
-    .await?;
+    // content from file 'datafusion/physical-expr/tests/data/regex.csv'
+    let csv_data = r#"values,patterns,replacement,flags
+abc,^(a),bb\1bb,i
+ABC,^(A).*,B,i
+aBc,(b|d),e,i
+AbC,(B|D),e,
+aBC,^(b|c),d,
+4000,\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b,xyz,
+4010,\b4([1-9]\d\d|\d[1-9]\d|\d\d[1-9])\b,xyz,
+Düsseldorf,[\p{Letter}-]+,München,
+Москва,[\p{L}-]+,Moscow,
+Köln,[a-zA-Z]ö[a-zA-Z]{2},Koln,
+اليوم,^\p{Arabic}+$,Today,"#;
+    let dir = tempdir()?;
+    let file_path = dir.path().join("regex.csv");
+    {
+        let mut file = File::create(&file_path)?;
+        // write CSV data
+        file.write_all(csv_data.as_bytes())?;
+    } // scope closes the file
+    let file_path = file_path.to_str().unwrap();
+
+    ctx.register_csv("examples", file_path, CsvReadOptions::new())
+        .await?;
 
     //
     //
@@ -113,11 +134,11 @@ pub async fn regexp() -> Result<()> {
 
     assert_batches_eq!(
         &[
-    "+---------------------------------------------------+----------------------------------------------------+",
-    "| regexp_like(Utf8(\"John Smith\"),Utf8(\"^.*Smith$\")) | regexp_like(Utf8(\"Smith Jones\"),Utf8(\"^Smith.*$\")) |",
-    "+---------------------------------------------------+----------------------------------------------------+",
-    "| true                                              | true                                               |",
-    "+---------------------------------------------------+----------------------------------------------------+",
+            "+---------------------------------------------------+----------------------------------------------------+",
+            "| regexp_like(Utf8(\"John Smith\"),Utf8(\"^.*Smith$\")) | regexp_like(Utf8(\"Smith Jones\"),Utf8(\"^Smith.*$\")) |",
+            "+---------------------------------------------------+----------------------------------------------------+",
+            "| true                                              | true                                               |",
+            "+---------------------------------------------------+----------------------------------------------------+",
         ],
         &result
     );
@@ -243,11 +264,11 @@ pub async fn regexp() -> Result<()> {
 
     assert_batches_eq!(
         &[
-    "+----------------------------------------------------+-----------------------------------------------------+",
-    "| regexp_match(Utf8(\"John Smith\"),Utf8(\"^.*Smith$\")) | regexp_match(Utf8(\"Smith Jones\"),Utf8(\"^Smith.*$\")) |",
-    "+----------------------------------------------------+-----------------------------------------------------+",
-    "| [John Smith]                                       | [Smith Jones]                                       |",
-    "+----------------------------------------------------+-----------------------------------------------------+",
+            "+----------------------------------------------------+-----------------------------------------------------+",
+            "| regexp_match(Utf8(\"John Smith\"),Utf8(\"^.*Smith$\")) | regexp_match(Utf8(\"Smith Jones\"),Utf8(\"^Smith.*$\")) |",
+            "+----------------------------------------------------+-----------------------------------------------------+",
+            "| [John Smith]                                       | [Smith Jones]                                       |",
+            "+----------------------------------------------------+-----------------------------------------------------+",
         ],
         &result
     );
@@ -269,21 +290,21 @@ pub async fn regexp() -> Result<()> {
 
     assert_batches_eq!(
         &[
-    "+---------------------------------------------------------------------------------------------------------+",
-    "| regexp_replace(examples.values,examples.patterns,examples.replacement,concat(Utf8(\"g\"),examples.flags)) |",
-    "+---------------------------------------------------------------------------------------------------------+",
-    "| bbabbbc                                                                                                 |",
-    "| B                                                                                                       |",
-    "| aec                                                                                                     |",
-    "| AbC                                                                                                     |",
-    "| aBC                                                                                                     |",
-    "| 4000                                                                                                    |",
-    "| xyz                                                                                                     |",
-    "| München                                                                                                 |",
-    "| Moscow                                                                                                  |",
-    "| Koln                                                                                                    |",
-    "| Today                                                                                                   |",
-    "+---------------------------------------------------------------------------------------------------------+",
+            "+---------------------------------------------------------------------------------------------------------+",
+            "| regexp_replace(examples.values,examples.patterns,examples.replacement,concat(Utf8(\"g\"),examples.flags)) |",
+            "+---------------------------------------------------------------------------------------------------------+",
+            "| bbabbbc                                                                                                 |",
+            "| B                                                                                                       |",
+            "| aec                                                                                                     |",
+            "| AbC                                                                                                     |",
+            "| aBC                                                                                                     |",
+            "| 4000                                                                                                    |",
+            "| xyz                                                                                                     |",
+            "| München                                                                                                 |",
+            "| Moscow                                                                                                  |",
+            "| Koln                                                                                                    |",
+            "| Today                                                                                                   |",
+            "+---------------------------------------------------------------------------------------------------------+",
         ],
         &result
     );
@@ -297,11 +318,11 @@ pub async fn regexp() -> Result<()> {
 
     assert_batches_eq!(
         &[
-    "+------------------------------------------------------------------------+",
-    "| regexp_replace(Utf8(\"foobarbaz\"),Utf8(\"b(..)\"),Utf8(\"X\\1Y\"),Utf8(\"g\")) |",
-    "+------------------------------------------------------------------------+",
-    "| fooXarYXazY                                                            |",
-    "+------------------------------------------------------------------------+",
+            "+------------------------------------------------------------------------+",
+            "| regexp_replace(Utf8(\"foobarbaz\"),Utf8(\"b(..)\"),Utf8(\"X\\1Y\"),Utf8(\"g\")) |",
+            "+------------------------------------------------------------------------+",
+            "| fooXarYXazY                                                            |",
+            "+------------------------------------------------------------------------+",
         ],
         &result
     );

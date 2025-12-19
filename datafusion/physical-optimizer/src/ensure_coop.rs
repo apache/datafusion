@@ -23,13 +23,14 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
-use datafusion_physical_plan::ExecutionPlan;
 
 /// `EnsureCooperative` is a [`PhysicalOptimizerRule`] that inspects the physical plan for
 /// sub plans that do not participate in cooperative scheduling. The plan is subdivided into sub
@@ -61,10 +62,10 @@ impl PhysicalOptimizerRule for EnsureCooperative {
         "EnsureCooperative"
     }
 
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _context: &OptimizerContext,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(|plan| {
             let is_leaf = plan.children().is_empty();
@@ -95,24 +96,23 @@ impl PhysicalOptimizerRule for EnsureCooperative {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_execution::config::SessionConfig;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_physical_plan::{displayable, test::scan_partitioned};
     use insta::assert_snapshot;
 
     #[tokio::test]
     async fn test_cooperative_exec_for_custom_exec() {
         let test_custom_exec = scan_partitioned(1);
-        let session_config = SessionConfig::new();
-        let optimizer_context = OptimizerContext::new(session_config);
+        let config = ConfigOptions::new();
         let optimized = EnsureCooperative::new()
-            .optimize_plan(test_custom_exec, &optimizer_context)
+            .optimize(test_custom_exec, &config)
             .unwrap();
 
         let display = displayable(optimized.as_ref()).indent(true).to_string();
         // Use insta snapshot to ensure full plan structure
-        assert_snapshot!(display, @r###"
-            CooperativeExec
-              DataSourceExec: partitions=1, partition_sizes=[1]
-            "###);
+        assert_snapshot!(display, @r"
+        CooperativeExec
+          DataSourceExec: partitions=1, partition_sizes=[1]
+        ");
     }
 }

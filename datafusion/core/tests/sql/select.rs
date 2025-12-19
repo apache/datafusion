@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use datafusion_common::{metadata::ScalarAndMetadata, ParamValues, ScalarValue};
+use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -222,10 +222,10 @@ async fn test_parameter_invalid_types() -> Result<()> {
         .await;
     assert_snapshot!(results.unwrap_err().strip_backtrace(),
         @r"
-        type_coercion
-        caused by
-        Error during planning: Cannot infer common argument type for comparison operation List(nullable Int32) = Int32
-        ");
+    type_coercion
+    caused by
+    Error during planning: Cannot infer common argument type for comparison operation List(Int32) = Int32
+    ");
     Ok(())
 }
 

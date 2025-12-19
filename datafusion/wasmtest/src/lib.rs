@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
@@ -101,7 +99,7 @@ mod test {
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
-    use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use object_store::{ObjectStore, memory::InMemory, path::Path};
     use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
 

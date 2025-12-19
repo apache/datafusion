@@ -43,8 +43,8 @@ pub use datafusion_datasource::file::FileSource;
 pub use datafusion_datasource::file_groups::FileGroup;
 pub use datafusion_datasource::file_groups::FileGroupPartitioner;
 pub use datafusion_datasource::file_scan_config::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileScanConfigBuilder,
+    FileScanConfig, FileScanConfigBuilder, wrap_partition_type_in_dict,
+    wrap_partition_value_in_dict,
 };
 pub use datafusion_datasource::file_sink_config::*;
 
@@ -57,10 +57,10 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        cast::AsArray,
-        types::{Float32Type, Float64Type, UInt32Type},
         BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, RecordBatch,
         StringArray, UInt64Array,
+        cast::AsArray,
+        types::{Float32Type, Float64Type, UInt32Type},
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SchemaRef;

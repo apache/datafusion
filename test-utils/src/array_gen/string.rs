@@ -18,9 +18,9 @@
 use arrow::array::{
     ArrayRef, GenericStringArray, OffsetSizeTrait, StringViewArray, UInt32Array,
 };
+use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::rngs::StdRng;
-use rand::Rng;
 
 /// Randomly generate string arrays
 pub struct StringArrayGenerator {

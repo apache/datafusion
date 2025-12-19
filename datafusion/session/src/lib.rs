@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 //! Session management for DataFusion query execution environment
 //!

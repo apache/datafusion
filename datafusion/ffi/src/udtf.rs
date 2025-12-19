@@ -18,8 +18,8 @@
 use std::{ffi::c_void, sync::Arc};
 
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
     StableAbi,
+    std_types::{RResult, RVec},
 };
 
 use datafusion::error::Result;
@@ -29,13 +29,14 @@ use datafusion::{
 };
 use datafusion_proto::{
     logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
+        DefaultLogicalExtensionCodec, from_proto::parse_exprs, to_proto::serialize_exprs,
     },
     protobuf::LogicalExprList,
 };
 use prost::Message;
 use tokio::runtime::Handle;
 
+use crate::util::FFIResult;
 use crate::{df_result, rresult_return, table_provider::FFI_TableProvider};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
@@ -45,10 +46,8 @@ use crate::{df_result, rresult_return, table_provider::FFI_TableProvider};
 pub struct FFI_TableFunction {
     /// Equivalent to the `call` function of the TableFunctionImpl.
     /// The arguments are Expr passed as protobuf encoded bytes.
-    pub call: unsafe extern "C" fn(
-        udtf: &Self,
-        args: RVec<u8>,
-    ) -> RResult<FFI_TableProvider, RString>,
+    pub call:
+        unsafe extern "C" fn(udtf: &Self, args: RVec<u8>) -> FFIResult<FFI_TableProvider>,
 
     /// Used to create a clone on the provider of the udtf. This should
     /// only need to be called by the receiver of the udtf.
@@ -90,7 +89,7 @@ impl FFI_TableFunction {
 unsafe extern "C" fn call_fn_wrapper(
     udtf: &FFI_TableFunction,
     args: RVec<u8>,
-) -> RResult<FFI_TableProvider, RString> {
+) -> FFIResult<FFI_TableProvider> {
     let runtime = udtf.runtime();
     let udtf = udtf.inner();
 
@@ -107,8 +106,13 @@ unsafe extern "C" fn call_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
-    let private_data = Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
-    drop(private_data);
+    unsafe {
+        debug_assert!(!udtf.private_data.is_null());
+        let private_data =
+            Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
+        drop(private_data);
+        udtf.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udtf: &FFI_TableFunction) -> FFI_TableFunction {
@@ -205,7 +209,7 @@ mod tests {
     use super::*;
     use arrow::{
         array::{
-            record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
+            ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array, record_batch,
         },
         datatypes::{DataType, Field, Schema},
     };

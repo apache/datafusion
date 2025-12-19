@@ -23,9 +23,9 @@ use datafusion::{
     arrow::util::pretty,
     catalog::{CatalogProvider, CatalogProviderList, SchemaProvider},
     datasource::{
-        file_format::{csv::CsvFormat, FileFormat},
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         TableProvider,
+        file_format::{FileFormat, csv::CsvFormat},
+        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
     },
     error::Result,
     execution::context::SessionState,

@@ -19,11 +19,12 @@ use std::sync::Arc;
 
 use abi_stable::StableAbi;
 use arrow::{
-    array::{make_array, ArrayRef},
+    array::{ArrayRef, make_array},
     datatypes::{Schema, SchemaRef},
     error::ArrowError,
-    ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+    ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi, to_ffi},
 };
+use datafusion_common::{DataFusionError, ScalarValue};
 use log::error;
 
 /// This is a wrapper struct around FFI_ArrowSchema simply to indicate
@@ -37,7 +38,9 @@ impl From<SchemaRef> for WrappedSchema {
         let ffi_schema = match FFI_ArrowSchema::try_from(value.as_ref()) {
             Ok(s) => s,
             Err(e) => {
-                error!("Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}");
+                error!(
+                    "Unable to convert DataFusion Schema to FFI_ArrowSchema in FFI_PlanProperties. {e}"
+                );
                 FFI_ArrowSchema::empty()
             }
         };
@@ -51,7 +54,9 @@ impl From<SchemaRef> for WrappedSchema {
 /// empty schema.
 #[cfg(not(tarpaulin_include))]
 fn catch_df_schema_error(e: &ArrowError) -> Schema {
-    error!("Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}");
+    error!(
+        "Unable to convert from FFI_ArrowSchema to DataFusion Schema in FFI_PlanProperties. {e}"
+    );
     Schema::empty()
 }
 
@@ -93,5 +98,23 @@ impl TryFrom<&ArrayRef> for WrappedArray {
         let schema = WrappedSchema(schema);
 
         Ok(WrappedArray { array, schema })
+    }
+}
+
+impl TryFrom<&ScalarValue> for WrappedArray {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ScalarValue) -> Result<Self, Self::Error> {
+        let array = value.to_array()?;
+        WrappedArray::try_from(&array).map_err(Into::into)
+    }
+}
+
+impl TryFrom<WrappedArray> for ScalarValue {
+    type Error = DataFusionError;
+
+    fn try_from(value: WrappedArray) -> Result<Self, Self::Error> {
+        let array: ArrayRef = value.try_into()?;
+        ScalarValue::try_from_array(array.as_ref(), 0)
     }
 }
