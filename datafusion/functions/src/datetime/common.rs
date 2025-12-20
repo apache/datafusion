@@ -42,6 +42,20 @@ const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented a
 
 static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
 
+/// Converts a string representation of a date‑time into a timestamp expressed in
+/// nanoseconds since the Unix epoch.
+///
+/// This helper is a thin wrapper around the more general `string_to_datetime`
+/// function. It accepts an optional `timezone` which, if `None`, defaults to
+/// Coordinated Universal Time (UTC). The string `s` must contain a valid
+/// date‑time format that can be parsed by the underlying chrono parser.
+///
+/// # Return Value
+///
+/// * `Ok(i64)` – The number of nanoseconds since `1970‑01‑01T00:00:00Z`.
+/// * `Err(DataFusionError)` – If the string cannot be parsed, the parsed
+///   value is out of range (between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804)
+///   or the parsed value does not correspond to an unambiguous time.
 pub(crate) fn string_to_timestamp_nanos_with_timezone(
     timezone: &Option<Tz>,
     s: &str,
