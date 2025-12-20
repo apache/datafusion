@@ -121,7 +121,7 @@ where
     // For integer bases >= 2 and non-negative scale, try the efficient integer algorithm
     if is_valid_integer_base(base)
         && scale >= 0
-        && let Some(unscaled) = unscale_decimal_value(value, scale)
+        && let Some(unscaled) = unscale_decimal_value(&value, scale)
     {
         return if unscaled > 0 {
             Ok(unscaled.ilog(base as u128) as f64)
@@ -132,13 +132,13 @@ where
 
     // Fallback to f64 computation for non-integer bases, negative scale, etc.
     // This naturally returns NaN for invalid inputs (base <= 1, non-finite, value <= 0)
-    decimal_to_f64(value, scale).map(|v| v.log(base))
+    decimal_to_f64(&value, scale).map(|v| v.log(base))
 }
 
 /// Unscale a decimal value by dividing by 10^scale, returning the result as u128.
 /// Returns None if the value is negative or the conversion fails.
 #[inline]
-fn unscale_decimal_value<T: ToPrimitive>(value: T, scale: i8) -> Option<u128> {
+fn unscale_decimal_value<T: ToPrimitive>(value: &T, scale: i8) -> Option<u128> {
     let value_u128 = value.to_u128()?;
     let divisor = 10u128.checked_pow(scale as u32)?;
     Some(value_u128 / divisor)
@@ -146,7 +146,7 @@ fn unscale_decimal_value<T: ToPrimitive>(value: T, scale: i8) -> Option<u128> {
 
 /// Convert a scaled decimal value to f64.
 #[inline]
-fn decimal_to_f64<T: ToPrimitive>(value: T, scale: i8) -> Result<f64, ArrowError> {
+fn decimal_to_f64<T: ToPrimitive>(value: &T, scale: i8) -> Result<f64, ArrowError> {
     let value_f64 = value.to_f64().ok_or_else(|| {
         ArrowError::ComputeError("Cannot convert value to f64".to_string())
     })?;
