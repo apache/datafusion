@@ -5118,6 +5118,74 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_preselection_threshold() {
+        // Test default threshold
+        let expr = BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::And,
+            Arc::new(Column::new("b", 1)),
+        );
+        assert_eq!(expr.preselection_threshold(), DEFAULT_PRESELECTION_THRESHOLD);
+        assert_eq!(expr.preselection_threshold(), 0.2);
+
+        // Test custom threshold via builder
+        let expr_custom = BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::And,
+            Arc::new(Column::new("b", 1)),
+        )
+        .with_preselection_threshold(0.5);
+        assert_eq!(expr_custom.preselection_threshold(), 0.5);
+
+        // Test threshold of 0.0 (disable pre-selection)
+        let expr_disabled = BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::And,
+            Arc::new(Column::new("b", 1)),
+        )
+        .with_preselection_threshold(0.0);
+        assert_eq!(expr_disabled.preselection_threshold(), 0.0);
+
+        // Test threshold of 1.0 (always pre-select for AND)
+        let expr_always = BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::And,
+            Arc::new(Column::new("b", 1)),
+        )
+        .with_preselection_threshold(1.0);
+        assert_eq!(expr_always.preselection_threshold(), 1.0);
+
+        // Test that threshold affects check_short_circuit behavior
+        // Create a boolean array with 20% true values (exactly at threshold)
+        let bool_array = BooleanArray::from(vec![true, false, false, false, false]);
+        let value = ColumnarValue::Array(Arc::new(bool_array));
+
+        // With default threshold (0.2), 20% true should trigger PreSelection
+        assert!(matches!(
+            check_short_circuit(&value, &Operator::And, 0.2),
+            ShortCircuitStrategy::PreSelection(_)
+        ));
+
+        // With threshold 0.1, 20% true should NOT trigger PreSelection
+        assert!(matches!(
+            check_short_circuit(&value, &Operator::And, 0.1),
+            ShortCircuitStrategy::None
+        ));
+
+        // With threshold 0.0, should never trigger PreSelection
+        assert!(matches!(
+            check_short_circuit(&value, &Operator::And, 0.0),
+            ShortCircuitStrategy::None
+        ));
+
+        // With threshold 1.0, should always trigger PreSelection (for mixed values)
+        assert!(matches!(
+            check_short_circuit(&value, &Operator::And, 1.0),
+            ShortCircuitStrategy::PreSelection(_)
+        ));
+    }
+
     /// Test for [pre_selection_scatter]
     /// Since [check_short_circuit] ensures that the left side does not contain null and is neither all_true nor all_false, as well as not being empty,
     /// the following tests have been designed:
