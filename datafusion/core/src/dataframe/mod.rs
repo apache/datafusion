@@ -1380,6 +1380,7 @@ impl DataFrame {
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
     /// let count = df.count().await?; // 1
+    ///
     /// # assert_eq!(count, 1);
     /// # Ok(())
     /// # }

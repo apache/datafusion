@@ -587,7 +587,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Run cargo fmt check (including doc comments)
+      - name: Run
         run: |
           echo '' > datafusion/proto/src/generated/datafusion.rs
           ci/scripts/rust_fmt.sh

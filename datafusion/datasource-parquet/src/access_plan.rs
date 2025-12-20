@@ -42,11 +42,11 @@ use parquet::file::metadata::RowGroupMetaData;
 /// // Use parquet reader RowSelector to specify scanning rows 100-200 and 350-400
 /// // in a row group that has 1000 rows
 /// let row_selection = RowSelection::from(vec![
-///    RowSelector::skip(100),
-///    RowSelector::select(100),
-///    RowSelector::skip(150),
-///    RowSelector::select(50),
-///    RowSelector::skip(600),  // skip last 600 rows
+///     RowSelector::skip(100),
+///     RowSelector::select(100),
+///     RowSelector::skip(150),
+///     RowSelector::select(50),
+///     RowSelector::skip(600), // skip last 600 rows
 /// ]);
 /// access_plan.scan_selection(1, row_selection);
 /// access_plan.skip(2); // skip row group 2
