@@ -55,15 +55,17 @@ pub(crate) fn build_in_list_result<C>(
 where
     C: FnMut(usize) -> bool,
 {
-    // Skip expensive contains check for null needle positions - the result
-    // will be masked to null anyway. This is a significant optimization when
-    // the needle array has nulls.
+    let contains_buf = BooleanBuffer::collect_bool(len, contains);
+
+    // Use bitwise operations to combine results with needle nulls.
+    // This is faster than checking nulls inside the loop as it leverages
+    // vectorized buffer operations.
     let contains_buf = if let Some(nulls) = needle_nulls {
-        let mut contains = contains;
-        BooleanBuffer::collect_bool(len, |i| nulls.is_valid(i) && contains(i))
+        &contains_buf & nulls.inner()
     } else {
-        BooleanBuffer::collect_bool(len, contains)
+        contains_buf
     };
+
     build_result_from_contains(needle_nulls, haystack_has_nulls, negated, contains_buf)
 }
 

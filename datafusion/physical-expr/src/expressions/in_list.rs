@@ -35,13 +35,14 @@ use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::SortOptions;
 use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::datatypes::*;
+use datafusion_common::cast::as_boolean_array as cast_as_boolean_array;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
-use datafusion_expr::{ColumnarValue, expr_vec_fmt};
+use datafusion_expr::{ColumnarValue, Operator, expr_vec_fmt};
+use datafusion_physical_expr_common::datum::apply_cmp;
 
 use static_filter::StaticFilter;
 use strategy::instantiate_static_filter;
@@ -304,53 +305,14 @@ impl PhysicalExpr for InListExpr {
             }
             None => {
                 // No static filter: iterate through each expression, compare, and OR results
-                let value = value.into_array(num_rows)?;
                 let found = self.list.iter().map(|expr| expr.evaluate(batch)).try_fold(
                     BooleanArray::new(BooleanBuffer::new_unset(num_rows), None),
                     |result, expr| -> Result<BooleanArray> {
-                        let rhs = match expr? {
-                            ColumnarValue::Array(array) => {
-                                let cmp = make_comparator(
-                                    value.as_ref(),
-                                    array.as_ref(),
-                                    SortOptions::default(),
-                                )?;
-                                (0..num_rows)
-                                    .map(|i| {
-                                        if value.is_null(i) || array.is_null(i) {
-                                            return None;
-                                        }
-                                        Some(cmp(i, i).is_eq())
-                                    })
-                                    .collect::<BooleanArray>()
-                            }
-                            ColumnarValue::Scalar(scalar) => {
-                                // Check if scalar is null once, before the loop
-                                if scalar.is_null() {
-                                    // If scalar is null, all comparisons return null
-                                    BooleanArray::from(vec![None; num_rows])
-                                } else {
-                                    // Convert scalar to 1-element array
-                                    let array = scalar.to_array()?;
-                                    let cmp = make_comparator(
-                                        value.as_ref(),
-                                        array.as_ref(),
-                                        SortOptions::default(),
-                                    )?;
-                                    // Compare each row of value with the single scalar element
-                                    (0..num_rows)
-                                        .map(|i| {
-                                            if value.is_null(i) {
-                                                None
-                                            } else {
-                                                Some(cmp(i, 0).is_eq())
-                                            }
-                                        })
-                                        .collect::<BooleanArray>()
-                                }
-                            }
-                        };
-                        Ok(or_kleene(&result, &rhs)?)
+                        let rhs = expr?;
+                        let eq = apply_cmp(Operator::Eq, &value, &rhs)?;
+                        let eq = eq.into_array(num_rows)?;
+                        let eq = cast_as_boolean_array(&eq)?;
+                        Ok(or_kleene(&result, eq)?)
                     },
                 )?;
 

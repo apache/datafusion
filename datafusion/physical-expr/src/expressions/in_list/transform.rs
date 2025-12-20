@@ -559,23 +559,23 @@ mod tests {
     #[test]
     fn test_byte_view_masked_filter_long_string() {
         let val = "7f4b18de3cfeb9b4ac78c381ee2ad278";
-        let array = Arc::new(StringViewArray::from(vec![val]));
+        let array: ArrayRef = Arc::new(StringViewArray::from(vec![val]));
         let filter =
-            make_byte_view_masked_filter::<StringViewType>(array.clone()).unwrap();
+            make_byte_view_masked_filter::<StringViewType>(Arc::clone(&array)).unwrap();
 
         // Test with same array (same buffers)
         let res = filter.contains(array.as_ref(), false).unwrap();
-        assert_eq!(res.value(0), true);
+        assert!(res.value(0));
 
         // Test with new array (different buffers)
         let array2 = Arc::new(StringViewArray::from(vec![val]));
         let res2 = filter.contains(array2.as_ref(), false).unwrap();
-        assert_eq!(res2.value(0), true);
+        assert!(res2.value(0));
 
         // Test with different value
         let val3 = "7f4b18de3cfeb9b4ac78c381ee2ad279";
         let array3 = Arc::new(StringViewArray::from(vec![val3]));
         let res3 = filter.contains(array3.as_ref(), false).unwrap();
-        assert_eq!(res3.value(0), false);
+        assert!(!res3.value(0));
     }
 }
