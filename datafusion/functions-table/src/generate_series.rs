@@ -67,7 +67,7 @@ impl fmt::Display for Empty {
 /// Trait for values that can be generated in a series
 pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
     type StepType: fmt::Debug + Clone + Send + Sync;
-    type ValueType: fmt::Debug + Clone + Send + Sync;
+    type ValueType: fmt::Debug + Default + Clone + Send + Sync;
 
     /// Check if we've reached the end of the series
     fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool;
@@ -83,6 +83,30 @@ pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
 
     /// Display the value for debugging
     fn display_value(&self) -> String;
+
+    /// Generate array for series from the current state
+    ///
+    /// Override this method for faster implementation than the naive one
+    fn generate_array_for_series(
+        series_state: &mut GenericSeriesState<Self>,
+    ) -> Result<ArrayRef> {
+        let mut buf = Vec::with_capacity(series_state.batch_size);
+
+        while buf.len() < series_state.batch_size
+            && !series_state.current.should_stop(
+                series_state.end.clone(),
+                &series_state.step,
+                series_state.include_end,
+            )
+        {
+            buf.push(series_state.current.to_value_type());
+            series_state.current.advance(&series_state.step)?;
+        }
+
+        let array = series_state.current.create_array(buf)?;
+
+        Ok(array)
+    }
 }
 
 impl SeriesValue for i64 {
@@ -108,6 +132,59 @@ impl SeriesValue for i64 {
 
     fn display_value(&self) -> String {
         self.to_string()
+    }
+
+    fn generate_array_for_series(
+        series_state: &mut GenericSeriesState<Self>,
+    ) -> Result<ArrayRef> {
+        let array: Int64Array = if series_state.step > 0 {
+            if series_state.include_end {
+                Int64Array::from_iter_values(
+                    (series_state.current..=series_state.end)
+                        .step_by(series_state.step as usize)
+                        .take(series_state.batch_size),
+                )
+            } else {
+                Int64Array::from_iter_values(
+                    (series_state.current..series_state.end)
+                        .step_by(series_state.step as usize)
+                        .take(series_state.batch_size),
+                )
+            }
+        } else {
+            // step < 0
+            let cur = series_state.current as i128;
+            let end = series_state.end as i128;
+            let step = (-series_state.step) as i128;
+
+            // Enabling collapsible_else_if to make the code more readable for differating between include end and not
+            #[expect(clippy::collapsible_else_if)]
+            let remaining: i128 = if series_state.include_end {
+                if cur < end { 0 } else { (cur - end) / step + 1 }
+            } else {
+                if cur <= end {
+                    0
+                } else {
+                    (cur - 1 - end) / step + 1
+                }
+            };
+
+            let n = (remaining.max(0) as usize).min(series_state.batch_size);
+
+            Int64Array::from_iter_values(
+                (0..n as i64).map(|i| series_state.current + i * series_state.step),
+            )
+        };
+
+        // Advance state once
+        series_state.current = array
+            .values()
+            .last()
+            .copied()
+            .unwrap_or(series_state.current)
+            + series_state.step;
+
+        Ok(Arc::new(array))
     }
 }
 
@@ -379,22 +456,12 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
     }
 
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
-        let mut buf = Vec::with_capacity(self.batch_size);
+        let array = T::generate_array_for_series(self)?;
 
-        while buf.len() < self.batch_size
-            && !self
-                .current
-                .should_stop(self.end.clone(), &self.step, self.include_end)
-        {
-            buf.push(self.current.to_value_type());
-            self.current.advance(&self.step)?;
-        }
-
-        if buf.is_empty() {
+        if array.is_empty() {
             return Ok(None);
         }
 
-        let array = self.current.create_array(buf)?;
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
         Ok(Some(batch))
     }
