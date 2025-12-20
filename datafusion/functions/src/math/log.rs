@@ -125,8 +125,8 @@ where
     {
         return if unscaled > 0 {
             Ok(unscaled.ilog(base as u128) as f64)
-    } else {
-        Ok(f64::NAN)
+        } else {
+            Ok(f64::NAN)
         };
     }
 
@@ -1192,7 +1192,7 @@ mod tests {
                 assert!(
                     log_result.is_finite() && log_result > 0.0,
                     "Expected positive finite log result, got {log_result}"
-        );
+                );
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
