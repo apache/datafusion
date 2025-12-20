@@ -35,7 +35,6 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{ArrowPrimitiveType, ByteViewType, Decimal128Type};
 use arrow::util::bit_iterator::BitIndexIterator;
-use datafusion_common::hash_utils::with_hashes;
 use datafusion_common::{HashSet, Result};
 use hashbrown::HashTable;
 
@@ -420,7 +419,7 @@ pub(crate) struct ByteViewMaskedFilter<T: ByteViewType> {
 
 impl<T: ByteViewType> ByteViewMaskedFilter<T>
 where
-    T::Native: PartialEq,
+    T::Native: PartialEq + Hash,
 {
     pub(crate) fn try_new(in_array: ArrayRef) -> Result<Self> {
         let bv = in_array.as_byte_view::<T>();
@@ -430,45 +429,47 @@ where
         let state = RandomState::new();
         let mut long_value_table = HashTable::new();
 
-        // Build hash table for long strings using batch hashing
-        with_hashes([in_array.as_ref()], &state, |hashes| {
-            let mut process_idx = |idx: usize| {
-                let view = views[idx];
-                masked_view_set.insert(masked_view(view));
+        let mut process_idx = |idx: usize| {
+            let view = views[idx];
+            masked_view_set.insert(masked_view(view));
 
-                // For long strings, store index in hash table
-                let len = (view as u32) as usize;
-                if len > UTF8VIEW_INLINE_LEN {
-                    let hash = hashes[idx];
-                    // SAFETY: idx is valid from iterator
-                    let val = unsafe { bv.value_unchecked(idx) };
-                    let bytes: &[u8] = val.as_ref();
+            // For long strings, store index in hash table
+            let len = (view as u32) as usize;
+            if len > UTF8VIEW_INLINE_LEN {
+                // SAFETY: idx is valid from iterator
+                let val = unsafe { bv.value_unchecked(idx) };
 
-                    // Only insert if not already present (deduplication)
-                    if long_value_table
-                        .find(hash, |&stored_idx| {
-                            let stored: &[u8] =
-                                unsafe { bv.value_unchecked(stored_idx) }.as_ref();
-                            stored == bytes
-                        })
-                        .is_none()
-                    {
-                        long_value_table.insert_unique(hash, idx, |&i| hashes[i]);
-                    }
-                }
-            };
+                // Hash the native value directly to match contains() logic
+                let hash = state.hash_one(val);
 
-            match bv.nulls() {
-                Some(nulls) => {
-                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
-                        .for_each(&mut process_idx);
-                }
-                None => {
-                    (0..in_array.len()).for_each(&mut process_idx);
+                let bytes: &[u8] = val.as_ref();
+
+                // Only insert if not already present (deduplication)
+                if long_value_table
+                    .find(hash, |&stored_idx| {
+                        let stored: &[u8] =
+                            unsafe { bv.value_unchecked(stored_idx) }.as_ref();
+                        stored == bytes
+                    })
+                    .is_none()
+                {
+                    long_value_table.insert_unique(hash, idx, |&i| {
+                        let val = unsafe { bv.value_unchecked(i) };
+                        state.hash_one(val)
+                    });
                 }
             }
-            Ok::<_, datafusion_common::DataFusionError>(())
-        })?;
+        };
+
+        match bv.nulls() {
+            Some(nulls) => {
+                BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                    .for_each(&mut process_idx);
+            }
+            None => {
+                (0..in_array.len()).for_each(&mut process_idx);
+            }
+        }
 
         Ok(Self {
             in_array,
