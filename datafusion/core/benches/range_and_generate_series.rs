@@ -43,44 +43,44 @@ fn criterion_benchmark(c: &mut Criterion) {
     let ctx = create_context();
     let rt = Runtime::new().unwrap();
 
-    c.bench_function("range(100000)", |b| {
-        b.iter(|| query(ctx.clone(), &rt, "SELECT value from range(100000)"))
+    c.bench_function("range(1000000)", |b| {
+        b.iter(|| query(ctx.clone(), &rt, "SELECT value from range(1000000)"))
     });
 
-    c.bench_function("generate_series(100000)", |b| {
+    c.bench_function("generate_series(1000000)", |b| {
         b.iter(|| {
             query(
                 ctx.clone(),
                 &rt,
-                "SELECT value from generate_series(100000)",
+                "SELECT value from generate_series(1000000)",
             )
         })
     });
 
-    c.bench_function("range(0, 100000, 5)", |b| {
-        b.iter(|| query(ctx.clone(), &rt, "SELECT value from range(0, 100000, 5)"))
+    c.bench_function("range(0, 1000000, 5)", |b| {
+        b.iter(|| query(ctx.clone(), &rt, "SELECT value from range(0, 1000000, 5)"))
     });
 
-    c.bench_function("generate_series(0, 100000, 5)", |b| {
+    c.bench_function("generate_series(0, 1000000, 5)", |b| {
         b.iter(|| {
             query(
                 ctx.clone(),
                 &rt,
-                "SELECT value from generate_series(0, 100000, 5)",
+                "SELECT value from generate_series(0, 1000000, 5)",
             )
         })
     });
 
-    c.bench_function("range(100000, 0, -5)", |b| {
-        b.iter(|| query(ctx.clone(), &rt, "SELECT value from range(100000, 0, -5)"))
+    c.bench_function("range(1000000, 0, -5)", |b| {
+        b.iter(|| query(ctx.clone(), &rt, "SELECT value from range(1000000, 0, -5)"))
     });
 
-    c.bench_function("generate_series(100000, 0, -5)", |b| {
+    c.bench_function("generate_series(1000000, 0, -5)", |b| {
         b.iter(|| {
             query(
                 ctx.clone(),
                 &rt,
-                "SELECT value from generate_series(100000, 0, -5)",
+                "SELECT value from generate_series(1000000, 0, -5)",
             )
         })
     });
