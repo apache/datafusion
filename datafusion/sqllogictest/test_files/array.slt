@@ -4827,6 +4827,16 @@ select array_union(arrow_cast(['hello'], 'LargeList(Utf8)'), arrow_cast(['hello'
 ----
 [hello, datafusion]
 
+query ?
+select array_union(column1, column2)
+from array_intersect_table_1D_NULL;
+----
+[1, 2, 3, 4]
+[2, 3]
+[3, 4]
+[3, 4]
+[1, 2]
+[]
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
 query TTT
