@@ -992,7 +992,6 @@ mod test {
     /// This helps reduce code duplication and makes it clear what differs between test cases.
     struct ParquetOpenerBuilder {
         store: Option<Arc<dyn ObjectStore>>,
-        file_schema: Option<SchemaRef>,
         table_schema: Option<TableSchema>,
         partition_index: usize,
         projection_indices: Option<Vec<usize>>,
@@ -1018,7 +1017,6 @@ mod test {
         fn new() -> Self {
             Self {
                 store: None,
-                file_schema: None,
                 table_schema: None,
                 partition_index: 0,
                 projection_indices: None,
@@ -1046,18 +1044,15 @@ mod test {
             self
         }
 
-        /// Set the file schema and create a simple table schema (for files without partition columns).
+        /// Create a simple table schema from a file schema (for files without partition columns).
         fn with_schema(mut self, file_schema: SchemaRef) -> Self {
-            self.file_schema = Some(Arc::clone(&file_schema));
             self.table_schema = Some(TableSchema::from_file_schema(file_schema));
             self
         }
 
         /// Set a custom table schema (for files with partition columns).
         fn with_table_schema(mut self, table_schema: TableSchema) -> Self {
-            let file_schema = Arc::clone(table_schema.file_schema());
             self.table_schema = Some(table_schema);
-            self.file_schema = Some(file_schema);
             self
         }
 
@@ -1106,12 +1101,10 @@ mod test {
             let store = self
                 .store
                 .expect("ParquetOpenerBuilder: store must be set via with_store()");
-            let file_schema = self.file_schema.expect(
-                "ParquetOpenerBuilder: file_schema or table_schema must be set via with_schema() or with_table_schema()",
-            );
             let table_schema = self.table_schema.expect(
                 "ParquetOpenerBuilder: table_schema must be set via with_schema() or with_table_schema()",
             );
+            let file_schema = Arc::clone(table_schema.file_schema());
 
             let projection = if let Some(projection) = self.projection {
                 projection
