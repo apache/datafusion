@@ -88,7 +88,7 @@ pub trait IntoHeapValue<T: ValueType> {
     ///
     /// Takes the StringHeap as an immutable reference since interning
     /// should not require exclusive access.
-    fn into_heap_value(&self, heap: &mut StringHeap) -> T;
+    fn to_heap_value(&self, heap: &mut StringHeap) -> T;
 }
 
 /// Implement for borrowed strings that convert to Arc<str> with interning.
@@ -102,7 +102,7 @@ impl IntoHeapValue<Arc<str>> for &str {
         }
     }
 
-    fn into_heap_value(&self, heap: &mut StringHeap) -> Arc<str> {
+    fn to_heap_value(&self, heap: &mut StringHeap) -> Arc<str> {
         heap.intern_string(self)
     }
 }
@@ -343,7 +343,7 @@ impl ArrowHeap for StringHeap {
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
         let new_str = self.value(row_idx).to_string();
-        let new_val = new_str.as_str().into_heap_value(self);
+        let new_val = new_str.as_str().to_heap_value(self);
         self.heap.append_or_replace(new_val, map_idx, map);
     }
 
@@ -366,7 +366,7 @@ impl ArrowHeap for StringHeap {
 
         // Only convert to heap value after confirming improvement
         let new_str_owned = new_str.to_string();
-        let new_val = new_str_owned.as_str().into_heap_value(self);
+        let new_val = new_str_owned.as_str().to_heap_value(self);
         self.heap.replace_if_better(heap_idx, new_val, map);
     }
 
