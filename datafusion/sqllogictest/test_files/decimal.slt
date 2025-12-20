@@ -794,6 +794,11 @@ select log(arrow_cast(100, 'Decimal32(9, 2)'));
 ----
 2
 
+query R
+select log(2.0, arrow_cast(12345.67, 'Decimal32(9, 2)'));
+----
+13
+
 # log for small decimal64
 query R
 select log(arrow_cast(100, 'Decimal64(18, 0)'));
@@ -804,6 +809,12 @@ query R
 select log(arrow_cast(100, 'Decimal64(18, 2)'));
 ----
 2
+
+query R
+select log(2.0, arrow_cast(12345.6789, 'Decimal64(15, 4)'));
+----
+13
+
 
 # log for small decimal128
 query R
@@ -906,6 +917,57 @@ query R
 select log(2.0, null);
 ----
 NULL
+
+# log with negative scale decimals
+# Using scientific notation to create decimals with negative scales
+# 1e4 = 10000 with scale -4, log10(10000) = 4.0
+query R
+select log(1e4);
+----
+4
+
+# log with negative scale and explicit base 10
+query R
+select log(10, 1e4);
+----
+4
+
+# log with negative scale and base 2
+# 8e1 = 80 with scale -1, log2(80) ≈ 6.321928
+query R
+select log(2.0, 8e1);
+----
+6.321928094887
+
+# log with negative scale and base 2 (another value)
+# 16e1 = 160 with scale -1, log2(160) ≈ 7.321928
+query R
+select log(2.0, 16e1);
+----
+7.321928094887
+
+# log with negative scale -3
+# 5e3 = 5000 with scale -3, log10(5000) ≈ 3.69897
+query R
+select log(5e3);
+----
+3.698970004336
+
+# log with negative scale array values
+query R rowsort
+select log(value) from (values (1e3), (1e4), (1e5)) as t(value);
+----
+3
+4
+5
+
+# log with negative scale and different bases
+query R rowsort
+select log(base, 1e4) from (values (10.0), (2.0), (3.0)) as t(base);
+----
+13.287712379549
+4
+8.383613097158
 
 # power with decimals
 

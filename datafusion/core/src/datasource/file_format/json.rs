@@ -218,13 +218,13 @@ mod tests {
         let result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_num_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&result),@r###"
-            +----------------------+
-            | sum(json_parallel.a) |
-            +----------------------+
-            | -7                   |
-            +----------------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&result),@r"
+        +----------------------+
+        | sum(json_parallel.a) |
+        +----------------------+
+        | -7                   |
+        +----------------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions);
 
@@ -249,10 +249,10 @@ mod tests {
 
         let result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -284,15 +284,15 @@ mod tests {
         }
         assert_eq!(deserializer.next()?, DeserializerOutput::InputExhausted);
 
-        assert_snapshot!(batches_to_string(&[all_batches]),@r###"
-            +----+----+----+----+----+
-            | c1 | c2 | c3 | c4 | c5 |
-            +----+----+----+----+----+
-            | 1  | 2  | 3  | 4  | 5  |
-            | 6  | 7  | 8  | 9  | 10 |
-            | 11 | 12 | 13 | 14 | 15 |
-            +----+----+----+----+----+
-        "###);
+        assert_snapshot!(batches_to_string(&[all_batches]),@r"
+        +----+----+----+----+----+
+        | c1 | c2 | c3 | c4 | c5 |
+        +----+----+----+----+----+
+        | 1  | 2  | 3  | 4  | 5  |
+        | 6  | 7  | 8  | 9  | 10 |
+        | 11 | 12 | 13 | 14 | 15 |
+        +----+----+----+----+----+
+        ");
 
         Ok(())
     }
@@ -324,14 +324,14 @@ mod tests {
         }
         assert_eq!(deserializer.next()?, DeserializerOutput::RequiresMoreData);
 
-        insta::assert_snapshot!(fmt_batches(&[all_batches]),@r###"
-            +----+----+----+----+----+
-            | c1 | c2 | c3 | c4 | c5 |
-            +----+----+----+----+----+
-            | 1  | 2  | 3  | 4  | 5  |
-            | 6  | 7  | 8  | 9  | 10 |
-            +----+----+----+----+----+
-        "###);
+        insta::assert_snapshot!(fmt_batches(&[all_batches]),@r"
+        +----+----+----+----+----+
+        | c1 | c2 | c3 | c4 | c5 |
+        +----+----+----+----+----+
+        | 1  | 2  | 3  | 4  | 5  |
+        | 6  | 7  | 8  | 9  | 10 |
+        +----+----+----+----+----+
+        ");
 
         Ok(())
     }

@@ -243,10 +243,10 @@ fn to_timestamp_expr_folded() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8("2020-09-08T12:00:00+00:00"))
       TableScan: test
-    "###
+    "#
     );
     Ok(())
 }
@@ -273,10 +273,10 @@ fn now_less_than_timestamp() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Filter: Boolean(true)
       TableScan: test
-    "###
+    "
     );
     Ok(())
 }
@@ -312,10 +312,10 @@ fn select_date_plus_interval() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
       TableScan: test
-    "###
+    "#
     );
     Ok(())
 }
@@ -334,10 +334,10 @@ fn simplify_project_scalar_fn() -> Result<()> {
     let actual = formatter.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: test.f AS power(test.f,Float64(1))
       TableScan: test
-    "###
+    "
     );
     Ok(())
 }

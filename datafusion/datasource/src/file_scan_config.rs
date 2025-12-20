@@ -78,7 +78,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// # use datafusion_physical_expr::projection::ProjectionExprs;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-/// # use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 /// # let file_schema = Arc::new(Schema::new(vec![
 /// #  Field::new("c1", DataType::Int32, false),
 /// #  Field::new("c2", DataType::Int32, false),
@@ -89,7 +88,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// #[derive(Clone)]
 /// # struct ParquetSource {
 /// #    table_schema: TableSchema,
-/// #    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>
 /// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
@@ -98,13 +96,11 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
 /// #  fn file_type(&self) -> &str { "parquet" }
-/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {table_schema: self.table_schema.clone(), schema_adapter_factory: Some(factory)} )) }
-/// #  fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> { self.schema_adapter_factory.clone() }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
 /// #  }
 /// # impl ParquetSource {
-/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into(), schema_adapter_factory: None} }
+/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -160,8 +156,6 @@ pub struct FileScanConfig {
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
-    /// Are new lines in values supported for CSVOptions
-    pub new_lines_in_values: bool,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
     pub file_source: Arc<dyn FileSource>,
     /// Batch size while creating new batches
@@ -251,7 +245,6 @@ pub struct FileScanConfigBuilder {
     statistics: Option<Statistics>,
     output_ordering: Vec<LexOrdering>,
     file_compression_type: Option<FileCompressionType>,
-    new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     partitioned_by_file_group: bool,
@@ -275,7 +268,6 @@ impl FileScanConfigBuilder {
             statistics: None,
             output_ordering: vec![],
             file_compression_type: None,
-            new_lines_in_values: None,
             limit: None,
             constraints: None,
             batch_size: None,
@@ -414,16 +406,6 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether new lines in values are supported for CSVOptions
-    ///
-    /// Parsing newlines in quoted values may be affected by execution behaviour such as
-    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
-    /// parsed successfully, which may reduce performance.
-    pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
-        self.new_lines_in_values = Some(new_lines_in_values);
-        self
-    }
-
     /// Set the batch_size property
     pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
         self.batch_size = batch_size;
@@ -473,7 +455,6 @@ impl FileScanConfigBuilder {
             statistics,
             output_ordering,
             file_compression_type,
-            new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
             partitioned_by_file_group,
@@ -485,7 +466,6 @@ impl FileScanConfigBuilder {
         });
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
-        let new_lines_in_values = new_lines_in_values.unwrap_or(false);
 
         FileScanConfig {
             object_store_url,
@@ -495,7 +475,6 @@ impl FileScanConfigBuilder {
             file_groups,
             output_ordering,
             file_compression_type,
-            new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
@@ -513,7 +492,6 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             statistics: Some(config.statistics),
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
-            new_lines_in_values: Some(config.new_lines_in_values),
             limit: config.limit,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
@@ -945,6 +923,22 @@ impl FileScanConfig {
         Ok(())
     }
 
+    /// Returns whether newlines in values are supported.
+    ///
+    /// This method always returns `false`. The actual newlines_in_values setting
+    /// has been moved to [`CsvSource`] and should be accessed via
+    /// [`CsvSource::csv_options()`] instead.
+    ///
+    /// [`CsvSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html
+    /// [`CsvSource::csv_options()`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html#method.csv_options
+    #[deprecated(
+        since = "52.0.0",
+        note = "newlines_in_values has moved to CsvSource. Access it via CsvSource::csv_options().newlines_in_values instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+    )]
+    pub fn newlines_in_values(&self) -> bool {
+        false
+    }
+
     #[deprecated(
         since = "52.0.0",
         note = "This method is no longer used, use eq_properties instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
@@ -952,17 +946,6 @@ impl FileScanConfig {
     pub fn projected_constraints(&self) -> Constraints {
         let props = self.eq_properties();
         props.constraints().clone()
-    }
-
-    /// Specifies whether newlines in (quoted) values are supported.
-    ///
-    /// Parsing newlines in quoted values may be affected by execution behaviour such as
-    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
-    /// parsed successfully, which may reduce performance.
-    ///
-    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
-    pub fn newlines_in_values(&self) -> bool {
-        self.new_lines_in_values
     }
 
     #[deprecated(
@@ -1793,7 +1776,6 @@ mod tests {
                 .into(),
             ])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .with_newlines_in_values(true)
             .build();
 
         // Verify the built config has all the expected values
@@ -1820,7 +1802,6 @@ mod tests {
             config.file_compression_type,
             FileCompressionType::UNCOMPRESSED
         );
-        assert!(config.new_lines_in_values);
         assert_eq!(config.output_ordering.len(), 1);
     }
 
@@ -1915,7 +1896,6 @@ mod tests {
             config.file_compression_type,
             FileCompressionType::UNCOMPRESSED
         );
-        assert!(!config.new_lines_in_values);
         assert!(config.output_ordering.is_empty());
         assert!(config.constraints.is_empty());
 
@@ -1963,7 +1943,6 @@ mod tests {
         .with_limit(Some(10))
         .with_file(file.clone())
         .with_constraints(Constraints::default())
-        .with_newlines_in_values(true)
         .build();
 
         // Create a new builder from the config
@@ -1993,7 +1972,6 @@ mod tests {
             "test_file.parquet"
         );
         assert_eq!(new_config.constraints, Constraints::default());
-        assert!(new_config.new_lines_in_values);
     }
 
     #[test]

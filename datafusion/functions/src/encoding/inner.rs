@@ -19,31 +19,30 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, BinaryArray, GenericByteArray, OffsetSizeTrait, StringArray,
+        Array, ArrayRef, AsArray, BinaryArrayType, FixedSizeBinaryArray,
+        GenericBinaryArray, GenericStringArray, OffsetSizeTrait,
     },
-    datatypes::{ByteArrayType, DataType},
+    datatypes::DataType,
 };
 use arrow_buffer::{Buffer, OffsetBufferBuilder};
 use base64::{
     Engine as _,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
-use datafusion_common::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, exec_err, internal_datafusion_err};
 use datafusion_common::{
-    cast::{
-        as_fixed_size_binary_array, as_generic_binary_array, as_generic_string_array,
-    },
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
     not_impl_err, plan_err,
+    types::{NativeType, logical_string},
     utils::take_function_args,
 };
-use datafusion_expr::{ColumnarValue, Documentation};
-use std::sync::Arc;
-use std::{fmt, str::FromStr};
-
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
+use std::fmt;
+use std::sync::Arc;
 
 // Allow padding characters, but don't require them, and don't generate them.
 const BASE64_ENGINE: GeneralPurpose = GeneralPurpose::new(
@@ -81,7 +80,17 @@ impl Default for EncodeFunc {
 impl EncodeFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Binary,
+                        vec![TypeSignatureClass::Native(logical_string())],
+                        NativeType::Binary,
+                    ),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -90,6 +99,7 @@ impl ScalarUDFImpl for EncodeFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "encode"
     }
@@ -99,52 +109,21 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
-        Ok(match arg_types[0] {
-            Utf8 => Utf8,
-            LargeUtf8 => LargeUtf8,
-            Utf8View => Utf8,
-            Binary => Utf8,
-            LargeBinary => LargeUtf8,
-            FixedSizeBinary(_) => Utf8,
-            Null => Null,
-            _ => {
-                return plan_err!(
-                    "The encode function can only accept Utf8 or Binary or Null."
-                );
-            }
-        })
-    }
-
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        encode(&args.args)
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [expression, format] = take_function_args(self.name(), arg_types)?;
-
-        if format != &DataType::Utf8 {
-            return Err(DataFusionError::Plan("2nd argument should be Utf8".into()));
+        match &arg_types[0] {
+            DataType::LargeBinary => Ok(DataType::LargeUtf8),
+            _ => Ok(DataType::Utf8),
         }
+    }
 
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [expression, encoding] = take_function_args("encode", &args.args)?;
+        let encoding = Encoding::try_from(encoding)?;
         match expression {
-            DataType::Utf8 | DataType::Utf8View | DataType::Null => {
-                Ok(vec![DataType::Utf8; 2])
+            _ if expression.data_type().is_null() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
             }
-            DataType::LargeUtf8 => Ok(vec![DataType::LargeUtf8, DataType::Utf8]),
-            DataType::Binary => Ok(vec![DataType::Binary, DataType::Utf8]),
-            DataType::LargeBinary => Ok(vec![DataType::LargeBinary, DataType::Utf8]),
-            DataType::FixedSizeBinary(sz) => {
-                Ok(vec![DataType::FixedSizeBinary(*sz), DataType::Utf8])
-            }
-            _ => plan_err!(
-                "1st argument should be Utf8 or Binary or Null, got {:?}",
-                arg_types[0]
-            ),
+            ColumnarValue::Array(array) => encode_array(array, encoding),
+            ColumnarValue::Scalar(scalar) => encode_scalar(scalar, encoding),
         }
     }
 
@@ -178,7 +157,17 @@ impl Default for DecodeFunc {
 impl DecodeFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Binary,
+                        vec![TypeSignatureClass::Native(logical_string())],
+                        NativeType::Binary,
+                    ),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -187,6 +176,7 @@ impl ScalarUDFImpl for DecodeFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "decode"
     }
@@ -196,40 +186,21 @@ impl ScalarUDFImpl for DecodeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].to_owned())
+        match &arg_types[0] {
+            DataType::LargeBinary => Ok(DataType::LargeBinary),
+            _ => Ok(DataType::Binary),
+        }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        decode(&args.args)
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return plan_err!(
-                "{} expects to get 2 arguments, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        }
-
-        if arg_types[1] != DataType::Utf8 {
-            return plan_err!("2nd argument should be Utf8");
-        }
-
-        match arg_types[0] {
-            DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::Null => {
-                Ok(vec![DataType::Binary, DataType::Utf8])
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [expression, encoding] = take_function_args("decode", &args.args)?;
+        let encoding = Encoding::try_from(encoding)?;
+        match expression {
+            _ if expression.data_type().is_null() => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)))
             }
-            DataType::LargeUtf8 | DataType::LargeBinary => {
-                Ok(vec![DataType::LargeBinary, DataType::Utf8])
-            }
-            _ => plan_err!(
-                "1st argument should be Utf8 or Binary or Null, got {:?}",
-                arg_types[0]
-            ),
+            ColumnarValue::Array(array) => decode_array(array, encoding),
+            ColumnarValue::Scalar(scalar) => decode_scalar(scalar, encoding),
         }
     }
 
@@ -238,275 +209,117 @@ impl ScalarUDFImpl for DecodeFunc {
     }
 }
 
+fn encode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValue> {
+    match value {
+        ScalarValue::Binary(maybe_bytes)
+        | ScalarValue::BinaryView(maybe_bytes)
+        | ScalarValue::FixedSizeBinary(_, maybe_bytes) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                maybe_bytes
+                    .as_ref()
+                    .map(|bytes| encoding.encode_bytes(bytes)),
+            )))
+        }
+        ScalarValue::LargeBinary(maybe_bytes) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(
+                maybe_bytes
+                    .as_ref()
+                    .map(|bytes| encoding.encode_bytes(bytes)),
+            )))
+        }
+        v => internal_err!("Unexpected value for encode: {v}"),
+    }
+}
+
+fn encode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
+    let array = match array.data_type() {
+        DataType::Binary => encoding.encode_array::<_, i32>(&array.as_binary::<i32>()),
+        DataType::BinaryView => encoding.encode_array::<_, i32>(&array.as_binary_view()),
+        DataType::LargeBinary => {
+            encoding.encode_array::<_, i64>(&array.as_binary::<i64>())
+        }
+        DataType::FixedSizeBinary(_) => {
+            encoding.encode_fsb_array(array.as_fixed_size_binary())
+        }
+        dt => {
+            internal_err!("Unexpected data type for encode: {dt}")
+        }
+    };
+    array.map(ColumnarValue::Array)
+}
+
+fn decode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValue> {
+    match value {
+        ScalarValue::Binary(maybe_bytes)
+        | ScalarValue::BinaryView(maybe_bytes)
+        | ScalarValue::FixedSizeBinary(_, maybe_bytes) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::Binary(
+                maybe_bytes
+                    .as_ref()
+                    .map(|x| encoding.decode_bytes(x))
+                    .transpose()?,
+            )))
+        }
+        ScalarValue::LargeBinary(maybe_bytes) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::LargeBinary(
+                maybe_bytes
+                    .as_ref()
+                    .map(|x| encoding.decode_bytes(x))
+                    .transpose()?,
+            )))
+        }
+        v => internal_err!("Unexpected value for decode: {v}"),
+    }
+}
+
+/// Estimate how many bytes are actually represented by the array; in case the
+/// the array slices it's internal buffer, this returns the byte size of that slice
+/// but not the byte size of the entire buffer.
+///
+/// This is an estimation only as it can estimate higher if null slots are non-zero
+/// sized.
+fn estimate_byte_data_size<O: OffsetSizeTrait>(array: &GenericBinaryArray<O>) -> usize {
+    let offsets = array.value_offsets();
+    // Unwraps are safe as should always have 1 element in offset buffer
+    let start = *offsets.first().unwrap();
+    let end = *offsets.last().unwrap();
+    let data_size = end - start;
+    data_size.as_usize()
+}
+
+fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
+    let array = match array.data_type() {
+        DataType::Binary => {
+            let array = array.as_binary::<i32>();
+            encoding.decode_array::<_, i32>(&array, estimate_byte_data_size(array))
+        }
+        DataType::BinaryView => {
+            let array = array.as_binary_view();
+            // Don't know if there is a more strict upper bound we can infer
+            // for view arrays byte data size.
+            encoding.decode_array::<_, i32>(&array, array.get_buffer_memory_size())
+        }
+        DataType::LargeBinary => {
+            let array = array.as_binary::<i64>();
+            encoding.decode_array::<_, i64>(&array, estimate_byte_data_size(array))
+        }
+        DataType::FixedSizeBinary(size) => {
+            let array = array.as_fixed_size_binary();
+            // TODO: could we be more conservative by accounting for nulls?
+            let estimate = array.len().saturating_mul(*size as usize);
+            encoding.decode_fsb_array(array, estimate)
+        }
+        dt => {
+            internal_err!("Unexpected data type for decode: {dt}")
+        }
+    };
+    array.map(ColumnarValue::Array)
+}
+
 #[derive(Debug, Copy, Clone)]
 enum Encoding {
     Base64,
     Hex,
-}
-
-fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarValue> {
-    match value {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => encoding.encode_utf8_array::<i32>(a.as_ref()),
-            DataType::LargeUtf8 => encoding.encode_utf8_array::<i64>(a.as_ref()),
-            DataType::Utf8View => encoding.encode_utf8_array::<i32>(a.as_ref()),
-            DataType::Binary => encoding.encode_binary_array::<i32>(a.as_ref()),
-            DataType::LargeBinary => encoding.encode_binary_array::<i64>(a.as_ref()),
-            DataType::FixedSizeBinary(_) => {
-                encoding.encode_fixed_size_binary_array(a.as_ref())
-            }
-            other => exec_err!(
-                "Unsupported data type {other:?} for function encode({encoding})"
-            ),
-        },
-        ColumnarValue::Scalar(scalar) => {
-            match scalar {
-                ScalarValue::Utf8(a) => {
-                    Ok(encoding.encode_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
-                }
-                ScalarValue::LargeUtf8(a) => Ok(encoding
-                    .encode_large_scalar(a.as_ref().map(|s: &String| s.as_bytes()))),
-                ScalarValue::Utf8View(a) => {
-                    Ok(encoding.encode_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
-                }
-                ScalarValue::Binary(a) => Ok(
-                    encoding.encode_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))
-                ),
-                ScalarValue::LargeBinary(a) => Ok(encoding
-                    .encode_large_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
-                ScalarValue::FixedSizeBinary(_, a) => Ok(
-                    encoding.encode_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))
-                ),
-                other => exec_err!(
-                    "Unsupported data type {other:?} for function encode({encoding})"
-                ),
-            }
-        }
-    }
-}
-
-fn decode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarValue> {
-    match value {
-        ColumnarValue::Array(a) => match a.data_type() {
-            DataType::Utf8 => encoding.decode_utf8_array::<i32>(a.as_ref()),
-            DataType::LargeUtf8 => encoding.decode_utf8_array::<i64>(a.as_ref()),
-            DataType::Utf8View => encoding.decode_utf8_array::<i32>(a.as_ref()),
-            DataType::Binary => encoding.decode_binary_array::<i32>(a.as_ref()),
-            DataType::LargeBinary => encoding.decode_binary_array::<i64>(a.as_ref()),
-            other => exec_err!(
-                "Unsupported data type {other:?} for function decode({encoding})"
-            ),
-        },
-        ColumnarValue::Scalar(scalar) => {
-            match scalar {
-                ScalarValue::Utf8(a) => {
-                    encoding.decode_scalar(a.as_ref().map(|s: &String| s.as_bytes()))
-                }
-                ScalarValue::LargeUtf8(a) => encoding
-                    .decode_large_scalar(a.as_ref().map(|s: &String| s.as_bytes())),
-                ScalarValue::Utf8View(a) => {
-                    encoding.decode_scalar(a.as_ref().map(|s: &String| s.as_bytes()))
-                }
-                ScalarValue::Binary(a) => {
-                    encoding.decode_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))
-                }
-                ScalarValue::LargeBinary(a) => encoding
-                    .decode_large_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice())),
-                other => exec_err!(
-                    "Unsupported data type {other:?} for function decode({encoding})"
-                ),
-            }
-        }
-    }
-}
-
-fn hex_encode(input: &[u8]) -> String {
-    hex::encode(input)
-}
-
-fn base64_encode(input: &[u8]) -> String {
-    BASE64_ENGINE.encode(input)
-}
-
-fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
-    // only write input / 2 bytes to buf
-    let out_len = input.len() / 2;
-    let buf = &mut buf[..out_len];
-    hex::decode_to_slice(input, buf)
-        .map_err(|e| internal_datafusion_err!("Failed to decode from hex: {e}"))?;
-    Ok(out_len)
-}
-
-fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
-    BASE64_ENGINE
-        .decode_slice(input, buf)
-        .map_err(|e| internal_datafusion_err!("Failed to decode from base64: {e}"))
-}
-
-macro_rules! encode_to_array {
-    ($METHOD: ident, $INPUT:expr) => {{
-        let utf8_array: StringArray = $INPUT
-            .iter()
-            .map(|x| x.map(|x| $METHOD(x.as_ref())))
-            .collect();
-        Arc::new(utf8_array)
-    }};
-}
-
-fn decode_to_array<F, T: ByteArrayType>(
-    method: F,
-    input: &GenericByteArray<T>,
-    conservative_upper_bound_size: usize,
-) -> Result<ArrayRef>
-where
-    F: Fn(&[u8], &mut [u8]) -> Result<usize>,
-{
-    let mut values = vec![0; conservative_upper_bound_size];
-    let mut offsets = OffsetBufferBuilder::new(input.len());
-    let mut total_bytes_decoded = 0;
-    for v in input {
-        if let Some(v) = v {
-            let cursor = &mut values[total_bytes_decoded..];
-            let decoded = method(v.as_ref(), cursor)?;
-            total_bytes_decoded += decoded;
-            offsets.push_length(decoded);
-        } else {
-            offsets.push_length(0);
-        }
-    }
-    // We reserved an upper bound size for the values buffer, but we only use the actual size
-    values.truncate(total_bytes_decoded);
-    let binary_array = BinaryArray::try_new(
-        offsets.finish(),
-        Buffer::from_vec(values),
-        input.nulls().cloned(),
-    )?;
-    Ok(Arc::new(binary_array))
-}
-
-impl Encoding {
-    fn encode_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
-        ColumnarValue::Scalar(match self {
-            Self::Base64 => ScalarValue::Utf8(value.map(|v| BASE64_ENGINE.encode(v))),
-            Self::Hex => ScalarValue::Utf8(value.map(hex::encode)),
-        })
-    }
-
-    fn encode_large_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
-        ColumnarValue::Scalar(match self {
-            Self::Base64 => {
-                ScalarValue::LargeUtf8(value.map(|v| BASE64_ENGINE.encode(v)))
-            }
-            Self::Hex => ScalarValue::LargeUtf8(value.map(hex::encode)),
-        })
-    }
-
-    fn encode_binary_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
-    where
-        T: OffsetSizeTrait,
-    {
-        let input_value = as_generic_binary_array::<T>(value)?;
-        let array: ArrayRef = match self {
-            Self::Base64 => encode_to_array!(base64_encode, input_value),
-            Self::Hex => encode_to_array!(hex_encode, input_value),
-        };
-        Ok(ColumnarValue::Array(array))
-    }
-
-    fn encode_fixed_size_binary_array(self, value: &dyn Array) -> Result<ColumnarValue> {
-        let input_value = as_fixed_size_binary_array(value)?;
-        let array: ArrayRef = match self {
-            Self::Base64 => encode_to_array!(base64_encode, input_value),
-            Self::Hex => encode_to_array!(hex_encode, input_value),
-        };
-        Ok(ColumnarValue::Array(array))
-    }
-
-    fn encode_utf8_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
-    where
-        T: OffsetSizeTrait,
-    {
-        let input_value = as_generic_string_array::<T>(value)?;
-        let array: ArrayRef = match self {
-            Self::Base64 => encode_to_array!(base64_encode, input_value),
-            Self::Hex => encode_to_array!(hex_encode, input_value),
-        };
-        Ok(ColumnarValue::Array(array))
-    }
-
-    fn decode_scalar(self, value: Option<&[u8]>) -> Result<ColumnarValue> {
-        let value = match value {
-            Some(value) => value,
-            None => return Ok(ColumnarValue::Scalar(ScalarValue::Binary(None))),
-        };
-
-        let out = match self {
-            Self::Base64 => BASE64_ENGINE.decode(value).map_err(|e| {
-                internal_datafusion_err!("Failed to decode value using base64: {e}")
-            })?,
-            Self::Hex => hex::decode(value).map_err(|e| {
-                internal_datafusion_err!("Failed to decode value using hex: {e}")
-            })?,
-        };
-
-        Ok(ColumnarValue::Scalar(ScalarValue::Binary(Some(out))))
-    }
-
-    fn decode_large_scalar(self, value: Option<&[u8]>) -> Result<ColumnarValue> {
-        let value = match value {
-            Some(value) => value,
-            None => return Ok(ColumnarValue::Scalar(ScalarValue::LargeBinary(None))),
-        };
-
-        let out = match self {
-            Self::Base64 => BASE64_ENGINE.decode(value).map_err(|e| {
-                internal_datafusion_err!("Failed to decode value using base64: {e}")
-            })?,
-            Self::Hex => hex::decode(value).map_err(|e| {
-                internal_datafusion_err!("Failed to decode value using hex: {e}")
-            })?,
-        };
-
-        Ok(ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(out))))
-    }
-
-    fn decode_binary_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
-    where
-        T: OffsetSizeTrait,
-    {
-        let input_value = as_generic_binary_array::<T>(value)?;
-        let array = self.decode_byte_array(input_value)?;
-        Ok(ColumnarValue::Array(array))
-    }
-
-    fn decode_utf8_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
-    where
-        T: OffsetSizeTrait,
-    {
-        let input_value = as_generic_string_array::<T>(value)?;
-        let array = self.decode_byte_array(input_value)?;
-        Ok(ColumnarValue::Array(array))
-    }
-
-    fn decode_byte_array<T: ByteArrayType>(
-        &self,
-        input_value: &GenericByteArray<T>,
-    ) -> Result<ArrayRef> {
-        match self {
-            Self::Base64 => {
-                let upper_bound =
-                    base64::decoded_len_estimate(input_value.values().len());
-                decode_to_array(base64_decode, input_value, upper_bound)
-            }
-            Self::Hex => {
-                // Calculate the upper bound for decoded byte size
-                // For hex encoding, each pair of hex characters (2 bytes) represents 1 byte when decoded
-                // So the upper bound is half the length of the input values.
-                let upper_bound = input_value.values().len() / 2;
-                decode_to_array(hex_decode, input_value, upper_bound)
-            }
-        }
-    }
 }
 
 impl fmt::Display for Encoding {
@@ -515,62 +328,266 @@ impl fmt::Display for Encoding {
     }
 }
 
-impl FromStr for Encoding {
-    type Err = DataFusionError;
-    fn from_str(name: &str) -> Result<Encoding> {
-        Ok(match name {
-            "base64" => Self::Base64,
-            "hex" => Self::Hex,
+impl TryFrom<&ColumnarValue> for Encoding {
+    type Error = DataFusionError;
+
+    fn try_from(encoding: &ColumnarValue) -> Result<Self> {
+        let encoding = match encoding {
+            ColumnarValue::Scalar(encoding) => match encoding.try_as_str().flatten() {
+                Some(encoding) => encoding,
+                _ => return exec_err!("Encoding must be a non-null string"),
+            },
+            ColumnarValue::Array(_) => {
+                return not_impl_err!(
+                    "Encoding must be a scalar; array specified encoding is not yet supported"
+                );
+            }
+        };
+        match encoding {
+            "base64" => Ok(Self::Base64),
+            "hex" => Ok(Self::Hex),
             _ => {
                 let options = [Self::Base64, Self::Hex]
                     .iter()
                     .map(|i| i.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
-                return plan_err!(
-                    "There is no built-in encoding named '{name}', currently supported encodings are: {options}"
-                );
+                plan_err!(
+                    "There is no built-in encoding named '{encoding}', currently supported encodings are: {options}"
+                )
             }
-        })
+        }
     }
 }
 
-/// Encodes the given data, accepts Binary, LargeBinary, Utf8, Utf8View or LargeUtf8 and returns a [`ColumnarValue`].
-/// Second argument is the encoding to use.
-/// Standard encodings are base64 and hex.
-fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [expression, format] = take_function_args("encode", args)?;
+impl Encoding {
+    fn encode_bytes(self, value: &[u8]) -> String {
+        match self {
+            Self::Base64 => BASE64_ENGINE.encode(value),
+            Self::Hex => hex::encode(value),
+        }
+    }
 
-    let encoding = match format {
-        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
-            Some(Some(method)) => method.parse::<Encoding>(),
-            _ => not_impl_err!(
-                "Second argument to encode must be non null constant string: Encode using dynamically decided method is not yet supported. Got {scalar:?}"
-            ),
-        },
-        ColumnarValue::Array(_) => not_impl_err!(
-            "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported"
-        ),
-    }?;
-    encode_process(expression, encoding)
+    fn decode_bytes(self, value: &[u8]) -> Result<Vec<u8>> {
+        match self {
+            Self::Base64 => BASE64_ENGINE.decode(value).map_err(|e| {
+                exec_datafusion_err!("Failed to decode value using base64: {e}")
+            }),
+            Self::Hex => hex::decode(value).map_err(|e| {
+                exec_datafusion_err!("Failed to decode value using hex: {e}")
+            }),
+        }
+    }
+
+    // OutputOffset important to ensure Large types output Large arrays
+    fn encode_array<'a, InputBinaryArray, OutputOffset>(
+        self,
+        array: &InputBinaryArray,
+    ) -> Result<ArrayRef>
+    where
+        InputBinaryArray: BinaryArrayType<'a>,
+        OutputOffset: OffsetSizeTrait,
+    {
+        match self {
+            Self::Base64 => {
+                let array: GenericStringArray<OutputOffset> = array
+                    .iter()
+                    .map(|x| x.map(|x| BASE64_ENGINE.encode(x)))
+                    .collect();
+                Ok(Arc::new(array))
+            }
+            Self::Hex => {
+                let array: GenericStringArray<OutputOffset> =
+                    array.iter().map(|x| x.map(hex::encode)).collect();
+                Ok(Arc::new(array))
+            }
+        }
+    }
+
+    // TODO: refactor this away once https://github.com/apache/arrow-rs/pull/8993 lands
+    fn encode_fsb_array(self, array: &FixedSizeBinaryArray) -> Result<ArrayRef> {
+        match self {
+            Self::Base64 => {
+                let array: GenericStringArray<i32> = array
+                    .iter()
+                    .map(|x| x.map(|x| BASE64_ENGINE.encode(x)))
+                    .collect();
+                Ok(Arc::new(array))
+            }
+            Self::Hex => {
+                let array: GenericStringArray<i32> =
+                    array.iter().map(|x| x.map(hex::encode)).collect();
+                Ok(Arc::new(array))
+            }
+        }
+    }
+
+    // OutputOffset important to ensure Large types output Large arrays
+    fn decode_array<'a, InputBinaryArray, OutputOffset>(
+        self,
+        value: &InputBinaryArray,
+        approx_data_size: usize,
+    ) -> Result<ArrayRef>
+    where
+        InputBinaryArray: BinaryArrayType<'a>,
+        OutputOffset: OffsetSizeTrait,
+    {
+        fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
+            // only write input / 2 bytes to buf
+            let out_len = input.len() / 2;
+            let buf = &mut buf[..out_len];
+            hex::decode_to_slice(input, buf)
+                .map_err(|e| exec_datafusion_err!("Failed to decode from hex: {e}"))?;
+            Ok(out_len)
+        }
+
+        fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
+            BASE64_ENGINE
+                .decode_slice(input, buf)
+                .map_err(|e| exec_datafusion_err!("Failed to decode from base64: {e}"))
+        }
+
+        match self {
+            Self::Base64 => {
+                let upper_bound = base64::decoded_len_estimate(approx_data_size);
+                delegated_decode::<_, _, OutputOffset>(base64_decode, value, upper_bound)
+            }
+            Self::Hex => {
+                // Calculate the upper bound for decoded byte size
+                // For hex encoding, each pair of hex characters (2 bytes) represents 1 byte when decoded
+                // So the upper bound is half the length of the input values.
+                let upper_bound = approx_data_size / 2;
+                delegated_decode::<_, _, OutputOffset>(hex_decode, value, upper_bound)
+            }
+        }
+    }
+
+    // TODO: refactor this away once https://github.com/apache/arrow-rs/pull/8993 lands
+    fn decode_fsb_array(
+        self,
+        value: &FixedSizeBinaryArray,
+        approx_data_size: usize,
+    ) -> Result<ArrayRef> {
+        fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
+            // only write input / 2 bytes to buf
+            let out_len = input.len() / 2;
+            let buf = &mut buf[..out_len];
+            hex::decode_to_slice(input, buf)
+                .map_err(|e| exec_datafusion_err!("Failed to decode from hex: {e}"))?;
+            Ok(out_len)
+        }
+
+        fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
+            BASE64_ENGINE
+                .decode_slice(input, buf)
+                .map_err(|e| exec_datafusion_err!("Failed to decode from base64: {e}"))
+        }
+
+        fn delegated_decode<DecodeFunction>(
+            decode: DecodeFunction,
+            input: &FixedSizeBinaryArray,
+            conservative_upper_bound_size: usize,
+        ) -> Result<ArrayRef>
+        where
+            DecodeFunction: Fn(&[u8], &mut [u8]) -> Result<usize>,
+        {
+            let mut values = vec![0; conservative_upper_bound_size];
+            let mut offsets = OffsetBufferBuilder::new(input.len());
+            let mut total_bytes_decoded = 0;
+            for v in input.iter() {
+                if let Some(v) = v {
+                    let cursor = &mut values[total_bytes_decoded..];
+                    let decoded = decode(v, cursor)?;
+                    total_bytes_decoded += decoded;
+                    offsets.push_length(decoded);
+                } else {
+                    offsets.push_length(0);
+                }
+            }
+            // We reserved an upper bound size for the values buffer, but we only use the actual size
+            values.truncate(total_bytes_decoded);
+            let binary_array = GenericBinaryArray::<i32>::try_new(
+                offsets.finish(),
+                Buffer::from_vec(values),
+                input.nulls().cloned(),
+            )?;
+            Ok(Arc::new(binary_array))
+        }
+
+        match self {
+            Self::Base64 => {
+                let upper_bound = base64::decoded_len_estimate(approx_data_size);
+                delegated_decode(base64_decode, value, upper_bound)
+            }
+            Self::Hex => {
+                // Calculate the upper bound for decoded byte size
+                // For hex encoding, each pair of hex characters (2 bytes) represents 1 byte when decoded
+                // So the upper bound is half the length of the input values.
+                let upper_bound = approx_data_size / 2;
+                delegated_decode(hex_decode, value, upper_bound)
+            }
+        }
+    }
 }
 
-/// Decodes the given data, accepts Binary, LargeBinary, Utf8, Utf8View or LargeUtf8 and returns a [`ColumnarValue`].
-/// Second argument is the encoding to use.
-/// Standard encodings are base64 and hex.
-fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [expression, format] = take_function_args("decode", args)?;
+fn delegated_decode<'a, DecodeFunction, InputBinaryArray, OutputOffset>(
+    decode: DecodeFunction,
+    input: &InputBinaryArray,
+    conservative_upper_bound_size: usize,
+) -> Result<ArrayRef>
+where
+    DecodeFunction: Fn(&[u8], &mut [u8]) -> Result<usize>,
+    InputBinaryArray: BinaryArrayType<'a>,
+    OutputOffset: OffsetSizeTrait,
+{
+    let mut values = vec![0; conservative_upper_bound_size];
+    let mut offsets = OffsetBufferBuilder::new(input.len());
+    let mut total_bytes_decoded = 0;
+    for v in input.iter() {
+        if let Some(v) = v {
+            let cursor = &mut values[total_bytes_decoded..];
+            let decoded = decode(v, cursor)?;
+            total_bytes_decoded += decoded;
+            offsets.push_length(decoded);
+        } else {
+            offsets.push_length(0);
+        }
+    }
+    // We reserved an upper bound size for the values buffer, but we only use the actual size
+    values.truncate(total_bytes_decoded);
+    let binary_array = GenericBinaryArray::<OutputOffset>::try_new(
+        offsets.finish(),
+        Buffer::from_vec(values),
+        input.nulls().cloned(),
+    )?;
+    Ok(Arc::new(binary_array))
+}
 
-    let encoding = match format {
-        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
-            Some(Some(method)) => method.parse::<Encoding>(),
-            _ => not_impl_err!(
-                "Second argument to decode must be a non null constant string: Decode using dynamically decided method is not yet supported. Got {scalar:?}"
-            ),
-        },
-        ColumnarValue::Array(_) => not_impl_err!(
-            "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported"
-        ),
-    }?;
-    decode_process(expression, encoding)
+#[cfg(test)]
+mod tests {
+    use arrow::array::BinaryArray;
+    use arrow_buffer::OffsetBuffer;
+
+    use super::*;
+
+    #[test]
+    fn test_estimate_byte_data_size() {
+        // Offsets starting at 0, but don't count entire data buffer size
+        let array = BinaryArray::new(
+            OffsetBuffer::new(vec![0, 5, 10, 15].into()),
+            vec![0; 100].into(),
+            None,
+        );
+        let size = estimate_byte_data_size(&array);
+        assert_eq!(size, 15);
+
+        // Offsets starting at 0, but don't count entire data buffer size
+        let array = BinaryArray::new(
+            OffsetBuffer::new(vec![50, 51, 51, 60, 80, 81].into()),
+            vec![0; 100].into(),
+            Some(vec![true, false, false, true, true].into()),
+        );
+        let size = estimate_byte_data_size(&array);
+        assert_eq!(size, 31);
+    }
 }

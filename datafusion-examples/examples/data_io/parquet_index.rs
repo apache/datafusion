@@ -511,7 +511,7 @@ impl ParquetMetadataIndexBuilder {
 
         // Get the schema of the file. A real system might have to handle the
         // case where the schema of the file is not the same as the schema of
-        // the other files e.g. using SchemaAdapter.
+        // the other files e.g. using PhysicalExprAdapterFactory.
         if self.file_schema.is_none() {
             self.file_schema = Some(reader.schema().clone());
         }
