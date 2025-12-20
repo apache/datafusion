@@ -868,9 +868,11 @@ select log(100000000000000000000000000000000000::decimal(76,0));
 ----
 35
 
-# log(10^50) for decimal256 for a value larger than i128
-query error Arrow error: Not yet implemented: Log of Decimal256 larger than Decimal128 is not yet supported
+# log(10^50) for decimal256 for a value larger than i128 (uses f64 fallback)
+query R
 select log(100000000000000000000000000000000000000000000000000::decimal(76,0));
+----
+50
 
 # log(10^35) for decimal128 with explicit base
 query R
