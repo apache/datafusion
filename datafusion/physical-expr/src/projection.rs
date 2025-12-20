@@ -21,12 +21,12 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
-use crate::expressions::Column;
+use crate::expressions::{Column, Literal};
 use crate::utils::collect_columns;
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Field, Schema, SchemaRef};
-use datafusion_common::stats::ColumnStatistics;
+use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Result, assert_or_internal_err, internal_datafusion_err, plan_err,
@@ -587,6 +587,38 @@ impl ProjectionExprs {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 std::mem::take(&mut stats.column_statistics[col.index()])
+            } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>()
+                && !literal.value().is_null()
+            {
+                // For constant columns (non-null literals), output proper statistics
+                let value = literal.value();
+                let data_type = expr.data_type(output_schema)?;
+
+                // For constant columns:
+                // - min_value = max_value = the literal value
+                // - distinct_count = 1
+                // - null_count = 0
+                // - byte_size = calculated from data type and num_rows
+                let distinct_count = Precision::Exact(1);
+                let null_count = Precision::Exact(0);
+
+                // Calculate byte_size: for primitive types, use width * num_rows
+                let byte_size = if let Some(byte_width) = data_type.primitive_width() {
+                    stats.num_rows.multiply(&Precision::Exact(byte_width))
+                } else {
+                    // For complex types (Utf8, List, etc.), we can't calculate exact size
+                    // without knowing the actual data, so leave it as Absent
+                    Precision::Absent
+                };
+
+                ColumnStatistics {
+                    min_value: Precision::Exact(value.clone()),
+                    max_value: Precision::Exact(value.clone()),
+                    distinct_count,
+                    null_count,
+                    sum_value: Precision::Absent, // Sum doesn't make sense for constants
+                    byte_size,
+                }
             } else {
                 // TODO stats: estimate more statistics from expressions
                 // (expressions should compute their statistics themselves)
@@ -2590,6 +2622,70 @@ pub(crate) mod tests {
 
         // Total byte size should be 0 for empty projection
         assert_eq!(output_stats.total_byte_size, Precision::Exact(0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_with_literal() -> Result<()> {
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        // Projection with literal: SELECT 42 AS constant, col0 AS num
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+                alias: "constant".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "num".to_string(),
+            },
+        ]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        // Row count should be preserved
+        assert_eq!(output_stats.num_rows, Precision::Exact(5));
+
+        // Should have 2 column statistics
+        assert_eq!(output_stats.column_statistics.len(), 2);
+
+        // First column (literal 42) should have proper constant statistics
+        assert_eq!(
+            output_stats.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int64(Some(42)))
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(42)))
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        // Int64 is 8 bytes, 5 rows = 40 bytes
+        assert_eq!(
+            output_stats.column_statistics[0].byte_size,
+            Precision::Exact(40)
+        );
+
+        // Second column (col0) should preserve statistics
+        assert_eq!(
+            output_stats.column_statistics[1].distinct_count,
+            Precision::Exact(5)
+        );
+        assert_eq!(
+            output_stats.column_statistics[1].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(21)))
+        );
 
         Ok(())
     }
