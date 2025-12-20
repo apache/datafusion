@@ -48,31 +48,44 @@ use kernels::{
     concat_elements_utf8view, regex_match_dyn, regex_match_dyn_scalar,
 };
 
+/// Default threshold for pre-selection optimization in AND operations.
+/// When the ratio of true values in the left-hand side is below this threshold,
+/// the RecordBatch will be filtered before evaluating the right-hand side.
+pub const DEFAULT_PRESELECTION_THRESHOLD: f32 = 0.2;
+
 /// Binary expression
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
+    /// Threshold ratio (0.0 to 1.0) for pre-selection optimization in AND operations.
+    /// When the ratio of true values in the LHS is <= this threshold, pre-selection is applied.
+    /// Set to 0.0 to disable pre-selection, or 1.0 to always enable it for AND operations.
+    preselection_threshold: f32,
 }
 
-// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+// Manually derive PartialEq, Eq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+// and because f32 doesn't implement Eq
 impl PartialEq for BinaryExpr {
     fn eq(&self, other: &Self) -> bool {
         self.left.eq(&other.left)
             && self.op.eq(&other.op)
             && self.right.eq(&other.right)
             && self.fail_on_overflow.eq(&other.fail_on_overflow)
+            && self.preselection_threshold == other.preselection_threshold
     }
 }
+impl Eq for BinaryExpr {}
 impl Hash for BinaryExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.left.hash(state);
         self.op.hash(state);
         self.right.hash(state);
         self.fail_on_overflow.hash(state);
+        self.preselection_threshold.to_bits().hash(state);
     }
 }
 
@@ -88,16 +101,32 @@ impl BinaryExpr {
             op,
             right,
             fail_on_overflow: false,
+            preselection_threshold: DEFAULT_PRESELECTION_THRESHOLD,
         }
     }
 
     /// Create new binary expression with explicit fail_on_overflow value
     pub fn with_fail_on_overflow(self, fail_on_overflow: bool) -> Self {
         Self {
-            left: self.left,
-            op: self.op,
-            right: self.right,
             fail_on_overflow,
+            ..self
+        }
+    }
+
+    /// Set the pre-selection threshold for AND operations.
+    ///
+    /// When evaluating `lhs AND rhs`, if the ratio of true values in `lhs`
+    /// is less than or equal to this threshold, the RecordBatch will be
+    /// filtered before evaluating `rhs`, which can improve performance
+    /// when `rhs` is expensive to evaluate.
+    ///
+    /// - Set to `0.0` to disable pre-selection optimization
+    /// - Set to `1.0` to always apply pre-selection for AND operations
+    /// - Default is [`DEFAULT_PRESELECTION_THRESHOLD`] (0.2)
+    pub fn with_preselection_threshold(self, threshold: f32) -> Self {
+        Self {
+            preselection_threshold: threshold,
+            ..self
         }
     }
 
@@ -114,6 +143,11 @@ impl BinaryExpr {
     /// Get the operator for this binary expression
     pub fn op(&self) -> &Operator {
         &self.op
+    }
+
+    /// Get the pre-selection threshold for AND operations
+    pub fn preselection_threshold(&self) -> f32 {
+        self.preselection_threshold
     }
 }
 
@@ -188,7 +222,7 @@ impl PhysicalExpr for BinaryExpr {
         let lhs = self.left.evaluate(batch)?;
 
         // Check if we can apply short-circuit evaluation.
-        match check_short_circuit(&lhs, &self.op) {
+        match check_short_circuit(&lhs, &self.op, self.preselection_threshold) {
             ShortCircuitStrategy::None => {}
             ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
             ShortCircuitStrategy::ReturnRight => {
@@ -638,10 +672,6 @@ enum ShortCircuitStrategy<'a> {
     PreSelection(&'a BooleanArray),
 }
 
-/// Based on the results calculated from the left side of the short-circuit operation,
-/// if the proportion of `true` is less than 0.2 and the current operation is an `and`,
-/// the `RecordBatch` will be filtered in advance.
-const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
 /// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
 ///
@@ -649,14 +679,14 @@ const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 /// - For `AND`:
 ///    - if LHS is all false => short-circuit → return LHS
 ///    - if LHS is all true  => short-circuit → return RHS
-///    - if LHS is mixed and true_count/sum_count <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
+///    - if LHS is mixed and true_count/sum_count <= `preselection_threshold` -> pre-selection
 /// - For `OR`:
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
 /// # Arguments
 /// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
-/// * `lhs` - The left-hand side (lhs) columnar value (array or scalar)
 /// * `op` - The logical operator (`AND` or `OR`)
+/// * `preselection_threshold` - Threshold ratio for pre-selection optimization in AND operations
 ///
 /// # Implementation Notes
 /// 1. Only works with Boolean-typed arguments (other types automatically return `false`)
@@ -665,6 +695,7 @@ const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 fn check_short_circuit<'a>(
     lhs: &'a ColumnarValue,
     op: &Operator,
+    preselection_threshold: f32,
 ) -> ShortCircuitStrategy<'a> {
     // Quick reject for non-logical operators,and quick judgment when op is and
     let is_and = match op {
@@ -708,7 +739,7 @@ fn check_short_circuit<'a>(
                     }
 
                     // determine if we can pre-selection
-                    if true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
+                    if true_count as f32 / len as f32 <= preselection_threshold {
                         return ShortCircuitStrategy::PreSelection(bool_array);
                     }
                 } else {
