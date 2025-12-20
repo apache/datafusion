@@ -34,7 +34,6 @@ use datafusion_datasource::TableSchema;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
-use crate::read_avro_schema_from_reader;
 use object_store::ObjectStore;
 use serde_json::Value;
 
@@ -76,19 +75,9 @@ impl AvroSource {
 
     fn build_projected_reader_schema(&self) -> Result<AvroSchema> {
         let file_schema = self.table_schema.file_schema().as_ref();
-        // Fast path: no projection. If we have the original writer schema JSON
-        // in metadata, just reuse it as-is without parsing.
+        // Fast path: no projection.
         if self.projection.file_indices.is_empty() {
-            return if let Some(avro_json) =
-                file_schema.metadata().get(SCHEMA_METADATA_KEY)
-            {
-                Ok(AvroSchema::new(avro_json.clone()))
-            } else {
-                // Fall back to deriving Avro from the full Arrow file schema, should be ok
-                // if not using projection.
-                Ok(AvroSchema::try_from(file_schema)
-                    .map_err(Into::<DataFusionError>::into)?)
-            };
+            return  Ok(AvroSchema::try_from(file_schema).map_err(Into::<DataFusionError>::into)?)
         }
         // Use the writer Avro schema JSON tagged upstream to build a projected reader schema
         match file_schema.metadata().get(SCHEMA_METADATA_KEY) {
@@ -246,61 +235,6 @@ mod private {
             let config = Arc::clone(&self.config);
 
             Ok(Box::pin(async move {
-                // check if schema should be inferred
-                let r = object_store
-                    .get(&partitioned_file.object_meta.location)
-                    .await?;
-                let config = Arc::new(match r.payload {
-                    GetResultPayload::File(mut file, _) => {
-                        let schema = match config
-                            .table_schema
-                            .file_schema()
-                            .metadata
-                            .get(SCHEMA_METADATA_KEY)
-                        {
-                            Some(_) => Arc::clone(config.table_schema.file_schema()),
-                            None => {
-                                Arc::new(read_avro_schema_from_reader(&mut file).unwrap())
-                            } // if not inferred, read schema from file
-                        };
-                        AvroSource {
-                            table_schema: TableSchema::new(
-                                schema,
-                                config.table_schema.table_partition_cols().clone(),
-                            ),
-                            batch_size: config.batch_size,
-                            projection: config.projection.clone(),
-                            metrics: config.metrics.clone(),
-                            schema_adapter_factory: config.schema_adapter_factory.clone(),
-                        }
-                    }
-                    GetResultPayload::Stream(_) => {
-                        let bytes = r.bytes().await?;
-                        let schema = match config
-                            .table_schema
-                            .file_schema()
-                            .metadata
-                            .get(SCHEMA_METADATA_KEY)
-                        {
-                            Some(_) => Arc::clone(config.table_schema.file_schema()),
-                            None => Arc::new(
-                                read_avro_schema_from_reader(&mut bytes.reader())
-                                    .unwrap(),
-                            ), // if not inferred, read schema from file
-                        };
-                        AvroSource {
-                            table_schema: TableSchema::new(
-                                schema,
-                                config.table_schema.table_partition_cols().clone(),
-                            ),
-                            batch_size: config.batch_size,
-                            projection: config.projection.clone(),
-                            metrics: config.metrics.clone(),
-                            schema_adapter_factory: config.schema_adapter_factory.clone(),
-                        }
-                    }
-                });
-
                 let r = object_store
                     .get(&partitioned_file.object_meta.location)
                     .await?;
