@@ -509,3 +509,275 @@ SELECT c, f.*  FROM json_table, LATERAL generate_series(1,2) f;
 1 2
 2 1
 2 2
+
+# To test edge cases related to batch size
+statement ok
+set datafusion.execution.batch_size = 10;
+
+# range equal batch size
+query I
+SELECT * FROM range(10)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+# generate_series equal batch size (including end)
+query I
+SELECT * FROM generate_series(9)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+# range equal batch size * 2
+query I
+SELECT * FROM range(20)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+
+# generate_series equal batch size * 2 (including end)
+query I
+SELECT * FROM generate_series(19)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+
+# range equal batch size with starting value
+query I
+SELECT * FROM range(1, 11)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+# generate_series equal batch size with starting value (including end)
+query I
+SELECT * FROM generate_series(1, 10)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+# range equal batch size * 2 with starting value
+query I
+SELECT * FROM range(1, 21)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+
+# generate_series equal batch size * 2 with starting value (including end)
+query I
+SELECT * FROM generate_series(1, 20)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+
+# range equal batch size with starting value and step
+query I
+SELECT count(*) FROM range(1, 22, 2)
+----
+20
+
+# range equal batch size with starting value and step
+query I
+SELECT * FROM range(1, 22, 2)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+# generate_series equal batch size with starting value and step (including end)
+query I
+SELECT count(*) FROM generate_series(1, 21, 2)
+----
+20
+
+# generate_series equal batch size with starting value and step (including end)
+query I
+SELECT * FROM generate_series(1, 21, 2)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+# range equal batch size * 2 with starting value and step
+query I
+SELECT count(*) FROM range(1, 40, 2)
+----
+20
+
+# range equal batch size * 2 with starting value and step
+query I
+SELECT * FROM range(1, 40, 2)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+
+# generate_series equal batch size * 2 with starting value and step (including end)
+query I
+SELECT count(*) FROM generate_series(1, 38, 2)
+----
+20
+
+# generate_series equal batch size * 2 with starting value and step (including end)
+query I
+SELECT * FROM generate_series(1, 38, 2)
+----
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+
+# Revert batch size
+statement ok
+set datafusion.execution.batch_size = 8192;
