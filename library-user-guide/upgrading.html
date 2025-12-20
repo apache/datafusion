@@ -714,6 +714,40 @@ Aggregate and window functions follow the same pattern.</p>
 <span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">foreign_udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ScalarUDF</span><span class="p">::</span><span class="n">new_from_shared_impl</span><span class="p">(</span><span class="n">foreign_udf</span><span class="p">);</span>
 </pre></div>
 </div>
+<p>When creating any of the following structs, we now require the user to
+provide a <code class="docutils literal notranslate"><span class="pre">TaskContextProvider</span></code> and optionally a <code class="docutils literal notranslate"><span class="pre">LogicalExtensionCodec</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_CatalogListProvider</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_CatalogProvider</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_SchemaProvider</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_TableProvider</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">FFI_TableFunction</span></code></p></li>
+</ul>
+<p>Each of these structs has a <code class="docutils literal notranslate"><span class="pre">new()</span></code> and a <code class="docutils literal notranslate"><span class="pre">new_with_ffi_codec()</span></code> method for
+instantiation. For example, when you previously would write</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyTableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ffi_table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FFI_TableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">table</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Now you will need to provide a <code class="docutils literal notranslate"><span class="pre">TaskContextProvider</span></code>. The most common
+implementation of this trait is <code class="docutils literal notranslate"><span class="pre">SessionContext</span></code>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">SessionContext</span><span class="p">::</span><span class="n">default</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyTableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ffi_table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FFI_TableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">table</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="n">ctx</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The alternative function to create these structures may be more convenient
+if you are doing many of these operations. A <code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec</span></code> will
+store the <code class="docutils literal notranslate"><span class="pre">TaskContextProvider</span></code> as well.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">codec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DefaultLogicalExtensionCodec</span><span class="w"> </span><span class="p">{});</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">SessionContext</span><span class="p">::</span><span class="n">default</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ffi_codec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FFI_LogicalExtensionCodec</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">codec</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="n">ctx</span><span class="p">);</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyTableProvider</span><span class="p">::</span><span class="n">new</span><span class="p">());</span>
+<span class="w">   </span><span class="kd">let</span><span class="w"> </span><span class="n">ffi_table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FFI_TableProvider</span><span class="p">::</span><span class="n">new_with_ffi_codec</span><span class="p">(</span><span class="n">table</span><span class="p">,</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span><span class="w"> </span><span class="n">ffi_codec</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Additional information about the usage of the <code class="docutils literal notranslate"><span class="pre">TaskContextProvider</span></code> can be
+found in the crate README.</p>
 <p>Additionally, the FFI structure for Scalar UDF’s no longer contains a
 <code class="docutils literal notranslate"><span class="pre">return_type</span></code> call. This code was not used since the <code class="docutils literal notranslate"><span class="pre">ForeignScalarUDF</span></code>
 struct implements the <code class="docutils literal notranslate"><span class="pre">return_field_from_args</span></code> instead.</p>
