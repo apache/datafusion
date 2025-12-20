@@ -798,20 +798,20 @@ fn to_timestamp_impl<T: ArrowTimestampType + ScalarType<i64>>(
     };
 
     match args.len() {
-        1 => handle::<T, _, i64>(
+        1 => handle::<T, _>(
             args,
             move |s| string_to_timestamp_nanos_with_timezone(&tz, s).map(|n| n / factor),
             name,
-            &ScalarDataType::new(Timestamp(T::UNIT, timezone.clone())),
+            &Timestamp(T::UNIT, timezone.clone()),
         ),
-        n if n >= 2 => handle_multiple::<T, _, _, i64>(
+        n if n >= 2 => handle_multiple::<T, _, _>(
             args,
             move |s, format| {
                 string_to_timestamp_nanos_formatted_with_timezone(&tz, s, format)
             },
             |n| n / factor,
             name,
-            &ScalarDataType::new(Timestamp(T::UNIT, timezone.clone())),
+            &Timestamp(T::UNIT, timezone.clone()),
         ),
         _ => exec_err!("Unsupported 0 argument count for function {name}"),
     }

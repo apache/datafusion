@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::marker::PhantomData;
 use std::sync::{Arc, LazyLock};
 
 use arrow::array::timezone::Tz;
@@ -23,6 +22,7 @@ use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
     StringArrayType, StringViewArray,
 };
+use arrow::compute::DecimalCast;
 use arrow::compute::kernels::cast_utils::string_to_datetime;
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow_buffer::ArrowNativeType;
@@ -35,7 +35,6 @@ use datafusion_common::{
     internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_expr::ColumnarValue;
-use num_traits::{PrimInt, ToPrimitive};
 
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
@@ -248,50 +247,14 @@ pub(crate) fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Res
         .timestamp_millis())
 }
 
-pub(crate) struct ScalarDataType<T: PrimInt> {
-    data_type: DataType,
-    _marker: PhantomData<T>,
-}
-
-impl<T: PrimInt> ScalarDataType<T> {
-    pub(crate) fn new(dt: DataType) -> Self {
-        Self {
-            data_type: dt,
-            _marker: PhantomData,
-        }
-    }
-
-    fn scalar(&self, r: Option<i64>) -> Result<ScalarValue> {
-        match &self.data_type {
-            DataType::Date32 => Ok(ScalarValue::Date32(r.and_then(|v| v.to_i32()))),
-            DataType::Timestamp(u, tz) => match u {
-                TimeUnit::Second => Ok(ScalarValue::TimestampSecond(r, tz.clone())),
-                TimeUnit::Millisecond => {
-                    Ok(ScalarValue::TimestampMillisecond(r, tz.clone()))
-                }
-                TimeUnit::Microsecond => {
-                    Ok(ScalarValue::TimestampMicrosecond(r, tz.clone()))
-                }
-                TimeUnit::Nanosecond => {
-                    Ok(ScalarValue::TimestampNanosecond(r, tz.clone()))
-                }
-            },
-            t => Err(internal_datafusion_err!(
-                "Unsupported data type for ScalarDataType<T>: {t:?}"
-            )),
-        }
-    }
-}
-
-pub(crate) fn handle<O, F, T>(
+pub(crate) fn handle<O, F>(
     args: &[ColumnarValue],
     op: F,
     name: &str,
-    sdt: &ScalarDataType<T>,
+    dt: &DataType,
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
-    T: PrimInt,
     F: Fn(&str) -> Result<O::Native>,
 {
     match &args[0] {
@@ -323,7 +286,7 @@ where
                     .map(|x| op(x))
                     .transpose()?
                     .and_then(|v| v.to_i64());
-                let s = sdt.scalar(result)?;
+                let s = scalar_value(dt, result)?;
                 Ok(ColumnarValue::Scalar(s))
             }
             _ => exec_err!("Unsupported data type {scalar:?} for function {name}"),
@@ -334,18 +297,17 @@ where
 // Given a function that maps a `&str`, `&str` to an arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
-pub(crate) fn handle_multiple<O, F, M, T>(
+pub(crate) fn handle_multiple<O, F, M>(
     args: &[ColumnarValue],
     op: F,
     op2: M,
     name: &str,
-    sdt: &ScalarDataType<T>,
+    dt: &DataType,
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
     F: Fn(&str, &str) -> Result<O::Native>,
     M: Fn(O::Native) -> O::Native,
-    T: PrimInt,
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
@@ -413,7 +375,7 @@ where
                         match op(a, s.as_str()) {
                             Ok(r) => {
                                 let result = op2(r).to_i64();
-                                let s = sdt.scalar(result)?;
+                                let s = scalar_value(dt, result)?;
                                 ret = Some(Ok(ColumnarValue::Scalar(s)));
                                 break;
                             }
@@ -567,4 +529,17 @@ where
 {
     // first map is the iterator, second is for the `Option<_>`
     array.iter().map(|x| x.map(&op).transpose()).collect()
+}
+
+fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {
+    match dt {
+        DataType::Date32 => Ok(ScalarValue::Date32(r.and_then(|v| v.to_i32()))),
+        DataType::Timestamp(u, tz) => match u {
+            TimeUnit::Second => Ok(ScalarValue::TimestampSecond(r, tz.clone())),
+            TimeUnit::Millisecond => Ok(ScalarValue::TimestampMillisecond(r, tz.clone())),
+            TimeUnit::Microsecond => Ok(ScalarValue::TimestampMicrosecond(r, tz.clone())),
+            TimeUnit::Nanosecond => Ok(ScalarValue::TimestampNanosecond(r, tz.clone())),
+        },
+        t => Err(internal_datafusion_err!("Unsupported data type: {t:?}")),
+    }
 }
