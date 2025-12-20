@@ -36,11 +36,11 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{displayable, execute_stream};
 use datafusion::prelude::*;
+use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
-use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
 #[derive(Debug, StructOpt)]
 pub struct RunOpt {

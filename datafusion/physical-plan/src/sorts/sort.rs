@@ -2119,21 +2119,21 @@ mod tests {
         plan = plan.with_fetch(Some(9));
 
         let batches = collect(Arc::new(plan), task_ctx).await?;
-        assert_snapshot!(batches_to_string(&batches), @r#"
-            +----+
-            | c1 |
-            +----+
-            | 0  |
-            | 1  |
-            | 2  |
-            | 3  |
-            | 4  |
-            | 5  |
-            | 6  |
-            | 7  |
-            | 8  |
-            +----+
-            "#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+
+        | c1 |
+        +----+
+        | 0  |
+        | 1  |
+        | 2  |
+        | 3  |
+        | 4  |
+        | 5  |
+        | 6  |
+        | 7  |
+        | 8  |
+        +----+
+        ");
         Ok(())
     }
 

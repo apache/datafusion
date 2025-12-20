@@ -16,11 +16,10 @@
 // under the License.
 
 use abi_stable::{
-    declare_root_module_statics,
+    StableAbi, declare_root_module_statics,
     library::{LibraryError, RootModule},
     package_version_strings,
     sabi_types::VersionStrings,
-    StableAbi,
 };
 use datafusion_ffi::table_provider::FFI_TableProvider;
 

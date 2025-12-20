@@ -22,35 +22,35 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use datafusion::catalog::Session;
 use datafusion::common::{
-    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
+    DFSchema, DataFusionError, Result, ScalarValue, internal_datafusion_err,
 };
+use datafusion::datasource::TableProvider;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
     FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
-use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{TableProviderFilterPushDown, TableType};
+use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
 };
 use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
-use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::metadata::ParquetMetaData;
 use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use datafusion::parquet::schema::types::ColumnPath;
-use datafusion::physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::*;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
@@ -58,8 +58,8 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::datasource::memory::DataSourceExec;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use object_store::ObjectStore;
 use tempfile::TempDir;
 use url::Url;

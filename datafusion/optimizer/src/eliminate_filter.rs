@@ -34,7 +34,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 pub struct EliminateFilter;
 
 impl EliminateFilter {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

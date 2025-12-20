@@ -44,7 +44,7 @@ use std::{any::Any, fmt::Debug, fmt::Display, sync::Arc};
 /// # use std::any::Any;
 /// # use std::sync::atomic::{AtomicUsize, Ordering};
 ///
-/// # use datafusion_physical_plan::metrics::CustomMetricValue;
+/// # use datafusion_execution::metrics::CustomMetricValue;
 ///
 /// #[derive(Debug, Default)]
 /// struct MyCounter {

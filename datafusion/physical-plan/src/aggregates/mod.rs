@@ -190,6 +190,9 @@ pub struct PhysicalGroupBy {
     /// expression in null_expr. If `groups[i][j]` is true, then the
     /// j-th expression in the i-th group is NULL, otherwise it is `expr[j]`.
     groups: Vec<Vec<bool>>,
+    /// True when GROUPING SETS/CUBE/ROLLUP are used so `__grouping_id` should
+    /// be included in the output schema.
+    has_grouping_set: bool,
 }
 
 impl PhysicalGroupBy {
@@ -198,11 +201,13 @@ impl PhysicalGroupBy {
         expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
         null_expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
         groups: Vec<Vec<bool>>,
+        has_grouping_set: bool,
     ) -> Self {
         Self {
             expr,
             null_expr,
             groups,
+            has_grouping_set,
         }
     }
 
@@ -214,6 +219,7 @@ impl PhysicalGroupBy {
             expr,
             null_expr: vec![],
             groups: vec![vec![false; num_exprs]],
+            has_grouping_set: false,
         }
     }
 
@@ -228,6 +234,11 @@ impl PhysicalGroupBy {
             })
         }
         exprs_nullable
+    }
+
+    /// Returns true if this has no grouping at all (including no GROUPING SETS)
+    pub fn is_true_no_grouping(&self) -> bool {
+        self.is_empty() && !self.has_grouping_set
     }
 
     /// Returns the group expressions
@@ -245,14 +256,20 @@ impl PhysicalGroupBy {
         &self.groups
     }
 
+    /// Returns true if this grouping uses GROUPING SETS, CUBE or ROLLUP.
+    pub fn has_grouping_set(&self) -> bool {
+        self.has_grouping_set
+    }
+
     /// Returns true if this `PhysicalGroupBy` has no group expressions
     pub fn is_empty(&self) -> bool {
         self.expr.is_empty()
     }
 
-    /// Check whether grouping set is single group
+    /// Returns true if this is a "simple" GROUP BY (not using GROUPING SETS/CUBE/ROLLUP).
+    /// This determines whether the `__grouping_id` column is included in the output schema.
     pub fn is_single(&self) -> bool {
-        self.null_expr.is_empty()
+        !self.has_grouping_set
     }
 
     /// Calculate GROUP BY expressions according to input schema.
@@ -266,7 +283,7 @@ impl PhysicalGroupBy {
     /// The number of expressions in the output schema.
     fn num_output_exprs(&self) -> usize {
         let mut num_exprs = self.expr.len();
-        if !self.is_single() {
+        if self.has_grouping_set {
             num_exprs += 1
         }
         num_exprs
@@ -283,7 +300,7 @@ impl PhysicalGroupBy {
                 .take(num_output_exprs)
                 .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _),
         );
-        if !self.is_single() {
+        if self.has_grouping_set {
             output_exprs.push(Arc::new(Column::new(
                 Aggregate::INTERNAL_GROUPING_ID,
                 self.expr.len(),
@@ -294,11 +311,7 @@ impl PhysicalGroupBy {
 
     /// Returns the number expression as grouping keys.
     pub fn num_group_exprs(&self) -> usize {
-        if self.is_single() {
-            self.expr.len()
-        } else {
-            self.expr.len() + 1
-        }
+        self.expr.len() + usize::from(self.has_grouping_set)
     }
 
     pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
@@ -321,7 +334,7 @@ impl PhysicalGroupBy {
                 .into(),
             );
         }
-        if !self.is_single() {
+        if self.has_grouping_set {
             fields.push(
                 Field::new(
                     Aggregate::INTERNAL_GROUPING_ID,
@@ -357,17 +370,17 @@ impl PhysicalGroupBy {
                 )
                 .collect();
         let num_exprs = expr.len();
-        let groups = if self.expr.is_empty() {
+        let groups = if self.expr.is_empty() && !self.has_grouping_set {
             // No GROUP BY expressions - should have no groups
             vec![]
         } else {
-            // Has GROUP BY expressions - create a single group
             vec![vec![false; num_exprs]]
         };
         Self {
             expr,
             null_expr: vec![],
             groups,
+            has_grouping_set: false,
         }
     }
 }
@@ -387,6 +400,7 @@ impl PartialEq for PhysicalGroupBy {
                 .zip(other.null_expr.iter())
                 .all(|((expr1, name1), (expr2, name2))| expr1.eq(expr2) && name1 == name2)
             && self.groups == other.groups
+            && self.has_grouping_set == other.has_grouping_set
     }
 }
 
@@ -756,8 +770,7 @@ impl AggregateExec {
         partition: usize,
         context: &Arc<TaskContext>,
     ) -> Result<StreamType> {
-        // no group by at all
-        if self.group_by.expr.is_empty() {
+        if self.group_by.is_true_no_grouping() {
             return Ok(StreamType::AggregateStream(AggregateStream::new(
                 self, context, partition,
             )?));
@@ -790,7 +803,7 @@ impl AggregateExec {
     /// on an AggregateExec.
     pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
         // ensure there is a group by
-        if self.group_expr().is_empty() {
+        if self.group_expr().is_empty() && !self.group_expr().has_grouping_set() {
             return false;
         }
         // ensure there are no aggregate expressions
@@ -1987,6 +2000,7 @@ mod tests {
                 vec![true, false],  // (NULL, b)
                 vec![false, false], // (a,b)
             ],
+            true,
         );
 
         let aggregates = vec![Arc::new(
@@ -2021,30 +2035,30 @@ mod tests {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result),
             @r"
-+---+-----+---------------+-----------------+
-| a | b   | __grouping_id | COUNT(1)[count] |
-+---+-----+---------------+-----------------+
-|   | 1.0 | 2             | 1               |
-|   | 1.0 | 2             | 1               |
-|   | 2.0 | 2             | 1               |
-|   | 2.0 | 2             | 1               |
-|   | 3.0 | 2             | 1               |
-|   | 3.0 | 2             | 1               |
-|   | 4.0 | 2             | 1               |
-|   | 4.0 | 2             | 1               |
-| 2 |     | 1             | 1               |
-| 2 |     | 1             | 1               |
-| 2 | 1.0 | 0             | 1               |
-| 2 | 1.0 | 0             | 1               |
-| 3 |     | 1             | 1               |
-| 3 |     | 1             | 2               |
-| 3 | 2.0 | 0             | 2               |
-| 3 | 3.0 | 0             | 1               |
-| 4 |     | 1             | 1               |
-| 4 |     | 1             | 2               |
-| 4 | 3.0 | 0             | 1               |
-| 4 | 4.0 | 0             | 2               |
-+---+-----+---------------+-----------------+
+            +---+-----+---------------+-----------------+
+            | a | b   | __grouping_id | COUNT(1)[count] |
+            +---+-----+---------------+-----------------+
+            |   | 1.0 | 2             | 1               |
+            |   | 1.0 | 2             | 1               |
+            |   | 2.0 | 2             | 1               |
+            |   | 2.0 | 2             | 1               |
+            |   | 3.0 | 2             | 1               |
+            |   | 3.0 | 2             | 1               |
+            |   | 4.0 | 2             | 1               |
+            |   | 4.0 | 2             | 1               |
+            | 2 |     | 1             | 1               |
+            | 2 |     | 1             | 1               |
+            | 2 | 1.0 | 0             | 1               |
+            | 2 | 1.0 | 0             | 1               |
+            | 3 |     | 1             | 1               |
+            | 3 |     | 1             | 2               |
+            | 3 | 2.0 | 0             | 2               |
+            | 3 | 3.0 | 0             | 1               |
+            | 4 |     | 1             | 1               |
+            | 4 |     | 1             | 2               |
+            | 4 | 3.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 2               |
+            +---+-----+---------------+-----------------+
             "
             );
             }
@@ -2052,22 +2066,22 @@ mod tests {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result),
             @r"
-+---+-----+---------------+-----------------+
-| a | b   | __grouping_id | COUNT(1)[count] |
-+---+-----+---------------+-----------------+
-|   | 1.0 | 2             | 2               |
-|   | 2.0 | 2             | 2               |
-|   | 3.0 | 2             | 2               |
-|   | 4.0 | 2             | 2               |
-| 2 |     | 1             | 2               |
-| 2 | 1.0 | 0             | 2               |
-| 3 |     | 1             | 3               |
-| 3 | 2.0 | 0             | 2               |
-| 3 | 3.0 | 0             | 1               |
-| 4 |     | 1             | 3               |
-| 4 | 3.0 | 0             | 1               |
-| 4 | 4.0 | 0             | 2               |
-+---+-----+---------------+-----------------+
+            +---+-----+---------------+-----------------+
+            | a | b   | __grouping_id | COUNT(1)[count] |
+            +---+-----+---------------+-----------------+
+            |   | 1.0 | 2             | 2               |
+            |   | 2.0 | 2             | 2               |
+            |   | 3.0 | 2             | 2               |
+            |   | 4.0 | 2             | 2               |
+            | 2 |     | 1             | 2               |
+            | 2 | 1.0 | 0             | 2               |
+            | 3 |     | 1             | 3               |
+            | 3 | 2.0 | 0             | 2               |
+            | 3 | 3.0 | 0             | 1               |
+            | 4 |     | 1             | 3               |
+            | 4 | 3.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 2               |
+            +---+-----+---------------+-----------------+
             "
             );
             }
@@ -2101,23 +2115,23 @@ mod tests {
         assert_snapshot!(
             batches_to_sort_string(&result),
             @r"
-            +---+-----+---------------+----------+
-            | a | b   | __grouping_id | COUNT(1) |
-            +---+-----+---------------+----------+
-            |   | 1.0 | 2             | 2        |
-            |   | 2.0 | 2             | 2        |
-            |   | 3.0 | 2             | 2        |
-            |   | 4.0 | 2             | 2        |
-            | 2 |     | 1             | 2        |
-            | 2 | 1.0 | 0             | 2        |
-            | 3 |     | 1             | 3        |
-            | 3 | 2.0 | 0             | 2        |
-            | 3 | 3.0 | 0             | 1        |
-            | 4 |     | 1             | 3        |
-            | 4 | 3.0 | 0             | 1        |
-            | 4 | 4.0 | 0             | 2        |
-            +---+-----+---------------+----------+
-            "
+        +---+-----+---------------+----------+
+        | a | b   | __grouping_id | COUNT(1) |
+        +---+-----+---------------+----------+
+        |   | 1.0 | 2             | 2        |
+        |   | 2.0 | 2             | 2        |
+        |   | 3.0 | 2             | 2        |
+        |   | 4.0 | 2             | 2        |
+        | 2 |     | 1             | 2        |
+        | 2 | 1.0 | 0             | 2        |
+        | 3 |     | 1             | 3        |
+        | 3 | 2.0 | 0             | 2        |
+        | 3 | 3.0 | 0             | 1        |
+        | 4 |     | 1             | 3        |
+        | 4 | 3.0 | 0             | 1        |
+        | 4 | 4.0 | 0             | 2        |
+        +---+-----+---------------+----------+
+        "
         );
         }
 
@@ -2136,6 +2150,7 @@ mod tests {
             vec![(col("a", &input_schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
@@ -2167,27 +2182,27 @@ mod tests {
         if spill {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result), @r"
-                +---+---------------+-------------+
-                | a | AVG(b)[count] | AVG(b)[sum] |
-                +---+---------------+-------------+
-                | 2 | 1             | 1.0         |
-                | 2 | 1             | 1.0         |
-                | 3 | 1             | 2.0         |
-                | 3 | 2             | 5.0         |
-                | 4 | 3             | 11.0        |
-                +---+---------------+-------------+
+            +---+---------------+-------------+
+            | a | AVG(b)[count] | AVG(b)[sum] |
+            +---+---------------+-------------+
+            | 2 | 1             | 1.0         |
+            | 2 | 1             | 1.0         |
+            | 3 | 1             | 2.0         |
+            | 3 | 2             | 5.0         |
+            | 4 | 3             | 11.0        |
+            +---+---------------+-------------+
             ");
             }
         } else {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result), @r"
-                +---+---------------+-------------+
-                | a | AVG(b)[count] | AVG(b)[sum] |
-                +---+---------------+-------------+
-                | 2 | 2             | 2.0         |
-                | 3 | 3             | 7.0         |
-                | 4 | 3             | 11.0        |
-                +---+---------------+-------------+
+            +---+---------------+-------------+
+            | a | AVG(b)[count] | AVG(b)[sum] |
+            +---+---------------+-------------+
+            | 2 | 2             | 2.0         |
+            | 3 | 3             | 7.0         |
+            | 4 | 3             | 11.0        |
+            +---+---------------+-------------+
             ");
             }
         };
@@ -2222,14 +2237,14 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_sort_string(&result), @r"
-            +---+--------------------+
-            | a | AVG(b)             |
-            +---+--------------------+
-            | 2 | 1.0                |
-            | 3 | 2.3333333333333335 |
-            | 4 | 3.6666666666666665 |
-            +---+--------------------+
-            ");
+        +---+--------------------+
+        | a | AVG(b)             |
+        +---+--------------------+
+        | 2 | 1.0                |
+        | 3 | 2.3333333333333335 |
+        | 4 | 3.6666666666666665 |
+        +---+--------------------+
+        ");
             // For row 2: 3, (2 + 3 + 2) / 3
             // For row 3: 4, (3 + 4 + 4) / 3
         }
@@ -2481,6 +2496,7 @@ mod tests {
             vec![(col("a", &input_schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         // something that allocates within the aggregator
@@ -2755,26 +2771,26 @@ mod tests {
         if is_first_acc {
             allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+--------------------------------------------+
-                | a | first_value(b) ORDER BY [b ASC NULLS LAST] |
-                +---+--------------------------------------------+
-                | 2 | 0.0                                        |
-                | 3 | 1.0                                        |
-                | 4 | 3.0                                        |
-                +---+--------------------------------------------+
-                ");
+            +---+--------------------------------------------+
+            | a | first_value(b) ORDER BY [b ASC NULLS LAST] |
+            +---+--------------------------------------------+
+            | 2 | 0.0                                        |
+            | 3 | 1.0                                        |
+            | 4 | 3.0                                        |
+            +---+--------------------------------------------+
+            ");
             }
         } else {
             allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+-------------------------------------------+
-                | a | last_value(b) ORDER BY [b ASC NULLS LAST] |
-                +---+-------------------------------------------+
-                | 2 | 3.0                                       |
-                | 3 | 5.0                                       |
-                | 4 | 6.0                                       |
-                +---+-------------------------------------------+
-                ");
+            +---+-------------------------------------------+
+            | a | last_value(b) ORDER BY [b ASC NULLS LAST] |
+            +---+-------------------------------------------+
+            | 2 | 3.0                                       |
+            | 3 | 5.0                                       |
+            | 4 | 6.0                                       |
+            +---+-------------------------------------------+
+            ");
             }
         };
         Ok(())
@@ -2925,6 +2941,7 @@ mod tests {
                 vec![true, false, true],
                 vec![true, true, false],
             ],
+            true,
         );
 
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
@@ -2962,13 +2979,13 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_sort_string(&output), @r"
-            +-----+-----+-------+---------------+-------+
-            | a   | b   | const | __grouping_id | 1     |
-            +-----+-----+-------+---------------+-------+
-            |     |     | 1     | 6             | 32768 |
-            |     | 0.0 |       | 5             | 32768 |
-            | 0.0 |     |       | 3             | 32768 |
-            +-----+-----+-------+---------------+-------+
+        +-----+-----+-------+---------------+-------+
+        | a   | b   | const | __grouping_id | 1     |
+        +-----+-----+-------+---------------+-------+
+        |     |     | 1     | 6             | 32768 |
+        |     | 0.0 |       | 5             | 32768 |
+        | 0.0 |     |       | 3             | 32768 |
+        +-----+-----+-------+---------------+-------+
         ");
         }
 
@@ -3077,13 +3094,13 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_string(&output), @r"
-            +--------------+------------+
-            | labels       | SUM(value) |
-            +--------------+------------+
-            | {a: a, b: b} | 2          |
-            | {a: , b: c}  | 1          |
-            +--------------+------------+
-            ");
+        +--------------+------------+
+        | labels       | SUM(value) |
+        +--------------+------------+
+        | {a: a, b: b} | 2          |
+        | {a: , b: c}  | 1          |
+        +--------------+------------+
+        ");
         }
 
         Ok(())
@@ -3284,6 +3301,7 @@ mod tests {
                 vec![false, true],  // (a, NULL)
                 vec![false, false], // (a,b)
             ],
+            true,
         );
         let aggr_schema = create_schema(
             &input_schema,
@@ -3335,6 +3353,7 @@ mod tests {
             vec![(col("a", &schema)?, "a".to_string())],
             vec![],
             vec![vec![false]],
+            false,
         );
 
         // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
@@ -3383,13 +3402,13 @@ mod tests {
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+--------+--------+
-                | a | MIN(b) | AVG(b) |
-                +---+--------+--------+
-                | 2 | 1.0    | 1.0    |
-                | 3 | 2.0    | 2.0    |
-                | 4 | 3.0    | 3.5    |
-                +---+--------+--------+
+            +---+--------+--------+
+            | a | MIN(b) | AVG(b) |
+            +---+--------+--------+
+            | 2 | 1.0    | 1.0    |
+            | 3 | 2.0    | 2.0    |
+            | 4 | 3.0    | 3.5    |
+            +---+--------+--------+
             ");
         }
 

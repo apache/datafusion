@@ -32,12 +32,12 @@ mod tests {
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_catalog::Session;
+    use datafusion_common::Result;
     use datafusion_common::cast::as_string_array;
     use datafusion_common::config::CsvOptions;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{arrow_test_data, batches_to_string};
-    use datafusion_common::Result;
     use datafusion_datasource::decoder::{
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
@@ -45,7 +45,7 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::write::BatchSerializer;
     use datafusion_expr::{col, lit};
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::array::{
         Array, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
@@ -57,8 +57,8 @@ mod tests {
     use bytes::Bytes;
     use chrono::DateTime;
     use datafusion_common::parsers::CompressionTypeVariant;
-    use futures::stream::BoxStream;
     use futures::StreamExt;
+    use futures::stream::BoxStream;
     use insta::assert_snapshot;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
@@ -621,15 +621,15 @@ mod tests {
             .collect()
             .await?;
 
-        assert_snapshot!(batches_to_string(&record_batch), @r###"
-            +----+------+
-            | c2 | c3   |
-            +----+------+
-            | 5  | 36   |
-            | 5  | -31  |
-            | 5  | -101 |
-            +----+------+
-        "###);
+        assert_snapshot!(batches_to_string(&record_batch), @r"
+        +----+------+
+        | c2 | c3   |
+        +----+------+
+        | 5  | 36   |
+        | 5  | -31  |
+        | 5  | -101 |
+        +----+------+
+        ");
 
         Ok(())
     }
@@ -706,11 +706,11 @@ mod tests {
 
         let re = Regex::new(r"DataSourceExec: file_groups=\{(\d+) group").unwrap();
 
-        if let Some(captures) = re.captures(&plan) {
-            if let Some(match_) = captures.get(1) {
-                let n_partitions = match_.as_str().parse::<usize>().unwrap();
-                return Ok(n_partitions);
-            }
+        if let Some(captures) = re.captures(&plan)
+            && let Some(match_) = captures.get(1)
+        {
+            let n_partitions = match_.as_str().parse::<usize>().unwrap();
+            return Ok(n_partitions);
         }
 
         internal_err!("query contains no DataSourceExec")
@@ -736,13 +736,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c2) |
         +--------------+
         | 285          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(n_partitions, actual_partitions);
@@ -775,13 +775,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c3) |
         +--------------+
         | 781          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(1, actual_partitions); // Compressed csv won't be scanned in parallel
@@ -812,13 +812,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c3) |
         +--------------+
         | 781          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(1, actual_partitions); // csv won't be scanned in parallel when newlines_in_values is set
@@ -843,10 +843,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -868,10 +868,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -944,17 +944,19 @@ mod tests {
 
         let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
         assert_eq!(files.len(), 1);
-        assert!(files
-            .last()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .path()
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .ends_with(".csv.gz"));
+        assert!(
+            files
+                .last()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .ends_with(".csv.gz")
+        );
 
         Ok(())
     }
@@ -983,17 +985,19 @@ mod tests {
 
         let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
         assert_eq!(files.len(), 1);
-        assert!(files
-            .last()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .path()
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .ends_with(".csv"));
+        assert!(
+            files
+                .last()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .ends_with(".csv")
+        );
 
         Ok(())
     }
@@ -1032,10 +1036,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -1084,13 +1088,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
-            +---------------------+
-            | sum(empty.column_1) |
-            +---------------------+
-            | 10                  |
-            +---------------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
+        +---------------------+
+        | sum(empty.column_1) |
+        +---------------------+
+        | 10                  |
+        +---------------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -1132,13 +1136,13 @@ mod tests {
             file_size
         };
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +-----------------------+
         | sum(one_col.column_1) |
         +-----------------------+
         | 50                    |
         +-----------------------+
-        "###);
+        ");
         }
 
         assert_eq!(expected_partitions, actual_partitions);
@@ -1171,13 +1175,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
-            +---------------+
-            | sum_of_5_cols |
-            +---------------+
-            | 15            |
-            +---------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
+        +---------------+
+        | sum_of_5_cols |
+        +---------------+
+        | 15            |
+        +---------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions);
 
@@ -1191,7 +1195,9 @@ mod tests {
     ) -> Result<()> {
         let schema = csv_schema();
         let generator = CsvBatchGenerator::new(batch_size, line_count);
-        let mut deserializer = csv_deserializer(batch_size, &schema);
+
+        let schema_clone = Arc::clone(&schema);
+        let mut deserializer = csv_deserializer(batch_size, &schema_clone);
 
         for data in generator {
             deserializer.digest(data);
@@ -1230,7 +1236,8 @@ mod tests {
     ) -> Result<()> {
         let schema = csv_schema();
         let generator = CsvBatchGenerator::new(batch_size, line_count);
-        let mut deserializer = csv_deserializer(batch_size, &schema);
+        let schema_clone = Arc::clone(&schema);
+        let mut deserializer = csv_deserializer(batch_size, &schema_clone);
 
         for data in generator {
             deserializer.digest(data);
@@ -1499,7 +1506,7 @@ mod tests {
 
         // Create a temp file with a .csv suffix so the reader accepts it
         let mut tmp = tempfile::Builder::new().suffix(".csv").tempfile()?; // ensures path ends with .csv
-                                                                           // CSV has header "a,b,c". First data row is truncated (only "1,2"), second row is complete.
+        // CSV has header "a,b,c". First data row is truncated (only "1,2"), second row is complete.
         write!(tmp, "a,b,c\n1,2\n3,4,5\n")?;
         let path = tmp.path().to_str().unwrap().to_string();
 

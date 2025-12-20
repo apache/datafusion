@@ -61,6 +61,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::joins::SeededRandomState;
+use crate::sort_pushdown::SortOrderPushdownResult;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt, ready};
@@ -427,8 +430,8 @@ enum BatchPartitionerState {
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
-pub const REPARTITION_RANDOM_STATE: ahash::RandomState =
-    ahash::RandomState::with_seeds(0, 0, 0, 0);
+pub const REPARTITION_RANDOM_STATE: SeededRandomState =
+    SeededRandomState::with_seeds(0, 0, 0, 0);
 
 impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
@@ -512,7 +515,11 @@ impl BatchPartitioner {
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(&arrays, &REPARTITION_RANDOM_STATE, hash_buffer)?;
+                    create_hashes(
+                        &arrays,
+                        REPARTITION_RANDOM_STATE.random_state(),
+                        hash_buffer,
+                    )?;
 
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| Vec::with_capacity(batch.num_rows()))
@@ -1092,6 +1099,27 @@ impl ExecutionPlan for RepartitionExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // RepartitionExec only maintains input order if preserve_order is set
+        // or if there's only one partition
+        if !self.maintains_input_order()[0] {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        // Delegate to the child and wrap with a new RepartitionExec
+        self.input.try_pushdown_sort(order)?.try_map(|new_input| {
+            let mut new_repartition =
+                RepartitionExec::try_new(new_input, self.partitioning().clone())?;
+            if self.preserve_order {
+                new_repartition = new_repartition.with_preserve_order();
+            }
+            Ok(Arc::new(new_repartition) as Arc<dyn ExecutionPlan>)
+        })
     }
 
     fn repartitioned(
