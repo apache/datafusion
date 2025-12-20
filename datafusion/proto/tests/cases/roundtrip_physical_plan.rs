@@ -18,28 +18,12 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-
 use std::sync::Arc;
 use std::vec;
-
-use crate::cases::{
-    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
-    MyRegexUdfNode,
-};
 
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion::physical_plan::metrics::MetricType;
-use datafusion_datasource::TableSchema;
-use datafusion_expr::dml::InsertOp;
-use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
-use datafusion_functions_aggregate::array_agg::array_agg_udaf;
-use datafusion_functions_aggregate::min_max::max_udaf;
-use prost::Message;
-
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -63,6 +47,7 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{JoinType, Operator, Volatility, create_udf};
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
@@ -72,6 +57,7 @@ use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
+use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
@@ -83,6 +69,7 @@ use datafusion::physical_plan::joins::{
     SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -107,20 +94,32 @@ use datafusion_common::{
     DataFusionError, NullEquality, Result, UnnestOptions, internal_datafusion_err,
     internal_err, not_impl_err,
 };
+use datafusion_datasource::TableSchema;
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
     ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
     WindowFrame, WindowFrameBound, WindowUDF,
 };
+use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
+use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::min_max::max_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_physical_plan::joins::join_hash_map::JoinHashMapU32;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalExtensionProtoCodec,
+    PhysicalExtensionCodec, PhysicalExtensionProtoCodec,
 };
-use datafusion_proto::protobuf::{self, PhysicalPlanNode};
+use datafusion_proto::protobuf::PhysicalPlanNode;
+use prost::Message;
+
+use crate::cases::{
+    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
+    MyRegexUdfNode,
+};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -128,7 +127,8 @@ use datafusion_proto::protobuf::{self, PhysicalPlanNode};
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    roundtrip_test_and_return(exec_plan, &ctx, &codec)?;
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+    roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_codec)?;
     Ok(())
 }
 
@@ -142,12 +142,13 @@ fn roundtrip_test_and_return(
     exec_plan: Arc<dyn ExecutionPlan>,
     ctx: &SessionContext,
     codec: &dyn PhysicalExtensionCodec,
+    proto_codec: &dyn PhysicalExtensionProtoCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec)
+    let proto: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec, proto_codec)
             .expect("to proto");
     let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), codec)
+        .try_into_physical_plan(&ctx.task_ctx(), codec, proto_codec)
         .expect("from proto");
 
     pretty_assertions::assert_eq!(
@@ -168,7 +169,8 @@ fn roundtrip_test_with_context(
     ctx: &SessionContext,
 ) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
-    roundtrip_test_and_return(exec_plan, ctx, &codec)?;
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+    roundtrip_test_and_return(exec_plan, ctx, &codec, &proto_codec)?;
     Ok(())
 }
 
@@ -176,9 +178,10 @@ fn roundtrip_test_with_context(
 /// query results are identical.
 async fn roundtrip_test_sql_with_context(sql: &str, ctx: &SessionContext) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
     let initial_plan = ctx.sql(sql).await?.create_physical_plan().await?;
 
-    roundtrip_test_and_return(initial_plan, ctx, &codec)?;
+    roundtrip_test_and_return(initial_plan, ctx, &codec, &proto_codec)?;
     Ok(())
 }
 
@@ -985,7 +988,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     }
 
     impl Display for CustomPredicateExpr {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             write!(f, "CustomPredicateExpr")
         }
     }
@@ -1078,7 +1081,12 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     let exec_plan = DataSourceExec::from_data_source(scan_config);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;
+    roundtrip_test_and_return(
+        exec_plan,
+        &ctx,
+        &CustomPhysicalExtensionCodec {},
+        &DefaultPhysicalExtensionProtoCodec {},
+    )?;
     Ok(())
 }
 
@@ -1284,7 +1292,8 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec)?;
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_codec)?;
     Ok(())
 }
 
@@ -1331,7 +1340,8 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(window, &ctx, &UDFExtensionCodec)?;
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+    roundtrip_test_and_return(window, &ctx, &UDFExtensionCodec, &proto_codec)?;
     Ok(())
 }
 
@@ -1402,7 +1412,8 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec)?;
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+    roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_codec)?;
     Ok(())
 }
 
@@ -1526,12 +1537,14 @@ fn roundtrip_csv_sink() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+
     let roundtrip_plan = roundtrip_test_and_return(
         Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
         &ctx,
         &codec,
-    )
-    .unwrap();
+        &proto_codec,
+    )?;
 
     let roundtrip_plan = roundtrip_plan
         .as_any()
@@ -1738,11 +1751,15 @@ async fn roundtrip_coalesce() -> Result<()> {
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
         &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalExtensionProtoCodec {},
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+    let restored = node.try_into_physical_plan(
+        &ctx.task_ctx(),
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalExtensionProtoCodec {},
+    )?;
 
     assert_eq!(
         plan.schema(),
@@ -1774,11 +1791,15 @@ async fn roundtrip_generate_series() -> Result<()> {
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
         &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalExtensionProtoCodec {},
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+    let restored = node.try_into_physical_plan(
+        &ctx.task_ctx(),
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalExtensionProtoCodec {},
+    )?;
 
     assert_eq!(
         plan.schema(),
@@ -1892,12 +1913,19 @@ async fn roundtrip_physical_plan_node() {
         .await
         .unwrap();
 
-    let node: PhysicalPlanNode =
-        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
-            .unwrap();
+    let node: PhysicalPlanNode = PhysicalPlanNode::try_from_physical_plan(
+        plan,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalExtensionProtoCodec {},
+    )
+    .unwrap();
 
     let plan = node
-        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
+        .try_into_physical_plan(
+            &ctx.task_ctx(),
+            &DefaultPhysicalExtensionCodec {},
+            &DefaultPhysicalExtensionProtoCodec {},
+        )
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
@@ -1972,12 +2000,17 @@ async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
 
             // serialize the physical plan
             let codec = DefaultPhysicalExtensionCodec {};
-            let proto =
-                PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
+            let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+
+            let proto = PhysicalPlanNode::try_from_physical_plan(
+                physical_plan.clone(),
+                &codec,
+                &proto_codec,
+            )?;
 
             // deserialize the physical plan
             let _deserialized_plan =
-                proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+                proto.try_into_physical_plan(&ctx.task_ctx(), &codec, &proto_codec)?;
         }
     }
 
@@ -2093,10 +2126,17 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
 
     // Serialize the physical plan - bug may happen here already but not necessarily manifests
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+
+    let proto = PhysicalPlanNode::try_from_physical_plan(
+        physical_plan.clone(),
+        &codec,
+        &proto_codec,
+    )?;
 
     // This will fail with the bug, but should succeed when fixed
-    let _deserialized_plan = proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    let _deserialized_plan =
+        proto.try_into_physical_plan(&ctx.task_ctx(), &codec, &proto_codec)?;
     Ok(())
 }
 
@@ -2119,13 +2159,17 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
         &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalExtensionProtoCodec {},
     )?;
 
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let unoptimized =
-        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
+    let unoptimized = node.try_into_physical_plan(
+        &ctx.task_ctx(),
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalExtensionProtoCodec {},
+    )?;
 
     let physical_planner =
         datafusion::physical_planner::DefaultPhysicalPlanner::default();
@@ -2353,13 +2397,15 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     // Serialize
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto: protobuf::PhysicalPlanNode =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec)
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+
+    let proto: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec, &proto_codec)
             .expect("serialization should succeed");
 
     // Deserialize
     let result: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), &codec)
+        .try_into_physical_plan(&ctx.task_ctx(), &codec, &proto_codec)
         .expect("deserialization should succeed");
 
     // The deserialized plan should have lit(true) instead of HashTableLookupExpr

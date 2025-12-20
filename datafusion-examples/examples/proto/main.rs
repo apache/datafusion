@@ -27,8 +27,10 @@
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
 //! - `composed_extension_codec` — example of using multiple extension codecs for serialization / deserialization
+//! - `expression_deduplication` — example of expression caching/deduplication using the codec decorator pattern
 
 mod composed_extension_codec;
+mod expression_deduplication;
 
 use datafusion::error::{DataFusionError, Result};
 use strum::{IntoEnumIterator, VariantNames};
@@ -39,6 +41,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 enum ExampleKind {
     All,
     ComposedExtensionCodec,
+    ExpressionDeduplication,
 }
 
 impl ExampleKind {
@@ -58,6 +61,9 @@ impl ExampleKind {
             }
             ExampleKind::ComposedExtensionCodec => {
                 composed_extension_codec::composed_extension_codec().await?
+            }
+            ExampleKind::ExpressionDeduplication => {
+                expression_deduplication::expression_deduplication().await?
             }
         }
         Ok(())
