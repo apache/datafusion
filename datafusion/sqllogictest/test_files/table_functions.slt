@@ -598,7 +598,6 @@ SELECT * FROM generate_series(19)
 query I
 SELECT * FROM range(1, 11)
 ----
-0
 1
 2
 3
@@ -608,12 +607,12 @@ SELECT * FROM range(1, 11)
 7
 8
 9
+10
 
 # generate_series equal batch size with starting value (including end)
 query I
 SELECT * FROM generate_series(1, 10)
 ----
-0
 1
 2
 3
@@ -623,12 +622,12 @@ SELECT * FROM generate_series(1, 10)
 7
 8
 9
+10
 
 # range equal batch size * 2 with starting value
 query I
 SELECT * FROM range(1, 21)
 ----
-0
 1
 2
 3
@@ -648,12 +647,12 @@ SELECT * FROM range(1, 21)
 17
 18
 19
+20
 
 # generate_series equal batch size * 2 with starting value (including end)
 query I
 SELECT * FROM generate_series(1, 20)
 ----
-0
 1
 2
 3
@@ -673,48 +672,49 @@ SELECT * FROM generate_series(1, 20)
 17
 18
 19
-
-# range equal batch size with starting value and step
-query I
-SELECT count(*) FROM range(1, 22, 2)
-----
 20
 
 # range equal batch size with starting value and step
 query I
-SELECT * FROM range(1, 22, 2)
+SELECT count(*) FROM range(1, 21, 2)
 ----
-0
+10
+
+# range equal batch size with starting value and step
+query I
+SELECT * FROM range(1, 21, 2)
+----
 1
-2
 3
-4
 5
-6
 7
-8
 9
+11
+13
+15
+17
+19
 
 # generate_series equal batch size with starting value and step (including end)
 query I
-SELECT count(*) FROM generate_series(1, 21, 2)
+SELECT count(*) FROM generate_series(1, 20, 2)
 ----
-20
+10
 
 # generate_series equal batch size with starting value and step (including end)
 query I
-SELECT * FROM generate_series(1, 21, 2)
+SELECT * FROM generate_series(1, 20, 2)
 ----
-0
 1
-2
 3
-4
 5
-6
 7
-8
 9
+11
+13
+15
+17
+19
 
 # range equal batch size * 2 with starting value and step
 query I
@@ -726,57 +726,57 @@ SELECT count(*) FROM range(1, 40, 2)
 query I
 SELECT * FROM range(1, 40, 2)
 ----
-0
 1
-2
 3
-4
 5
-6
 7
-8
 9
-10
 11
-12
 13
-14
 15
-16
 17
-18
 19
+21
+23
+25
+27
+29
+31
+33
+35
+37
+39
 
 # generate_series equal batch size * 2 with starting value and step (including end)
 query I
-SELECT count(*) FROM generate_series(1, 38, 2)
+SELECT count(*) FROM generate_series(1, 39, 2)
 ----
 20
 
 # generate_series equal batch size * 2 with starting value and step (including end)
 query I
-SELECT * FROM generate_series(1, 38, 2)
+SELECT * FROM generate_series(1, 39, 2)
 ----
-0
 1
-2
 3
-4
 5
-6
 7
-8
 9
-10
 11
-12
 13
-14
 15
-16
 17
-18
 19
+21
+23
+25
+27
+29
+31
+33
+35
+37
+39
 
 # Revert batch size
 statement ok
