@@ -67,7 +67,7 @@ impl fmt::Display for Empty {
 /// Trait for values that can be generated in a series
 pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
     type StepType: fmt::Debug + Clone + Send + Sync;
-    type ValueType: fmt::Debug + Default + Clone + Send + Sync;
+    type ValueType: fmt::Debug + Clone + Send + Sync;
 
     /// Check if we've reached the end of the series
     fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool;
