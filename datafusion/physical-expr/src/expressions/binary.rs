@@ -764,7 +764,6 @@ enum ShortCircuitStrategy<'a> {
     PreSelection(&'a BooleanArray),
 }
 
-
 /// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
 ///
 /// Short-circuiting occurs under these circumstances:
@@ -5033,7 +5032,11 @@ mod tests {
         let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::And),
+            check_short_circuit(
+                &left_value,
+                &Operator::And,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::ReturnLeft
         ));
 
@@ -5043,9 +5046,11 @@ mod tests {
         let ColumnarValue::Array(array) = &left_value else {
             panic!("Expected ColumnarValue::Array");
         };
-        let ShortCircuitStrategy::PreSelection(value) =
-            check_short_circuit(&left_value, &Operator::And)
-        else {
+        let ShortCircuitStrategy::PreSelection(value) = check_short_circuit(
+            &left_value,
+            &Operator::And,
+            DEFAULT_PRESELECTION_THRESHOLD,
+        ) else {
             panic!("Expected ShortCircuitStrategy::PreSelection");
         };
         let expected_boolean_arr: Vec<_> =
@@ -5057,7 +5062,11 @@ mod tests {
         let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::Or),
+            check_short_circuit(
+                &left_value,
+                &Operator::Or,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::ReturnLeft
         ));
 
@@ -5066,7 +5075,11 @@ mod tests {
             logical2physical(&logical_col("a").gt(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::Or),
+            check_short_circuit(
+                &left_value,
+                &Operator::Or,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::None
         ));
 
@@ -5102,13 +5115,21 @@ mod tests {
         let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
         let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
         assert!(matches!(
-            check_short_circuit(&mixed_nulls_value, &Operator::And),
+            check_short_circuit(
+                &mixed_nulls_value,
+                &Operator::And,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::None
         ));
 
         // Case: Mixed values with nulls - shouldn't short-circuit for OR
         assert!(matches!(
-            check_short_circuit(&mixed_nulls_value, &Operator::Or),
+            check_short_circuit(
+                &mixed_nulls_value,
+                &Operator::Or,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::None
         ));
 
@@ -5125,11 +5146,19 @@ mod tests {
 
         // All nulls shouldn't short-circuit for AND or OR
         assert!(matches!(
-            check_short_circuit(&null_value, &Operator::And),
+            check_short_circuit(
+                &null_value,
+                &Operator::And,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::None
         ));
         assert!(matches!(
-            check_short_circuit(&null_value, &Operator::Or),
+            check_short_circuit(
+                &null_value,
+                &Operator::Or,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::None
         ));
 
@@ -5137,33 +5166,57 @@ mod tests {
         // Scalar true
         let scalar_true = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
         assert!(matches!(
-            check_short_circuit(&scalar_true, &Operator::Or),
+            check_short_circuit(
+                &scalar_true,
+                &Operator::Or,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::ReturnLeft
         )); // Should short-circuit OR
         assert!(matches!(
-            check_short_circuit(&scalar_true, &Operator::And),
+            check_short_circuit(
+                &scalar_true,
+                &Operator::And,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::ReturnRight
         )); // Should return the RHS for AND
 
         // Scalar false
         let scalar_false = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
         assert!(matches!(
-            check_short_circuit(&scalar_false, &Operator::And),
+            check_short_circuit(
+                &scalar_false,
+                &Operator::And,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::ReturnLeft
         )); // Should short-circuit AND
         assert!(matches!(
-            check_short_circuit(&scalar_false, &Operator::Or),
+            check_short_circuit(
+                &scalar_false,
+                &Operator::Or,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::ReturnRight
         )); // Should return the RHS for OR
 
         // Scalar null
         let scalar_null = ColumnarValue::Scalar(ScalarValue::Boolean(None));
         assert!(matches!(
-            check_short_circuit(&scalar_null, &Operator::And),
+            check_short_circuit(
+                &scalar_null,
+                &Operator::And,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::None
         ));
         assert!(matches!(
-            check_short_circuit(&scalar_null, &Operator::Or),
+            check_short_circuit(
+                &scalar_null,
+                &Operator::Or,
+                DEFAULT_PRESELECTION_THRESHOLD
+            ),
             ShortCircuitStrategy::None
         ));
     }
