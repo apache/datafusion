@@ -145,6 +145,14 @@ pub trait HashTableAllocExt {
         hasher: impl Fn(&Self::T) -> u64,
         accounting: &mut usize,
     );
+
+    /// Return the amount of memory allocated by this HashTable to store elements
+    /// (`size_of<T> * capacity`).
+    ///
+    /// Note this calculation is not recursive, and does not include any heap
+    /// allocations contained within the HashTable's elements. Does not include the
+    /// size of `self`
+    fn allocated_size(&self) -> usize;
 }
 
 impl<T> HashTableAllocExt for HashTable<T>
@@ -178,5 +186,9 @@ where
                 self.entry(hash, |y| y == &x, hasher).insert(x);
             }
         }
+    }
+
+    fn allocated_size(&self) -> usize {
+        size_of::<T>() * self.capacity()
     }
 }
