@@ -91,7 +91,7 @@ pub trait IntoHeapValue<T: ValueType> {
     fn to_heap_value(&self, heap: &mut StringHeap) -> T;
 }
 
-/// Implement for borrowed strings that convert to Arc<str> with interning.
+/// Implement for borrowed strings that convert to `Arc<str>` with interning.
 impl IntoHeapValue<Arc<str>> for &str {
     fn check_comparison(&self, existing: &Arc<str>, desc: bool) -> bool {
         let existing_str = existing.as_ref();
@@ -240,7 +240,7 @@ pub struct StringHeap {
     heap: TopKHeap<Arc<str>>,
     desc: bool,
     data_type: DataType,
-    /// Cache of interned strings for the current batch, mapping hash to Arc<str>.
+    /// Cache of interned strings for the current batch, mapping hash to `Arc<str>`.
     /// Cleared on each `set_batch` call to prevent memory leaks from old batches.
     string_cache: HashMap<u64, Arc<str>>,
 }

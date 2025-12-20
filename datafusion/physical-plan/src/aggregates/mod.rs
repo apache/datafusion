@@ -81,7 +81,7 @@ mod topk_stream;
 /// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
 /// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
 /// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
-/// ```
+/// ```text
 pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
     is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
 }
