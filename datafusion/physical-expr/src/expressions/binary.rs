@@ -5126,7 +5126,10 @@ mod tests {
             Operator::And,
             Arc::new(Column::new("b", 1)),
         );
-        assert_eq!(expr.preselection_threshold(), DEFAULT_PRESELECTION_THRESHOLD);
+        assert_eq!(
+            expr.preselection_threshold(),
+            DEFAULT_PRESELECTION_THRESHOLD
+        );
         assert_eq!(expr.preselection_threshold(), 0.2);
 
         // Test custom threshold via builder
