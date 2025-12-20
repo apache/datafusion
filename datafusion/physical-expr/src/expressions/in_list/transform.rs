@@ -482,7 +482,7 @@ where
 
 impl<T: ByteViewType + 'static> StaticFilter for ByteViewMaskedFilter<T>
 where
-    T::Native: PartialEq,
+    T::Native: PartialEq + Hash,
 {
     fn null_count(&self) -> usize {
         self.in_array.null_count()
@@ -523,7 +523,10 @@ where
                 // SAFETY: i is in bounds from build_in_list_result iteration
                 let needle_val = unsafe { needle_bv.value_unchecked(i) };
                 let needle_bytes: &[u8] = needle_val.as_ref();
-                let hash = self.state.hash_one(needle_bytes);
+                // Hash the native value directly (e.g. &str) instead of bytes,
+                // because the hash table was built using native value hashing.
+                // This is critical for &str vs &[u8] which hash differently.
+                let hash = self.state.hash_one(needle_val);
 
                 self.long_value_table
                     .find(hash, |&idx| {
@@ -542,7 +545,37 @@ pub(crate) fn make_byte_view_masked_filter<T: ByteViewType + 'static>(
     in_array: ArrayRef,
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>>
 where
-    T::Native: PartialEq,
+    T::Native: PartialEq + Hash,
 {
     Ok(Arc::new(ByteViewMaskedFilter::<T>::try_new(in_array)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::StringViewArray;
+    use arrow::datatypes::StringViewType;
+
+    #[test]
+    fn test_byte_view_masked_filter_long_string() {
+        let val = "7f4b18de3cfeb9b4ac78c381ee2ad278";
+        let array = Arc::new(StringViewArray::from(vec![val]));
+        let filter =
+            make_byte_view_masked_filter::<StringViewType>(array.clone()).unwrap();
+
+        // Test with same array (same buffers)
+        let res = filter.contains(array.as_ref(), false).unwrap();
+        assert_eq!(res.value(0), true);
+
+        // Test with new array (different buffers)
+        let array2 = Arc::new(StringViewArray::from(vec![val]));
+        let res2 = filter.contains(array2.as_ref(), false).unwrap();
+        assert_eq!(res2.value(0), true);
+
+        // Test with different value
+        let val3 = "7f4b18de3cfeb9b4ac78c381ee2ad279";
+        let array3 = Arc::new(StringViewArray::from(vec![val3]));
+        let res3 = filter.contains(array3.as_ref(), false).unwrap();
+        assert_eq!(res3.value(0), false);
+    }
 }
