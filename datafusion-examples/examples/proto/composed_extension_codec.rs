@@ -42,7 +42,8 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, ComposedPhysicalExtensionCodec, PhysicalExtensionCodec,
+    AsExecutionPlan, ComposedPhysicalExtensionCodec, DefaultPhysicalExtensionProtoCodec,
+    PhysicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
 
@@ -62,17 +63,19 @@ pub async fn composed_extension_codec() -> Result<()> {
         Arc::new(ParentPhysicalExtensionCodec {}),
         Arc::new(ChildPhysicalExtensionCodec {}),
     ]);
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
 
     // serialize execution plan to proto
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec_plan.clone(),
             &composed_codec,
+            &proto_codec,
         )?;
 
     // deserialize proto back to execution plan
     let result_exec_plan: Arc<dyn ExecutionPlan> =
-        proto.try_into_physical_plan(&ctx.task_ctx(), &composed_codec)?;
+        proto.try_into_physical_plan(&ctx.task_ctx(), &composed_codec, &proto_codec)?;
 
     // assert that the original and deserialized execution plans are equal
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
