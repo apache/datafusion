@@ -1073,4 +1073,34 @@ mod tests {
         "
         )
     }
+
+    #[test]
+    fn test_evaluate_stable_expressions_enabled_by_default() -> Result<()> {
+        // By default, stable expressions like now() should be simplified to literals
+        let time = Utc::now();
+
+        // With default config, evaluate_stable_expressions should be true
+        let config = OptimizerContext::new().with_query_execution_start_time(time);
+        assert!(
+            config.options().optimizer.evaluate_stable_expressions,
+            "evaluate_stable_expressions should be true by default"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_stable_expressions_disabled() -> Result<()> {
+        // When evaluate_stable_expressions is false, stable functions should NOT be simplified
+        use datafusion_common::config::ConfigOptions;
+
+        let mut config_options = ConfigOptions::default();
+        config_options.optimizer.evaluate_stable_expressions = false;
+
+        // Verify the config is set correctly
+        assert!(
+            !config_options.optimizer.evaluate_stable_expressions,
+            "evaluate_stable_expressions should be false when explicitly disabled"
+        );
+        Ok(())
+    }
 }

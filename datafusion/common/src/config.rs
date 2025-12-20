@@ -1122,6 +1122,17 @@ config_namespace! {
         ///
         /// Default: true
         pub enable_sort_pushdown: bool, default = true
+
+        /// When set to true (default), the optimizer will evaluate stable functions
+        /// (like `now()`, `current_date()`, `current_time()`) during query planning,
+        /// converting them to literal values. When set to false, stable functions
+        /// are preserved in the plan and evaluated at execution time.
+        ///
+        /// Setting this to false is useful when performing query rewrites that need
+        /// to preserve stable function calls, or when you want the function to be
+        /// re-evaluated for each execution of a prepared statement rather than
+        /// being fixed at planning time.
+        pub evaluate_stable_expressions: bool, default = true
     }
 }
 

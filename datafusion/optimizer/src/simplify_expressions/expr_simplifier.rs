@@ -541,7 +541,7 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
         // stack as not ok (as all parents have at least one child or
         // descendant that can not be evaluated
 
-        if !Self::can_evaluate(&expr) {
+        if !self.can_evaluate(&expr) {
             // walk back up stack, marking first parent that is not mutable
             let parent_iter = self.can_evaluate.iter_mut().rev();
             for p in parent_iter {
@@ -620,18 +620,24 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Can a function of the specified volatility be evaluated?
-    fn volatility_ok(volatility: Volatility) -> bool {
+    fn volatility_ok(&self, volatility: Volatility) -> bool {
         match volatility {
             Volatility::Immutable => true,
             // Values for functions such as now() are taken from ExecutionProps
-            Volatility::Stable => true,
+            Volatility::Stable => {
+                // Check if stable expression evaluation is enabled in config
+                self.execution_props
+                    .config_options
+                    .as_ref()
+                    .is_none_or(|opts| opts.optimizer.evaluate_stable_expressions)
+            }
             Volatility::Volatile => false,
         }
     }
 
     /// Can the expression be evaluated at plan time, (assuming all of
     /// its children can also be evaluated)?
-    fn can_evaluate(expr: &Expr) -> bool {
+    fn can_evaluate(&self, expr: &Expr) -> bool {
         // check for reasons we can't evaluate this node
         //
         // NOTE all expr types are listed here so when new ones are
@@ -652,7 +658,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
-                Self::volatility_ok(func.signature().volatility)
+                self.volatility_ok(func.signature().volatility)
             }
             Expr::Literal(_, _)
             | Expr::Alias(..)
