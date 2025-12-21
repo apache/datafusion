@@ -22,6 +22,7 @@ use crate::cache::CacheAccessor;
 use crate::cache::cache_manager::{FileStatisticsCache, FileStatisticsCacheEntry};
 
 use datafusion_common::Statistics;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use dashmap::DashMap;
 use object_store::ObjectMeta;
@@ -31,14 +32,54 @@ pub use crate::cache::DefaultFilesMetadataCache;
 
 /// Default implementation of [`FileStatisticsCache`]
 ///
-/// Stores collected statistics for files
+/// Stores collected statistics and file orderings for files.
 ///
-/// Cache is invalided when file size or last modification has changed
+/// Cache is invalidated when file size or last modification has changed.
 ///
 /// [`FileStatisticsCache`]: crate::cache::cache_manager::FileStatisticsCache
 #[derive(Default)]
 pub struct DefaultFileStatisticsCache {
     statistics: DashMap<Path, (ObjectMeta, Arc<Statistics>)>,
+    /// Cached file orderings, keyed by file path.
+    /// Stored separately from statistics to maintain backwards compatibility
+    /// with the FileStatisticsCache trait interface.
+    orderings: DashMap<Path, (ObjectMeta, Option<LexOrdering>)>,
+}
+
+impl DefaultFileStatisticsCache {
+    /// Get the cached ordering for a file, if available and still valid.
+    ///
+    /// Returns `None` if the file is not cached or has been modified.
+    /// Returns `Some(None)` if the file is cached but has no ordering.
+    /// Returns `Some(Some(ordering))` if the file is cached and has an ordering.
+    pub fn get_ordering(
+        &self,
+        path: &Path,
+        meta: &ObjectMeta,
+    ) -> Option<Option<LexOrdering>> {
+        self.orderings.get(path).and_then(|entry| {
+            let (saved_meta, ordering) = entry.value();
+            if saved_meta.size != meta.size
+                || saved_meta.last_modified != meta.last_modified
+            {
+                // File has changed, cache entry is stale
+                None
+            } else {
+                Some(ordering.clone())
+            }
+        })
+    }
+
+    /// Cache the ordering for a file.
+    pub fn put_ordering(
+        &self,
+        path: &Path,
+        ordering: Option<LexOrdering>,
+        meta: &ObjectMeta,
+    ) {
+        self.orderings
+            .insert(path.clone(), (meta.clone(), ordering));
+    }
 }
 
 impl FileStatisticsCache for DefaultFileStatisticsCache {
@@ -61,6 +102,23 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
         }
 
         entries
+    }
+
+    fn get_ordering(
+        &self,
+        path: &Path,
+        meta: &ObjectMeta,
+    ) -> Option<Option<LexOrdering>> {
+        DefaultFileStatisticsCache::get_ordering(self, path, meta)
+    }
+
+    fn put_ordering(
+        &self,
+        path: &Path,
+        ordering: Option<LexOrdering>,
+        meta: &ObjectMeta,
+    ) {
+        DefaultFileStatisticsCache::put_ordering(self, path, ordering, meta)
     }
 }
 
@@ -110,6 +168,7 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     }
 
     fn remove(&self, k: &Path) -> Option<Arc<Statistics>> {
+        self.orderings.remove(k);
         self.statistics.remove(k).map(|x| x.1.1)
     }
 
@@ -122,7 +181,8 @@ impl CacheAccessor<Path, Arc<Statistics>> for DefaultFileStatisticsCache {
     }
 
     fn clear(&self) {
-        self.statistics.clear()
+        self.statistics.clear();
+        self.orderings.clear();
     }
     fn name(&self) -> String {
         "DefaultFileStatisticsCache".to_string()

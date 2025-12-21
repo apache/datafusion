@@ -750,32 +750,35 @@ impl ListingTable {
 
     /// Collects statistics and ordering for a given partitioned file.
     ///
-    /// This method first checks if the statistics for the given file are already cached.
-    /// If they are, it returns the cached statistics and infers ordering separately.
-    /// If they are not, it infers both statistics and ordering from the file in a
-    /// single metadata read, caching the statistics for future use.
+    /// This method checks if both statistics and ordering are cached.
+    /// If both are cached, returns them without any file access.
+    /// If only statistics are cached, infers ordering and caches it.
+    /// If neither is cached, infers both in a single metadata read.
     async fn do_collect_statistics_and_ordering(
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
+        let path = &part_file.object_meta.location;
+        let meta = &part_file.object_meta;
+
         // Check if statistics are cached
-        if let Some(statistics) = self
-            .collected_statistics
-            .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
-        {
-            // Cache hit: we have statistics but still need to get ordering
+        if let Some(statistics) = self.collected_statistics.get_with_extra(path, meta) {
+            // Statistics cache hit - check if ordering is also cached
+            if let Some(ordering) = self.collected_statistics.get_ordering(path, meta) {
+                // Both cached - return without any file access
+                return Ok((statistics, ordering));
+            }
+
+            // Statistics cached but ordering not - infer ordering and cache it
             let ordering = self
                 .options
                 .format
-                .infer_ordering(
-                    ctx,
-                    store,
-                    Arc::clone(&self.file_schema),
-                    &part_file.object_meta,
-                )
+                .infer_ordering(ctx, store, Arc::clone(&self.file_schema), meta)
                 .await?;
+            self.collected_statistics
+                .put_ordering(path, ordering.clone(), meta);
             return Ok((statistics, ordering));
         }
 
@@ -783,20 +786,14 @@ impl ListingTable {
         let file_meta = self
             .options
             .format
-            .infer_stats_and_ordering(
-                ctx,
-                store,
-                Arc::clone(&self.file_schema),
-                &part_file.object_meta,
-            )
+            .infer_stats_and_ordering(ctx, store, Arc::clone(&self.file_schema), meta)
             .await?;
 
         let statistics = Arc::new(file_meta.statistics);
-        self.collected_statistics.put_with_extra(
-            &part_file.object_meta.location,
-            Arc::clone(&statistics),
-            &part_file.object_meta,
-        );
+        self.collected_statistics
+            .put_with_extra(path, Arc::clone(&statistics), meta);
+        self.collected_statistics
+            .put_ordering(path, file_meta.ordering.clone(), meta);
 
         Ok((statistics, file_meta.ordering))
     }

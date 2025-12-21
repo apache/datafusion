@@ -19,6 +19,7 @@ use crate::cache::cache_unit::DefaultFilesMetadataCache;
 use crate::cache::{CacheAccessor, DefaultListFilesCache};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 use std::any::Any;
@@ -31,7 +32,7 @@ pub use super::list_files_cache::{
     DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
 };
 
-/// A cache for [`Statistics`].
+/// A cache for [`Statistics`] and optionally file orderings.
 ///
 /// If enabled via [`CacheManagerConfig::with_files_statistics_cache`] this
 /// cache avoids inferring the same file statistics repeatedly during the
@@ -43,6 +44,33 @@ pub trait FileStatisticsCache:
 {
     /// Retrieves the information about the entries currently cached.
     fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry>;
+
+    /// Get the cached ordering for a file, if available and still valid.
+    ///
+    /// Returns `None` if the file is not cached or has been modified.
+    /// Returns `Some(None)` if the file is cached but has no ordering.
+    /// Returns `Some(Some(ordering))` if the file is cached and has an ordering.
+    ///
+    /// Default implementation returns `None` (ordering not cached).
+    fn get_ordering(
+        &self,
+        _path: &Path,
+        _meta: &ObjectMeta,
+    ) -> Option<Option<LexOrdering>> {
+        None
+    }
+
+    /// Cache the ordering for a file.
+    ///
+    /// Default implementation does nothing (ordering not cached).
+    fn put_ordering(
+        &self,
+        _path: &Path,
+        _ordering: Option<LexOrdering>,
+        _meta: &ObjectMeta,
+    ) {
+        // Default: no-op
+    }
 }
 
 /// Represents information about a cached statistics entry.
