@@ -230,10 +230,9 @@ physical_plan
 02)--SortExec: TopK(fetch=2), expr=[max_val@1 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[category@0 as category, max(string_topk.val)@1 as max_val]
 04)------AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 select category, max(val) from string_topk_view group by category order by max(val) desc limit 2;
@@ -256,10 +255,9 @@ physical_plan
 02)--SortExec: TopK(fetch=2), expr=[max_val@1 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[category@0 as category, max(string_topk_view.val)@1 as max_val]
 04)------AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TII
 select trace_id, min(other), MIN(timestamp) from traces group by trace_id order by MIN(timestamp), MIN(other) limit 4;
@@ -289,10 +287,9 @@ physical_plan
 02)--SortExec: TopK(fetch=2), expr=[max_trace@1 DESC], preserve_partitioning=[true]
 03)----ProjectionExec: expr=[trace_id@0 as trace_id, max(traces.trace_id)@1 as max_trace]
 04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]
-05)--------CoalesceBatchesExec: target_batch_size=8192
-06)----------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]
-08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 # Setting to map varchar to utf8view, to test PR https://github.com/apache/datafusion/pull/15152
