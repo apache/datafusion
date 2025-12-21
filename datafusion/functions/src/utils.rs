@@ -219,6 +219,40 @@ pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
     }
 }
 
+pub fn decimal32_to_i32(value: i32, scale: i8) -> Result<i32, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        match 10_i32.checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
+    }
+}
+
+pub fn decimal64_to_i64(value: i64, scale: i8) -> Result<i64, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        match i64::from(10).checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod test {
     /// $FUNC ScalarUDFImpl to test
@@ -334,6 +368,7 @@ pub mod test {
     }
 
     use arrow::datatypes::DataType;
+    use itertools::Either;
     pub(crate) use test_function;
 
     use super::*;
@@ -373,6 +408,108 @@ pub mod test {
                     );
                 }
                 Err(_) => assert!(expected.is_none()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal32_to_i32() {
+        let cases: [(i32, i8, Either<i32, String>); _] = [
+            (123, 0, Either::Left(123)),
+            (1230, 1, Either::Left(123)),
+            (123000, 3, Either::Left(123)),
+            (1234567, 2, Either::Left(12345)),
+            (-1234567, 2, Either::Left(-12345)),
+            (1, 0, Either::Left(1)),
+            (
+                123,
+                -3,
+                Either::Right("Negative scale is not supported".into()),
+            ),
+            (
+                123,
+                i8::MAX,
+                Either::Right("Cannot get a power of 127".into()),
+            ),
+            (999999999, 0, Either::Left(999999999)),
+            (999999999, 3, Either::Left(999999)),
+        ];
+
+        for (value, scale, expected) in cases {
+            match decimal32_to_i32(value, scale) {
+                Ok(actual) => {
+                    let expected_value =
+                        expected.left().expect("Got value but expected none");
+                    assert_eq!(
+                        actual, expected_value,
+                        "{value} and {scale} vs {expected_value:?}"
+                    );
+                }
+                Err(ArrowError::ComputeError(msg)) => {
+                    assert_eq!(
+                        msg,
+                        expected.right().expect("Got error but expected value")
+                    );
+                }
+                Err(_) => {
+                    assert!(expected.is_right())
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal64_to_i64() {
+        let cases: [(i64, i8, Either<i64, String>); _] = [
+            (123, 0, Either::Left(123)),
+            (1234567890, 2, Either::Left(12345678)),
+            (-1234567890, 2, Either::Left(-12345678)),
+            (
+                123,
+                -3,
+                Either::Right("Negative scale is not supported".into()),
+            ),
+            (
+                123,
+                i8::MAX,
+                Either::Right("Cannot get a power of 127".into()),
+            ),
+            (
+                999999999999999999i64,
+                0,
+                Either::Left(999999999999999999i64),
+            ),
+            (
+                999999999999999999i64,
+                3,
+                Either::Left(999999999999999999i64 / 1000),
+            ),
+            (
+                -999999999999999999i64,
+                3,
+                Either::Left(-999999999999999999i64 / 1000),
+            ),
+        ];
+
+        for (value, scale, expected) in cases {
+            match decimal64_to_i64(value, scale) {
+                Ok(actual) => {
+                    let expected_value =
+                        expected.left().expect("Got value but expected none");
+                    assert_eq!(
+                        actual, expected_value,
+                        "{value} and {scale} vs {expected_value:?}"
+                    );
+                }
+                Err(ArrowError::ComputeError(msg)) => {
+                    assert_eq!(
+                        msg,
+                        expected.right().expect("Got error but expected value")
+                    );
+                }
+                Err(_) => {
+                    assert!(expected.is_right())
+                }
             }
         }
     }

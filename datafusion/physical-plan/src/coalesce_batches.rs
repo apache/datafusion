@@ -24,6 +24,7 @@ use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
+use crate::projection::ProjectionExec;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -40,7 +41,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::sort_pushdown::SortOrderPushdownResult;
 use datafusion_common::config::ConfigOptions;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -224,6 +227,18 @@ impl ExecutionPlan for CoalesceBatchesExec {
         CardinalityEffect::Equal
     }
 
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.input.try_swapping_with_projection(projection)? {
+            Some(new_input) => Ok(Some(
+                Arc::new(self.clone()).with_new_children(vec![new_input])?,
+            )),
+            None => Ok(None),
+        }
+    }
+
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
@@ -240,6 +255,20 @@ impl ExecutionPlan for CoalesceBatchesExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // CoalesceBatchesExec is transparent for sort ordering - it preserves order
+        // Delegate to the child and wrap with a new CoalesceBatchesExec
+        self.input.try_pushdown_sort(order)?.try_map(|new_input| {
+            Ok(Arc::new(
+                CoalesceBatchesExec::new(new_input, self.target_batch_size)
+                    .with_fetch(self.fetch),
+            ) as Arc<dyn ExecutionPlan>)
+        })
     }
 }
 

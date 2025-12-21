@@ -294,7 +294,7 @@ ceil(numeric_expression)
 #### Example
 
 ```sql
-    > SELECT ceil(3.14);
+> SELECT ceil(3.14);
 +------------+
 | ceil(3.14) |
 +------------+
@@ -2709,7 +2709,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ### `to_date`
 
 Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.

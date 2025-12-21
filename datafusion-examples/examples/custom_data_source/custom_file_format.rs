@@ -27,13 +27,13 @@ use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
     datasource::{
+        MemTable,
         file_format::{
-            csv::CsvFormatFactory, file_compression_type::FileCompressionType,
-            FileFormat, FileFormatFactory,
+            FileFormat, FileFormatFactory, csv::CsvFormatFactory,
+            file_compression_type::FileCompressionType,
         },
         physical_plan::{FileScanConfig, FileSinkConfig, FileSource},
         table_schema::TableSchema,
-        MemTable,
     },
     error::Result,
     execution::session_state::SessionStateBuilder,

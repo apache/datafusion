@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion Query Optimizer
+# Query Optimizer
 
 [DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory
 format.
@@ -25,8 +25,11 @@ format.
 DataFusion has modular design, allowing individual crates to be re-used in other projects.
 
 This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
-contains an extensive set of OptimizerRules that may rewrite the plan and/or its expressions so
+contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRules`] that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.
+
+[`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
+[`physicaloptimizerrules`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
 
 ## Running the Optimizer
 

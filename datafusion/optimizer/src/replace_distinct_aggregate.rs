@@ -69,7 +69,7 @@ use datafusion_expr::{ExprFunctionExt, Limit, LogicalPlanBuilder, col, lit};
 pub struct ReplaceDistinctWithAggregate {}
 
 impl ReplaceDistinctWithAggregate {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }

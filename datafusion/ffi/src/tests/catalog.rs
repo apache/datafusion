@@ -29,6 +29,7 @@ use std::{any::Any, fmt::Debug, sync::Arc};
 
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
 use datafusion::{
@@ -163,7 +164,9 @@ impl CatalogProvider for FixedCatalogProvider {
         schema: Arc<dyn SchemaProvider>,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         if !["apple", "banana", "cherry", "date"].contains(&name) {
-            return exec_err!("FixedCatalogProvider only provides four schemas: apple, banana, cherry, date");
+            return exec_err!(
+                "FixedCatalogProvider only provides four schemas: apple, banana, cherry, date"
+            );
         }
 
         self.inner.register_schema(name, schema)
@@ -178,9 +181,11 @@ impl CatalogProvider for FixedCatalogProvider {
     }
 }
 
-pub(crate) extern "C" fn create_catalog_provider() -> FFI_CatalogProvider {
+pub(crate) extern "C" fn create_catalog_provider(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_CatalogProvider {
     let catalog_provider = Arc::new(FixedCatalogProvider::default());
-    FFI_CatalogProvider::new(catalog_provider, None)
+    FFI_CatalogProvider::new_with_ffi_codec(catalog_provider, None, codec)
 }
 
 /// This catalog provider list is intended only for unit tests. It prepopulates with one
@@ -222,7 +227,9 @@ impl CatalogProviderList for FixedCatalogProviderList {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         if !["blue", "red", "green", "yellow"].contains(&name.as_str()) {
-            log::warn!("FixedCatalogProviderList only provides four catalogs: blue, red, green, yellow");
+            log::warn!(
+                "FixedCatalogProviderList only provides four catalogs: blue, red, green, yellow"
+            );
             return None;
         }
 
@@ -230,7 +237,9 @@ impl CatalogProviderList for FixedCatalogProviderList {
     }
 }
 
-pub(crate) extern "C" fn create_catalog_provider_list() -> FFI_CatalogProviderList {
+pub(crate) extern "C" fn create_catalog_provider_list(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_CatalogProviderList {
     let catalog_provider_list = Arc::new(FixedCatalogProviderList::default());
-    FFI_CatalogProviderList::new(catalog_provider_list, None)
+    FFI_CatalogProviderList::new_with_ffi_codec(catalog_provider_list, None, codec)
 }

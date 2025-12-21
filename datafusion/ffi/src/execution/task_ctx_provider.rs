@@ -19,7 +19,7 @@ use std::ffi::c_void;
 use std::sync::{Arc, Weak};
 
 use abi_stable::StableAbi;
-use datafusion_common::{ffi_datafusion_err, DataFusionError};
+use datafusion_common::{DataFusionError, ffi_datafusion_err};
 use datafusion_execution::{TaskContext, TaskContextProvider};
 
 use crate::execution::task_ctx::FFI_TaskContext;
@@ -67,44 +67,54 @@ struct TaskContextProviderPrivateData {
 
 impl FFI_TaskContextProvider {
     unsafe fn inner(&self) -> Option<Arc<TaskContext>> {
-        let private_data = self.private_data as *const TaskContextProviderPrivateData;
-        (*private_data).ctx.upgrade().map(|ctx| ctx.task_ctx())
+        unsafe {
+            let private_data = self.private_data as *const TaskContextProviderPrivateData;
+            (*private_data).ctx.upgrade().map(|ctx| ctx.task_ctx())
+        }
     }
 }
 
 unsafe extern "C" fn task_ctx_fn_wrapper(
     ctx_provider: &FFI_TaskContextProvider,
 ) -> FFIResult<FFI_TaskContext> {
-    rresult!(ctx_provider
-        .inner()
-        .map(FFI_TaskContext::from)
-        .ok_or_else(|| {
-            ffi_datafusion_err!(
-                "TaskContextProvider went out of scope over FFI boundary."
-            )
-        }))
+    unsafe {
+        rresult!(
+            ctx_provider
+                .inner()
+                .map(FFI_TaskContext::from)
+                .ok_or_else(|| {
+                    ffi_datafusion_err!(
+                        "TaskContextProvider went out of scope over FFI boundary."
+                    )
+                })
+        )
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
     provider: &FFI_TaskContextProvider,
 ) -> FFI_TaskContextProvider {
-    let private_data = provider.private_data as *const TaskContextProviderPrivateData;
-    let ctx = Weak::clone(&(*private_data).ctx);
+    unsafe {
+        let private_data = provider.private_data as *const TaskContextProviderPrivateData;
+        let ctx = Weak::clone(&(*private_data).ctx);
 
-    let private_data = Box::new(TaskContextProviderPrivateData { ctx });
+        let private_data = Box::new(TaskContextProviderPrivateData { ctx });
 
-    FFI_TaskContextProvider {
-        task_ctx: task_ctx_fn_wrapper,
-        release: release_fn_wrapper,
-        clone: clone_fn_wrapper,
-        private_data: Box::into_raw(private_data) as *mut c_void,
-        library_marker_id: crate::get_library_marker_id,
+        FFI_TaskContextProvider {
+            task_ctx: task_ctx_fn_wrapper,
+            release: release_fn_wrapper,
+            clone: clone_fn_wrapper,
+            private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
+        }
     }
 }
 unsafe extern "C" fn release_fn_wrapper(ctx: &mut FFI_TaskContextProvider) {
-    let private_data =
-        Box::from_raw(ctx.private_data as *mut TaskContextProviderPrivateData);
-    drop(private_data);
+    unsafe {
+        let private_data =
+            Box::from_raw(ctx.private_data as *mut TaskContextProviderPrivateData);
+        drop(private_data);
+    }
 }
 impl Drop for FFI_TaskContextProvider {
     fn drop(&mut self) {
