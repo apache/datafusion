@@ -24,7 +24,7 @@ use arrow::array::RecordBatch;
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::disk_manager::RefCountedTempFile;
 
-use super::{IPCStreamWriter, spill_manager::SpillManager};
+use super::{IPCStreamWriter, gc_view_arrays, spill_manager::SpillManager};
 
 /// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 /// Caller is able to use this struct to incrementally append in-memory batches to
@@ -50,6 +50,7 @@ impl InProgressSpillFile {
     }
 
     /// Appends a `RecordBatch` to the spill file, initializing the writer if necessary.
+    /// Performs garbage collection on StringView/BinaryView arrays to reduce spill file size.
     ///
     /// # Errors
     /// - Returns an error if the file is not active (has been finalized)
@@ -61,6 +62,9 @@ impl InProgressSpillFile {
                 "Append operation failed: No active in-progress file. The file may have already been finalized."
             ));
         }
+
+        let gc_batch = gc_view_arrays(batch)?;
+
         if self.writer.is_none() {
             // Use the SpillManager's declared schema rather than the batch's schema.
             // Individual batches may have different schemas (e.g., different nullability)
@@ -87,7 +91,7 @@ impl InProgressSpillFile {
             }
         }
         if let Some(writer) = &mut self.writer {
-            let (spilled_rows, _) = writer.write(batch)?;
+            let (spilled_rows, _) = writer.write(&gc_batch)?;
             if let Some(in_progress_file) = &mut self.in_progress_file {
                 let pre_size = in_progress_file.current_disk_usage();
                 in_progress_file.update_disk_usage()?;
