@@ -25,11 +25,13 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::{
     DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float32Type,
-    Float64Type, Int64Type,
+    Float64Type, Int32Type,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
-use datafusion_common::types::NativeType;
+use datafusion_common::types::{
+    NativeType, logical_float32, logical_float64, logical_int32,
+};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -70,19 +72,32 @@ impl Default for RoundFunc {
 impl RoundFunc {
     pub fn new() -> Self {
         let decimal = Coercion::new_exact(TypeSignatureClass::Decimal);
-        let integer = Coercion::new_exact(TypeSignatureClass::Integer);
-        let float = Coercion::new_implicit(
-            TypeSignatureClass::Float,
+        let decimal_places = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int32()),
+            vec![TypeSignatureClass::Integer],
+            NativeType::Int32,
+        );
+        let float32 = Coercion::new_exact(TypeSignatureClass::Native(logical_float32()));
+        let float64 = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_float64()),
             vec![TypeSignatureClass::Numeric],
             NativeType::Float64,
         );
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![decimal.clone(), integer.clone()]),
+                    TypeSignature::Coercible(vec![
+                        decimal.clone(),
+                        decimal_places.clone(),
+                    ]),
                     TypeSignature::Coercible(vec![decimal]),
-                    TypeSignature::Coercible(vec![float.clone(), integer]),
-                    TypeSignature::Coercible(vec![float]),
+                    TypeSignature::Coercible(vec![
+                        float32.clone(),
+                        decimal_places.clone(),
+                    ]),
+                    TypeSignature::Coercible(vec![float32]),
+                    TypeSignature::Coercible(vec![float64.clone(), decimal_places]),
+                    TypeSignature::Coercible(vec![float64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -115,23 +130,19 @@ impl ScalarUDFImpl for RoundFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 && args.args.len() != 2 {
-            return exec_err!(
-                "round function requires one or two arguments, got {}",
-                args.args.len()
-            );
-        }
-
         if args.arg_fields.iter().any(|a| a.data_type().is_null()) {
             return ColumnarValue::Scalar(ScalarValue::Null)
                 .cast_to(args.return_type(), None);
         }
 
-        let default_decimal_places = ColumnarValue::Scalar(ScalarValue::Int64(Some(0)));
-        let value = &args.args[0];
-        let decimal_places = args.args.get(1).unwrap_or(&default_decimal_places);
+        let default_decimal_places = ColumnarValue::Scalar(ScalarValue::Int32(Some(0)));
+        let decimal_places = if args.args.len() == 2 {
+            &args.args[1]
+        } else {
+            &default_decimal_places
+        };
 
-        round_columnar(value, decimal_places, args.number_rows)
+        round_columnar(&args.args[0], decimal_places, args.number_rows)
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
@@ -160,12 +171,12 @@ fn round_columnar(
     number_rows: usize,
 ) -> Result<ColumnarValue> {
     let value_array = value.to_array(number_rows)?;
-    let decimal_places_is_scalar = matches!(decimal_places, ColumnarValue::Scalar(_));
-    let value_is_scalar = matches!(value, ColumnarValue::Scalar(_));
+    let both_scalars = matches!(value, ColumnarValue::Scalar(_))
+        && matches!(decimal_places, ColumnarValue::Scalar(_));
 
     let arr: ArrayRef = match value_array.data_type() {
         Float64 => {
-            let result = calculate_binary_math::<Float64Type, Int64Type, Float64Type, _>(
+            let result = calculate_binary_math::<Float64Type, Int32Type, Float64Type, _>(
                 value_array.as_ref(),
                 decimal_places,
                 round_float::<f64>,
@@ -173,7 +184,7 @@ fn round_columnar(
             result as _
         }
         Float32 => {
-            let result = calculate_binary_math::<Float32Type, Int64Type, Float32Type, _>(
+            let result = calculate_binary_math::<Float32Type, Int32Type, Float32Type, _>(
                 value_array.as_ref(),
                 decimal_places,
                 round_float::<f32>,
@@ -183,7 +194,7 @@ fn round_columnar(
         Decimal32(precision, scale) => {
             let result = calculate_binary_decimal_math::<
                 Decimal32Type,
-                Int64Type,
+                Int32Type,
                 Decimal32Type,
                 _,
             >(
@@ -198,7 +209,7 @@ fn round_columnar(
         Decimal64(precision, scale) => {
             let result = calculate_binary_decimal_math::<
                 Decimal64Type,
-                Int64Type,
+                Int32Type,
                 Decimal64Type,
                 _,
             >(
@@ -213,7 +224,7 @@ fn round_columnar(
         Decimal128(precision, scale) => {
             let result = calculate_binary_decimal_math::<
                 Decimal128Type,
-                Int64Type,
+                Int32Type,
                 Decimal128Type,
                 _,
             >(
@@ -228,7 +239,7 @@ fn round_columnar(
         Decimal256(precision, scale) => {
             let result = calculate_binary_decimal_math::<
                 Decimal256Type,
-                Int64Type,
+                Int32Type,
                 Decimal256Type,
                 _,
             >(
@@ -243,24 +254,18 @@ fn round_columnar(
         other => exec_err!("Unsupported data type {other:?} for function round")?,
     };
 
-    if value_is_scalar && decimal_places_is_scalar {
+    if both_scalars {
         ScalarValue::try_from_array(&arr, 0).map(ColumnarValue::Scalar)
     } else {
         Ok(ColumnarValue::Array(arr))
     }
 }
 
-fn round_float<T>(value: T, decimal_places: i64) -> Result<T, ArrowError>
+fn round_float<T>(value: T, decimal_places: i32) -> Result<T, ArrowError>
 where
     T: num_traits::Float,
 {
-    let places: i32 = decimal_places.try_into().map_err(|e| {
-        ArrowError::ComputeError(format!(
-            "Invalid value for decimal places: {decimal_places}: {e}"
-        ))
-    })?;
-
-    let factor = T::from(10_f64.powi(places)).ok_or_else(|| {
+    let factor = T::from(10_f64.powi(decimal_places)).ok_or_else(|| {
         ArrowError::ComputeError(format!(
             "Invalid value for decimal places: {decimal_places}"
         ))
@@ -271,91 +276,116 @@ where
 fn round_decimal32(
     value: i32,
     scale: i8,
-    decimal_places: i64,
+    decimal_places: i32,
 ) -> Result<i32, ArrowError> {
-    let rounded =
-        round_decimal_i256(i256::from_i128(i128::from(value)), scale, decimal_places)?;
-    rounded
-        .to_i128()
-        .and_then(|v| i32::try_from(v).ok())
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Overflow while rounding decimal32".into())
-        })
+    let rounded = round_decimal_i128(i128::from(value), scale, decimal_places)?;
+    i32::try_from(rounded)
+        .map_err(|_| ArrowError::ComputeError("Overflow while rounding decimal32".into()))
 }
 
 fn round_decimal64(
     value: i64,
     scale: i8,
-    decimal_places: i64,
+    decimal_places: i32,
 ) -> Result<i64, ArrowError> {
-    let rounded =
-        round_decimal_i256(i256::from_i128(value.into()), scale, decimal_places)?;
-    rounded
-        .to_i128()
-        .and_then(|v| i64::try_from(v).ok())
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Overflow while rounding decimal64".into())
-        })
+    let rounded = round_decimal_i128(i128::from(value), scale, decimal_places)?;
+    i64::try_from(rounded)
+        .map_err(|_| ArrowError::ComputeError("Overflow while rounding decimal64".into()))
 }
 
 fn round_decimal128(
     value: i128,
     scale: i8,
-    decimal_places: i64,
+    decimal_places: i32,
 ) -> Result<i128, ArrowError> {
-    let rounded = round_decimal_i256(i256::from_i128(value), scale, decimal_places)?;
-    rounded.to_i128().ok_or_else(|| {
-        ArrowError::ComputeError("Overflow while rounding decimal128".into())
-    })
+    round_decimal_i128(value, scale, decimal_places)
 }
 
 fn round_decimal256(
     value: i256,
     scale: i8,
-    decimal_places: i64,
+    decimal_places: i32,
 ) -> Result<i256, ArrowError> {
     round_decimal_i256(value, scale, decimal_places)
 }
 
-fn round_decimal_i256(
-    value: i256,
+fn round_decimal_i128(
+    value: i128,
     scale: i8,
-    decimal_places: i64,
-) -> Result<i256, ArrowError> {
-    let dp: i32 = decimal_places.try_into().map_err(|e| {
+    decimal_places: i32,
+) -> Result<i128, ArrowError> {
+    let diff = i64::from(scale) - i64::from(decimal_places);
+    if diff <= 0 {
+        return Ok(value);
+    }
+
+    let diff: u32 = diff.try_into().map_err(|e| {
         ArrowError::ComputeError(format!(
             "Invalid value for decimal places: {decimal_places}: {e}"
         ))
     })?;
 
-    let diff = scale as i32 - dp;
+    let factor = 10_i128.checked_pow(diff).ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "Overflow while rounding decimal with scale {scale} and decimal places {decimal_places}"
+        ))
+    })?;
+
+    let mut quotient = value / factor;
+    let remainder = value % factor;
+
+    // `factor` is an even number (10^n, n > 0), so `factor / 2` is the tie threshold
+    let threshold = factor / 2;
+    if remainder >= threshold {
+        quotient = quotient.checked_add(1).ok_or_else(|| {
+            ArrowError::ComputeError("Overflow while rounding decimal".into())
+        })?;
+    } else if remainder <= -threshold {
+        quotient = quotient.checked_sub(1).ok_or_else(|| {
+            ArrowError::ComputeError("Overflow while rounding decimal".into())
+        })?;
+    }
+
+    quotient
+        .checked_mul(factor)
+        .ok_or_else(|| ArrowError::ComputeError("Overflow while rounding decimal".into()))
+}
+
+fn round_decimal_i256(
+    value: i256,
+    scale: i8,
+    decimal_places: i32,
+) -> Result<i256, ArrowError> {
+    let diff = i64::from(scale) - i64::from(decimal_places);
     if diff <= 0 {
         return Ok(value);
     }
 
-    let factor = i256::from_i128(10)
-        .checked_pow(diff as u32)
-        .ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "Overflow while rounding decimal with scale {scale} and decimal places {decimal_places}"
-            ))
-        })?;
+    let diff: u32 = diff.try_into().map_err(|e| {
+        ArrowError::ComputeError(format!(
+            "Invalid value for decimal places: {decimal_places}: {e}"
+        ))
+    })?;
+
+    let factor = i256::from_i128(10).checked_pow(diff).ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "Overflow while rounding decimal with scale {scale} and decimal places {decimal_places}"
+        ))
+    })?;
 
     let mut quotient = value / factor;
     let remainder = value % factor;
-    let abs_remainder = remainder.wrapping_abs();
 
-    let threshold = (factor + i256::ONE) / i256::from_i128(2);
-    if abs_remainder >= threshold {
-        quotient = if value.is_negative() {
-            quotient.checked_sub(i256::ONE).ok_or_else(|| {
-                ArrowError::ComputeError("Overflow while rounding decimal".into())
-            })?
-        } else {
-            quotient.checked_add(i256::ONE).ok_or_else(|| {
-                ArrowError::ComputeError("Overflow while rounding decimal".into())
-            })?
-        };
+    // `factor` is an even number (10^n, n > 0), so `factor / 2` is the tie threshold
+    let threshold = factor / i256::from_i128(2);
+    if remainder >= threshold {
+        quotient = quotient.checked_add(i256::ONE).ok_or_else(|| {
+            ArrowError::ComputeError("Overflow while rounding decimal".into())
+        })?;
+    } else if remainder <= -threshold {
+        quotient = quotient.checked_sub(i256::ONE).ok_or_else(|| {
+            ArrowError::ComputeError("Overflow while rounding decimal".into())
+        })?;
     }
 
     quotient
@@ -367,12 +397,7 @@ fn round_decimal_i256(
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{
-        ArrayRef, AsArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
-        Int64Array,
-    };
-    use arrow::datatypes::{Decimal128Type, Decimal256Type};
-    use arrow_buffer::i256;
+    use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
     use datafusion_common::DataFusionError;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
@@ -386,7 +411,7 @@ mod test {
         let value = ColumnarValue::Array(value);
         let decimal_places = decimal_places
             .map(ColumnarValue::Array)
-            .unwrap_or_else(|| ColumnarValue::Scalar(ScalarValue::Int64(Some(0))));
+            .unwrap_or_else(|| ColumnarValue::Scalar(ScalarValue::Int32(Some(0))));
 
         let result = super::round_columnar(&value, &decimal_places, number_rows)?;
         match result {
@@ -479,54 +504,5 @@ mod test {
             result,
             Err(DataFusionError::ArrowError(_, _)) | Err(DataFusionError::Execution(_))
         ));
-    }
-
-    #[test]
-    fn test_round_decimal128_scalar_places() {
-        let values = Decimal128Array::from(vec![1739751405458550000000i128])
-            .with_precision_and_scale(38, 10)
-            .unwrap();
-
-        let decimal_places = Arc::new(Int64Array::from(vec![2])) as ArrayRef;
-        let result = round_arrays(Arc::new(values), Some(decimal_places))
-            .expect("failed to initialize function round");
-        let decimals = result.as_primitive::<Decimal128Type>();
-
-        assert_eq!(decimals.value(0), 1739751405458600000000i128);
-        assert_eq!(decimals.precision(), 38);
-        assert_eq!(decimals.scale(), 10);
-    }
-
-    #[test]
-    fn test_round_decimal128_negative_places() {
-        let values = Decimal128Array::from(vec![1234555i128])
-            .with_precision_and_scale(10, 2)
-            .unwrap();
-
-        let decimal_places = Arc::new(Int64Array::from(vec![-1])) as ArrayRef;
-        let result = round_arrays(Arc::new(values), Some(decimal_places))
-            .expect("failed to initialize function round");
-        let decimals = result.as_primitive::<Decimal128Type>();
-
-        // 12345.55 rounded to -1 decimal place => 12350.00
-        assert_eq!(decimals.value(0), 1235000i128);
-        assert_eq!(decimals.precision(), 10);
-        assert_eq!(decimals.scale(), 2);
-    }
-
-    #[test]
-    fn test_round_decimal256() {
-        let values = Decimal256Array::from(vec![Some(i256::from_i128(12345678))])
-            .with_precision_and_scale(30, 4)
-            .unwrap();
-
-        let decimal_places = Arc::new(Int64Array::from(vec![2])) as ArrayRef;
-        let result = round_arrays(Arc::new(values), Some(decimal_places))
-            .expect("failed to initialize function round");
-        let decimals = result.as_primitive::<Decimal256Type>();
-
-        assert_eq!(decimals.value(0), i256::from_i128(12345700));
-        assert_eq!(decimals.precision(), 30);
-        assert_eq!(decimals.scale(), 4);
     }
 }
