@@ -19,11 +19,40 @@ use arrow::array::{MapBuilder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Returns the metadata of the input expression. If a key is provided, returns the value for that key. If no key is provided, returns a Map of all metadata.",
+    syntax_example = "arrow_metadata(expression, [key])",
+    sql_example = r#"```sql
+> select arrow_metadata(col) from table;
++----------------------------+
+| arrow_metadata(table.col)  |
++----------------------------+
+| {k: v}                     |
++----------------------------+
+> select arrow_metadata(col, 'k') from table;
++-------------------------------+
+| arrow_metadata(table.col, 'k')|
++-------------------------------+
+| v                             |
++-------------------------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "The expression to retrieve metadata from. Can be a column or other expression."
+    ),
+    argument(
+        name = "key",
+        description = "Optional. The specific metadata key to retrieve."
+    )
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArrowMetadataFunc {
     signature: Signature,
@@ -54,6 +83,10 @@ impl ScalarUDFImpl for ArrowMetadataFunc {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
