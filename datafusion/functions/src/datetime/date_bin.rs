@@ -25,9 +25,7 @@ use arrow::array::types::{
     TimestampSecondType,
 };
 use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
-use arrow::datatypes::DataType::{
-    LargeUtf8, Null, Time32, Time64, Timestamp, Utf8, Utf8View,
-};
+use arrow::datatypes::DataType::{Time32, Time64, Timestamp};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
@@ -244,16 +242,26 @@ impl ScalarUDFImpl for DateBinFunc {
     ) -> Result<ColumnarValue> {
         let args = &args.args;
         if args.len() == 2 {
-            let origin = if matches!(args[1].data_type(), Time32(_)) {
-                ColumnarValue::Scalar(ScalarValue::Time32Second(Some(0)))
-            } else if matches!(args[1].data_type(), Time64(_)) {
-                ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(0)))
-            } else {
-                // Default to unix EPOCH
-                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                    Some(0),
-                    Some("+00:00".into()),
-                ))
+            let origin = match args[1].data_type() {
+                Time32(Second) => {
+                    ColumnarValue::Scalar(ScalarValue::Time32Second(Some(0)))
+                }
+                Time32(Millisecond) => {
+                    ColumnarValue::Scalar(ScalarValue::Time32Millisecond(Some(0)))
+                }
+                Time64(Microsecond) => {
+                    ColumnarValue::Scalar(ScalarValue::Time64Microsecond(Some(0)))
+                }
+                Time64(Nanosecond) => {
+                    ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(0)))
+                }
+                _ => {
+                    // Default to unix EPOCH
+                    ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                        Some(0),
+                        Some("+00:00".into()),
+                    ))
+                }
             };
             date_bin_impl(&args[0], &args[1], &origin)
         } else if args.len() == 3 {
