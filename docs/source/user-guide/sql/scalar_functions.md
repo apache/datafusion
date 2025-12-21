@@ -4988,6 +4988,7 @@ union_tag(union_expression)
 ## Other Functions
 
 - [arrow_cast](#arrow_cast)
+- [arrow_metadata](#arrow_metadata)
 - [arrow_typeof](#arrow_typeof)
 - [get_field](#get_field)
 - [version](#version)
@@ -5028,6 +5029,36 @@ arrow_cast(expression, datatype)
 +---------------------------+---------------------+
 | 2023-01-02T12:53:02+08:00 | 2023-01-02T12:53:02 |
 +---------------------------+---------------------+
+```
+
+### `arrow_metadata`
+
+Returns the metadata of the input expression. If a key is provided, returns the value for that key. If no key is provided, returns a Map of all metadata.
+
+```sql
+arrow_metadata(expression, [key])
+```
+
+#### Arguments
+
+- **expression**: The expression to retrieve metadata from. Can be a column or other expression.
+- **key**: Optional. The specific metadata key to retrieve.
+
+#### Example
+
+```sql
+> select arrow_metadata(col) from table;
++----------------------------+
+| arrow_metadata(table.col)  |
++----------------------------+
+| {k: v}                     |
++----------------------------+
+> select arrow_metadata(col, 'k') from table;
++-------------------------------+
+| arrow_metadata(table.col, 'k')|
++-------------------------------+
+| v                             |
++-------------------------------+
 ```
 
 ### `arrow_typeof`
