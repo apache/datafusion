@@ -1443,10 +1443,28 @@ fn build_predicate_expression(
     // predicate expression can only be a binary expression
     let expr_any = expr.as_any();
     if let Some(is_null) = expr_any.downcast_ref::<phys_expr::IsNullExpr>() {
+        // If argument is a literal, evaluate directly
+        if let Some(literal) = is_null
+            .arg()
+            .as_any()
+            .downcast_ref::<phys_expr::Literal>()
+        {
+            let result = literal.value().is_null();
+            return Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(result))));
+        }
         return build_is_null_column_expr(is_null.arg(), schema, required_columns, false)
             .unwrap_or_else(|| unhandled_hook.handle(expr));
     }
     if let Some(is_not_null) = expr_any.downcast_ref::<phys_expr::IsNotNullExpr>() {
+        // If argument is a literal, evaluate directly
+        if let Some(literal) = is_not_null
+            .arg()
+            .as_any()
+            .downcast_ref::<phys_expr::Literal>()
+        {
+            let result = !literal.value().is_null();
+            return Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(result))));
+        }
         return build_is_null_column_expr(
             is_not_null.arg(),
             schema,
