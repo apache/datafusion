@@ -60,13 +60,12 @@ mod tests {
         record_batch::RecordBatch,
     };
     use datafusion_common::{
-        Result, ScalarValue, record_batch,
+        Result, ScalarValue,
         test_util::batches_to_sort_string,
         tree_node::{Transformed, TransformedResult, TreeNode},
     };
     use datafusion_datasource::{
-        PartitionedFile, file_scan_config::FileScanConfigBuilder,
-        schema_adapter::DefaultSchemaAdapterFactory, source::DataSourceExec,
+        PartitionedFile, file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
     };
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_physical_expr::expressions::{Column, Literal};
@@ -140,65 +139,13 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let read = collect(parquet_exec, task_ctx).await.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
         +----+--------------+
         | id | extra_column |
         +----+--------------+
         | 1  | foo          |
         +----+--------------+
-        "###);
-    }
-
-    #[test]
-    fn default_schema_adapter() {
-        let table_schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-        ]);
-
-        // file has a subset of the table schema fields and different type
-        let file_schema = Schema::new(vec![
-            Field::new("c", DataType::Float64, true), // not in table schema
-            Field::new("b", DataType::Float64, true),
-        ]);
-
-        let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(table_schema));
-        let (mapper, indices) = adapter.map_schema(&file_schema).unwrap();
-        assert_eq!(indices, vec![1]);
-
-        let file_batch = record_batch!(("b", Float64, vec![1.0, 2.0])).unwrap();
-
-        let mapped_batch = mapper.map_batch(file_batch).unwrap();
-
-        // the mapped batch has the correct schema and the "b" column has been cast to Utf8
-        let expected_batch = record_batch!(
-            ("a", Int32, vec![None, None]), // missing column filled with nulls
-            ("b", Utf8, vec!["1.0", "2.0"])  // b was cast to string and order was changed
-        )
-        .unwrap();
-        assert_eq!(mapped_batch, expected_batch);
-    }
-
-    #[test]
-    fn default_schema_adapter_non_nullable_columns() {
-        let table_schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false), // "a"" is declared non nullable
-            Field::new("b", DataType::Utf8, true),
-        ]);
-        let file_schema = Schema::new(vec![
-            // since file doesn't have "a" it will be filled with nulls
-            Field::new("b", DataType::Float64, true),
-        ]);
-
-        let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(table_schema));
-        let (mapper, indices) = adapter.map_schema(&file_schema).unwrap();
-        assert_eq!(indices, vec![0]);
-
-        let file_batch = record_batch!(("b", Float64, vec![1.0, 2.0])).unwrap();
-
-        // Mapping fails because it tries to fill in a non-nullable column with nulls
-        let err = mapper.map_batch(file_batch).unwrap_err().to_string();
-        assert!(err.contains("Invalid argument error: Column 'a' is declared as non-nullable but contains null values"), "{err}");
+        ");
     }
 
     #[derive(Debug)]

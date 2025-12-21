@@ -15,6 +15,32 @@
 # specific language governing permissions and limitations
 # under the License.
 
+query T
+SELECT encode(arrow_cast('tom', 'Utf8View'),'base64');
+----
+dG9t
+
+query T
+SELECT arrow_cast(decode(arrow_cast('dG9t', 'Utf8View'),'base64'), 'Utf8');
+----
+tom
+
+query T
+SELECT encode(arrow_cast('tom', 'BinaryView'),'base64');
+----
+dG9t
+
+query T
+SELECT arrow_cast(decode(arrow_cast('dG9t', 'BinaryView'),'base64'), 'Utf8');
+----
+tom
+
+# test for hex digest
+query T
+select encode(digest('hello', 'sha256'), 'hex');
+----
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+
 statement ok
 CREATE TABLE test(
   num INT,
@@ -29,23 +55,29 @@ CREATE TABLE test(
 ;
 
 # errors
-query error 1st argument should be Utf8 or Binary or Null, got Int64
+query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Binary but received NativeType::Int64, DataType: Int64
 select encode(12, 'hex');
 
-query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
-select encode(bin_field, 'non_encoding') from test;
-
-query error 1st argument should be Utf8 or Binary or Null, got Int64
+query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Binary but received NativeType::Int64, DataType: Int64
 select decode(12, 'hex');
 
 query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
-select decode(hex_field, 'non_encoding') from test;
+select encode('', 'non_encoding');
 
-query error
+query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
+select decode('', 'non_encoding');
+
+query error DataFusion error: Execution error: Encoding must be a non-null string
+select decode('', null) from test;
+
+query error DataFusion error: This feature is not implemented: Encoding must be a scalar; array specified encoding is not yet supported
+select decode('', hex_field) from test;
+
+query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'to_hex' function
 select to_hex(hex_field) from test;
 
-query error
-select arrow_cast(decode(X'8f50d3f60eae370ddbf85c86219c55108a350165', 'base64'), 'Utf8');
+query error DataFusion error: Execution error: Failed to decode value using base64
+select decode(X'8f50d3f60eae370ddbf85c86219c55108a350165', 'base64');
 
 # Arrays tests
 query T
@@ -56,13 +88,20 @@ SELECT encode(bin_field, 'hex') FROM test ORDER BY num;
 NULL
 8f50d3f60eae370ddbf85c86219c55108a350165
 
-query T
-SELECT arrow_cast(decode(base64_field, 'base64'), 'Utf8') FROM test ORDER BY num;
+query TTTTTT
+SELECT
+  arrow_cast(decode(arrow_cast(base64_field, 'Utf8'), 'base64'), 'Utf8'),
+  arrow_cast(decode(arrow_cast(base64_field, 'LargeUtf8'), 'base64'), 'Utf8'),
+  arrow_cast(decode(arrow_cast(base64_field, 'Utf8View'), 'base64'), 'Utf8'),
+  arrow_cast(decode(arrow_cast(base64_field, 'Binary'), 'base64'), 'Utf8'),
+  arrow_cast(decode(arrow_cast(base64_field, 'LargeBinary'), 'base64'), 'Utf8'),
+  arrow_cast(decode(arrow_cast(base64_field, 'BinaryView'), 'base64'), 'Utf8')
+FROM test ORDER BY num;
 ----
-abc
-qweqw
-NULL
-8f50d3f60eae370ddbf85c86219c55108a350165
+abc abc abc abc abc abc
+qweqw qweqw qweqw qweqw qweqw qweqw
+NULL NULL NULL NULL NULL NULL
+8f50d3f60eae370ddbf85c86219c55108a350165 8f50d3f60eae370ddbf85c86219c55108a350165 8f50d3f60eae370ddbf85c86219c55108a350165 8f50d3f60eae370ddbf85c86219c55108a350165 8f50d3f60eae370ddbf85c86219c55108a350165 8f50d3f60eae370ddbf85c86219c55108a350165
 
 query T
 SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test ORDER BY num;
@@ -90,51 +129,77 @@ select decode(encode(bin_field, 'base64'), 'base64') = X'8f50d3f60eae370ddbf85c8
 ----
 true
 
-# test for Utf8View support for encode
 statement ok
-CREATE TABLE test_source AS VALUES
-    ('Andrew', 'X'),
-    ('Xiangpeng', 'Xiangpeng'),
-    ('Raphael', 'R'),
-    (NULL, 'R');
+drop table test
 
+# test for Utf8View support for encode
 statement ok
 CREATE TABLE test_utf8view AS
 select
   arrow_cast(column1, 'Utf8View') AS column1_utf8view,
   arrow_cast(column2, 'Utf8View') AS column2_utf8view
-FROM test_source;
+FROM VALUES
+    ('Andrew', 'X'),
+    ('Xiangpeng', 'Xiangpeng'),
+    ('Raphael', 'R'),
+    (NULL, 'R');
 
-query TTTTTT
+query TTTT
 SELECT
-  column1_utf8view,
   encode(column1_utf8view, 'base64') AS column1_base64,
   encode(column1_utf8view, 'hex') AS column1_hex,
-  column2_utf8view,
   encode(column2_utf8view, 'base64') AS column2_base64,
   encode(column2_utf8view, 'hex') AS column2_hex
 FROM test_utf8view;
 ----
-Andrew QW5kcmV3 416e64726577 X WA 58
-Xiangpeng WGlhbmdwZW5n 5869616e6770656e67 Xiangpeng WGlhbmdwZW5n 5869616e6770656e67
-Raphael UmFwaGFlbA 5261706861656c R Ug 52
-NULL NULL NULL R Ug 52
+QW5kcmV3 416e64726577 WA 58
+WGlhbmdwZW5n 5869616e6770656e67 WGlhbmdwZW5n 5869616e6770656e67
+UmFwaGFlbA 5261706861656c Ug 52
+NULL NULL Ug 52
 
-# test for hex digest
-query T
-select encode(digest('hello', 'sha256'), 'hex');
+query TTTTTT
+SELECT
+  encode(arrow_cast(column1_utf8view, 'Utf8'), 'base64'),
+  encode(arrow_cast(column1_utf8view, 'LargeUtf8'), 'base64'),
+  encode(arrow_cast(column1_utf8view, 'Utf8View'), 'base64'),
+  encode(arrow_cast(column1_utf8view, 'Binary'), 'base64'),
+  encode(arrow_cast(column1_utf8view, 'LargeBinary'), 'base64'),
+  encode(arrow_cast(column1_utf8view, 'BinaryView'), 'base64')
+FROM test_utf8view;
 ----
-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+QW5kcmV3 QW5kcmV3 QW5kcmV3 QW5kcmV3 QW5kcmV3 QW5kcmV3
+WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n WGlhbmdwZW5n
+UmFwaGFlbA UmFwaGFlbA UmFwaGFlbA UmFwaGFlbA UmFwaGFlbA UmFwaGFlbA
+NULL NULL NULL NULL NULL NULL
 
-# test for FixedSizeBinary support for encode
+statement ok
+drop table test_utf8view
+
+# FixedSizeBinary support
 statement ok
 CREATE TABLE test_fsb AS
 SELECT arrow_cast(X'0123456789ABCDEF', 'FixedSizeBinary(8)') as fsb_col;
 
-query TT
+query ??
 SELECT
-  encode(fsb_col, 'base64') AS fsb_base64,
-  encode(fsb_col, 'hex') AS fsb_hex
-FROM test_fsb;
+  decode(encode(arrow_cast(X'0123456789abcdef', 'FixedSizeBinary(8)'), 'base64'), 'base64'),
+  decode(encode(arrow_cast(X'0123456789abcdef', 'FixedSizeBinary(8)'), 'hex'), 'hex');
 ----
-ASNFZ4mrze8 0123456789abcdef
+0123456789abcdef 0123456789abcdef
+
+query ??
+SELECT
+  decode(encode(column1, 'base64'), 'base64'),
+  decode(encode(column1, 'hex'), 'hex')
+FROM values
+  (arrow_cast(X'0123456789abcdef', 'FixedSizeBinary(8)')),
+  (arrow_cast(X'ffffffffffffffff', 'FixedSizeBinary(8)'));
+----
+0123456789abcdef 0123456789abcdef
+ffffffffffffffff ffffffffffffffff
+
+query error DataFusion error: Execution error: Failed to decode value using base64
+select decode('invalid', 'base64');
+
+query error DataFusion error: Execution error: Failed to decode value using hex
+select decode('invalid', 'hex');

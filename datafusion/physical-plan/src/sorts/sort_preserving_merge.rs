@@ -983,22 +983,22 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+-------------------------------+
-            | a | b | c                             |
-            +---+---+-------------------------------+
-            | 1 |   | 1970-01-01T00:00:00.000000008 |
-            | 1 |   | 1970-01-01T00:00:00.000000008 |
-            | 2 | a |                               |
-            | 7 | b | 1970-01-01T00:00:00.000000006 |
-            | 2 | b |                               |
-            | 9 | d |                               |
-            | 3 | e | 1970-01-01T00:00:00.000000004 |
-            | 3 | g | 1970-01-01T00:00:00.000000005 |
-            | 4 | h |                               |
-            | 5 | i | 1970-01-01T00:00:00.000000004 |
-            +---+---+-------------------------------+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+-------------------------------+
+        | a | b | c                             |
+        +---+---+-------------------------------+
+        | 1 |   | 1970-01-01T00:00:00.000000008 |
+        | 1 |   | 1970-01-01T00:00:00.000000008 |
+        | 2 | a |                               |
+        | 7 | b | 1970-01-01T00:00:00.000000006 |
+        | 2 | b |                               |
+        | 9 | d |                               |
+        | 3 | e | 1970-01-01T00:00:00.000000004 |
+        | 3 | g | 1970-01-01T00:00:00.000000005 |
+        | 4 | h |                               |
+        | 5 | i | 1970-01-01T00:00:00.000000004 |
+        +---+---+-------------------------------+
+        ");
     }
 
     #[tokio::test]
@@ -1024,14 +1024,14 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 1 | a |
-            | 2 | b |
-            +---+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+
+        | a | b |
+        +---+---+
+        | 1 | a |
+        | 2 | b |
+        +---+---+
+        ");
     }
 
     #[tokio::test]
@@ -1056,17 +1056,17 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 1 | a |
-            | 2 | b |
-            | 7 | c |
-            | 9 | d |
-            | 3 | e |
-            +---+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+
+        | a | b |
+        +---+---+
+        | 1 | a |
+        | 2 | b |
+        | 7 | c |
+        | 9 | d |
+        | 3 | e |
+        +---+---+
+        ");
     }
 
     #[tokio::test]
@@ -1165,16 +1165,16 @@ mod tests {
         let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
             .await
             .unwrap();
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +----+---+
-            | a  | b |
-            +----+---+
-            | 1  | a |
-            | 10 | b |
-            | 2  | c |
-            | 20 | d |
-            +----+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +----+---+
+        | a  | b |
+        +----+---+
+        | 1  | a |
+        | 10 | b |
+        | 2  | c |
+        | 20 | d |
+        +----+---+
+        ");
 
         // Now, validate metrics
         let metrics = merge.metrics().unwrap();
@@ -1280,32 +1280,32 @@ mod tests {
         // Expect the data to be sorted first by "batch_number" (because
         // that was the order it was fed in, even though only "value"
         // is in the sort key)
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-                +--------------+-------+
-                | batch_number | value |
-                +--------------+-------+
-                | 0            | A     |
-                | 1            | A     |
-                | 2            | A     |
-                | 3            | A     |
-                | 4            | A     |
-                | 5            | A     |
-                | 6            | A     |
-                | 7            | A     |
-                | 8            | A     |
-                | 9            | A     |
-                | 0            | B     |
-                | 1            | B     |
-                | 2            | B     |
-                | 3            | B     |
-                | 4            | B     |
-                | 5            | B     |
-                | 6            | B     |
-                | 7            | B     |
-                | 8            | B     |
-                | 9            | B     |
-                +--------------+-------+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +--------------+-------+
+        | batch_number | value |
+        +--------------+-------+
+        | 0            | A     |
+        | 1            | A     |
+        | 2            | A     |
+        | 3            | A     |
+        | 4            | A     |
+        | 5            | A     |
+        | 6            | A     |
+        | 7            | A     |
+        | 8            | A     |
+        | 9            | A     |
+        | 0            | B     |
+        | 1            | B     |
+        | 2            | B     |
+        | 3            | B     |
+        | 4            | B     |
+        | 5            | B     |
+        | 6            | B     |
+        | 7            | B     |
+        | 8            | B     |
+        | 9            | B     |
+        +--------------+-------+
+        ");
     }
 
     #[derive(Debug)]

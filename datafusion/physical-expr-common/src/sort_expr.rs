@@ -457,6 +457,17 @@ impl LexOrdering {
             req.expr.eq(&cur.expr) && is_reversed_sort_options(&req.options, &cur.options)
         })
     }
+
+    /// Returns the sort options for the given expression if one is defined in this `LexOrdering`.
+    pub fn get_sort_options(&self, expr: &dyn PhysicalExpr) -> Option<SortOptions> {
+        for e in self {
+            if e.expr.as_ref().dyn_eq(expr) {
+                return Some(e.options);
+            }
+        }
+
+        None
+    }
 }
 
 /// Check if two SortOptions represent reversed orderings.
