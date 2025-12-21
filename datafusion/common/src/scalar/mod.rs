@@ -77,14 +77,13 @@ use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
 };
 use arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType,
-    DECIMAL128_MAX_PRECISION, DataType, Date32Type, Decimal32Type, Decimal64Type,
-    Decimal128Type, Decimal256Type, DecimalType, Field, Float32Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, UnionFields,
-    UnionMode, i256, validate_decimal_precision_and_scale,
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType, Date32Type,
+    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Field,
+    Float32Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTime,
+    IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type, UnionFields, UnionMode, i256, validate_decimal_precision_and_scale,
 };
 use arrow::util::display::{ArrayFormatter, FormatOptions, array_value_to_string};
 use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
@@ -1151,13 +1150,8 @@ impl ScalarValue {
 
     /// Create a decimal Scalar from value/precision and scale.
     pub fn try_new_decimal128(value: i128, precision: u8, scale: i8) -> Result<Self> {
-        // make sure the precision and scale is valid
-        if precision <= DECIMAL128_MAX_PRECISION && scale.unsigned_abs() <= precision {
-            return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
-        }
-        _internal_err!(
-            "Can not new a decimal type ScalarValue for precision {precision} and scale {scale}"
-        )
+        Self::validate_decimal_or_internal_err::<Decimal128Type>(precision, scale)?;
+        Ok(ScalarValue::Decimal128(Some(value), precision, scale))
     }
 
     /// Create a Null instance of ScalarValue for this datatype
@@ -1249,7 +1243,7 @@ impl ScalarValue {
                 index_type.clone(),
                 Box::new(value_type.as_ref().try_into()?),
             ),
-            // `ScalaValue::List` contains single element `ListArray`.
+            // `ScalarValue::List` contains single element `ListArray`.
             DataType::List(field_ref) => ScalarValue::List(Arc::new(
                 GenericListArray::new_null(Arc::clone(field_ref), 1),
             )),
@@ -1257,7 +1251,7 @@ impl ScalarValue {
             DataType::LargeList(field_ref) => ScalarValue::LargeList(Arc::new(
                 GenericListArray::new_null(Arc::clone(field_ref), 1),
             )),
-            // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
+            // `ScalarValue::FixedSizeList` contains single element `FixedSizeList`.
             DataType::FixedSizeList(field_ref, fixed_length) => {
                 ScalarValue::FixedSizeList(Arc::new(FixedSizeListArray::new_null(
                     Arc::clone(field_ref),
@@ -1337,6 +1331,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing PI
     pub fn new_pi(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            DataType::Float16 => Ok(ScalarValue::from(f16::PI)),
             DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::PI)),
             _ => _internal_err!("PI is not supported for data type: {}", datatype),
@@ -1346,6 +1341,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing PI's upper bound
     pub fn new_pi_upper(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            // TODO: half::f16 doesn't seem to have equivalent
             DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
             _ => {
@@ -1357,6 +1353,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing -PI's lower bound
     pub fn new_negative_pi_lower(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            // TODO: half::f16 doesn't seem to have equivalent
             DataType::Float32 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F64)),
             _ => {
@@ -1368,6 +1365,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing FRAC_PI_2's upper bound
     pub fn new_frac_pi_2_upper(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            // TODO: half::f16 doesn't seem to have equivalent
             DataType::Float32 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F64)),
             _ => {
@@ -1379,6 +1377,7 @@ impl ScalarValue {
     // Returns a [`ScalarValue`] representing FRAC_PI_2's lower bound
     pub fn new_neg_frac_pi_2_lower(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            // TODO: half::f16 doesn't seem to have equivalent
             DataType::Float32 => {
                 Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F32))
             }
@@ -1394,6 +1393,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing -PI
     pub fn new_negative_pi(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            DataType::Float16 => Ok(ScalarValue::from(-f16::PI)),
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::PI)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::PI)),
             _ => _internal_err!("-PI is not supported for data type: {}", datatype),
@@ -1403,6 +1403,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing PI/2
     pub fn new_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            DataType::Float16 => Ok(ScalarValue::from(f16::FRAC_PI_2)),
             DataType::Float32 => Ok(ScalarValue::from(std::f32::consts::FRAC_PI_2)),
             DataType::Float64 => Ok(ScalarValue::from(std::f64::consts::FRAC_PI_2)),
             _ => _internal_err!("PI/2 is not supported for data type: {}", datatype),
@@ -1412,6 +1413,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing -PI/2
     pub fn new_neg_frac_pi_2(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            DataType::Float16 => Ok(ScalarValue::from(-f16::FRAC_PI_2)),
             DataType::Float32 => Ok(ScalarValue::from(-std::f32::consts::FRAC_PI_2)),
             DataType::Float64 => Ok(ScalarValue::from(-std::f64::consts::FRAC_PI_2)),
             _ => _internal_err!("-PI/2 is not supported for data type: {}", datatype),
@@ -1421,6 +1423,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing infinity
     pub fn new_infinity(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            DataType::Float16 => Ok(ScalarValue::from(f16::INFINITY)),
             DataType::Float32 => Ok(ScalarValue::from(f32::INFINITY)),
             DataType::Float64 => Ok(ScalarValue::from(f64::INFINITY)),
             _ => {
@@ -1432,6 +1435,7 @@ impl ScalarValue {
     /// Returns a [`ScalarValue`] representing negative infinity
     pub fn new_neg_infinity(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
+            DataType::Float16 => Ok(ScalarValue::from(f16::NEG_INFINITY)),
             DataType::Float32 => Ok(ScalarValue::from(f32::NEG_INFINITY)),
             DataType::Float64 => Ok(ScalarValue::from(f64::NEG_INFINITY)),
             _ => {
@@ -1455,7 +1459,7 @@ impl ScalarValue {
             DataType::UInt16 => ScalarValue::UInt16(Some(0)),
             DataType::UInt32 => ScalarValue::UInt32(Some(0)),
             DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-            DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(0.0))),
+            DataType::Float16 => ScalarValue::Float16(Some(f16::ZERO)),
             DataType::Float32 => ScalarValue::Float32(Some(0.0)),
             DataType::Float64 => ScalarValue::Float64(Some(0.0)),
             DataType::Decimal32(precision, scale) => {
@@ -1670,7 +1674,7 @@ impl ScalarValue {
             DataType::UInt16 => ScalarValue::UInt16(Some(1)),
             DataType::UInt32 => ScalarValue::UInt32(Some(1)),
             DataType::UInt64 => ScalarValue::UInt64(Some(1)),
-            DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(1.0))),
+            DataType::Float16 => ScalarValue::Float16(Some(f16::ONE)),
             DataType::Float32 => ScalarValue::Float32(Some(1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(1.0)),
             DataType::Decimal32(precision, scale) => {
@@ -1736,7 +1740,7 @@ impl ScalarValue {
             DataType::Int16 | DataType::UInt16 => ScalarValue::Int16(Some(-1)),
             DataType::Int32 | DataType::UInt32 => ScalarValue::Int32(Some(-1)),
             DataType::Int64 | DataType::UInt64 => ScalarValue::Int64(Some(-1)),
-            DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(-1.0))),
+            DataType::Float16 => ScalarValue::Float16(Some(f16::NEG_ONE)),
             DataType::Float32 => ScalarValue::Float32(Some(-1.0)),
             DataType::Float64 => ScalarValue::Float64(Some(-1.0)),
             DataType::Decimal32(precision, scale) => {
@@ -1963,9 +1967,7 @@ impl ScalarValue {
             | ScalarValue::Float16(None)
             | ScalarValue::Float32(None)
             | ScalarValue::Float64(None) => Ok(self.clone()),
-            ScalarValue::Float16(Some(v)) => {
-                Ok(ScalarValue::Float16(Some(f16::from_f32(-v.to_f32()))))
-            }
+            ScalarValue::Float16(Some(v)) => Ok(ScalarValue::Float16(Some(-v))),
             ScalarValue::Float64(Some(v)) => Ok(ScalarValue::Float64(Some(-v))),
             ScalarValue::Float32(Some(v)) => Ok(ScalarValue::Float32(Some(-v))),
             ScalarValue::Int8(Some(v)) => Ok(ScalarValue::Int8(Some(v.neg_checked()?))),
@@ -2086,6 +2088,7 @@ impl ScalarValue {
         let r = add_wrapping(&self.to_scalar()?, &other.borrow().to_scalar()?)?;
         Self::try_from_array(r.as_ref(), 0)
     }
+
     /// Checked addition of `ScalarValue`
     ///
     /// NB: operating on `ScalarValue` directly is not efficient, performance sensitive code
@@ -2718,71 +2721,6 @@ impl ScalarValue {
         Ok(array)
     }
 
-    fn build_decimal32_array(
-        value: Option<i32>,
-        precision: u8,
-        scale: i8,
-        size: usize,
-    ) -> Result<Decimal32Array> {
-        Ok(match value {
-            Some(val) => Decimal32Array::from(vec![val; size])
-                .with_precision_and_scale(precision, scale)?,
-            None => {
-                let mut builder = Decimal32Array::builder(size)
-                    .with_precision_and_scale(precision, scale)?;
-                builder.append_nulls(size);
-                builder.finish()
-            }
-        })
-    }
-
-    fn build_decimal64_array(
-        value: Option<i64>,
-        precision: u8,
-        scale: i8,
-        size: usize,
-    ) -> Result<Decimal64Array> {
-        Ok(match value {
-            Some(val) => Decimal64Array::from(vec![val; size])
-                .with_precision_and_scale(precision, scale)?,
-            None => {
-                let mut builder = Decimal64Array::builder(size)
-                    .with_precision_and_scale(precision, scale)?;
-                builder.append_nulls(size);
-                builder.finish()
-            }
-        })
-    }
-
-    fn build_decimal128_array(
-        value: Option<i128>,
-        precision: u8,
-        scale: i8,
-        size: usize,
-    ) -> Result<Decimal128Array> {
-        Ok(match value {
-            Some(val) => Decimal128Array::from(vec![val; size])
-                .with_precision_and_scale(precision, scale)?,
-            None => {
-                let mut builder = Decimal128Array::builder(size)
-                    .with_precision_and_scale(precision, scale)?;
-                builder.append_nulls(size);
-                builder.finish()
-            }
-        })
-    }
-
-    fn build_decimal256_array(
-        value: Option<i256>,
-        precision: u8,
-        scale: i8,
-        size: usize,
-    ) -> Result<Decimal256Array> {
-        Ok(repeat_n(value, size)
-            .collect::<Decimal256Array>()
-            .with_precision_and_scale(precision, scale)?)
-    }
-
     /// Converts `Vec<ScalarValue>` where each element has type corresponding to
     /// `data_type`, to a single element [`ListArray`].
     ///
@@ -2938,18 +2876,35 @@ impl ScalarValue {
     /// - a `Dictionary` that fails be converted to a dictionary array of size
     pub fn to_array_of_size(&self, size: usize) -> Result<ArrayRef> {
         Ok(match self {
-            ScalarValue::Decimal32(e, precision, scale) => Arc::new(
-                ScalarValue::build_decimal32_array(*e, *precision, *scale, size)?,
+            ScalarValue::Decimal32(Some(e), precision, scale) => Arc::new(
+                Decimal32Array::from_value(*e, size)
+                    .with_precision_and_scale(*precision, *scale)?,
             ),
-            ScalarValue::Decimal64(e, precision, scale) => Arc::new(
-                ScalarValue::build_decimal64_array(*e, *precision, *scale, size)?,
+            ScalarValue::Decimal32(None, precision, scale) => {
+                new_null_array(&DataType::Decimal32(*precision, *scale), size)
+            }
+            ScalarValue::Decimal64(Some(e), precision, scale) => Arc::new(
+                Decimal64Array::from_value(*e, size)
+                    .with_precision_and_scale(*precision, *scale)?,
             ),
-            ScalarValue::Decimal128(e, precision, scale) => Arc::new(
-                ScalarValue::build_decimal128_array(*e, *precision, *scale, size)?,
+            ScalarValue::Decimal64(None, precision, scale) => {
+                new_null_array(&DataType::Decimal64(*precision, *scale), size)
+            }
+            ScalarValue::Decimal128(Some(e), precision, scale) => Arc::new(
+                Decimal128Array::from_value(*e, size)
+                    .with_precision_and_scale(*precision, *scale)?,
             ),
-            ScalarValue::Decimal256(e, precision, scale) => Arc::new(
-                ScalarValue::build_decimal256_array(*e, *precision, *scale, size)?,
+            ScalarValue::Decimal128(None, precision, scale) => {
+                new_null_array(&DataType::Decimal128(*precision, *scale), size)
+            }
+            ScalarValue::Decimal256(Some(e), precision, scale) => Arc::new(
+                Decimal256Array::from_value(*e, size)
+                    .with_precision_and_scale(*precision, *scale)?,
             ),
+            ScalarValue::Decimal256(None, precision, scale) => {
+                new_null_array(&DataType::Decimal256(*precision, *scale), size)
+            }
+
             ScalarValue::Boolean(e) => match e {
                 None => new_null_array(&DataType::Boolean, size),
                 Some(true) => {
@@ -3226,10 +3181,7 @@ impl ScalarValue {
                     .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
                     Arc::new(ar)
                 }
-                None => {
-                    let dt = self.data_type();
-                    new_null_array(&dt, size)
-                }
+                None => new_null_array(&DataType::Union(fields.clone(), *mode), size),
             },
             ScalarValue::Dictionary(key_type, v) => {
                 // values array is one element long (the value)
@@ -5110,7 +5062,8 @@ mod tests {
     use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::datatypes::{
-        ArrowNumericType, DECIMAL256_MAX_PRECISION, Fields, Float64Type, TimeUnit,
+        ArrowNumericType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, Fields,
+        Float64Type, TimeUnit,
     };
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
