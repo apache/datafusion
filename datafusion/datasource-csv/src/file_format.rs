@@ -529,6 +529,7 @@ impl CsvFormat {
         let mut column_names = vec![];
         let mut column_type_possibilities = vec![];
         let mut record_number = -1;
+        let initial_records_to_read = records_to_read;
 
         pin_mut!(stream);
 
@@ -619,12 +620,20 @@ impl CsvFormat {
             }
         }
 
-        let schema = build_schema_helper(column_names, column_type_possibilities);
+        let schema = build_schema_helper(
+            column_names,
+            column_type_possibilities,
+            initial_records_to_read == 0,
+        );
         Ok((schema, total_records_read))
     }
 }
 
-fn build_schema_helper(names: Vec<String>, types: Vec<HashSet<DataType>>) -> Schema {
+fn build_schema_helper(
+    names: Vec<String>,
+    types: Vec<HashSet<DataType>>,
+    disable_inference: bool,
+) -> Schema {
     let fields = names
         .into_iter()
         .zip(types)
@@ -637,10 +646,17 @@ fn build_schema_helper(names: Vec<String>, types: Vec<HashSet<DataType>>) -> Sch
             data_type_possibilities.remove(&DataType::Null);
 
             match data_type_possibilities.len() {
-                // Return Null for columns with only nulls / empty files
-                // This allows schema merging to work when reading folders
-                // such files along with normal files.
-                0 => Field::new(field_name, DataType::Null, true),
+                // When no types were inferred (empty HashSet):
+                // - If schema_infer_max_rec was explicitly set to 0, return Utf8
+                // - Otherwise return Null (whether from reading null values or empty files)
+                //   This allows schema merging to work when reading folders with empty files
+                0 => {
+                    if disable_inference {
+                        Field::new(field_name, DataType::Utf8, true)
+                    } else {
+                        Field::new(field_name, DataType::Null, true)
+                    }
+                }
                 1 => Field::new(
                     field_name,
                     data_type_possibilities.iter().next().unwrap().clone(),
@@ -832,7 +848,7 @@ mod tests {
             HashSet::from([DataType::Utf8]), // col5
         ];
 
-        let schema = build_schema_helper(column_names, column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities, false);
 
         // Verify schema has 5 columns
         assert_eq!(schema.fields().len(), 5);
@@ -862,7 +878,7 @@ mod tests {
             HashSet::from([DataType::Utf8]),                     // Should remain Utf8
         ];
 
-        let schema = build_schema_helper(column_names, column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities, false);
 
         // col1 should be Float64 due to Int64 + Float64 = Float64
         assert_eq!(*schema.field(0).data_type(), DataType::Float64);
@@ -880,7 +896,7 @@ mod tests {
             HashSet::from([DataType::Boolean, DataType::Int64, DataType::Utf8]), // Should resolve to Utf8 due to conflicts
         ];
 
-        let schema = build_schema_helper(column_names, column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities, false);
 
         // Should default to Utf8 for conflicting types
         assert_eq!(*schema.field(0).data_type(), DataType::Utf8);
