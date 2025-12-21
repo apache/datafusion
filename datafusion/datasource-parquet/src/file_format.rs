@@ -545,7 +545,11 @@ impl FileFormat for ParquetFormat {
         // Convert ordering requirements to Parquet SortingColumns for file metadata
         let sorting_columns = if let Some(ref requirements) = order_requirements {
             let ordering: LexOrdering = requirements.clone().into();
-            Some(lex_ordering_to_sorting_columns(&ordering)?)
+            // In cases like `COPY (... ORDER BY ...) TO ...` the ORDER BY clause
+            // may not be compatible with Parquet sorting columns (e.g. ordering on `random()`).
+            // So if we cannot create a Parquet sorting column from the ordering requirement,
+            // we skip setting sorting columns on the Parquet sink.
+            lex_ordering_to_sorting_columns(&ordering).ok()
         } else {
             None
         };
