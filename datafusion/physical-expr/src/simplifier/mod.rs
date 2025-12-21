@@ -24,7 +24,6 @@ use std::sync::Arc;
 use crate::{PhysicalExpr, simplifier::not::simplify_not_expr};
 
 pub mod const_evaluator;
-pub mod is_null;
 pub mod not;
 pub mod unwrap_cast;
 
@@ -57,10 +56,9 @@ impl<'a> PhysicalExprSimplifier<'a> {
                 #[cfg(test)]
                 let original_type = node.data_type(schema).unwrap();
 
-                // Apply NOT expression simplification first, then IS NULL/IS NOT NULL simplification,
-                // then unwrap cast optimization, then constant expression evaluation
+                // Apply NOT expression simplification first, then unwrap cast optimization,
+                // then constant expression evaluation
                 let rewritten = simplify_not_expr(&node, schema)?
-                    .transform_data(|node| is_null::simplify_is_null_expr(&node))?
                     .transform_data(|node| {
                         unwrap_cast::unwrap_cast_in_comparison(node, schema)
                     })?
@@ -89,8 +87,7 @@ impl<'a> PhysicalExprSimplifier<'a> {
 mod tests {
     use super::*;
     use crate::expressions::{
-        BinaryExpr, CastExpr, IsNotNullExpr, IsNullExpr, Literal, NotExpr, TryCastExpr,
-        col, in_list, lit,
+        BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr, col, in_list, lit,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
@@ -613,53 +610,5 @@ mod tests {
             literal.value(),
             &ScalarValue::Utf8(Some("hello world".to_string()))
         );
-    }
-
-    #[test]
-    fn test_simplify_is_null_literal() -> Result<()> {
-        let schema = test_schema();
-        let simplifier = PhysicalExprSimplifier::new(&schema);
-
-        // IS NULL(1) -> false
-        let is_null_expr = Arc::new(IsNullExpr::new(lit(ScalarValue::Int32(Some(1)))));
-        let result = simplifier.simplify(is_null_expr)?;
-        assert_eq!(
-            as_literal(&result).value(),
-            &ScalarValue::Boolean(Some(false))
-        );
-
-        // IS NULL(NULL) -> true
-        let is_null_expr = Arc::new(IsNullExpr::new(lit(ScalarValue::Int32(None))));
-        let result = simplifier.simplify(is_null_expr)?;
-        assert_eq!(
-            as_literal(&result).value(),
-            &ScalarValue::Boolean(Some(true))
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_simplify_is_not_null_literal() -> Result<()> {
-        let schema = test_schema();
-        let simplifier = PhysicalExprSimplifier::new(&schema);
-
-        // IS NOT NULL(1) -> true
-        let expr = Arc::new(IsNotNullExpr::new(lit(ScalarValue::Int32(Some(1)))));
-        let result = simplifier.simplify(expr)?;
-        assert_eq!(
-            as_literal(&result).value(),
-            &ScalarValue::Boolean(Some(true))
-        );
-
-        // IS NOT NULL(NULL) -> false
-        let expr = Arc::new(IsNotNullExpr::new(lit(ScalarValue::Int32(None))));
-        let result = simplifier.simplify(expr)?;
-        assert_eq!(
-            as_literal(&result).value(),
-            &ScalarValue::Boolean(Some(false))
-        );
-
-        Ok(())
     }
 }
