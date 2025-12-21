@@ -198,7 +198,7 @@ async fn test_create_table_with_order_writes_sorting_columns() -> Result<()> {
     // Find the parquet file that was written
     let parquet_files: Vec<_> = std::fs::read_dir(&table_path)?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "parquet"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "parquet"))
         .collect();
 
     assert!(
