@@ -34,7 +34,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{BufferSpec, layout};
+use arrow::array::{Array, BinaryViewArray, BufferSpec, StringViewArray, layout};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::{
     MetadataVersion,
@@ -337,6 +337,97 @@ fn get_max_alignment_for_schema(schema: &Schema) -> usize {
         max_alignment = std::cmp::max(max_alignment, required_alignment);
     }
     max_alignment
+}
+
+#[cfg(test)]
+const VIEW_SIZE_BYTES: usize = 16;
+#[cfg(test)]
+const INLINE_THRESHOLD: usize = 12;
+
+/// Performs garbage collection on view arrays before spilling.
+pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+    let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
+    let mut any_gc_performed = false;
+
+    for array in batch.columns() {
+        let gc_array = match array.data_type() {
+            arrow::datatypes::DataType::Utf8View => {
+                let string_view = array
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .expect("Utf8View array should downcast to StringViewArray");
+                if should_gc_view_array(string_view.len(), string_view.data_buffers()) {
+                    any_gc_performed = true;
+                    Arc::new(string_view.gc()) as Arc<dyn Array>
+                } else {
+                    Arc::clone(array)
+                }
+            }
+            arrow::datatypes::DataType::BinaryView => {
+                let binary_view = array
+                    .as_any()
+                    .downcast_ref::<BinaryViewArray>()
+                    .expect("BinaryView array should downcast to BinaryViewArray");
+                if should_gc_view_array(binary_view.len(), binary_view.data_buffers()) {
+                    any_gc_performed = true;
+                    Arc::new(binary_view.gc()) as Arc<dyn Array>
+                } else {
+                    Arc::clone(array)
+                }
+            }
+            _ => Arc::clone(array),
+        };
+        new_columns.push(gc_array);
+    }
+
+    if any_gc_performed {
+        Ok(RecordBatch::try_new(batch.schema(), new_columns)?)
+    } else {
+        Ok(batch.clone())
+    }
+}
+
+fn should_gc_view_array(len: usize, data_buffers: &[arrow::buffer::Buffer]) -> bool {
+    if len < 10 {
+        return false;
+    }
+
+    let total_buffer_size: usize = data_buffers.iter().map(|b| b.capacity()).sum();
+    total_buffer_size > 0
+}
+
+#[cfg(test)]
+fn calculate_string_view_waste_ratio(array: &StringViewArray) -> f64 {
+    calculate_view_waste_ratio(array.len(), array.data_buffers(), |i| {
+        if !array.is_null(i) {
+            let value = array.value(i);
+            if value.len() > INLINE_THRESHOLD {
+                return value.len();
+            }
+        }
+        0
+    })
+}
+
+#[cfg(test)]
+fn calculate_view_waste_ratio<F>(
+    len: usize,
+    data_buffers: &[arrow::buffer::Buffer],
+    get_value_size: F,
+) -> f64
+where
+    F: Fn(usize) -> usize,
+{
+    let total_buffer_size: usize = data_buffers.iter().map(|b| b.capacity()).sum();
+    if total_buffer_size == 0 {
+        return 0.0;
+    }
+
+    let mut actual_used_size = (0..len).map(get_value_size).sum::<usize>();
+    actual_used_size += len * VIEW_SIZE_BYTES;
+
+    let waste = total_buffer_size.saturating_sub(actual_used_size);
+    waste as f64 / total_buffer_size as f64
 }
 
 #[cfg(test)]
@@ -862,6 +953,428 @@ mod tests {
         drop(spilled_file);
         assert_eq!(env.spilling_progress().active_files_count, 0);
         assert_eq!(env.spilling_progress().current_bytes, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_string_view_before_spill() -> Result<()> {
+        use arrow::array::StringViewArray;
+
+        let strings: Vec<String> = (0..1000)
+            .map(|i| {
+                if i % 2 == 0 {
+                    "short_string".to_string()
+                } else {
+                    "this_is_a_much_longer_string_that_will_not_be_inlined".to_string()
+                }
+            })
+            .collect();
+
+        let string_array = StringViewArray::from(strings);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "strings",
+            DataType::Utf8View,
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(string_array) as ArrayRef],
+        )?;
+        let sliced_batch = batch.slice(0, 100);
+        let gc_batch = gc_view_arrays(&sliced_batch)?;
+
+        assert_eq!(gc_batch.num_rows(), sliced_batch.num_rows());
+        assert_eq!(gc_batch.num_columns(), sliced_batch.num_columns());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_binary_view_before_spill() -> Result<()> {
+        use arrow::array::BinaryViewArray;
+
+        let binaries: Vec<Vec<u8>> = (0..1000)
+            .map(|i| {
+                if i % 2 == 0 {
+                    vec![1, 2, 3, 4]
+                } else {
+                    vec![1; 50]
+                }
+            })
+            .collect();
+
+        let binary_array =
+            BinaryViewArray::from_iter(binaries.iter().map(|b| Some(b.as_slice())));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "binaries",
+            DataType::BinaryView,
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(binary_array) as ArrayRef],
+        )?;
+        let sliced_batch = batch.slice(0, 100);
+        let gc_batch = gc_view_arrays(&sliced_batch)?;
+
+        assert_eq!(gc_batch.num_rows(), sliced_batch.num_rows());
+        assert_eq!(gc_batch.num_columns(), sliced_batch.num_columns());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_skips_small_arrays() -> Result<()> {
+        use arrow::array::StringViewArray;
+
+        let strings: Vec<String> = (0..10).map(|i| format!("string_{i}")).collect();
+
+        let string_array = StringViewArray::from(strings);
+        let array_ref: ArrayRef = Arc::new(string_array);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "strings",
+            DataType::Utf8View,
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array_ref])?;
+
+        // GC should return the original batch for small arrays
+        let gc_batch = gc_view_arrays(&batch)?;
+
+        // The batch should be unchanged (cloned, not GC'd)
+        assert_eq!(gc_batch.num_rows(), batch.num_rows());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_with_mixed_columns() -> Result<()> {
+        use arrow::array::{Int32Array, StringViewArray};
+
+        let strings: Vec<String> = (0..200)
+            .map(|i| format!("long_string_for_gc_testing_{i}"))
+            .collect();
+
+        let string_array = StringViewArray::from(strings);
+        let int_array = Int32Array::from((0..200).collect::<Vec<i32>>());
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("strings", DataType::Utf8View, false),
+            Field::new("ints", DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(string_array) as ArrayRef,
+                Arc::new(int_array) as ArrayRef,
+            ],
+        )?;
+
+        let sliced_batch = batch.slice(0, 50);
+        let gc_batch = gc_view_arrays(&sliced_batch)?;
+
+        assert_eq!(gc_batch.num_columns(), 2);
+        assert_eq!(gc_batch.num_rows(), 50);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_verify_gc_triggers_for_sliced_arrays() -> Result<()> {
+        let strings: Vec<String> = (0..1000)
+            .map(|i| {
+                format!(
+                    "http://example.com/very/long/path/that/exceeds/inline/threshold/{i}"
+                )
+            })
+            .collect();
+
+        let string_array = StringViewArray::from(strings);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "url",
+            DataType::Utf8View,
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(string_array.clone()) as ArrayRef],
+        )?;
+
+        let sliced = batch.slice(0, 100);
+
+        let sliced_array = sliced
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        let should_gc =
+            should_gc_view_array(sliced_array.len(), sliced_array.data_buffers());
+        let waste_ratio = calculate_string_view_waste_ratio(sliced_array);
+
+        assert!(
+            waste_ratio > 0.8,
+            "Waste ratio should be > 0.8 for sliced array"
+        );
+        assert!(
+            should_gc,
+            "GC should trigger for sliced array with high waste"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reproduce_issue_19414_string_view_spill_without_gc() -> Result<()> {
+        use arrow::array::StringViewArray;
+        use std::fs;
+
+        let num_rows = 5000;
+        let mut strings = Vec::with_capacity(num_rows);
+
+        for i in 0..num_rows {
+            let url = match i % 5 {
+                0 => format!(
+                    "http://irr.ru/index.php?showalbum/login-leniya7777294,938303130/{i}"
+                ),
+                1 => format!("http://komme%2F27.0.1453.116/very/long/path/{i}"),
+                2 => format!("https://produkty%2Fproduct/category/item/{i}"),
+                3 => format!(
+                    "http://irr.ru/index.php?showalbum/login-kapusta-advert2668/{i}"
+                ),
+                4 => format!(
+                    "http://irr.ru/index.php?showalbum/login-kapustic/product/{i}"
+                ),
+                _ => unreachable!(),
+            };
+            strings.push(url);
+        }
+
+        let string_array = StringViewArray::from(strings);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "URL",
+            DataType::Utf8View,
+            false,
+        )]));
+
+        let original_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(string_array.clone()) as ArrayRef],
+        )?;
+
+        let total_buffer_size: usize = string_array
+            .data_buffers()
+            .iter()
+            .map(|buffer| buffer.capacity())
+            .sum();
+
+        let mut sliced_batches = Vec::new();
+        let slice_size = 100;
+
+        for i in (0..num_rows).step_by(slice_size) {
+            let len = std::cmp::min(slice_size, num_rows - i);
+            let sliced = original_batch.slice(i, len);
+            sliced_batches.push(sliced);
+        }
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, schema);
+
+        let mut in_progress_file = spill_manager.create_in_progress_file("Test GC")?;
+
+        for batch in &sliced_batches {
+            in_progress_file.append_batch(batch)?;
+        }
+
+        let spill_file = in_progress_file.finish()?.unwrap();
+        let file_size = fs::metadata(spill_file.path())?.len() as usize;
+
+        let theoretical_without_gc = total_buffer_size * sliced_batches.len();
+        let reduction_percent = ((theoretical_without_gc - file_size) as f64
+            / theoretical_without_gc as f64)
+            * 100.0;
+
+        assert!(
+            reduction_percent > 80.0,
+            "GC should reduce spill file size by >80%, got {reduction_percent:.1}%"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_clickbench_issue_19414() -> Result<()> {
+        use arrow::array::StringViewArray;
+        use std::fs;
+
+        // Test for clickbench issue: 820MB -> 33MB spill reduction
+        let unique_urls = vec![
+            "http://irr.ru/index.php?showalbum/login-leniya7777294,938303130",
+            "http://komme%2F27.0.1453.116",
+            "https://produkty%2Fproduct",
+            "http://irr.ru/index.php?showalbum/login-kapusta-advert2668]=0&order_by=0",
+            "http://irr.ru/index.php?showalbum/login-kapustic/product_name",
+            "http://irr.ru/index.php",
+            "https://produkty%2F",
+            "http://irr.ru/index.php?showalbum/login",
+            "https://produkty/kurortmag",
+            "https://produkty%2Fpulove.ru/album/login",
+        ];
+
+        let mut urls = Vec::with_capacity(200_000);
+
+        // URL frequencies from bug report
+        for _ in 0..58976 {
+            urls.push(unique_urls[0].to_string());
+        }
+        for _ in 0..29585 {
+            urls.push(unique_urls[1].to_string());
+        }
+        for _ in 0..11464 {
+            urls.push(unique_urls[2].to_string());
+        }
+        for _ in 0..10480 {
+            urls.push(unique_urls[3].to_string());
+        }
+        for _ in 0..10128 {
+            urls.push(unique_urls[4].to_string());
+        }
+        for _ in 0..7758 {
+            urls.push(unique_urls[5].to_string());
+        }
+        for _ in 0..6649 {
+            urls.push(unique_urls[6].to_string());
+        }
+        for _ in 0..6141 {
+            urls.push(unique_urls[7].to_string());
+        }
+        for _ in 0..5764 {
+            urls.push(unique_urls[8].to_string());
+        }
+        for _ in 0..5495 {
+            urls.push(unique_urls[9].to_string());
+        }
+
+        while urls.len() < 200_000 {
+            urls.push(unique_urls[urls.len() % 10].to_string());
+        }
+
+        let string_array = StringViewArray::from(urls);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "URL",
+            DataType::Utf8View,
+            false,
+        )]));
+
+        let original_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(string_array.clone()) as ArrayRef],
+        )?;
+
+        // Simulate GROUP BY slices
+        let mut sliced_batches = Vec::new();
+        let total_rows = original_batch.num_rows();
+        let mut offset = 0;
+
+        let group_sizes = vec![
+            58976, 29585, 11464, 10480, 10128, 7758, 6649, 6141, 5764, 5495,
+        ];
+        for &size in &group_sizes {
+            if offset < total_rows {
+                let actual_size = std::cmp::min(size, total_rows - offset);
+                sliced_batches.push(original_batch.slice(offset, actual_size));
+                offset += actual_size;
+            }
+        }
+
+        // Small groups for remainder
+        while offset < total_rows {
+            let size = std::cmp::min(100, total_rows - offset);
+            sliced_batches.push(original_batch.slice(offset, size));
+            offset += size;
+        }
+
+        // Setup spill with GC
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, schema);
+
+        let mut in_progress_file = spill_manager.create_in_progress_file("Clickbench")?;
+        for batch in &sliced_batches {
+            in_progress_file.append_batch(batch)?;
+        }
+
+        let spill_file = in_progress_file.finish()?.unwrap();
+        let file_size_mb = fs::metadata(spill_file.path())?.len() as f64 / 1_048_576.0;
+
+        assert!(
+            file_size_mb < 50.0,
+            "Spill file should be <50MB (target 33MB), got {file_size_mb:.2}MB"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_spill_with_and_without_gc_comparison() -> Result<()> {
+        let num_rows = 2000;
+        let strings: Vec<String> = (0..num_rows)
+            .map(|i| {
+                format!(
+                    "http://example.com/this/is/a/long/url/path/that/wont/be/inlined/{i}"
+                )
+            })
+            .collect();
+
+        let string_array = StringViewArray::from(strings);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "url",
+            DataType::Utf8View,
+            false,
+        )]));
+
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(string_array) as ArrayRef])?;
+
+        let sliced_batch = batch.slice(0, 200);
+
+        let array_without_gc = sliced_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        let size_without_gc: usize = array_without_gc
+            .data_buffers()
+            .iter()
+            .map(|buffer| buffer.capacity())
+            .sum();
+
+        let gc_batch = gc_view_arrays(&sliced_batch)?;
+        let array_with_gc = gc_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        let size_with_gc: usize = array_with_gc
+            .data_buffers()
+            .iter()
+            .map(|buffer| buffer.capacity())
+            .sum();
+
+        let reduction_percent =
+            ((size_without_gc - size_with_gc) as f64 / size_without_gc as f64) * 100.0;
+
+        assert!(
+            reduction_percent > 85.0,
+            "Expected >85% reduction for 10% slice, got {reduction_percent:.1}%"
+        );
 
         Ok(())
     }
