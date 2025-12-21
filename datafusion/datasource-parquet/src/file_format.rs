@@ -34,7 +34,7 @@ use datafusion_datasource::write::{
     ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
 
-use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion_datasource::file_format::{FileFormat, FileFormatFactory, FileMeta};
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -54,11 +54,11 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
-use crate::metadata::DFParquetMetadata;
+use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
 use crate::source::{ParquetSource, parse_coerce_int96_string};
 use async_trait::async_trait;
@@ -81,7 +81,7 @@ use parquet::basic::Type;
 #[cfg(feature = "parquet_encryption")]
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ParquetMetaData, SortingColumn};
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::types::SchemaDescriptor;
@@ -449,6 +449,48 @@ impl FileFormat for ParquetFormat {
             .await
     }
 
+    async fn infer_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<Option<LexOrdering>> {
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)
+                .await?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata = DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties)
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_metadata()
+            .await?;
+        DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &table_schema)
+    }
+
+    async fn infer_stats_and_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<FileMeta> {
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)
+                .await?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let (statistics, ordering) = DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties)
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_statistics_and_ordering(&table_schema)
+            .await?;
+        Ok(FileMeta::new(statistics).with_ordering(ordering))
+    }
+
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
@@ -500,7 +542,18 @@ impl FileFormat for ParquetFormat {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
-        let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
+        // Convert ordering requirements to Parquet SortingColumns for file metadata
+        let sorting_columns = if let Some(ref requirements) = order_requirements {
+            let ordering: LexOrdering = requirements.clone().into();
+            Some(lex_ordering_to_sorting_columns(&ordering)?)
+        } else {
+            None
+        };
+
+        let sink = Arc::new(
+            ParquetSink::new(conf, self.options.clone())
+                .with_sorting_columns(sorting_columns),
+        );
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
@@ -1088,6 +1141,8 @@ pub struct ParquetSink {
     /// File metadata from successfully produced parquet files. The Mutex is only used
     /// to allow inserting to HashMap from behind borrowed reference in DataSink::write_all.
     written: Arc<parking_lot::Mutex<HashMap<Path, ParquetMetaData>>>,
+    /// Optional sorting columns to write to Parquet metadata
+    sorting_columns: Option<Vec<SortingColumn>>,
 }
 
 impl Debug for ParquetSink {
@@ -1119,7 +1174,17 @@ impl ParquetSink {
             config,
             parquet_options,
             written: Default::default(),
+            sorting_columns: None,
         }
+    }
+
+    /// Set sorting columns for the Parquet file metadata.
+    pub fn with_sorting_columns(
+        mut self,
+        sorting_columns: Option<Vec<SortingColumn>>,
+    ) -> Self {
+        self.sorting_columns = sorting_columns;
+        self
     }
 
     /// Retrieve the file metadata for the written files, keyed to the path
@@ -1145,6 +1210,12 @@ impl ParquetSink {
         }
 
         let mut builder = WriterPropertiesBuilder::try_from(&parquet_opts)?;
+
+        // Set sorting columns if configured
+        if let Some(ref sorting_columns) = self.sorting_columns {
+            builder = builder.set_sorting_columns(Some(sorting_columns.clone()));
+        }
+
         builder = set_writer_encryption_properties(
             builder,
             runtime,

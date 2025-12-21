@@ -22,6 +22,7 @@ use crate::{
     ObjectStoreFetch, apply_file_schema_type_coercions, coerce_int96_to_resolution,
 };
 use arrow::array::{ArrayRef, BooleanArray};
+use arrow::compute::SortOptions;
 use arrow::compute::and;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::sum;
@@ -33,6 +34,8 @@ use datafusion_common::{
 };
 use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::Accumulator;
 use log::debug;
 use object_store::path::Path;
@@ -41,6 +44,7 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+    SortingColumn,
 };
 use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
@@ -208,6 +212,26 @@ impl<'a> DFParquetMetadata<'a> {
         Self::statistics_from_parquet_metadata(&metadata, table_schema)
     }
 
+    /// Fetch both statistics and ordering from Parquet metadata in a single metadata fetch.
+    ///
+    /// This is more efficient than calling [`Self::fetch_statistics`] and then separately
+    /// extracting ordering, as it only fetches the metadata once.
+    ///
+    /// # Returns
+    /// A tuple of (Statistics, Option<LexOrdering>) where the ordering is `None` if:
+    /// - No row groups have sorting_columns
+    /// - Row groups have inconsistent sorting_columns
+    /// - Sorting columns cannot be mapped to the Arrow schema
+    pub async fn fetch_statistics_and_ordering(
+        &self,
+        table_schema: &SchemaRef,
+    ) -> Result<(Statistics, Option<LexOrdering>)> {
+        let metadata = self.fetch_metadata().await?;
+        let statistics = Self::statistics_from_parquet_metadata(&metadata, table_schema)?;
+        let ordering = Self::ordering_from_parquet_metadata(&metadata, table_schema)?;
+        Ok((statistics, ordering))
+    }
+
     /// Convert statistics in [`ParquetMetaData`] into [`Statistics`] using [`StatisticsConverter`]
     ///
     /// The statistics are calculated for each column in the table schema
@@ -373,6 +397,194 @@ impl<'a> DFParquetMetadata<'a> {
 
         Ok(statistics)
     }
+
+    /// Extract LexOrdering from Parquet sorting_columns metadata.
+    ///
+    /// Returns `Ok(None)` if:
+    /// - No row groups exist
+    /// - No row group has sorting_columns
+    /// - Row groups have inconsistent sorting_columns
+    /// - A sorting column cannot be mapped to the Arrow schema
+    ///
+    /// # Arguments
+    /// * `metadata` - The Parquet file metadata
+    /// * `arrow_schema` - The Arrow schema to map column indices to
+    pub(crate) fn ordering_from_parquet_metadata(
+        metadata: &ParquetMetaData,
+        arrow_schema: &SchemaRef,
+    ) -> Result<Option<LexOrdering>> {
+        let row_groups = metadata.row_groups();
+        if row_groups.is_empty() {
+            return Ok(None);
+        }
+
+        // Get sorting_columns from first row group
+        let first_sorting = match row_groups[0].sorting_columns() {
+            Some(cols) if !cols.is_empty() => cols,
+            _ => return Ok(None),
+        };
+
+        // Verify all row groups have identical sorting_columns
+        for rg in &row_groups[1..] {
+            match rg.sorting_columns() {
+                Some(cols) if cols == first_sorting => {}
+                _ => {
+                    debug!(
+                        "Row groups have inconsistent sorting_columns, treating as unordered"
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+
+        // Get the Parquet schema descriptor for column name lookup
+        let file_metadata = metadata.file_metadata();
+        let parquet_schema = file_metadata.schema_descr();
+
+        // Convert Parquet schema to Arrow schema for column mapping
+        let parquet_arrow_schema =
+            parquet_to_arrow_schema(parquet_schema, file_metadata.key_value_metadata())?;
+
+        // Convert each SortingColumn to PhysicalSortExpr
+        let sort_exprs: Vec<PhysicalSortExpr> = first_sorting
+            .iter()
+            .filter_map(|sorting_col| {
+                sorting_column_to_sort_expr(
+                    sorting_col,
+                    parquet_schema,
+                    &parquet_arrow_schema,
+                    arrow_schema,
+                )
+                .ok()
+                .flatten()
+            })
+            .collect();
+
+        // If we couldn't map any columns, return None
+        if sort_exprs.is_empty() {
+            return Ok(None);
+        }
+
+        // If we couldn't map all columns, the ordering is incomplete
+        // Only return the ordering if we mapped all sorting columns
+        if sort_exprs.len() != first_sorting.len() {
+            debug!(
+                "Could only map {}/{} sorting columns to Arrow schema",
+                sort_exprs.len(),
+                first_sorting.len()
+            );
+            return Ok(None);
+        }
+
+        Ok(LexOrdering::new(sort_exprs))
+    }
+}
+
+/// Convert a Parquet SortingColumn to a PhysicalSortExpr.
+///
+/// Returns `Ok(None)` if the column cannot be mapped to the Arrow schema.
+fn sorting_column_to_sort_expr(
+    sorting_col: &SortingColumn,
+    parquet_schema: &SchemaDescriptor,
+    parquet_arrow_schema: &Schema,
+    arrow_schema: &SchemaRef,
+) -> Result<Option<PhysicalSortExpr>> {
+    let column_idx = sorting_col.column_idx as usize;
+
+    // Get the column path from the Parquet schema
+    // The column_idx in SortingColumn refers to leaf columns
+    if column_idx >= parquet_schema.num_columns() {
+        debug!(
+            "SortingColumn column_idx {} out of bounds (schema has {} columns)",
+            column_idx,
+            parquet_schema.num_columns()
+        );
+        return Ok(None);
+    }
+
+    let parquet_column_desc = parquet_schema.column(column_idx);
+    let column_path = parquet_column_desc.path().string();
+
+    // Find the corresponding field in the Parquet-derived Arrow schema
+    let parquet_arrow_field_idx = parquet_arrow_schema
+        .fields()
+        .iter()
+        .position(|f| f.name() == &column_path);
+
+    let arrow_field_name = match parquet_arrow_field_idx {
+        Some(idx) => parquet_arrow_schema.field(idx).name().clone(),
+        None => {
+            // For nested columns, the path might be different
+            // Try to find by the last component of the path
+            let last_component =
+                column_path.split('.').next_back().unwrap_or(&column_path);
+            if let Ok(field) = parquet_arrow_schema.field_with_name(last_component) {
+                field.name().clone()
+            } else {
+                debug!(
+                    "Could not find Arrow field for Parquet column path: {column_path}"
+                );
+                return Ok(None);
+            }
+        }
+    };
+
+    // Find the field index in the target Arrow schema
+    let arrow_field_idx = match arrow_schema.index_of(&arrow_field_name) {
+        Ok(idx) => idx,
+        Err(_) => {
+            debug!(
+                "Column '{arrow_field_name}' from Parquet sorting_columns not found in Arrow schema"
+            );
+            return Ok(None);
+        }
+    };
+
+    // Create the Column expression
+    let column_expr = Arc::new(Column::new(&arrow_field_name, arrow_field_idx));
+
+    // Create the sort options
+    let sort_options = SortOptions {
+        descending: sorting_col.descending,
+        nulls_first: sorting_col.nulls_first,
+    };
+
+    Ok(Some(PhysicalSortExpr::new(column_expr, sort_options)))
+}
+
+/// Convert a PhysicalSortExpr to a Parquet SortingColumn.
+///
+/// Returns `Err` if the expression is not a simple column reference,
+/// since Parquet's SortingColumn only supports column indices.
+pub(crate) fn sort_expr_to_sorting_column(
+    sort_expr: &PhysicalSortExpr,
+) -> Result<SortingColumn> {
+    let column = sort_expr
+        .expr
+        .as_any()
+        .downcast_ref::<Column>()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Parquet sorting_columns only supports simple column references, \
+                 but got expression: {}",
+                sort_expr.expr
+            ))
+        })?;
+
+    Ok(SortingColumn {
+        column_idx: column.index() as i32,
+        descending: sort_expr.options.descending,
+        nulls_first: sort_expr.options.nulls_first,
+    })
+}
+
+/// Convert a LexOrdering to Vec<SortingColumn> for Parquet.
+///
+/// Returns `Err` if any expression is not a simple column reference.
+pub(crate) fn lex_ordering_to_sorting_columns(
+    ordering: &LexOrdering,
+) -> Result<Vec<SortingColumn>> {
+    ordering.iter().map(sort_expr_to_sorting_column).collect()
 }
 
 /// Min/max aggregation can take Dictionary encode input but always produces unpacked
@@ -617,8 +829,330 @@ impl FileMetadata for CachedParquetMetaData {
 mod tests {
     use super::*;
     use arrow::array::{ArrayRef, BooleanArray, Int32Array};
+    use arrow::datatypes::Field;
     use datafusion_common::ScalarValue;
+    use parquet::basic::Type;
+    use parquet::file::metadata::{
+        ColumnChunkMetaData, FileMetaData, ParquetMetaDataBuilder, RowGroupMetaData,
+    };
+    use parquet::schema::types::SchemaDescriptor;
+    use parquet::schema::types::Type as SchemaType;
     use std::sync::Arc;
+
+    /// Create a test Parquet schema descriptor with given column names (all INT32)
+    fn create_test_schema_descr(column_names: &[&str]) -> Arc<SchemaDescriptor> {
+        let fields: Vec<Arc<SchemaType>> = column_names
+            .iter()
+            .map(|name| {
+                Arc::new(
+                    SchemaType::primitive_type_builder(name, Type::INT32)
+                        .build()
+                        .unwrap(),
+                )
+            })
+            .collect();
+
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(fields)
+            .build()
+            .unwrap();
+
+        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    /// Create a test Arrow schema with given column names (all Int32)
+    fn create_test_arrow_schema(column_names: &[&str]) -> SchemaRef {
+        let fields: Vec<Field> = column_names
+            .iter()
+            .map(|name| Field::new(*name, DataType::Int32, true))
+            .collect();
+        Arc::new(Schema::new(fields))
+    }
+
+    /// Create a RowGroupMetaData with the given sorting columns
+    fn create_row_group_with_sorting(
+        schema_descr: &Arc<SchemaDescriptor>,
+        sorting_columns: Option<Vec<SortingColumn>>,
+        num_rows: i64,
+    ) -> RowGroupMetaData {
+        let columns: Vec<ColumnChunkMetaData> = schema_descr
+            .columns()
+            .iter()
+            .map(|col| ColumnChunkMetaData::builder(col.clone()).build().unwrap())
+            .collect();
+
+        let mut builder = RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(num_rows)
+            .set_column_metadata(columns);
+
+        if let Some(sorting) = sorting_columns {
+            builder = builder.set_sorting_columns(Some(sorting));
+        }
+
+        builder.build().unwrap()
+    }
+
+    /// Create a ParquetMetaData with given row groups
+    fn create_parquet_metadata(
+        schema_descr: Arc<SchemaDescriptor>,
+        row_groups: Vec<RowGroupMetaData>,
+    ) -> ParquetMetaData {
+        let file_metadata = FileMetaData::new(
+            1,                                                      // version
+            row_groups.iter().map(|rg| rg.num_rows()).sum::<i64>(), // num_rows
+            None,                                                   // created_by
+            None,                                                   // key_value_metadata
+            schema_descr,                                           // schema_descr
+            None,                                                   // column_orders
+        );
+
+        ParquetMetaDataBuilder::new(file_metadata)
+            .set_row_groups(row_groups)
+            .build()
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_single_row_group_with_sorting() {
+        // Single row group with sorting_columns [a ASC NULLS FIRST, b DESC NULLS LAST]
+        let schema_descr = create_test_schema_descr(&["a", "b", "c"]);
+        let arrow_schema = create_test_arrow_schema(&["a", "b", "c"]);
+
+        let sorting_columns = vec![
+            SortingColumn {
+                column_idx: 0,
+                descending: false,
+                nulls_first: true,
+            }, // a ASC NULLS FIRST
+            SortingColumn {
+                column_idx: 1,
+                descending: true,
+                nulls_first: false,
+            }, // b DESC NULLS LAST
+        ];
+
+        let row_group =
+            create_row_group_with_sorting(&schema_descr, Some(sorting_columns), 1000);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert!(result.is_some());
+        let ordering = result.unwrap();
+        assert_eq!(ordering.len(), 2);
+
+        // Check first sort expr (a ASC NULLS FIRST)
+        let expr0 = &ordering[0];
+        assert_eq!(expr0.expr.to_string(), "a@0");
+        assert!(!expr0.options.descending);
+        assert!(expr0.options.nulls_first);
+
+        // Check second sort expr (b DESC NULLS LAST)
+        let expr1 = &ordering[1];
+        assert_eq!(expr1.expr.to_string(), "b@1");
+        assert!(expr1.options.descending);
+        assert!(!expr1.options.nulls_first);
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_multiple_row_groups_identical_sorting() {
+        // Multiple row groups with identical sorting_columns
+        let schema_descr = create_test_schema_descr(&["a", "b"]);
+        let arrow_schema = create_test_arrow_schema(&["a", "b"]);
+
+        let sorting_columns = vec![SortingColumn {
+            column_idx: 0,
+            descending: false,
+            nulls_first: true,
+        }]; // a ASC NULLS FIRST
+
+        let row_group1 = create_row_group_with_sorting(
+            &schema_descr,
+            Some(sorting_columns.clone()),
+            500,
+        );
+        let row_group2 = create_row_group_with_sorting(
+            &schema_descr,
+            Some(sorting_columns.clone()),
+            500,
+        );
+        let row_group3 =
+            create_row_group_with_sorting(&schema_descr, Some(sorting_columns), 500);
+
+        let metadata = create_parquet_metadata(
+            schema_descr,
+            vec![row_group1, row_group2, row_group3],
+        );
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert!(result.is_some());
+        let ordering = result.unwrap();
+        assert_eq!(ordering.len(), 1);
+
+        let expr0 = &ordering[0];
+        assert_eq!(expr0.expr.to_string(), "a@0");
+        assert!(!expr0.options.descending);
+        assert!(expr0.options.nulls_first);
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_multiple_row_groups_different_sorting() {
+        // Multiple row groups with DIFFERENT sorting_columns → should return None
+        let schema_descr = create_test_schema_descr(&["a", "b"]);
+        let arrow_schema = create_test_arrow_schema(&["a", "b"]);
+
+        let sorting1 = vec![SortingColumn {
+            column_idx: 0,
+            descending: false,
+            nulls_first: true,
+        }]; // a ASC
+        let sorting2 = vec![SortingColumn {
+            column_idx: 1,
+            descending: false,
+            nulls_first: true,
+        }]; // b ASC (different column)
+
+        let row_group1 =
+            create_row_group_with_sorting(&schema_descr, Some(sorting1), 500);
+        let row_group2 =
+            create_row_group_with_sorting(&schema_descr, Some(sorting2), 500);
+
+        let metadata =
+            create_parquet_metadata(schema_descr, vec![row_group1, row_group2]);
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_no_row_groups() {
+        // No row groups → should return None
+        let schema_descr = create_test_schema_descr(&["a", "b"]);
+        let arrow_schema = create_test_arrow_schema(&["a", "b"]);
+
+        let metadata = create_parquet_metadata(schema_descr, vec![]);
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_no_sorting_columns() {
+        // Row groups with no sorting_columns → should return None
+        let schema_descr = create_test_schema_descr(&["a", "b"]);
+        let arrow_schema = create_test_arrow_schema(&["a", "b"]);
+
+        let row_group = create_row_group_with_sorting(&schema_descr, None, 1000);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_empty_sorting_columns() {
+        // Row groups with empty sorting_columns vector → should return None
+        let schema_descr = create_test_schema_descr(&["a", "b"]);
+        let arrow_schema = create_test_arrow_schema(&["a", "b"]);
+
+        let row_group = create_row_group_with_sorting(&schema_descr, Some(vec![]), 1000);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_column_index_out_of_bounds() {
+        // Sorting column index references a non-existent column → should return None
+        let schema_descr = create_test_schema_descr(&["a", "b"]);
+        let arrow_schema = create_test_arrow_schema(&["a", "b"]);
+
+        // Column index 5 doesn't exist (only 0 and 1 are valid)
+        let sorting_columns = vec![SortingColumn {
+            column_idx: 5,
+            descending: false,
+            nulls_first: true,
+        }];
+
+        let row_group =
+            create_row_group_with_sorting(&schema_descr, Some(sorting_columns), 1000);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_column_not_in_arrow_schema() {
+        // Parquet has more columns than Arrow schema
+        // If sorting references a column not in Arrow schema, should return None
+        let schema_descr = create_test_schema_descr(&["a", "b", "c"]);
+        // Arrow schema only has "a" and "b", not "c"
+        let arrow_schema = create_test_arrow_schema(&["a", "b"]);
+
+        // Sort by column "c" (index 2 in Parquet)
+        let sorting_columns = vec![SortingColumn {
+            column_idx: 2,
+            descending: false,
+            nulls_first: true,
+        }];
+
+        let row_group =
+            create_row_group_with_sorting(&schema_descr, Some(sorting_columns), 1000);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        // Column "c" is not in Arrow schema, so ordering should be None
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_ordering_from_parquet_metadata_first_has_sorting_second_has_none() {
+        // First row group has sorting, second has None → should return None
+        let schema_descr = create_test_schema_descr(&["a", "b"]);
+        let arrow_schema = create_test_arrow_schema(&["a", "b"]);
+
+        let sorting = vec![SortingColumn {
+            column_idx: 0,
+            descending: false,
+            nulls_first: true,
+        }];
+
+        let row_group1 = create_row_group_with_sorting(&schema_descr, Some(sorting), 500);
+        let row_group2 = create_row_group_with_sorting(&schema_descr, None, 500);
+
+        let metadata =
+            create_parquet_metadata(schema_descr, vec![row_group1, row_group2]);
+
+        let result =
+            DFParquetMetadata::ordering_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert!(result.is_none());
+    }
 
     #[test]
     fn test_has_any_exact_match() {
@@ -665,5 +1199,102 @@ mod tests {
             let result = has_any_exact_match(&computed_max, &row_group_maxes, &exactness);
             assert_eq!(result, Some(false));
         }
+    }
+
+    #[test]
+    fn test_sort_expr_to_sorting_column_asc_nulls_first() {
+        use super::sort_expr_to_sorting_column;
+
+        let column = Arc::new(Column::new("a", 0));
+        let sort_expr = PhysicalSortExpr::new(
+            column,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        );
+
+        let result = sort_expr_to_sorting_column(&sort_expr).unwrap();
+
+        assert_eq!(result.column_idx, 0);
+        assert!(!result.descending);
+        assert!(result.nulls_first);
+    }
+
+    #[test]
+    fn test_sort_expr_to_sorting_column_desc_nulls_last() {
+        use super::sort_expr_to_sorting_column;
+
+        let column = Arc::new(Column::new("b", 5));
+        let sort_expr = PhysicalSortExpr::new(
+            column,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        );
+
+        let result = sort_expr_to_sorting_column(&sort_expr).unwrap();
+
+        assert_eq!(result.column_idx, 5);
+        assert!(result.descending);
+        assert!(!result.nulls_first);
+    }
+
+    #[test]
+    fn test_sort_expr_to_sorting_column_non_column_expr() {
+        use super::sort_expr_to_sorting_column;
+        use datafusion_common::ScalarValue;
+        use datafusion_physical_expr::expressions::Literal;
+
+        // Create a non-column expression (a literal)
+        let literal = Arc::new(Literal::new(ScalarValue::Int32(Some(42))));
+        let sort_expr = PhysicalSortExpr::new(literal, SortOptions::default());
+
+        let result = sort_expr_to_sorting_column(&sort_expr);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("only supports simple column references"),
+            "Expected error about column references, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_lex_ordering_to_sorting_columns() {
+        use super::lex_ordering_to_sorting_columns;
+
+        let col_a = Arc::new(Column::new("a", 0));
+        let col_b = Arc::new(Column::new("b", 1));
+
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new(
+                col_a,
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            ),
+            PhysicalSortExpr::new(
+                col_b,
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+        ])
+        .unwrap();
+
+        let result = lex_ordering_to_sorting_columns(&ordering).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].column_idx, 0);
+        assert!(!result[0].descending);
+        assert!(result[0].nulls_first);
+        assert_eq!(result[1].column_idx, 1);
+        assert!(result[1].descending);
+        assert!(!result[1].nulls_first);
     }
 }

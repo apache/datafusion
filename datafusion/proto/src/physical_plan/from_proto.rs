@@ -616,30 +616,33 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
-        Ok(PartitionedFile {
-            object_meta: ObjectMeta {
-                location: Path::parse(val.path.as_str()).map_err(|e| {
-                    proto_error(format!("Invalid object_store path: {e}"))
-                })?,
-                last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
-                size: val.size,
-                e_tag: None,
-                version: None,
-            },
-            partition_values: val
-                .partition_values
+        let range = val.range.as_ref().map(|v| (v.start, v.end));
+        let statistics = val
+            .statistics
+            .as_ref()
+            .map(|v| v.try_into().map(Arc::new))
+            .transpose()?;
+        let mut file = PartitionedFile::new_from_meta(ObjectMeta {
+            location: Path::parse(val.path.as_str())
+                .map_err(|e| proto_error(format!("Invalid object_store path: {e}")))?,
+            last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
+            size: val.size,
+            e_tag: None,
+            version: None,
+        })
+        .with_partition_values(
+            val.partition_values
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            range: val.range.as_ref().map(|v| v.try_into()).transpose()?,
-            statistics: val
-                .statistics
-                .as_ref()
-                .map(|v| v.try_into().map(Arc::new))
-                .transpose()?,
-            extensions: None,
-            metadata_size_hint: None,
-        })
+        );
+        if let Some((start, end)) = range {
+            file = file.with_range(start, end);
+        }
+        if let Some(statistics) = statistics {
+            file = file.with_statistics(statistics);
+        }
+        Ok(file)
     }
 }
 
@@ -754,20 +757,13 @@ mod tests {
     #[test]
     fn partitioned_file_path_roundtrip_percent_encoded() {
         let path_str = "foo/foo%2Fbar/baz%252Fqux";
-        let pf = PartitionedFile {
-            object_meta: ObjectMeta {
-                location: Path::parse(path_str).unwrap(),
-                last_modified: Utc.timestamp_nanos(1_000),
-                size: 42,
-                e_tag: None,
-                version: None,
-            },
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
+        let pf = PartitionedFile::new_from_meta(ObjectMeta {
+            location: Path::parse(path_str).unwrap(),
+            last_modified: Utc.timestamp_nanos(1_000),
+            size: 42,
+            e_tag: None,
+            version: None,
+        });
 
         let proto = protobuf::PartitionedFile::try_from(&pf).unwrap();
         assert_eq!(proto.path, path_str);

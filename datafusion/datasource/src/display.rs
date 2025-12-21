@@ -293,6 +293,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            ordering: None,
             metadata_size_hint: None,
         }
     }

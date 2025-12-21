@@ -392,7 +392,34 @@ impl FileScanConfigBuilder {
     }
 
     /// Set the output ordering of the files
+    ///
+    /// If files have orderings defined (e.g., from Parquet metadata), this method
+    /// validates that the provided output_ordering is compatible with the file orderings.
+    /// A warning is logged if there's a mismatch, but the provided ordering is still used.
     pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
+        // Check if files have orderings defined.
+        // If the files have no ordering, use the provided output_ordering.
+        // If they do have ordering, validate compatibility and log a warning if mismatched.
+        if !output_ordering.is_empty() {
+            for group in self.file_groups.iter() {
+                for file in group.iter() {
+                    if let Some(file_ordering) = &file.ordering {
+                        // Check if any of the output orderings is compatible with file ordering
+                        let compatible = output_ordering
+                            .iter()
+                            .any(|oo| is_ordering_compatible(oo, file_ordering));
+                        if !compatible {
+                            log::warn!(
+                                "Output ordering {:?} may not be compatible with file ordering {:?} for file {}",
+                                output_ordering,
+                                file_ordering,
+                                file.object_meta.location
+                            );
+                        }
+                    }
+                }
+            }
+        }
         self.output_ordering = output_ordering;
         self
     }
@@ -1337,6 +1364,37 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
 }
 
+/// Checks if a user-specified output ordering is compatible with a file's ordering.
+///
+/// An output ordering is considered compatible with a file ordering if:
+/// - The output ordering is a prefix of the file ordering, or
+/// - The output ordering equals the file ordering
+///
+/// For example, if a file has ordering `[a ASC, b ASC, c ASC]`:
+/// - `[a ASC]` is compatible (prefix)
+/// - `[a ASC, b ASC]` is compatible (prefix)
+/// - `[a ASC, b ASC, c ASC]` is compatible (equal)
+/// - `[a ASC, b DESC]` is NOT compatible (different sort direction)
+/// - `[b ASC]` is NOT compatible (not a prefix)
+fn is_ordering_compatible(
+    output_ordering: &LexOrdering,
+    file_ordering: &LexOrdering,
+) -> bool {
+    // Output ordering must not be longer than file ordering
+    if output_ordering.len() > file_ordering.len() {
+        return false;
+    }
+
+    // Check that each element of output_ordering matches the corresponding element in file_ordering
+    for (output_expr, file_expr) in output_ordering.iter().zip(file_ordering.iter()) {
+        if output_expr != file_expr {
+            return false;
+        }
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1695,6 +1753,7 @@ mod tests {
                             })
                             .collect::<Vec<_>>(),
                     })),
+                    ordering: None,
                     extensions: None,
                     metadata_size_hint: None,
                 }
@@ -2304,6 +2363,125 @@ mod tests {
                 assert_eq!(col_names, vec!["year", "month"]);
             }
             _ => panic!("Expected Hash partitioning"),
+        }
+    }
+
+    // Tests for is_ordering_compatible
+    // Note: LexOrdering is non-degenerate (always has at least one element),
+    // so we don't need to test empty orderings.
+    mod ordering_compatibility_tests {
+        use super::*;
+        use arrow::compute::SortOptions;
+
+        /// Helper to create a PhysicalSortExpr
+        fn sort_expr(
+            name: &str,
+            idx: usize,
+            descending: bool,
+            nulls_first: bool,
+        ) -> PhysicalSortExpr {
+            PhysicalSortExpr::new(
+                Arc::new(Column::new(name, idx)),
+                SortOptions {
+                    descending,
+                    nulls_first,
+                },
+            )
+        }
+
+        /// Helper to create a non-empty LexOrdering (unwraps the Option)
+        fn lex_ordering(exprs: Vec<PhysicalSortExpr>) -> LexOrdering {
+            LexOrdering::new(exprs).expect("expected non-empty ordering")
+        }
+
+        #[test]
+        fn test_is_ordering_compatible_equal_orderings() {
+            // Equal orderings should be compatible
+            let output = lex_ordering(vec![
+                sort_expr("a", 0, false, true),
+                sort_expr("b", 1, true, false),
+            ]);
+            let file = lex_ordering(vec![
+                sort_expr("a", 0, false, true),
+                sort_expr("b", 1, true, false),
+            ]);
+
+            assert!(is_ordering_compatible(&output, &file));
+        }
+
+        #[test]
+        fn test_is_ordering_compatible_output_is_prefix() {
+            // Output ordering is prefix of file ordering → compatible
+            let output = lex_ordering(vec![sort_expr("a", 0, false, true)]);
+            let file = lex_ordering(vec![
+                sort_expr("a", 0, false, true),
+                sort_expr("b", 1, true, false),
+            ]);
+
+            assert!(is_ordering_compatible(&output, &file));
+        }
+
+        #[test]
+        fn test_is_ordering_compatible_output_longer() {
+            // Output ordering longer than file ordering → not compatible
+            let output = lex_ordering(vec![
+                sort_expr("a", 0, false, true),
+                sort_expr("b", 1, true, false),
+                sort_expr("c", 2, false, true),
+            ]);
+            let file = lex_ordering(vec![
+                sort_expr("a", 0, false, true),
+                sort_expr("b", 1, true, false),
+            ]);
+
+            assert!(!is_ordering_compatible(&output, &file));
+        }
+
+        #[test]
+        fn test_is_ordering_compatible_different_direction() {
+            // Different sort direction → not compatible
+            let output = lex_ordering(vec![
+                sort_expr("a", 0, false, true), // ASC
+            ]);
+            let file = lex_ordering(vec![
+                sort_expr("a", 0, true, true), // DESC
+            ]);
+
+            assert!(!is_ordering_compatible(&output, &file));
+        }
+
+        #[test]
+        fn test_is_ordering_compatible_different_nulls() {
+            // Different nulls_first → not compatible
+            let output = lex_ordering(vec![
+                sort_expr("a", 0, false, true), // NULLS FIRST
+            ]);
+            let file = lex_ordering(vec![
+                sort_expr("a", 0, false, false), // NULLS LAST
+            ]);
+
+            assert!(!is_ordering_compatible(&output, &file));
+        }
+
+        #[test]
+        fn test_is_ordering_compatible_different_columns() {
+            // Different columns → not compatible
+            let output = lex_ordering(vec![sort_expr("a", 0, false, true)]);
+            let file = lex_ordering(vec![sort_expr("b", 1, false, true)]);
+
+            assert!(!is_ordering_compatible(&output, &file));
+        }
+
+        #[test]
+        fn test_is_ordering_compatible_different_column_indices() {
+            // Same column name but different indices → not compatible
+            // (Column expressions with same name but different indices are not equal)
+            let output = lex_ordering(vec![sort_expr("a", 0, false, true)]);
+            let file = lex_ordering(vec![
+                sort_expr("a", 1, false, true), // Different index
+            ]);
+
+            assert!(!is_ordering_compatible(&output, &file));
         }
     }
 }

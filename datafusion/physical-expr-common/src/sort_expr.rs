@@ -458,6 +458,21 @@ impl LexOrdering {
         })
     }
 
+    /// Checks if `other` is a prefix of this `LexOrdering`.
+    pub fn is_prefix(&self, other: &LexOrdering) -> bool {
+        let self_exprs = self.as_ref();
+        let other_exprs = other.as_ref();
+
+        if other_exprs.len() > self_exprs.len() {
+            return false;
+        }
+
+        other_exprs
+            .iter()
+            .zip(self_exprs.iter())
+            .all(|(req, cur)| req.expr.eq(&cur.expr) && req.options == cur.options)
+    }
+
     /// Returns the sort options for the given expression if one is defined in this `LexOrdering`.
     pub fn get_sort_options(&self, expr: &dyn PhysicalExpr) -> Option<SortOptions> {
         for e in self {
@@ -803,6 +818,130 @@ impl DerefMut for OrderingRequirements {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::{DataType, FieldRef, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::Result;
+    use datafusion_expr_common::columnar_value::ColumnarValue;
+    use std::any::Any;
+    use std::fmt::{Display, Formatter};
+
+    /// A simple mock PhysicalExpr for testing, identified by name.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct TestExpr {
+        name: &'static str,
+    }
+
+    impl TestExpr {
+        fn new_expr(name: &'static str) -> Arc<dyn PhysicalExpr> {
+            Arc::new(Self { name })
+        }
+    }
+
+    impl Display for TestExpr {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.name)
+        }
+    }
+
+    impl PhysicalExpr for TestExpr {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+
+        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+            Ok(true)
+        }
+
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+            unimplemented!("TestExpr::evaluate is not needed for sort tests")
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.name)
+        }
+
+        fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
+            unimplemented!("TestExpr::return_field is not needed for sort tests")
+        }
+    }
+
+    /// Helper to create a PhysicalSortExpr with the given expression and options.
+    fn sort_expr(expr: Arc<dyn PhysicalExpr>, options: SortOptions) -> PhysicalSortExpr {
+        PhysicalSortExpr::new(expr, options)
+    }
+
+    #[test]
+    fn test_is_prefix() {
+        let asc = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+
+        let a = TestExpr::new_expr("a");
+        let b = TestExpr::new_expr("b");
+        let c = TestExpr::new_expr("c");
+
+        // [a ASC] is a prefix of [a ASC] (exact match)
+        let ordering1 = LexOrdering::new([sort_expr(Arc::clone(&a), asc)]).unwrap();
+        let ordering2 = LexOrdering::new([sort_expr(Arc::clone(&a), asc)]).unwrap();
+        assert!(ordering1.is_prefix(&ordering2));
+
+        // [a ASC] is a prefix of [a ASC, b DESC]
+        let ordering_ab = LexOrdering::new([
+            sort_expr(Arc::clone(&a), asc),
+            sort_expr(Arc::clone(&b), desc),
+        ])
+        .unwrap();
+        assert!(ordering_ab.is_prefix(&ordering1));
+
+        // [a ASC, b DESC] is NOT a prefix of [a ASC] (other is longer)
+        assert!(!ordering1.is_prefix(&ordering_ab));
+
+        // [a DESC] is NOT a prefix of [a ASC] (different sort options)
+        let ordering_a_desc =
+            LexOrdering::new([sort_expr(Arc::clone(&a), desc)]).unwrap();
+        assert!(!ordering1.is_prefix(&ordering_a_desc));
+
+        // [b ASC] is NOT a prefix of [a ASC] (different expressions)
+        let ordering_b = LexOrdering::new([sort_expr(Arc::clone(&b), asc)]).unwrap();
+        assert!(!ordering1.is_prefix(&ordering_b));
+
+        // [a ASC, b ASC] is a prefix of [a ASC, b ASC, c ASC]
+        let ordering_ab_asc = LexOrdering::new([
+            sort_expr(Arc::clone(&a), asc),
+            sort_expr(Arc::clone(&b), asc),
+        ])
+        .unwrap();
+        let ordering_abc = LexOrdering::new([
+            sort_expr(Arc::clone(&a), asc),
+            sort_expr(Arc::clone(&b), asc),
+            sort_expr(Arc::clone(&c), asc),
+        ])
+        .unwrap();
+        assert!(ordering_abc.is_prefix(&ordering_ab_asc));
+
+        // [a ASC, b DESC] is NOT a prefix of [a ASC, b ASC, c ASC] (mismatch in middle)
+        assert!(!ordering_abc.is_prefix(&ordering_ab));
+    }
 
     #[test]
     fn test_is_reversed_sort_options() {

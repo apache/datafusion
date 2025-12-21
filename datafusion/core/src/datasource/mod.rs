@@ -113,14 +113,7 @@ mod tests {
             version: None,
         };
 
-        let partitioned_file = PartitionedFile {
-            object_meta: meta,
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
+        let partitioned_file = PartitionedFile::new_from_meta(meta);
 
         let f1 = Field::new("id", DataType::Int32, true);
         let f2 = Field::new("extra_column", DataType::Utf8, true);

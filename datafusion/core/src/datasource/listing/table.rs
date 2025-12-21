@@ -347,7 +347,7 @@ mod tests {
             let table =
                 ListingTable::try_new(config.clone()).expect("Creating the table");
             let ordering_result =
-                table.try_create_output_ordering(state.execution_props());
+                table.try_create_output_ordering(state.execution_props(), &[]);
 
             match (expected_result, ordering_result) {
                 (Ok(expected), Ok(result)) => {

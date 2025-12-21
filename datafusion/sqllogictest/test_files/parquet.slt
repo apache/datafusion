@@ -889,3 +889,42 @@ WHERE b = 2;
 
 statement ok
 DROP TABLE t;
+
+###################
+# Test: Ordering inference from Parquet sorting_columns metadata
+# Verifies DataFusion auto-infers ordering WITHOUT needing WITH ORDER clause
+###################
+
+# Create source data
+statement ok
+CREATE TABLE ordering_src AS VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+
+# Write sorted Parquet file (COPY TO with ORDER BY writes sorting_columns metadata)
+query I
+COPY (SELECT column1 as a, column2 as b FROM ordering_src ORDER BY a ASC NULLS FIRST)
+TO 'test_files/scratch/parquet/ordering_inference.parquet'
+STORED AS PARQUET;
+----
+5
+
+# Create external table pointing to sorted Parquet (NO WITH ORDER clause!)
+statement ok
+CREATE EXTERNAL TABLE sorted_inferred (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/ordering_inference.parquet';
+
+# Verify ordering is inferred - expect output_ordering in DataSourceExec, NO SortExec
+query TT
+EXPLAIN SELECT a, b FROM sorted_inferred ORDER BY a ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: sorted_inferred.a ASC NULLS FIRST
+02)--TableScan: sorted_inferred projection=[a, b]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/ordering_inference.parquet]]}, projection=[a, b], output_ordering=[a@0 ASC], file_type=parquet
+
+# Cleanup
+statement ok
+DROP TABLE sorted_inferred;
+
+statement ok
+DROP TABLE ordering_src;

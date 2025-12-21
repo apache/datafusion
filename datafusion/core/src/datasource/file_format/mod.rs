@@ -80,6 +80,7 @@ pub(crate) mod test_util {
                 range: None,
                 statistics: None,
                 extensions: None,
+                ordering: None,
                 metadata_size_hint: None,
             }]
             .into(),
