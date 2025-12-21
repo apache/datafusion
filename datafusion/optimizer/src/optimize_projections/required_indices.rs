@@ -17,8 +17,7 @@
 
 //! [`RequiredIndices`] helper for OptimizeProjection
 
-use crate::optimize_projections::outer_columns;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan};
 
@@ -112,16 +111,35 @@ impl RequiredIndices {
     /// * `input_schema`: The input schema to analyze for index requirements.
     /// * `expr`: An expression for which we want to find necessary field indices.
     fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
-        // TODO could remove these clones (and visit the expression directly)
-        let mut cols = expr.column_refs();
-        // Get outer-referenced (subquery) columns:
-        outer_columns(expr, &mut cols);
-        self.indices.reserve(cols.len());
-        for col in cols {
-            if let Some(idx) = input_schema.maybe_index_of_column(col) {
-                self.indices.push(idx);
+        expr.apply(|expr| {
+            match expr {
+                Expr::Column(col) => {
+                    push_column_index(&mut self.indices, input_schema, col);
+                }
+                Expr::OuterReferenceColumn(_, col) => {
+                    push_column_index(&mut self.indices, input_schema, col);
+                }
+                Expr::ScalarSubquery(subquery) => collect_outer_ref_exprs(
+                    &mut self.indices,
+                    input_schema,
+                    &subquery.outer_ref_columns,
+                ),
+                Expr::Exists(exists) => collect_outer_ref_exprs(
+                    &mut self.indices,
+                    input_schema,
+                    &exists.subquery.outer_ref_columns,
+                ),
+                Expr::InSubquery(insubquery) => collect_outer_ref_exprs(
+                    &mut self.indices,
+                    input_schema,
+                    &insubquery.subquery.outer_ref_columns,
+                ),
+                _ => {}
             }
-        }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        // traversal above is infallible
+        .expect("traversal should not fail");
     }
 
     /// Adds the indices of the fields referred to by the given expressions
@@ -222,5 +240,47 @@ impl RequiredIndices {
         self.indices.sort_unstable();
         self.indices.dedup();
         self
+    }
+}
+
+fn collect_outer_ref_exprs(
+    indices: &mut Vec<usize>,
+    input_schema: &DFSchemaRef,
+    exprs: &[Expr],
+) {
+    exprs.iter().for_each(|outer_expr| {
+        outer_expr
+            .apply(|expr| {
+                match expr {
+                    Expr::Column(col) | Expr::OuterReferenceColumn(_, col) => {
+                        push_column_index(indices, input_schema, col);
+                    }
+                    Expr::ScalarSubquery(subquery) => collect_outer_ref_exprs(
+                        indices,
+                        input_schema,
+                        &subquery.outer_ref_columns,
+                    ),
+                    Expr::Exists(exists) => collect_outer_ref_exprs(
+                        indices,
+                        input_schema,
+                        &exists.subquery.outer_ref_columns,
+                    ),
+                    Expr::InSubquery(insubquery) => collect_outer_ref_exprs(
+                        indices,
+                        input_schema,
+                        &insubquery.subquery.outer_ref_columns,
+                    ),
+                    _ => {}
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            // traversal above is infallible
+            .expect("outer reference traversal should not fail");
+    });
+}
+
+fn push_column_index(indices: &mut Vec<usize>, input_schema: &DFSchemaRef, col: &Column) {
+    if let Some(idx) = input_schema.maybe_index_of_column(col) {
+        indices.push(idx);
     }
 }
