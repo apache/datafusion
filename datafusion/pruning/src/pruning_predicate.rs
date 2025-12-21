@@ -1444,10 +1444,7 @@ fn build_predicate_expression(
     let expr_any = expr.as_any();
     if let Some(is_null) = expr_any.downcast_ref::<phys_expr::IsNullExpr>() {
         // If argument is a literal, evaluate directly
-        if let Some(literal) = is_null
-            .arg()
-            .as_any()
-            .downcast_ref::<phys_expr::Literal>()
+        if let Some(literal) = is_null.arg().as_any().downcast_ref::<phys_expr::Literal>()
         {
             let result = literal.value().is_null();
             return Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(result))));
