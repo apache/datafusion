@@ -50,3 +50,4 @@ ci/scripts/rust_docs.sh
 ci/scripts/license_header.sh
 ci/scripts/typos_check.sh
 ci/scripts/doc_prettier_check.sh
+ci/scripts/check_metric_docs.sh
