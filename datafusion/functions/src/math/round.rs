@@ -24,11 +24,10 @@ use arrow::datatypes::DataType::{
     Decimal32, Decimal64, Decimal128, Decimal256, Float32, Float64,
 };
 use arrow::datatypes::{
-    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float32Type,
-    Float64Type, Int32Type,
+    ArrowNativeTypeOp, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, Float32Type, Float64Type, Int32Type,
 };
 use arrow::error::ArrowError;
-use arrow_buffer::i256;
 use datafusion_common::types::{
     NativeType, logical_float32, logical_float64, logical_int32,
 };
@@ -200,7 +199,7 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal32(v, *scale, dp),
+                |v, dp| round_decimal(v, *scale, dp),
                 *precision,
                 *scale,
             )?;
@@ -215,7 +214,7 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal64(v, *scale, dp),
+                |v, dp| round_decimal(v, *scale, dp),
                 *precision,
                 *scale,
             )?;
@@ -230,7 +229,7 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal128(v, *scale, dp),
+                |v, dp| round_decimal(v, *scale, dp),
                 *precision,
                 *scale,
             )?;
@@ -245,7 +244,7 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal256(v, *scale, dp),
+                |v, dp| round_decimal(v, *scale, dp),
                 *precision,
                 *scale,
             )?;
@@ -273,47 +272,11 @@ where
     Ok((value * factor).round() / factor)
 }
 
-fn round_decimal32(
-    value: i32,
+fn round_decimal<V: ArrowNativeTypeOp>(
+    value: V,
     scale: i8,
     decimal_places: i32,
-) -> Result<i32, ArrowError> {
-    let rounded = round_decimal_i128(i128::from(value), scale, decimal_places)?;
-    i32::try_from(rounded)
-        .map_err(|_| ArrowError::ComputeError("Overflow while rounding decimal32".into()))
-}
-
-fn round_decimal64(
-    value: i64,
-    scale: i8,
-    decimal_places: i32,
-) -> Result<i64, ArrowError> {
-    let rounded = round_decimal_i128(i128::from(value), scale, decimal_places)?;
-    i64::try_from(rounded)
-        .map_err(|_| ArrowError::ComputeError("Overflow while rounding decimal64".into()))
-}
-
-fn round_decimal128(
-    value: i128,
-    scale: i8,
-    decimal_places: i32,
-) -> Result<i128, ArrowError> {
-    round_decimal_i128(value, scale, decimal_places)
-}
-
-fn round_decimal256(
-    value: i256,
-    scale: i8,
-    decimal_places: i32,
-) -> Result<i256, ArrowError> {
-    round_decimal_i256(value, scale, decimal_places)
-}
-
-fn round_decimal_i128(
-    value: i128,
-    scale: i8,
-    decimal_places: i32,
-) -> Result<i128, ArrowError> {
+) -> Result<V, ArrowError> {
     let diff = i64::from(scale) - i64::from(decimal_places);
     if diff <= 0 {
         return Ok(value);
@@ -325,72 +288,38 @@ fn round_decimal_i128(
         ))
     })?;
 
-    let factor = 10_i128.checked_pow(diff).ok_or_else(|| {
+    let one = V::ONE;
+    let two = V::from_usize(2).ok_or_else(|| {
+        ArrowError::ComputeError("Internal error: could not create constant 2".into())
+    })?;
+    let ten = V::from_usize(10).ok_or_else(|| {
+        ArrowError::ComputeError("Internal error: could not create constant 10".into())
+    })?;
+
+    let factor = ten.pow_checked(diff).map_err(|_| {
         ArrowError::ComputeError(format!(
             "Overflow while rounding decimal with scale {scale} and decimal places {decimal_places}"
         ))
     })?;
 
-    let mut quotient = value / factor;
-    let remainder = value % factor;
+    let mut quotient = value.div_wrapping(factor);
+    let remainder = value.mod_wrapping(factor);
 
     // `factor` is an even number (10^n, n > 0), so `factor / 2` is the tie threshold
-    let threshold = factor / 2;
+    let threshold = factor.div_wrapping(two);
     if remainder >= threshold {
-        quotient = quotient.checked_add(1).ok_or_else(|| {
+        quotient = quotient.add_checked(one).map_err(|_| {
             ArrowError::ComputeError("Overflow while rounding decimal".into())
         })?;
-    } else if remainder <= -threshold {
-        quotient = quotient.checked_sub(1).ok_or_else(|| {
+    } else if remainder <= threshold.neg_wrapping() {
+        quotient = quotient.sub_checked(one).map_err(|_| {
             ArrowError::ComputeError("Overflow while rounding decimal".into())
         })?;
     }
 
     quotient
-        .checked_mul(factor)
-        .ok_or_else(|| ArrowError::ComputeError("Overflow while rounding decimal".into()))
-}
-
-fn round_decimal_i256(
-    value: i256,
-    scale: i8,
-    decimal_places: i32,
-) -> Result<i256, ArrowError> {
-    let diff = i64::from(scale) - i64::from(decimal_places);
-    if diff <= 0 {
-        return Ok(value);
-    }
-
-    let diff: u32 = diff.try_into().map_err(|e| {
-        ArrowError::ComputeError(format!(
-            "Invalid value for decimal places: {decimal_places}: {e}"
-        ))
-    })?;
-
-    let factor = i256::from_i128(10).checked_pow(diff).ok_or_else(|| {
-        ArrowError::ComputeError(format!(
-            "Overflow while rounding decimal with scale {scale} and decimal places {decimal_places}"
-        ))
-    })?;
-
-    let mut quotient = value / factor;
-    let remainder = value % factor;
-
-    // `factor` is an even number (10^n, n > 0), so `factor / 2` is the tie threshold
-    let threshold = factor / i256::from_i128(2);
-    if remainder >= threshold {
-        quotient = quotient.checked_add(i256::ONE).ok_or_else(|| {
-            ArrowError::ComputeError("Overflow while rounding decimal".into())
-        })?;
-    } else if remainder <= -threshold {
-        quotient = quotient.checked_sub(i256::ONE).ok_or_else(|| {
-            ArrowError::ComputeError("Overflow while rounding decimal".into())
-        })?;
-    }
-
-    quotient
-        .checked_mul(factor)
-        .ok_or_else(|| ArrowError::ComputeError("Overflow while rounding decimal".into()))
+        .mul_checked(factor)
+        .map_err(|_| ArrowError::ComputeError("Overflow while rounding decimal".into()))
 }
 
 #[cfg(test)]
