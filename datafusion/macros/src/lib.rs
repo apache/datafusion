@@ -110,9 +110,72 @@ pub fn user_doc(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Helper attribute to register metrics structs or execs for documentation generation.
-/// Usage:
-/// - `#[metric_doc(common)]` on `*_Metrics` structs (derives `DocumentedMetrics`)
-/// - `#[metric_doc(M1, M2)]` on `*_Exec` structs to link metrics (derives `DocumentedExec`)
+///
+/// # Usage
+///
+/// ## On Metrics Structs
+///
+/// Use `#[metric_doc]` (no arguments) for operator-specific metrics:
+/// ```ignore
+/// #[metric_doc]
+/// struct FilterExecMetrics {
+///     /// Common metrics for most operators
+///     baseline_metrics: BaselineMetrics,
+///     /// Selectivity of the filter
+///     selectivity: RatioMetrics,
+/// }
+/// ```
+///
+/// Use `#[metric_doc(common)]` for reusable metrics shared across operators:
+/// ```ignore
+/// #[metric_doc(common)]
+/// pub struct BaselineMetrics {
+///     /// Amount of time the operator was actively using the CPU
+///     elapsed_compute: Time,
+///     /// Total output rows
+///     output_rows: Count,
+/// }
+/// ```
+///
+/// ## On Exec Structs
+///
+/// Reference a single metrics struct:
+/// ```ignore
+/// #[metric_doc(FilterExecMetrics)]
+/// pub struct FilterExec { /* ... */ }
+/// ```
+///
+/// Reference multiple metrics structs (for operators with multiple metric groups):
+/// ```ignore
+/// #[metric_doc(MetricsGroupA, MetricsGroupB)]
+/// pub struct UserDefinedExec { /* ... */ }
+/// ```
+///
+/// ## Cross-File Usage
+///
+/// Metrics structs can be defined in different files/modules from the exec.
+/// The macro resolves references at compile time, so metrics can live anywhere
+/// as long as they are in scope where the exec is defined:
+/// ```ignore
+/// // In metrics/groups.rs
+/// #[metric_doc]
+/// pub struct MetricsGroupA {
+///     /// Time spent in phase A
+///     phase_a_time: Time,
+/// }
+///
+/// #[metric_doc]
+/// pub struct MetricsGroupB {
+///     /// Time spent in phase B
+///     phase_b_time: Time,
+/// }
+///
+/// // In exec/user_defined.rs
+/// use crate::metrics::groups::{MetricsGroupA, MetricsGroupB};
+///
+/// #[metric_doc(MetricsGroupA, MetricsGroupB)]
+/// pub struct UserDefinedExec { /* ... */ }
+/// ```
 #[proc_macro_attribute]
 pub fn metric_doc(args: TokenStream, input: TokenStream) -> TokenStream {
     metric_doc_impl::metric_doc(&args, input)
