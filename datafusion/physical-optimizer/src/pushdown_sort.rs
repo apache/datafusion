@@ -169,11 +169,13 @@ mod tests {
             schema: SchemaRef,
             constant_exprs: Vec<Arc<dyn PhysicalExpr>>,
         ) -> Result<Self> {
-            let mut eq_props = EquivalenceProperties::new(schema.clone());
+            let mut eq_props = EquivalenceProperties::new(Arc::clone(&schema));
 
             let const_exprs: Vec<ConstExpr> = constant_exprs
                 .iter()
-                .map(|expr| ConstExpr::new(expr.clone(), AcrossPartitions::Uniform(None)))
+                .map(|expr| {
+                    ConstExpr::new(Arc::clone(expr), AcrossPartitions::Uniform(None))
+                })
                 .collect();
 
             eq_props.add_constants(const_exprs)?;
@@ -210,7 +212,7 @@ mod tests {
             self
         }
         fn schema(&self) -> SchemaRef {
-            self.schema.clone()
+            Arc::clone(&self.schema)
         }
         fn properties(&self) -> &PlanProperties {
             &self.cache
@@ -263,8 +265,8 @@ mod tests {
 
         let col_a = col("a", &schema)?;
         let mock_plan = Arc::new(MockPlanWithConstants::new(
-            schema.clone(),
-            vec![col_a.clone()],
+            Arc::clone(&schema),
+            vec![Arc::clone(&col_a)],
         )?);
 
         let eq_props = mock_plan.properties().equivalence_properties();
