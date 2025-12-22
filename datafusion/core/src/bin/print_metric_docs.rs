@@ -20,7 +20,7 @@
 
 use std::collections::HashSet;
 
-use datafusion_doc::metric_doc_sections::{
+use datafusion_expr::metric_doc_sections::{
     ExecDoc, MetricDoc, MetricDocPosition, exec_docs, metric_docs,
 };
 

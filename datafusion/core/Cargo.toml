@@ -108,6 +108,7 @@ unicode_expressions = [
     "datafusion-sql?/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
+docs = []
 extended_tests = []
 
 [dependencies]
@@ -130,7 +131,6 @@ datafusion-datasource-parquet = { workspace = true, optional = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true, default-features = false }
 datafusion-expr-common = { workspace = true }
-datafusion-doc = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true, default-features = false, optional = true }

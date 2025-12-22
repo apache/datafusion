@@ -24,7 +24,7 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SOURCE_DIR}/../" && pwd
 
 TARGET_FILE="docs/source/user-guide/metrics.md"
-PRINT_METRIC_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_metric_docs"
+PRINT_METRIC_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs --bin print_metric_docs"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"

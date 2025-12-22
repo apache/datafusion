@@ -48,8 +48,8 @@ fn main() {
                     let dir_name = path.file_name().unwrap().to_str().unwrap();
                     let crate_name = format!("datafusion-{dir_name}");
 
-                    // Skip self (core) and macros (definition only)
-                    if dir_name == "core" || dir_name == "macros" {
+                    // Skip self (core), macros (definition only), and doc (dev-dep only)
+                    if dir_name == "core" || dir_name == "macros" || dir_name == "doc" {
                         continue;
                     }
 
