@@ -861,9 +861,12 @@ impl DistributionSatisfactionResult {
         allow_subset: bool,
         target_partitions: usize,
     ) -> bool {
-        !self.is_satisfied()
-            || (!allow_subset
-                && target_partitions > self.output_partitioning.partition_count())
+        (match self.satisfaction {
+            PartitioningSatisfaction::Exact => false,
+            PartitioningSatisfaction::Subset => !allow_subset,
+            PartitioningSatisfaction::NotSatisfied => true,
+        }) || !allow_subset
+            && target_partitions > self.output_partitioning.partition_count()
     }
 }
 

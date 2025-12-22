@@ -20,8 +20,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
-    parquet_exec_with_stats, repartition_exec, schema, sort_exec,
+    bounded_window_exec_with_partition, check_integrity, coalesce_partitions_exec,
+    parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec, schema, sort_exec,
     sort_exec_with_preserve_partitioning, sort_merge_join_exec,
     sort_preserving_merge_exec, union_exec,
 };
@@ -62,15 +62,18 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
+use datafusion_physical_plan::windows::BoundedWindowAggExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlanProperties, Partitioning, PlanProperties,
     Statistics, displayable,
@@ -3654,6 +3657,87 @@ fn distribution_satisfaction_superset_hash_matches_sanity_check() -> Result<()> 
         PartitioningSatisfaction::NotSatisfied,
         true,
     )
+}
+
+#[test]
+fn single_partition_join_skips_repartition() -> Result<()> {
+    let left = parquet_exec();
+    let right = parquet_exec();
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+        Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
+    )];
+
+    let plan = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+    let config = TestConfig::default().with_query_execution_partitions(16);
+    let optimized = config.to_plan(plan, &[Run::Distribution]);
+
+    assert_plan!(
+        optimized,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn single_partition_window_partition_skips_repartition() -> Result<()> {
+    let schema = schema();
+    let sort_exprs = vec![PhysicalSortExpr {
+        expr: col("a", &schema)?,
+        options: SortOptions::default(),
+    }];
+    let partition_by = vec![col("b", &schema)?];
+
+    let window_plan = bounded_window_exec_with_partition(
+        "c",
+        sort_exprs.clone(),
+        &partition_by,
+        parquet_exec(),
+    );
+    let config = TestConfig::default().with_query_execution_partitions(12);
+    let optimized = config.to_plan(window_plan, &[Run::Distribution, Run::Sorting]);
+
+    assert_plan!(
+        optimized,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC], preserve_partitioning=[false]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn grouped_union_from_single_partition_skips_repartition() -> Result<()> {
+    let union = union_exec(vec![
+        parquet_exec(),
+        Arc::new(EmptyExec::new(schema()).with_partitions(0)),
+    ]);
+    let aggregated =
+        aggregate_exec_with_alias(union, vec![("a".to_string(), "group_a".to_string())]);
+    let mut config = TestConfig::default().with_query_execution_partitions(10);
+    config.config.optimizer.enable_round_robin_repartition = false;
+    let optimized = config.to_plan(aggregated, &[Run::Distribution]);
+
+    assert_plan!(
+        optimized,
+        @r"
+    AggregateExec: mode=FinalPartitioned, gby=[group_a@0 as group_a], aggr=[]
+      AggregateExec: mode=Partial, gby=[a@0 as group_a], aggr=[]
+        UnionExec
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          EmptyExec
+    "
+    );
+
+    Ok(())
 }
 
 fn assert_hash_satisfaction_alignment(
