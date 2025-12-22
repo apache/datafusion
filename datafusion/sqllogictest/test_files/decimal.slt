@@ -1017,6 +1017,16 @@ from (values (10.0), (2.0), (3.0)) as t(base);
 4
 8.383613097158
 
+# Test log of a decimal value between 0 and 1 (e.g., 0.5)
+query R
+SELECT log(10, arrow_cast(0.5, 'Decimal32(5, 1)'))
+----
+NaN
+
+query R
+SELECT log(10, arrow_cast(1 , 'Decimal32(5, 1)'))
+----
+0
 
 # power with decimals
 

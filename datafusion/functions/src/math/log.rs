@@ -129,7 +129,7 @@ fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
     } else {
         let unscaled_value = decimal32_to_i32(value, scale)?;
         if unscaled_value <= 0 {
-            return Ok(f64::NEG_INFINITY);
+            return Ok(f64::NAN);
         }
         let log_value: u32 = unscaled_value.ilog(base as i32);
         Ok(log_value as f64)
@@ -160,7 +160,7 @@ fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
     } else {
         let unscaled_value = decimal64_to_i64(value, scale)?;
         if unscaled_value <= 0 {
-            return Ok(f64::NEG_INFINITY);
+            return Ok(f64::NAN);
         }
         let log_value: u32 = unscaled_value.ilog(base as i64);
         Ok(log_value as f64)
@@ -192,7 +192,7 @@ fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> 
     } else {
         let unscaled_value = decimal128_to_i128(value, scale)?;
         if unscaled_value <= 0 {
-            return Ok(f64::NEG_INFINITY);
+            return Ok(f64::NAN);
         }
         let log_value: u32 = unscaled_value.ilog(base as i128);
         Ok(log_value as f64)
