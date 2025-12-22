@@ -17,17 +17,18 @@
 
 use std::sync::Arc;
 
-use abi_stable::{StableAbi, std_types::RVec};
-use arrow::{error::ArrowError, ffi::FFI_ArrowSchema};
+use abi_stable::StableAbi;
+use abi_stable::std_types::RVec;
+use arrow::error::ArrowError;
+use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::function::PartitionEvaluatorArgs;
 use datafusion_physical_plan::PhysicalExpr;
 
-use crate::{
-    arrow_wrappers::WrappedSchema, physical_expr::FFI_PhysicalExpr,
-    util::rvec_wrapped_to_vec_fieldref,
-};
+use crate::arrow_wrappers::WrappedSchema;
+use crate::physical_expr::FFI_PhysicalExpr;
+use crate::util::rvec_wrapped_to_vec_fieldref;
 
 /// A stable struct for sharing [`PartitionEvaluatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function

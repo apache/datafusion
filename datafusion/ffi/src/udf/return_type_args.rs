@@ -15,19 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{
-    StableAbi,
-    std_types::{ROption, RVec},
-};
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RVec};
 use arrow_schema::FieldRef;
-use datafusion::{
-    common::ffi_datafusion_err, error::DataFusionError, logical_expr::ReturnFieldArgs,
-    scalar::ScalarValue,
-};
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::{DataFusionError, ffi_datafusion_err};
+use datafusion_expr::ReturnFieldArgs;
+use prost::Message;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
-use prost::Message;
 
 /// A stable struct for sharing a [`ReturnFieldArgs`] across FFI boundaries.
 #[repr(C)]

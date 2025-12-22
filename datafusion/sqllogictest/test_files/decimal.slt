@@ -969,6 +969,65 @@ select log(base, 1e4) from (values (10.0), (2.0), (3.0)) as t(base);
 4
 8.383613097158
 
+# log(decimal32) with negative scale
+# 1e4 = 10000 with scale -4
+query R
+select log(CAST(1e4 AS DECIMAL(9, -4)));
+----
+4
+
+# log(decimal32) with negative scale and base 2
+# 8e1 = 80, log2(80) ≈ 6.321928
+query R
+select log(2.0, CAST(8e1 AS DECIMAL(9, -1)));
+----
+6.321928094887
+
+
+# log(decimal64) with negative scale
+# 5e3 = 5000, log10(5000) ≈ 3.69897
+query R
+select log(CAST(5e3 AS DECIMAL(18, -3)));
+----
+3.698970004336
+
+# log(decimal64) with negative scale and different bases
+query R rowsort
+select log(base, CAST(1e4 AS DECIMAL(18, -4)))
+from (values (10.0), (2.0), (3.0)) as t(base);
+----
+13.287712379549
+4
+8.383613097158
+
+# log(decimal128) with negative scale and base 2
+# 8e1 = 80, log2(80) ≈ 6.321928
+query R
+select log(2.0, CAST(8e1 AS DECIMAL(38, -1)));
+----
+6.321928094887
+
+
+# log(decimal128) with negative scale and different bases
+query R rowsort
+select log(base, CAST(1e4 AS DECIMAL(38, -4)))
+from (values (10.0), (2.0), (3.0)) as t(base);
+----
+13.287712379549
+4
+8.383613097158
+
+# Test log of a decimal value between 0 and 1 (e.g., 0.5)
+query R
+SELECT log(10, arrow_cast(0.5, 'Decimal32(5, 1)'))
+----
+NaN
+
+query R
+SELECT log(10, arrow_cast(1 , 'Decimal32(5, 1)'))
+----
+0
+
 # power with decimals
 
 query RT
@@ -995,6 +1054,11 @@ query R
 SELECT power(2.5, 0)
 ----
 1
+
+query R
+SELECT power(1e4, 2)
+----
+100000000
 
 # int64 base with decimal exponent (coerced to float computation)
 query R

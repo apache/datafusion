@@ -17,21 +17,19 @@
 
 use std::sync::Arc;
 
-use abi_stable::{
-    StableAbi,
-    std_types::{RString, RVec},
-};
-use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
+use abi_stable::StableAbi;
+use abi_stable::std_types::{RString, RVec};
+use arrow::datatypes::Schema;
+use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
 use datafusion_common::error::DataFusionError;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    physical_expr::{FFI_PhysicalExpr, sort::FFI_PhysicalSortExpr},
-    util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped},
-};
+use crate::arrow_wrappers::WrappedSchema;
+use crate::physical_expr::FFI_PhysicalExpr;
+use crate::physical_expr::sort::FFI_PhysicalSortExpr;
+use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 
 /// A stable struct for sharing [`AccumulatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding field
@@ -153,10 +151,10 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::{
-        error::Result, logical_expr::function::AccumulatorArgs,
-        physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
-    };
+    use datafusion::error::Result;
+    use datafusion::logical_expr::function::AccumulatorArgs;
+    use datafusion::physical_expr::PhysicalSortExpr;
+    use datafusion::physical_plan::expressions::col;
 
     use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 
