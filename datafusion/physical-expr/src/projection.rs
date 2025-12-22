@@ -588,67 +588,43 @@ impl ProjectionExprs {
             let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 std::mem::take(&mut stats.column_statistics[col.index()])
             } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
+                // Handle literal expressions (constants) by calculating proper statistics
                 let data_type = expr.data_type(output_schema)?;
 
                 if literal.value().is_null() {
-                    // For NULL literals (constant NULL columns), output proper statistics
-                    // This enables optimizations like constant column detection and sort elimination
-                    // For constant NULL columns:
-                    // - null_count = num_rows (all rows are NULL)
-                    // - distinct_count = 1 (all NULLs are considered the same)
-                    // - min_value/max_value = Absent (NULLs don't have min/max)
-                    // - byte_size = Absent (NULLs don't take space in most representations)
                     let null_count = match stats.num_rows {
                         Precision::Exact(num_rows) => Precision::Exact(num_rows),
-                        _ => Precision::Absent, // Can't determine null_count without exact row count
+                        _ => Precision::Absent,
                     };
 
                     ColumnStatistics {
-                        min_value: Precision::Absent, // NULLs don't have min/max
+                        min_value: Precision::Absent,
                         max_value: Precision::Absent,
-                        distinct_count: Precision::Exact(1), // All NULLs are considered the same
+                        distinct_count: Precision::Exact(1),
                         null_count,
-                        sum_value: Precision::Absent, // Sum doesn't make sense for NULLs
-                        byte_size: Precision::Absent, // NULLs don't take space
+                        sum_value: Precision::Absent,
+                        byte_size: Precision::Absent,
                     }
                 } else {
-                    // For constant columns (non-null literals), output proper statistics
                     let value = literal.value();
-
-                    // For constant columns:
-                    // - min_value = max_value = the literal value
-                    // - distinct_count = 1
-                    // - null_count = 0
-                    // - byte_size = calculated from data type and num_rows
                     let distinct_count = Precision::Exact(1);
                     let null_count = Precision::Exact(0);
 
-                    // Calculate byte_size: for primitive types, use width * num_rows
                     let byte_size = if let Some(byte_width) = data_type.primitive_width()
                     {
                         stats.num_rows.multiply(&Precision::Exact(byte_width))
                     } else {
-                        // For complex types (Utf8, List, etc.), the byte_size when materialized
-                        // as an array depends on the array encoding and representation (e.g.,
-                        // dictionary encoding, string view arrays), so we conservatively set it to Absent
+                        // Complex types depend on array encoding, so set to Absent
                         Precision::Absent
                     };
 
-                    // Calculate sum_value: for numeric types, sum = value * num_rows
-                    // This is useful for optimizations (e.g., cross joins multiply sum_value by row count)
-                    let sum_value = if !value.is_null() {
-                        // Convert num_rows to a ScalarValue of the same type as the value
-                        Precision::<ScalarValue>::from(stats.num_rows)
-                            .cast_to(&value.data_type())
-                            .ok()
-                            .map(|row_count| {
-                                // Multiply value * num_rows to get the sum
-                                Precision::Exact(value.clone()).multiply(&row_count)
-                            })
-                            .unwrap_or(Precision::Absent)
-                    } else {
-                        Precision::Absent
-                    };
+                    let sum_value = Precision::<ScalarValue>::from(stats.num_rows)
+                        .cast_to(&value.data_type())
+                        .ok()
+                        .map(|row_count| {
+                            Precision::Exact(value.clone()).multiply(&row_count)
+                        })
+                        .unwrap_or(Precision::Absent);
 
                     ColumnStatistics {
                         min_value: Precision::Exact(value.clone()),
@@ -2666,6 +2642,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    // Test statistics calculation for non-null literal (numeric constant)
     #[test]
     fn test_project_statistics_with_literal() -> Result<()> {
         let input_stats = get_stats();
@@ -2735,6 +2712,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    // Test statistics calculation for NULL literal (constant NULL column)
     #[test]
     fn test_project_statistics_with_null_literal() -> Result<()> {
         let input_stats = get_stats();
@@ -2802,6 +2780,7 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    // Test statistics calculation for complex type literal (e.g., Utf8 string)
     #[test]
     fn test_project_statistics_with_complex_type_literal() -> Result<()> {
         let input_stats = get_stats();
