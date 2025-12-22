@@ -1118,6 +1118,7 @@ fn get_repartition_requirement_status(
     for (child, requirement, roundrobin_beneficial) in
         izip!(children.into_iter(), requirements, rr_beneficial)
     {
+        let output_partitioning = child.output_partitioning();
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
         let roundrobin_beneficial_stats = match child.partition_statistics(None)?.num_rows
@@ -1127,18 +1128,23 @@ fn get_repartition_requirement_status(
             Precision::Absent => true,
         };
         let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
+        let hash_requirement_unmet = is_hash
+            && !output_partitioning
+                .satisfaction(&requirement, child.equivalence_properties(), false)
+                .is_satisfied();
         // Hash re-partitioning is necessary when the input has more than one
         // partitions:
-        let multi_partitions = child.output_partitioning().partition_count() > 1;
+        let multi_partitions = output_partitioning.partition_count() > 1;
         let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
-        needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
+        needs_alignment |= is_hash
+            && (multi_partitions || roundrobin_sensible || hash_requirement_unmet);
         repartition_status_flags.push((
             is_hash,
             RepartitionRequirementStatus {
                 requirement,
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
-                hash_necessary: is_hash && multi_partitions,
+                hash_necessary: is_hash && (multi_partitions || hash_requirement_unmet),
             },
         ));
     }
