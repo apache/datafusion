@@ -298,7 +298,7 @@ macro_rules! impl_to_timestamp_constructors {
             #[deprecated(since = "52.0.0", note = "use `new_with_config` instead")]
             /// Deprecated constructor retained for backwards compatibility.
             ///
-            /// Prefer [`new_with_config`] which allows specifying the
+            /// Prefer `new_with_config` which allows specifying the
             /// timezone via [`ConfigOptions`]. This helper now mirrors the
             /// canonical default offset (None) provided by `ConfigOptions::default()`.
             pub fn new() -> Self {
