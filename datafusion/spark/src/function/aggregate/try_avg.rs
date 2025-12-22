@@ -24,7 +24,7 @@ use arrow::array::{BooleanArray, Decimal128Array, Float64Array};
 use arrow::datatypes::{
     DataType, Decimal128Type, Field, FieldRef, IntervalUnit, IntervalYearMonthType,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, downcast_value, exec_err};
+use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 
@@ -161,11 +161,9 @@ impl TryAvgAccumulator {
                     }
                 },
             };
-            if let Some(sum) = self.sum_dec128 {
-                if exceeds_decimal128_precision(sum, p) {
-                    self.failed = true;
-                    return;
-                }
+            if let Some(sum) = self.sum_dec128 && exceeds_decimal128_precision(sum, p) {
+                self.failed = true;
+                return;
             }
             self.inc_count();
             if self.failed {
@@ -258,12 +256,11 @@ impl TryAvgAccumulator {
                         total.checked_sub(half)
                     };
 
-                    if let Some(adj) = adjusted {
-                        if let Some(avg) = adj.checked_div(denom) {
-                            if fits_i32(avg) {
-                                return ScalarValue::IntervalYearMonth(Some(avg as i32));
-                            }
-                        }
+                    if let Some(adj) = adjusted
+                        && let Some(avg) = adj.checked_div(denom)
+                        && fits_i32(avg)
+                    {
+                        return ScalarValue::IntervalYearMonth(Some(avg as i32));
                     }
                     ScalarValue::IntervalYearMonth(None)
                 } else {
