@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A wrapper around `hashbrown::RawTable` that allows entries to be tracked by index
+//! A wrapper around `hashbrown::HashTable` that allows entries to be tracked by index
 
 use crate::aggregates::group_values::HashValue;
 use crate::aggregates::topk::heap::Comparable;
@@ -29,7 +29,7 @@ use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::exec_datafusion_err;
 use half::f16;
-use hashbrown::raw::RawTable;
+use hashbrown::hash_table::HashTable;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -48,13 +48,14 @@ pub struct HashTableItem<ID: KeyType> {
     pub heap_idx: usize,
 }
 
-/// A custom wrapper around `hashbrown::RawTable` that:
+/// A custom wrapper around `hashbrown::HashTable` that:
 /// 1. limits the number of entries to the top K
 /// 2. Allocates a capacity greater than top K to maintain a low-fill factor and prevent resizing
 /// 3. Tracks indexes to allow corresponding heap to refer to entries by index vs hash
-/// 4. Catches resize events to allow the corresponding heap to update it's indexes
 struct TopKHashTable<ID: KeyType> {
-    map: RawTable<HashTableItem<ID>>,
+    map: HashTable<usize>,
+    store: Vec<Option<HashTableItem<ID>>>,
+    free_list: Vec<usize>,
     limit: usize,
 }
 
@@ -79,7 +80,6 @@ pub trait ArrowHashTable {
         &mut self,
         row_idx: usize,
         replace_idx: usize,
-        map: &mut Vec<(usize, usize)>,
     ) -> (usize, bool);
 }
 
@@ -156,7 +156,6 @@ impl ArrowHashTable for StringHashTable {
         &mut self,
         row_idx: usize,
         replace_idx: usize,
-        mapper: &mut Vec<(usize, usize)>,
     ) -> (usize, bool) {
         unsafe {
             let id = match self.data_type {
@@ -212,7 +211,7 @@ impl ArrowHashTable for StringHashTable {
 
             // add the new group
             let id = id.map(|id| id.to_string());
-            let map_idx = self.map.insert(hash, id, heap_idx, mapper);
+            let map_idx = self.map.insert(hash, id, heap_idx);
             (map_idx, true)
         }
     }
@@ -281,7 +280,6 @@ where
         &mut self,
         row_idx: usize,
         replace_idx: usize,
-        mapper: &mut Vec<(usize, usize)>,
     ) -> (usize, bool) {
         unsafe {
             let ids = self.owned.as_primitive::<VAL>();
@@ -300,52 +298,57 @@ where
             let heap_idx = self.map.remove_if_full(replace_idx);
 
             // add the new group
-            let map_idx = self.map.insert(hash, id, heap_idx, mapper);
+            let map_idx = self.map.insert(hash, id, heap_idx);
             (map_idx, true)
         }
     }
 }
 
-impl<ID: KeyType> TopKHashTable<ID> {
+use hashbrown::hash_table::Entry;
+impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
     pub fn new(limit: usize, capacity: usize) -> Self {
         Self {
-            map: RawTable::with_capacity(capacity),
+            map: HashTable::with_capacity(capacity),
+            store: Vec::with_capacity(capacity),
+            free_list: Vec::new(),
             limit,
         }
     }
 
     pub fn find(&self, hash: u64, mut eq: impl FnMut(&ID) -> bool) -> Option<usize> {
-        let bucket = self.map.find(hash, |mi| eq(&mi.id))?;
-        // JUSTIFICATION
-        //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
-        //  Soundness: getting the index of a bucket we just found
-        let idx = unsafe { self.map.bucket_index(&bucket) };
-        Some(idx)
+        let eq = |&idx: &usize| eq(&self.store[idx].as_ref().unwrap().id);
+        self.map.find(hash, eq).copied()
     }
 
     pub unsafe fn heap_idx_at(&self, map_idx: usize) -> usize {
-        unsafe {
-            let bucket = self.map.bucket(map_idx);
-            bucket.as_ref().heap_idx
-        }
+        self.store[map_idx].as_ref().unwrap().heap_idx
     }
 
     pub unsafe fn remove_if_full(&mut self, replace_idx: usize) -> usize {
-        unsafe {
-            if self.map.len() >= self.limit {
-                self.map.erase(self.map.bucket(replace_idx));
-                0 // if full, always replace top node
-            } else {
-                self.map.len() // if we're not full, always append to end
+        if self.map.len() >= self.limit {
+            let item_to_remove = self.store[replace_idx].as_ref().unwrap();
+            let hash = item_to_remove.hash;
+            let id_to_remove = &item_to_remove.id;
+
+            let eq = |&idx: &usize| self.store[idx].as_ref().unwrap().id == *id_to_remove;
+            let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
+            match self.map.entry(hash, eq, hasher) {
+                Entry::Occupied(entry) => {
+                    let (removed_idx, _) = entry.remove();
+                    self.store[removed_idx] = None;
+                    self.free_list.push(removed_idx);
+                }
+                Entry::Vacant(_) => unreachable!(),
             }
+            0 // if full, always replace top node
+        } else {
+            self.map.len() // if we're not full, always append to end
         }
     }
 
     unsafe fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
-        unsafe {
-            for (m, h) in mapper {
-                self.map.bucket(*m).as_mut().heap_idx = *h
-            }
+        for (m, h) in mapper {
+            self.store[*m].as_mut().unwrap().heap_idx = *h;
         }
     }
 
@@ -354,31 +357,29 @@ impl<ID: KeyType> TopKHashTable<ID> {
         hash: u64,
         id: ID,
         heap_idx: usize,
-        mapper: &mut Vec<(usize, usize)>,
     ) -> usize {
-        let mi = HashTableItem::new(hash, id, heap_idx);
-        let bucket = self.map.try_insert_no_grow(hash, mi);
-        let bucket = match bucket {
-            Ok(bucket) => bucket,
-            Err(new_item) => {
-                let bucket = self.map.insert(hash, new_item, |mi| mi.hash);
-                // JUSTIFICATION
-                //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
-                //  Soundness: we're getting indexes of buckets, not dereferencing them
-                unsafe {
-                    for bucket in self.map.iter() {
-                        let heap_idx = bucket.as_ref().heap_idx;
-                        let map_idx = self.map.bucket_index(&bucket);
-                        mapper.push((heap_idx, map_idx));
-                    }
-                }
-                bucket
-            }
+        let mi = HashTableItem::new(hash, id.clone(), heap_idx);
+        let store_idx = if let Some(idx) = self.free_list.pop() {
+            self.store[idx] = Some(mi);
+            idx
+        } else {
+            self.store.push(Some(mi));
+            self.store.len() - 1
         };
-        // JUSTIFICATION
-        //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
-        //  Soundness: we're getting indexes of buckets, not dereferencing them
-        unsafe { self.map.bucket_index(&bucket) }
+
+        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
+        if self.map.len() == self.map.capacity() {
+            self.map.reserve(self.limit, hasher);
+        }
+
+        let eq_fn = |&idx: &usize| self.store[idx].as_ref().unwrap().id == id;
+        match self.map.entry(hash, eq_fn, hasher) {
+            Entry::Occupied(_) => unreachable!("Item should not exist"),
+            Entry::Vacant(vacant) => {
+                vacant.insert(store_idx);
+            }
+        }
+        store_idx
     }
 
     pub fn len(&self) -> usize {
@@ -386,14 +387,14 @@ impl<ID: KeyType> TopKHashTable<ID> {
     }
 
     pub unsafe fn take_all(&mut self, idxs: Vec<usize>) -> Vec<ID> {
-        unsafe {
-            let ids = idxs
-                .into_iter()
-                .map(|idx| self.map.bucket(idx).as_ref().id.clone())
-                .collect();
-            self.map.clear();
-            ids
-        }
+        let ids = idxs
+            .into_iter()
+            .map(|idx| self.store[idx].take().unwrap().id)
+            .collect();
+        self.map.clear();
+        self.store.clear();
+        self.free_list.clear();
+        ids
     }
 }
 
@@ -471,9 +472,8 @@ mod tests {
         let dt = DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()));
         let mut ht = new_hash_table(1, dt.clone())?;
         ht.set_batch(Arc::new(ids));
-        let mut mapper = vec![];
         let ids = unsafe {
-            ht.find_or_insert(0, 0, &mut mapper);
+            ht.find_or_insert(0, 0);
             ht.take_all(vec![0])
         };
         assert_eq!(ids.data_type(), &dt);
@@ -486,22 +486,9 @@ mod tests {
         let mut heap_to_map = BTreeMap::<usize, usize>::new();
         let mut map = TopKHashTable::<Option<String>>::new(5, 3);
         for (heap_idx, id) in vec!["1", "2", "3", "4", "5"].into_iter().enumerate() {
-            let mut mapper = vec![];
             let hash = heap_idx as u64;
-            let map_idx = map.insert(hash, Some(id.to_string()), heap_idx, &mut mapper);
+            let map_idx = map.insert(hash, Some(id.to_string()), heap_idx);
             let _ = heap_to_map.insert(heap_idx, map_idx);
-            if heap_idx == 3 {
-                assert_eq!(
-                    mapper,
-                    vec![(0, 0), (1, 1), (2, 2), (3, 3)],
-                    "Pass {heap_idx} resized incorrectly!"
-                );
-                for (heap_idx, map_idx) in mapper {
-                    let _ = heap_to_map.insert(heap_idx, map_idx);
-                }
-            } else {
-                assert_eq!(mapper, vec![], "Pass {heap_idx} should not have resized!");
-            }
         }
 
         let (_heap_idxs, map_idxs): (Vec<_>, Vec<_>) = heap_to_map.into_iter().unzip();

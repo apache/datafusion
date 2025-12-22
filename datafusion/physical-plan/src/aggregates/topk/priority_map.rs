@@ -67,10 +67,8 @@ impl PriorityMap {
         //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
         //  Soundness: replace_idx kept valid during resizes
         let (map_idx, did_insert) =
-            unsafe { self.map.find_or_insert(row_idx, replace_idx, map) };
+            unsafe { self.map.find_or_insert(row_idx, replace_idx) };
         if did_insert {
-            self.heap.renumber(map);
-            map.clear();
             self.heap.insert(row_idx, map_idx, map);
             // JUSTIFICATION
             //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
