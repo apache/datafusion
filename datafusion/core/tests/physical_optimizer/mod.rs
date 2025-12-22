@@ -17,6 +17,7 @@
 
 //! Physical Optimizer integration tests
 
+mod aggregate_repartition;
 #[expect(clippy::needless_pass_by_value)]
 mod aggregate_statistics;
 mod combine_partial_final_agg;
