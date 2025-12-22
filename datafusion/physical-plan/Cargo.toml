@@ -42,6 +42,9 @@ force_hash_collisions = []
 test_utils = ["arrow/test_utils"]
 tokio_coop = []
 tokio_coop_fallback = []
+# Force physical plans to keep state separately from itself, making
+# them re-executable.
+stateless_plan = []
 
 [lib]
 name = "datafusion_physical_plan"

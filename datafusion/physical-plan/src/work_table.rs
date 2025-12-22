@@ -23,7 +23,8 @@ use std::sync::{Arc, Mutex};
 use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
@@ -34,6 +35,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// A vector of record batches with a memory reservation.
@@ -100,12 +103,14 @@ pub struct WorkTableExec {
     name: String,
     /// The schema of the stream
     schema: SchemaRef,
-    /// The work table
-    work_table: Arc<WorkTable>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// The work table
+    #[cfg(not(feature = "stateless_plan"))]
+    work_table: Arc<WorkTable>,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl WorkTableExec {
@@ -115,9 +120,11 @@ impl WorkTableExec {
         Self {
             name,
             schema,
-            metrics: ExecutionPlanMetricsSet::new(),
-            work_table: Arc::new(WorkTable::new()),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            work_table: Arc::new(WorkTable::new()),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -189,6 +196,7 @@ impl ExecutionPlan for WorkTableExec {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         // WorkTable streams must be the plan base.
         assert_eq_or_internal_err!(
@@ -196,7 +204,20 @@ impl ExecutionPlan for WorkTableExec {
             0,
             "WorkTableExec got an invalid partition {partition} (expected 0)"
         );
-        let batch = self.work_table.take()?;
+
+        #[cfg(feature = "stateless_plan")]
+        let Some(work_table) = &state.work_table() else {
+            use datafusion_common::internal_err;
+
+            return internal_err!(
+                "work table is not found in one of the parent plan node"
+            );
+        };
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let work_table = &self.work_table;
+
+        let batch = work_table.take()?;
 
         let stream =
             MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
@@ -204,6 +225,7 @@ impl ExecutionPlan for WorkTableExec {
         Ok(Box::pin(cooperative(stream)))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -216,6 +238,7 @@ impl ExecutionPlan for WorkTableExec {
         Ok(Statistics::new_unknown(&self.schema()))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     /// Injects run-time state into this `WorkTableExec`.
     ///
     /// The only state this node currently understands is an [`Arc<WorkTable>`].

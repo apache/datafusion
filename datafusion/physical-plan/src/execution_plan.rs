@@ -24,16 +24,23 @@ pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
+#[cfg(not(feature = "stateless_plan"))]
+use crate::stream::RecordBatchStreamAdapter;
+#[cfg(feature = "stateless_plan")]
+use {crate::state::PlanStateNode, crate::state::WithPlanStateNode};
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
+use datafusion_execution::metrics::MetricsSet;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     Distribution, Partitioning, PhysicalExpr, expressions,
 };
+#[cfg(not(feature = "stateless_plan"))]
+use futures::StreamExt;
 
 use std::any::Any;
 use std::fmt::Debug;
@@ -41,9 +48,7 @@ use std::sync::Arc;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
-use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
-use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
@@ -59,7 +64,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
 
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::TryStreamExt;
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -80,6 +85,18 @@ use futures::stream::{StreamExt, TryStreamExt};
 /// [`execute`]: ExecutionPlan::execute
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
+///
+/// # State
+///
+/// Two modes are supported for physical plan states:
+///
+/// * Default mode: a plan state, which must be shared across partitions or
+///   different nodes during execution, is stored directly within each plan.
+///   In this mode, a plan generally cannot be reused.
+///
+/// * Statelss mode: a state is stored in a separate state tree created each
+///   time the plan is executed. In this mode, a plan can be reused and executed
+///   concurrently using separate state trees.
 ///
 /// # Examples
 ///
@@ -230,6 +247,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// thus it is expected that any cached plan properties will remain valid after the reset.
     ///
     /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
+    #[cfg(not(feature = "stateless_plan"))]
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
         self.with_new_children(children)
@@ -320,6 +338,17 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// The [cancellation benchmark] tracks some cases of how quickly queries can
     /// be cancelled.
+    ///
+    /// # State
+    ///
+    /// In stateless plan mode, the provided `state` must be preserved for the duration
+    /// of plan execution to guarantee correct results. For non-root nodes, this is
+    /// ensured by the [`Arc`]s stored within the parent state node, so it is important
+    /// to maintain this invariant for the root node.
+    ///
+    /// Helper functions are available to simplify working with state. For example,
+    /// [`execute_plan`] and [`execute_stream`] embed the state root into the returned
+    /// stream, ensuring it is not dropped until the stream itself is dropped.
     ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
@@ -454,6 +483,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream>;
 
     /// Return a snapshot of the set of [`Metric`]s for this
@@ -467,6 +497,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// resolved) for all available partitions, the set of metrics
     /// should be complete. If this function is called prior to
     /// `execute()` new metrics may appear in subsequent calls.
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }
@@ -679,6 +710,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// in order to wire up the working table used during recursive-CTE execution.
     /// Similar patterns can be followed by custom nodes that need late-bound
     /// dependencies or shared state.
+    #[cfg(not(feature = "stateless_plan"))]
     fn with_new_state(
         &self,
         _state: Arc<dyn Any + Send + Sync>,
@@ -1182,13 +1214,68 @@ pub fn displayable(plan: &dyn ExecutionPlan) -> DisplayableExecutionPlan<'_> {
     DisplayableExecutionPlan::new(plan)
 }
 
-/// Execute the [ExecutionPlan] and collect the results in memory
+/// Execute the [ExecutionPlan] and collect the results in memory.
+#[cfg(not(feature = "stateless_plan"))]
 pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
     let stream = execute_stream(plan, context)?;
     crate::common::collect(stream).await
+}
+
+/// Execute the [ExecutionPlan] and collect the results in memory.
+#[cfg(feature = "stateless_plan")]
+pub async fn collect(
+    plan: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> Result<Vec<RecordBatch>> {
+    collect_preserving_state(plan, context)
+        .await
+        .as_result()
+        .map(|r| r.into_inner())
+}
+
+/// Execute the [ExecutionPlan] and collect the results in memory,
+/// returning passed `metrics_plan` acquired just after plan execution.
+#[cfg(not(feature = "stateless_plan"))]
+pub async fn collect_and_get_metrics_of(
+    plan: Arc<dyn ExecutionPlan>,
+    metrics_plan: &Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> Result<(Vec<RecordBatch>, Option<MetricsSet>)> {
+    let batches = collect(Arc::clone(&plan), context).await?;
+    Ok((batches, metrics_plan.metrics()))
+}
+
+/// Execute the [ExecutionPlan] and collect the results in memory,
+/// returning passed `metrics_plan` acquired just after plan execution.
+#[cfg(feature = "stateless_plan")]
+pub async fn collect_and_get_metrics_of(
+    plan: Arc<dyn ExecutionPlan>,
+    metrics_plan: &Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> Result<(Vec<RecordBatch>, Option<MetricsSet>)> {
+    let (batches, state) = collect_preserving_state(plan, context)
+        .await
+        .as_result()?
+        .into_parts();
+    let metrics = state.metrics_of(metrics_plan);
+    Ok((batches, metrics))
+}
+
+/// Executes the [`ExecutionPlan`] and collects the results in memory.
+/// This function also preserves the plan state and returns it to the caller,
+/// which can be useful, for example, for accessing node metrics.
+#[cfg(feature = "stateless_plan")]
+pub async fn collect_preserving_state(
+    plan: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> WithPlanStateNode<Result<Vec<RecordBatch>>> {
+    execute_stream_preserving_state(plan, context)
+        .try_map_async(|stream| async move { Ok(crate::common::collect(stream?).await) })
+        .await
+        .unwrap()
 }
 
 /// Execute the [ExecutionPlan] and return a single stream of `RecordBatch`es.
@@ -1203,21 +1290,139 @@ pub async fn collect(
     clippy::needless_pass_by_value,
     reason = "Public API that historically takes owned Arcs"
 )]
+#[cfg(not(feature = "stateless_plan"))]
 pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
     match plan.output_partitioning().partition_count() {
-        0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
+        0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))
+            as SendableRecordBatchStream),
         1 => plan.execute(0, context),
         2.. => {
             // merge into a single partition
-            let plan = CoalescePartitionsExec::new(Arc::clone(&plan));
+            let plan = Arc::new(CoalescePartitionsExec::new(Arc::clone(&plan)));
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.properties().output_partitioning().partition_count());
             plan.execute(0, context)
         }
     }
+}
+
+/// Execute the [ExecutionPlan] and return a single stream of `RecordBatch`es.
+///
+/// See [collect] to buffer the `RecordBatch`es in memory.
+///
+/// # Aborting Execution
+///
+/// Dropping the stream will abort the execution of the query, and free up
+/// any allocated resources
+#[cfg(feature = "stateless_plan")]
+pub fn execute_stream(
+    plan: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> Result<SendableRecordBatchStream> {
+    let stream_with_state = execute_stream_preserving_state(plan, context).as_result()?;
+    Ok(Box::pin(stream_with_state))
+}
+
+#[cfg(feature = "stateless_plan")]
+pub fn execute_stream_and_get_metrics_of(
+    plan: Arc<dyn ExecutionPlan>,
+    metrics_plan: &Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> Result<(SendableRecordBatchStream, Option<MetricsSet>)> {
+    let stream_with_state = execute_stream_preserving_state(plan, context).as_result()?;
+    let metrics = stream_with_state.state().metrics_of(metrics_plan);
+    Ok((Box::pin(stream_with_state), metrics))
+}
+
+/// Execute the [ExecutionPlan].
+#[cfg(feature = "stateless_plan")]
+pub fn execute_stream_preserving_state(
+    plan: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> WithPlanStateNode<Result<SendableRecordBatchStream>> {
+    let num_partitions = plan.output_partitioning().partition_count();
+    if num_partitions == 0 {
+        let plan_state = PlanStateNode::new_root_arc(Arc::clone(&plan));
+        let stream = Box::pin(EmptyRecordBatchStream::new(plan.schema()));
+        return WithPlanStateNode::new(Ok(stream), plan_state);
+    }
+
+    let plan = if num_partitions == 1 {
+        plan
+    } else {
+        Arc::new(CoalescePartitionsExec::new(plan))
+    };
+
+    execute_plan_preserving_state(plan, 0, context)
+}
+
+/// Execute a particular partition of the [ExecutionPlan].
+/// This function also preserves the plan state and returns it to the caller,
+/// which can be useful, for example, for accessing node metrics.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "consistent with `execute_stream(...)`"
+)]
+#[cfg(feature = "stateless_plan")]
+pub fn execute_plan_preserving_state(
+    plan: Arc<dyn ExecutionPlan>,
+    partition: usize,
+    context: Arc<TaskContext>,
+) -> WithPlanStateNode<Result<SendableRecordBatchStream>> {
+    let plan_state = PlanStateNode::new_root_arc(Arc::clone(&plan));
+    let stream_res = plan.execute(partition, context, &plan_state);
+    WithPlanStateNode::new(stream_res, plan_state)
+}
+
+#[cfg(feature = "stateless_plan")]
+pub fn execute_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    partition: usize,
+    context: Arc<TaskContext>,
+) -> Result<SendableRecordBatchStream> {
+    let stream_with_state =
+        execute_plan_preserving_state(plan, partition, context).as_result()?;
+    Ok(Box::pin(stream_with_state))
+}
+
+#[cfg(not(feature = "stateless_plan"))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "consistent with `execute_stream(...)`"
+)]
+pub fn execute_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    partition: usize,
+    context: Arc<TaskContext>,
+) -> Result<SendableRecordBatchStream> {
+    plan.execute(partition, context)
+}
+
+#[cfg(not(feature = "stateless_plan"))]
+pub fn execute_plan_and_get_metrics_of(
+    plan: Arc<dyn ExecutionPlan>,
+    metrics_plan: &Arc<dyn ExecutionPlan>,
+    partition: usize,
+    context: Arc<TaskContext>,
+) -> Result<(SendableRecordBatchStream, Option<MetricsSet>)> {
+    let stream = execute_plan(plan, partition, context)?;
+    Ok((stream, metrics_plan.metrics()))
+}
+
+#[cfg(feature = "stateless_plan")]
+pub fn execute_plan_and_get_metrics_of(
+    plan: Arc<dyn ExecutionPlan>,
+    metrics_plan: &Arc<dyn ExecutionPlan>,
+    partition: usize,
+    context: Arc<TaskContext>,
+) -> Result<(SendableRecordBatchStream, Option<MetricsSet>)> {
+    let stream_with_state =
+        execute_plan_preserving_state(plan, partition, context).as_result()?;
+    let metrics = stream_with_state.state().metrics_of(metrics_plan);
+    Ok((Box::pin(stream_with_state), metrics))
 }
 
 /// Execute the [ExecutionPlan] and collect the results in memory
@@ -1271,6 +1476,7 @@ pub async fn collect_partitioned(
     clippy::needless_pass_by_value,
     reason = "Public API that historically takes owned Arcs"
 )]
+#[cfg(not(feature = "stateless_plan"))]
 pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -1279,6 +1485,24 @@ pub fn execute_stream_partitioned(
     let mut streams = Vec::with_capacity(num_partitions);
     for i in 0..num_partitions {
         streams.push(plan.execute(i, Arc::clone(&context))?);
+    }
+    Ok(streams)
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Public API that historically takes owned Arcs"
+)]
+#[cfg(feature = "stateless_plan")]
+pub fn execute_stream_partitioned(
+    plan: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+) -> Result<Vec<SendableRecordBatchStream>> {
+    let num_partitions = plan.output_partitioning().partition_count();
+    let mut streams = Vec::with_capacity(num_partitions);
+    let plan_state = PlanStateNode::new_root_arc(Arc::clone(&plan));
+    for i in 0..num_partitions {
+        streams.push(plan.execute(i, Arc::clone(&context), &plan_state)?);
     }
     Ok(streams)
 }
@@ -1306,6 +1530,7 @@ pub fn execute_stream_partitioned(
     clippy::needless_pass_by_value,
     reason = "Public API that historically takes owned Arcs"
 )]
+#[cfg(not(feature = "stateless_plan"))]
 pub fn execute_input_stream(
     input: Arc<dyn ExecutionPlan>,
     sink_schema: SchemaRef,
@@ -1331,6 +1556,7 @@ pub fn execute_input_stream(
         Ok(input_stream)
     } else {
         // Check not null constraint on the input stream
+
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             sink_schema,
             input_stream
@@ -1405,6 +1631,39 @@ pub enum CardinalityEffect {
     GreaterEqual,
 }
 
+// Macros helping to unify a work with the plan for both stateless/stateful method.
+
+/// Helps to acquire metrics.
+#[macro_export]
+macro_rules! plan_metrics {
+    ($self: expr, $state: expr $(,)?) => {{
+        #[cfg(feature = "stateless_plan")]
+        {
+            &$state.metrics
+        }
+        #[cfg(not(feature = "stateless_plan"))]
+        {
+            &$self.metrics
+        }
+    }};
+}
+
+/// Helps to execute a child plan.
+#[macro_export]
+macro_rules! execute_input {
+    ($child_idx: expr, $input: expr, $partition: expr, $task_ctx: expr, $state: expr $(,)?) => {{
+        #[cfg(feature = "stateless_plan")]
+        {
+            $input.execute($partition, $task_ctx, &$state.child_state($child_idx))
+        }
+
+        #[cfg(not(feature = "stateless_plan"))]
+        {
+            $input.execute($partition, $task_ctx)
+        }
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::Any;
@@ -1416,7 +1675,7 @@ mod tests {
     use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
-    use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion_execution::SendableRecordBatchStream;
 
     #[derive(Debug)]
     pub struct EmptyExec;
@@ -1465,6 +1724,7 @@ mod tests {
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,
+            #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }
@@ -1532,6 +1792,7 @@ mod tests {
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,
+            #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }

@@ -19,17 +19,22 @@
 //! [`crate::displayable`] for examples of how to format
 
 use std::collections::{BTreeMap, HashMap};
-use std::fmt;
 use std::fmt::Formatter;
+use std::fmt::{self, Debug};
+#[cfg(feature = "stateless_plan")]
+use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_execution::metrics::MetricsSet;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
 use crate::metrics::MetricType;
 use crate::render_tree::RenderTree;
+#[cfg(feature = "stateless_plan")]
+use crate::state::{ExecutionPlanStateVisitor, PlanStateNode, accept_state};
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
@@ -148,10 +153,19 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows aggregated
     /// metrics
-    pub fn with_metrics(inner: &'a dyn ExecutionPlan) -> Self {
+    pub fn with_metrics(
+        inner: &'a dyn ExecutionPlan,
+        #[cfg(feature = "stateless_plan")] state: Arc<PlanStateNode>,
+    ) -> Self {
+        #[cfg(feature = "stateless_plan")]
+        let show_metrics = ShowMetrics::Aggregated { state };
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let show_metrics = ShowMetrics::Aggregated;
+
         Self {
             inner,
-            show_metrics: ShowMetrics::Aggregated,
+            show_metrics,
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),
@@ -162,10 +176,19 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Create a wrapper around an [`ExecutionPlan`] which can be
     /// pretty printed in a variety of ways that also shows all low
     /// level metrics
-    pub fn with_full_metrics(inner: &'a dyn ExecutionPlan) -> Self {
+    pub fn with_full_metrics(
+        inner: &'a dyn ExecutionPlan,
+        #[cfg(feature = "stateless_plan")] state: Arc<PlanStateNode>,
+    ) -> Self {
+        #[cfg(feature = "stateless_plan")]
+        let show_metrics = ShowMetrics::Full { state };
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let show_metrics = ShowMetrics::Full;
+
         Self {
             inner,
-            show_metrics: ShowMetrics::Full,
+            show_metrics,
             show_statistics: false,
             show_schema: false,
             metric_types: Self::default_metric_types(),
@@ -216,32 +239,39 @@ impl<'a> DisplayableExecutionPlan<'a> {
         } else {
             DisplayFormatType::Default
         };
+
         struct Wrapper<'a> {
             format_type: DisplayFormatType,
-            plan: &'a dyn ExecutionPlan,
             show_metrics: ShowMetrics,
+            plan: &'a dyn ExecutionPlan,
             show_statistics: bool,
             show_schema: bool,
             metric_types: Vec<MetricType>,
         }
+
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                let mut visitor = IndentVisitor {
+                let mut formatter = IndentFormatter {
                     t: self.format_type,
                     f,
                     indent: 0,
-                    show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
                     show_schema: self.show_schema,
-                    metric_types: &self.metric_types,
                 };
-                accept(self.plan, &mut visitor)
+                dispatch_formatter(
+                    self.plan,
+                    &self.show_metrics,
+                    &self.metric_types,
+                    &mut formatter,
+                    false, // visit_only_root
+                )
             }
         }
+
         Wrapper {
             format_type,
             plan: self.inner,
-            show_metrics: self.show_metrics,
+            show_metrics: self.show_metrics.clone(),
             show_statistics: self.show_statistics,
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
@@ -270,28 +300,30 @@ impl<'a> DisplayableExecutionPlan<'a> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let t = DisplayFormatType::Default;
 
-                let mut visitor = GraphvizVisitor {
+                let mut formatter = GraphvizFormatter {
                     f,
                     t,
-                    show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
-                    metric_types: &self.metric_types,
                     graphviz_builder: GraphvizBuilder::default(),
                     parents: Vec::new(),
                 };
 
-                visitor.start_graph()?;
-
-                accept(self.plan, &mut visitor)?;
-
-                visitor.end_graph()?;
+                formatter.start_graph()?;
+                dispatch_formatter(
+                    self.plan,
+                    &self.show_metrics,
+                    &self.metric_types,
+                    &mut formatter,
+                    false, // visit_only_root
+                )?;
+                formatter.end_graph()?;
                 Ok(())
             }
         }
 
         Wrapper {
             plan: self.inner,
-            show_metrics: self.show_metrics,
+            show_metrics: self.show_metrics.clone(),
             show_statistics: self.show_statistics,
             metric_types: self.metric_types.clone(),
         }
@@ -333,23 +365,26 @@ impl<'a> DisplayableExecutionPlan<'a> {
 
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                let mut visitor = IndentVisitor {
+                let mut formatter = IndentFormatter {
                     f,
                     t: DisplayFormatType::Default,
                     indent: 0,
-                    show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
                     show_schema: self.show_schema,
-                    metric_types: &self.metric_types,
                 };
-                visitor.pre_visit(self.plan)?;
-                Ok(())
+                dispatch_formatter(
+                    self.plan,
+                    &self.show_metrics,
+                    &self.metric_types,
+                    &mut formatter,
+                    true, // visit_only_root
+                )
             }
         }
 
         Wrapper {
             plan: self.inner,
-            show_metrics: self.show_metrics,
+            show_metrics: self.show_metrics.clone(),
             show_statistics: self.show_statistics,
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
@@ -373,17 +408,214 @@ impl<'a> DisplayableExecutionPlan<'a> {
 }
 
 /// Enum representing the different levels of metrics to display
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone)]
 enum ShowMetrics {
     /// Do not show any metrics
     None,
 
     /// Show aggregated metrics across partition
+    #[cfg(feature = "stateless_plan")]
+    Aggregated { state: Arc<PlanStateNode> },
+
+    #[cfg(not(feature = "stateless_plan"))]
     Aggregated,
 
     /// Show full per-partition metrics
+    #[cfg(feature = "stateless_plan")]
+    Full { state: Arc<PlanStateNode> },
+
+    #[cfg(not(feature = "stateless_plan"))]
     Full,
 }
+
+impl Debug for ShowMetrics {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::None => "none",
+                Self::Aggregated { .. } => "aggregated",
+                Self::Full { .. } => "full",
+            }
+        )
+    }
+}
+
+/// Helper trait to implement various plan display formats.
+trait PlanFormatter {
+    fn pre_visit(
+        &mut self,
+        _plan: &dyn ExecutionPlan,
+        _metrics: Option<MetricsSet>,
+    ) -> Result<bool, fmt::Error>;
+
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, fmt::Error>;
+}
+
+/// Helps to dispatch formatter depending on metrics requirements.
+fn dispatch_formatter(
+    plan: &dyn ExecutionPlan,
+    show_metrics: &ShowMetrics,
+    metric_types: &[MetricType],
+    formatter: &mut impl PlanFormatter,
+    visit_only_root: bool,
+) -> fmt::Result {
+    macro_rules! dispatch {
+        ($plan: expr, $visitor: expr) => {
+            if !visit_only_root {
+                accept($plan, &mut $visitor)
+            } else {
+                $visitor.pre_visit(plan).map(|_| ())
+            }
+        };
+    }
+
+    #[cfg(feature = "stateless_plan")]
+    macro_rules! dispatch_with_state {
+        ($state: expr, $visitor: expr) => {
+            if !visit_only_root {
+                accept_state($state, &mut $visitor).map(|_| ())
+            } else {
+                $visitor.pre_visit($state).map(|_| ())
+            }
+        };
+    }
+
+    match &show_metrics {
+        ShowMetrics::None => {
+            // Metrics are not required, hence state is not required.
+            let mut visitor = PlanFormatterVisitor {
+                show_metrics: false,
+                formatter,
+                #[cfg(not(feature = "stateless_plan"))]
+                is_aggregated: false,
+                #[cfg(not(feature = "stateless_plan"))]
+                metric_types: &[],
+            };
+            dispatch!(plan, visitor)
+        }
+        #[cfg(not(feature = "stateless_plan"))]
+        ShowMetrics::Aggregated | ShowMetrics::Full => {
+            let is_aggregated = matches!(show_metrics, ShowMetrics::Aggregated);
+
+            // Take metrics from the plan itself.
+            let mut visitor = PlanFormatterVisitor {
+                show_metrics: true,
+                formatter,
+                is_aggregated,
+                metric_types,
+            };
+            dispatch!(plan, visitor)
+        }
+        #[cfg(feature = "stateless_plan")]
+        ShowMetrics::Aggregated { state } | ShowMetrics::Full { state } => {
+            let is_aggregated = matches!(show_metrics, ShowMetrics::Aggregated { .. });
+
+            // Take metrics from the state.
+            let mut visitor = PlanWithStateFormatterVisitor {
+                formatter,
+                is_aggregated,
+                metric_types,
+            };
+            dispatch_with_state!(state, visitor)
+        }
+    }
+}
+
+/// Formats plan without state.
+struct PlanFormatterVisitor<'a, T> {
+    formatter: &'a mut T,
+    show_metrics: bool,
+    #[cfg(not(feature = "stateless_plan"))]
+    is_aggregated: bool,
+    #[cfg(not(feature = "stateless_plan"))]
+    metric_types: &'a [MetricType],
+}
+
+impl<T> ExecutionPlanVisitor for PlanFormatterVisitor<'_, T>
+where
+    T: PlanFormatter,
+{
+    type Error = fmt::Error;
+
+    #[cfg(feature = "stateless_plan")]
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+        let _ = self.show_metrics;
+        self.formatter.pre_visit(plan, None)
+    }
+
+    #[cfg(not(feature = "stateless_plan"))]
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+        let metrics = if !self.show_metrics {
+            None
+        } else {
+            plan.metrics().map(|metrics| {
+                if self.is_aggregated {
+                    metrics
+                        .filter_by_metric_types(self.metric_types)
+                        .aggregate_by_name()
+                        .sorted_for_display()
+                        .timestamps_removed()
+                } else {
+                    metrics.filter_by_metric_types(self.metric_types)
+                }
+            })
+        };
+
+        self.formatter.pre_visit(plan, metrics)
+    }
+
+    fn post_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+        self.formatter.post_visit(plan)
+    }
+}
+
+#[cfg(feature = "stateless_plan")]
+mod visitor {
+    use crate::state::ExecutionPlanStateVisitor;
+
+    use super::*;
+
+    /// Formats plan with metrics. State is required.
+    pub struct PlanWithStateFormatterVisitor<'a, T> {
+        pub formatter: &'a mut T,
+        pub is_aggregated: bool,
+        pub metric_types: &'a [MetricType],
+    }
+
+    impl<T> ExecutionPlanStateVisitor for PlanWithStateFormatterVisitor<'_, T>
+    where
+        T: PlanFormatter,
+    {
+        type Error = fmt::Error;
+
+        fn pre_visit(&mut self, state: &Arc<PlanStateNode>) -> Result<bool, Self::Error> {
+            let metrics = state.metrics.clone_inner();
+            let metrics = if self.is_aggregated {
+                metrics
+                    .filter_by_metric_types(self.metric_types)
+                    .aggregate_by_name()
+                    .sorted_for_display()
+                    .timestamps_removed()
+            } else {
+                metrics.filter_by_metric_types(self.metric_types)
+            };
+            self.formatter
+                .pre_visit(state.plan_node.as_ref(), Some(metrics))
+        }
+
+        fn post_visit(
+            &mut self,
+            state: &Arc<PlanStateNode>,
+        ) -> Result<bool, Self::Error> {
+            self.formatter.post_visit(state.plan_node.as_ref())
+        }
+    }
+}
+
+#[cfg(feature = "stateless_plan")]
+use visitor::PlanWithStateFormatterVisitor;
 
 /// Formats plans with a single line per node.
 ///
@@ -394,51 +626,33 @@ enum ShowMetrics {
 ///   FilterExec: column1@0 = 5
 ///     ValuesExec
 /// ```
-struct IndentVisitor<'a, 'b> {
+struct IndentFormatter<'a, 'b> {
     /// How to format each node
     t: DisplayFormatType,
     /// Write to this formatter
     f: &'a mut Formatter<'b>,
     /// Indent size
     indent: usize,
-    /// How to show metrics
-    show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
     /// If schema should be displayed
     show_schema: bool,
-    /// Which metric types should be rendered
-    metric_types: &'a [MetricType],
 }
 
-impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
-    type Error = fmt::Error;
-    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+impl PlanFormatter for IndentFormatter<'_, '_> {
+    fn pre_visit(
+        &mut self,
+        plan: &dyn ExecutionPlan,
+        metrics: Option<MetricsSet>,
+    ) -> Result<bool, fmt::Error> {
         write!(self.f, "{:indent$}", "", indent = self.indent * 2)?;
         plan.fmt_as(self.t, self.f)?;
-        match self.show_metrics {
-            ShowMetrics::None => {}
-            ShowMetrics::Aggregated => {
-                if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics
-                        .filter_by_metric_types(self.metric_types)
-                        .aggregate_by_name()
-                        .sorted_for_display()
-                        .timestamps_removed();
-
-                    write!(self.f, ", metrics=[{metrics}]")?;
-                } else {
-                    write!(self.f, ", metrics=[]")?;
-                }
-            }
-            ShowMetrics::Full => {
-                if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics.filter_by_metric_types(self.metric_types);
-                    write!(self.f, ", metrics=[{metrics}]")?;
-                } else {
-                    write!(self.f, ", metrics=[]")?;
-                }
-            }
+        if let Some(metrics) = metrics {
+            if metrics.is_empty() {
+                write!(self.f, ", metrics=[]")?
+            } else {
+                write!(self.f, ", metrics=[{metrics}]")?
+            };
         }
         if self.show_statistics {
             let stats = plan.partition_statistics(None).map_err(|_e| fmt::Error)?;
@@ -456,29 +670,24 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
         Ok(true)
     }
 
-    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, fmt::Error> {
         self.indent -= 1;
         Ok(true)
     }
 }
 
-struct GraphvizVisitor<'a, 'b> {
+struct GraphvizFormatter<'a, 'b> {
     f: &'a mut Formatter<'b>,
     /// How to format each node
     t: DisplayFormatType,
-    /// How to show metrics
-    show_metrics: ShowMetrics,
     /// If statistics should be displayed
     show_statistics: bool,
-    /// Which metric types should be rendered
-    metric_types: &'a [MetricType],
-
     graphviz_builder: GraphvizBuilder,
     /// Used to record parent node ids when visiting a plan.
     parents: Vec<usize>,
 }
 
-impl GraphvizVisitor<'_, '_> {
+impl GraphvizFormatter<'_, '_> {
     fn start_graph(&mut self) -> fmt::Result {
         self.graphviz_builder.start_graph(self.f)
     }
@@ -488,10 +697,12 @@ impl GraphvizVisitor<'_, '_> {
     }
 }
 
-impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
-    type Error = fmt::Error;
-
-    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+impl PlanFormatter for GraphvizFormatter<'_, '_> {
+    fn pre_visit(
+        &mut self,
+        plan: &dyn ExecutionPlan,
+        metrics: Option<MetricsSet>,
+    ) -> Result<bool, fmt::Error> {
         let id = self.graphviz_builder.next_id();
 
         struct Wrapper<'a>(&'a dyn ExecutionPlan, DisplayFormatType);
@@ -503,30 +714,15 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         }
 
         let label = { format!("{}", Wrapper(plan, self.t)) };
-
-        let metrics = match self.show_metrics {
-            ShowMetrics::None => "".to_string(),
-            ShowMetrics::Aggregated => {
-                if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics
-                        .filter_by_metric_types(self.metric_types)
-                        .aggregate_by_name()
-                        .sorted_for_display()
-                        .timestamps_removed();
-
-                    format!("metrics=[{metrics}]")
-                } else {
+        let metrics = match metrics {
+            Some(metrics) => {
+                if metrics.is_empty() {
                     "metrics=[]".to_string()
+                } else {
+                    format!("metrics=[{metrics}]")
                 }
             }
-            ShowMetrics::Full => {
-                if let Some(metrics) = plan.metrics() {
-                    let metrics = metrics.filter_by_metric_types(self.metric_types);
-                    format!("metrics=[{metrics}]")
-                } else {
-                    "metrics=[]".to_string()
-                }
-            }
+            None => "".to_string(),
         };
 
         let statistics = if self.show_statistics {
@@ -559,7 +755,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         Ok(true)
     }
 
-    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, fmt::Error> {
         self.parents.pop();
         Ok(true)
     }
@@ -1123,6 +1319,8 @@ mod tests {
     use datafusion_common::{Result, Statistics, internal_datafusion_err};
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
+    #[cfg(feature = "stateless_plan")]
+    use crate::state::PlanStateNode;
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
 
     use super::DisplayableExecutionPlan;
@@ -1172,6 +1370,7 @@ mod tests {
             &self,
             _: usize,
             _: Arc<TaskContext>,
+            #[cfg(feature = "stateless_plan")] _: &Arc<PlanStateNode>,
         ) -> Result<SendableRecordBatchStream> {
             todo!()
         }

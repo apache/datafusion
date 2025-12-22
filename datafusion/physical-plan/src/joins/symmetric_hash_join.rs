@@ -50,11 +50,12 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_filter, update_join_on,
 };
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     joins::StreamJoinPartitionMode,
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
 use arrow::array::{
@@ -72,6 +73,8 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
@@ -184,8 +187,6 @@ pub struct SymmetricHashJoinExec {
     pub(crate) join_type: JoinType,
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Defines the null equality for the join.
@@ -198,6 +199,9 @@ pub struct SymmetricHashJoinExec {
     mode: StreamJoinPartitionMode,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl SymmetricHashJoinExec {
@@ -247,13 +251,14 @@ impl SymmetricHashJoinExec {
             filter,
             join_type: *join_type,
             random_state,
-            metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equality,
             left_sort_exprs,
             right_sort_exprs,
             mode,
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -466,6 +471,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         )?))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -479,7 +485,13 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
         assert_eq_or_internal_err!(
@@ -517,9 +529,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let right_side_joiner =
             OneSideHashJoiner::new(JoinSide::Right, on_right, self.right.schema());
 
-        let left_stream = self.left.execute(partition, Arc::clone(&context))?;
-
-        let right_stream = self.right.execute(partition, Arc::clone(&context))?;
+        let left_stream =
+            execute_input!(0, self.left, partition, Arc::clone(&context), state)?;
+        let right_stream =
+            execute_input!(1, self.right, partition, Arc::clone(&context), state)?;
 
         let batch_size = context.session_config().batch_size();
         let enforce_batch_size_in_joins =
@@ -544,7 +557,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 left: left_side_joiner,
                 right: right_side_joiner,
                 column_indices: self.column_indices.clone(),
-                metrics: StreamJoinMetrics::new(partition, &self.metrics),
+                metrics: StreamJoinMetrics::new(partition, plan_metrics!(self, state)),
                 graph,
                 left_sorted_filter_expr,
                 right_sorted_filter_expr,
@@ -564,7 +577,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 left: left_side_joiner,
                 right: right_side_joiner,
                 column_indices: self.column_indices.clone(),
-                metrics: StreamJoinMetrics::new(partition, &self.metrics),
+                metrics: StreamJoinMetrics::new(partition, plan_metrics!(self, state)),
                 graph,
                 left_sorted_filter_expr,
                 right_sorted_filter_expr,

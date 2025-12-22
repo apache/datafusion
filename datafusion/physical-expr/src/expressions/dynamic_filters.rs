@@ -22,11 +22,11 @@ use tokio::sync::watch;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{
-    Result,
+    Result, internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
+use datafusion_physical_expr_common::physical_expr::DynHash;
 
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,21 +46,134 @@ impl FilterState {
     }
 }
 
-/// A dynamic [`PhysicalExpr`] that can be updated by anyone with a reference to it.
-///
-/// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
-/// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
-/// the same `ExecutionPlan` is reused with different data.
-#[derive(Debug)]
-pub struct DynamicFilterPhysicalExpr {
+/// Planning time version of dynamic filter, not intended to be concurrently modified.
+/// Typically, it is converted to the [`DynamicFilterPhysicalExpr`] when a plan is executed.
+#[derive(Debug, Clone)]
+pub struct PlannedDynamicFilterPhysicalExpr {
+    pub(super) expr: Arc<dyn PhysicalExpr>,
     /// The original children of this PhysicalExpr, if any.
     /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
     /// and later remapped to the actual expressions that are being filtered.
     /// But we need to know the children (e.g. columns referenced in the expression) ahead of time to evaluate the expression correctly.
-    children: Vec<Arc<dyn PhysicalExpr>>,
+    pub(super) children: Vec<Arc<dyn PhysicalExpr>>,
     /// If any of the children were remapped / modified (e.g. to adjust for projections) we need to keep track of the new children
-    /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
-    remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    /// so that when we update [`DynamicFilterPhysicalExpr::current`] in subsequent iterations we can re-apply the replacements.
+    pub(super) remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+}
+
+impl PartialEq for PlannedDynamicFilterPhysicalExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.children == other.children && self.expr.dyn_eq(&other.expr)
+    }
+}
+
+impl Hash for PlannedDynamicFilterPhysicalExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expr.dyn_hash(state);
+        self.children.dyn_hash(state);
+        self.remapped_children.dyn_hash(state);
+    }
+}
+
+impl Eq for PlannedDynamicFilterPhysicalExpr {}
+
+impl Display for PlannedDynamicFilterPhysicalExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DynamicFilter [ ")?;
+        // Same as init-generation [`DynamicFilterPhysicalExpr`].
+        format_empty_filter(f)?;
+        write!(f, " ]")
+    }
+}
+
+impl PlannedDynamicFilterPhysicalExpr {
+    /// Create a new [`PlannedDynamicFilterPhysicalExpr`]
+    /// from an initial expression and a list of children.
+    /// The list of children is provided separately because
+    /// the initial expression may not have the same children.
+    /// For example, if the initial expression is just `true`
+    /// it will not reference any columns, but we may know that
+    /// we are going to replace this expression with a real one
+    /// that does reference certain columns.
+    /// In this case you **must** pass in the columns that will be
+    /// used in the final expression as children to this function
+    /// since DataFusion is generally not compatible with dynamic
+    /// *children* in expressions.
+    ///
+    /// To determine the children you can:
+    ///
+    /// - Use [`collect_columns`] to collect the columns from the expression.
+    /// - Use existing information, such as the sort columns in a `SortExec`.
+    ///
+    /// Generally the important bit is that the *leaf children that reference columns
+    /// do not change* since those will be used to determine what columns need to read or projected
+    /// when evaluating the expression.
+    ///
+    /// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
+    /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
+    /// the same `ExecutionPlan` is reused with different data.
+    ///
+    /// [`collect_columns`]: crate::utils::collect_columns
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        Self {
+            children,
+            expr,
+            remapped_children: None, // Initially no remapped children
+        }
+    }
+
+    /// Convert this origin into [`DynamicFilterPhysicalExpr`] which could be
+    /// modified concurrently and tracks self generation.
+    pub fn to_executable(&self) -> DynamicFilterPhysicalExpr {
+        DynamicFilterPhysicalExpr::init(
+            self.children.clone(),
+            Arc::clone(&self.expr),
+            self.remapped_children.clone(),
+        )
+    }
+}
+
+impl PhysicalExpr for PlannedDynamicFilterPhysicalExpr {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn evaluate(&self, _batch: &arrow::array::RecordBatch) -> Result<ColumnarValue> {
+        internal_err!("planned expr is not supposed to be directly evaluated")
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        self.remapped_children
+            .as_ref()
+            .unwrap_or(&self.children)
+            .iter()
+            .collect()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(Self {
+            expr: Arc::clone(&self.expr),
+            children: self.children.clone(),
+            remapped_children: Some(children),
+        }))
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.fmt(f)
+    }
+}
+
+/// A dynamic [`PhysicalExpr`] that can be updated by anyone with a reference to it.
+#[derive(Debug, Clone)]
+pub struct DynamicFilterPhysicalExpr {
+    /// The same as [`PlannedDynamicFilterPhysicalExpr::children`].
+    children: Vec<Arc<dyn PhysicalExpr>>,
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
     /// Broadcasts filter state (updates and completion) to all waiters.
@@ -70,6 +183,43 @@ pub struct DynamicFilterPhysicalExpr {
     /// But this can have overhead in production, so it's only included in our tests.
     data_type: Arc<RwLock<Option<DataType>>>,
     nullable: Arc<RwLock<Option<bool>>>,
+    /// Origin expression.
+    origin: Arc<dyn PhysicalExpr>,
+    /// Originated from [`PlannedDynamicFilterPhysicalExpr::remapped_children`].
+    remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+}
+
+impl Hash for DynamicFilterPhysicalExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let inner = self.current().expect("Failed to get current expression");
+        inner.dyn_hash(state);
+        self.children.hash(state);
+        self.remapped_children.dyn_hash(state);
+    }
+}
+
+impl PartialEq for DynamicFilterPhysicalExpr {
+    fn eq(&self, other: &Self) -> bool {
+        let inner = self.current().expect("Failed to get current expression");
+        let our_children = self.remapped_children.as_ref().unwrap_or(&self.children);
+        let other_children = other.remapped_children.as_ref().unwrap_or(&other.children);
+        let other = other.current().expect("Failed to get current expression");
+        inner.dyn_eq(other.as_any()) && our_children == other_children
+    }
+}
+
+impl Eq for DynamicFilterPhysicalExpr {}
+
+impl Display for DynamicFilterPhysicalExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.render(f, |expr, f| write!(f, "{expr}"))
+    }
+}
+
+impl From<&PlannedDynamicFilterPhysicalExpr> for DynamicFilterPhysicalExpr {
+    fn from(planned: &PlannedDynamicFilterPhysicalExpr) -> Self {
+        planned.to_executable()
+    }
 }
 
 #[derive(Debug)]
@@ -101,74 +251,31 @@ impl Inner {
     }
 }
 
-impl Hash for DynamicFilterPhysicalExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let inner = self.current().expect("Failed to get current expression");
-        inner.dyn_hash(state);
-        self.children.dyn_hash(state);
-        self.remapped_children.dyn_hash(state);
-    }
-}
-
-impl PartialEq for DynamicFilterPhysicalExpr {
-    fn eq(&self, other: &Self) -> bool {
-        let inner = self.current().expect("Failed to get current expression");
-        let our_children = self.remapped_children.as_ref().unwrap_or(&self.children);
-        let other_children = other.remapped_children.as_ref().unwrap_or(&other.children);
-        let other = other.current().expect("Failed to get current expression");
-        inner.dyn_eq(other.as_any()) && our_children == other_children
-    }
-}
-
-impl Eq for DynamicFilterPhysicalExpr {}
-
-impl Display for DynamicFilterPhysicalExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.render(f, |expr, f| write!(f, "{expr}"))
-    }
-}
-
 impl DynamicFilterPhysicalExpr {
-    /// Create a new [`DynamicFilterPhysicalExpr`]
-    /// from an initial expression and a list of children.
-    /// The list of children is provided separately because
-    /// the initial expression may not have the same children.
-    /// For example, if the initial expression is just `true`
-    /// it will not reference any columns, but we may know that
-    /// we are going to replace this expression with a real one
-    /// that does reference certain columns.
-    /// In this case you **must** pass in the columns that will be
-    /// used in the final expression as children to this function
-    /// since DataFusion is generally not compatible with dynamic
-    /// *children* in expressions.
-    ///
-    /// To determine the children you can:
-    ///
-    /// - Use [`collect_columns`] to collect the columns from the expression.
-    /// - Use existing information, such as the sort columns in a `SortExec`.
-    ///
-    /// Generally the important bit is that the *leaf children that reference columns
-    /// do not change* since those will be used to determine what columns need to read or projected
-    /// when evaluating the expression.
-    ///
-    /// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
-    /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
-    /// the same `ExecutionPlan` is reused with different data.
-    ///
-    /// [`collect_columns`]: crate::utils::collect_columns
-    pub fn new(
+    fn init(
         children: Vec<Arc<dyn PhysicalExpr>>,
-        inner: Arc<dyn PhysicalExpr>,
+        origin: Arc<dyn PhysicalExpr>,
+        remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
     ) -> Self {
         let (state_watch, _) = watch::channel(FilterState::InProgress { generation: 1 });
         Self {
             children,
-            remapped_children: None, // Initially no remapped children
-            inner: Arc::new(RwLock::new(Inner::new(inner))),
+            remapped_children,
+            inner: Arc::new(RwLock::new(Inner::new(Arc::clone(&origin)))),
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
+            origin,
         }
+    }
+
+    /// Make a new [`DynamicFilterPhysicalExpr`].
+    /// See the comment for [`PlannedDynamicFilterPhysicalExpr`] for details.
+    pub fn new(
+        origin: Arc<dyn PhysicalExpr>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        Self::init(children, origin, None)
     }
 
     fn remap_children(
@@ -294,6 +401,23 @@ impl DynamicFilterPhysicalExpr {
             .await;
     }
 
+    /// Check if this dynamic filter is originated from passed planned
+    /// [`PlannedDynamicFilterPhysicalExpr`] and if it is so -- return
+    /// its executable version.
+    pub fn as_dynamic_for(
+        &self,
+        origin: &PlannedDynamicFilterPhysicalExpr,
+    ) -> Option<Arc<DynamicFilterPhysicalExpr>> {
+        if Arc::ptr_eq(&self.origin, &origin.expr) {
+            let mut expr = self.clone();
+            expr.remapped_children = origin.remapped_children.clone();
+            expr.children = origin.children.clone();
+            Some(Arc::new(expr))
+        } else {
+            None
+        }
+    }
+
     fn render(
         &self,
         f: &mut std::fmt::Formatter<'_>,
@@ -306,13 +430,17 @@ impl DynamicFilterPhysicalExpr {
         let current_generation = self.current_generation();
         write!(f, "DynamicFilter [ ")?;
         if current_generation == 1 {
-            write!(f, "empty")?;
+            format_empty_filter(f)?;
         } else {
             render_expr(inner, f)?;
         }
 
         write!(f, " ]")
     }
+}
+
+fn format_empty_filter(f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "empty")
 }
 
 impl PhysicalExpr for DynamicFilterPhysicalExpr {
@@ -339,6 +467,7 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
+            origin: Arc::clone(&self.origin),
         }))
     }
 
@@ -442,10 +571,13 @@ mod test {
             datafusion_expr::Operator::Eq,
             lit(42) as Arc<dyn PhysicalExpr>,
         ));
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![col("a", &table_schema).unwrap()],
-            expr as Arc<dyn PhysicalExpr>,
-        ));
+        let dynamic_filter = Arc::new(
+            PlannedDynamicFilterPhysicalExpr::new(
+                expr as Arc<dyn PhysicalExpr>,
+                vec![col("a", &table_schema).unwrap()],
+            )
+            .to_executable(),
+        );
         // Simulate two `ParquetSource` files with different filter schemas
         // Both of these should hit the same inner `PhysicalExpr` even after `update()` is called
         // and be able to remap children independently.
@@ -539,7 +671,9 @@ mod test {
     #[test]
     fn test_snapshot() {
         let expr = lit(42) as Arc<dyn PhysicalExpr>;
-        let dynamic_filter = DynamicFilterPhysicalExpr::new(vec![], Arc::clone(&expr));
+        let dynamic_filter =
+            PlannedDynamicFilterPhysicalExpr::new(Arc::clone(&expr), vec![])
+                .to_executable();
 
         // Take a snapshot of the current expression
         let snapshot = dynamic_filter.snapshot().unwrap();
@@ -555,8 +689,11 @@ mod test {
 
     #[test]
     fn test_dynamic_filter_physical_expr_misbehaves_data_type_nullable() {
-        let dynamic_filter =
-            DynamicFilterPhysicalExpr::new(vec![], lit(42) as Arc<dyn PhysicalExpr>);
+        let dynamic_filter = PlannedDynamicFilterPhysicalExpr::new(
+            lit(42) as Arc<dyn PhysicalExpr>,
+            vec![],
+        )
+        .to_executable();
 
         // First call to data_type and nullable should set the initial values.
         let initial_data_type = dynamic_filter.data_type(&Schema::empty()).unwrap();
@@ -596,10 +733,13 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_complete_already_complete() {
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![],
-            lit(42) as Arc<dyn PhysicalExpr>,
-        ));
+        let dynamic_filter = Arc::new(
+            PlannedDynamicFilterPhysicalExpr::new(
+                lit(42) as Arc<dyn PhysicalExpr>,
+                vec![],
+            )
+            .to_executable(),
+        );
 
         // Mark as complete immediately
         dynamic_filter.mark_complete();
@@ -631,10 +771,13 @@ mod test {
         ));
 
         // Create DynamicFilterPhysicalExpr with children [col_a, col_b]
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
-            expr as Arc<dyn PhysicalExpr>,
-        ));
+        let dynamic_filter = Arc::new(
+            PlannedDynamicFilterPhysicalExpr::new(
+                expr as Arc<dyn PhysicalExpr>,
+                vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            )
+            .to_executable(),
+        );
 
         // Clone the Arc (two references to the same DynamicFilterPhysicalExpr)
         let clone_1 = Arc::clone(&dynamic_filter);

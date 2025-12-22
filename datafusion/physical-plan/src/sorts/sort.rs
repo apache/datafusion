@@ -27,6 +27,9 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::common::spawn_buffered;
+use crate::dynamic_filter::{
+    PlannedDynamicFilterPhysicalExpr, make_planned_dynamic_filter,
+};
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::filter_pushdown::{
@@ -34,14 +37,15 @@ use crate::filter_pushdown::{
 };
 use crate::limit::LimitStream;
 use crate::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput, SpillMetrics,
-    SplitMetrics,
+    BaselineMetrics, ExecutionPlanMetricsSet, RecordOutput, SpillMetrics, SplitMetrics,
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::stream::BatchSplitStream;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
@@ -62,10 +66,12 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::MetricsSet;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::lit;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -881,8 +887,6 @@ pub struct SortExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: LexOrdering,
-    /// Containing all metrics set created during sort
-    metrics_set: ExecutionPlanMetricsSet,
     /// Preserve partitions of input plan. If false, the input partitions
     /// will be sorted and merged into a single output partition.
     preserve_partitioning: bool,
@@ -895,8 +899,41 @@ pub struct SortExec {
     /// Filter matching the state of the sort for dynamic filter pushdown.
     /// If `fetch` is `Some`, this will also be set and a TopK operator may be used.
     /// If `fetch` is `None`, this will be `None`.
-    filter: Option<Arc<RwLock<TopKDynamicFilters>>>,
+    filter: Option<Arc<PlannedDynamicFilterPhysicalExpr>>,
+    /// Containing all metrics set created during sort
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
+
+#[cfg(feature = "stateless_plan")]
+mod exec_state {
+    use crate::dynamic_filter::DynamicFilterPhysicalExpr;
+    use crate::state::PlanState;
+
+    use super::*;
+
+    pub struct SortExecState {
+        /// Originated from [`SortExec::filter`].
+        pub filter: Option<Arc<RwLock<TopKDynamicFilters>>>,
+    }
+
+    impl PlanState for SortExecState {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn dynamic_filters(&self) -> Vec<Arc<DynamicFilterPhysicalExpr>> {
+            if let Some(filter) = self.filter.as_ref() {
+                vec![filter.read().expr()]
+            } else {
+                vec![]
+            }
+        }
+    }
+}
+
+#[cfg(feature = "stateless_plan")]
+use exec_state::SortExecState;
 
 impl SortExec {
     /// Create a new sort execution plan that produces a single,
@@ -909,12 +946,13 @@ impl SortExec {
         Self {
             expr,
             input,
-            metrics_set: ExecutionPlanMetricsSet::new(),
             preserve_partitioning,
             fetch: None,
             common_sort_prefix: sort_prefix,
             cache,
             filter: None,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -941,28 +979,38 @@ impl SortExec {
         self
     }
 
-    /// Add or reset `self.filter` to a new `TopKDynamicFilters`.
-    fn create_filter(&self) -> Arc<RwLock<TopKDynamicFilters>> {
+    /// Add or reset `self.filter`.
+    fn create_filter(&self) -> Arc<PlannedDynamicFilterPhysicalExpr> {
         let children = self
             .expr
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
             .collect::<Vec<_>>();
-        Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
-            DynamicFilterPhysicalExpr::new(children, lit(true)),
-        ))))
+        Arc::new(make_planned_dynamic_filter(lit(true), children))
+    }
+
+    fn execute_filter(&self) -> Option<Arc<RwLock<TopKDynamicFilters>>> {
+        self.filter.as_ref().map(|filter| {
+            Arc::new(RwLock::new(TopKDynamicFilters::new(
+                #[cfg(feature = "stateless_plan")]
+                Arc::new(filter.to_executable()),
+                #[cfg(not(feature = "stateless_plan"))]
+                Arc::clone(filter),
+            )))
+        })
     }
 
     fn cloned(&self) -> Self {
         SortExec {
             input: Arc::clone(&self.input),
             expr: self.expr.clone(),
-            metrics_set: self.metrics_set.clone(),
             preserve_partitioning: self.preserve_partitioning,
             common_sort_prefix: self.common_sort_prefix.clone(),
             fetch: self.fetch,
             cache: self.cache.clone(),
             filter: self.filter.clone(),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: self.metrics.clone(),
         }
     }
 
@@ -1092,12 +1140,19 @@ impl DisplayAs for SortExec {
                             "SortExec: TopK(fetch={fetch}), expr=[{}], preserve_partitioning=[{preserve_partitioning}]",
                             self.expr
                         )?;
+
+                        // Note: in the case of stateless plan stored planned dynamic
+                        // filter is always trivial prior to execution so it doesn't make
+                        // sense to display it.
+                        // TODO: introduce `fmt_as_with_state` to handle such cases.
+                        #[cfg(not(feature = "stateless_plan"))]
                         if let Some(filter) = &self.filter
-                            && let Ok(current) = filter.read().expr().current()
+                            && let Ok(current) = filter.current()
                             && !current.eq(&lit(true))
                         {
                             write!(f, ", filter=[{current}]")?;
                         }
+
                         if !self.common_sort_prefix.is_empty() {
                             write!(f, ", sort_prefix=[")?;
                             let mut first = true;
@@ -1190,6 +1245,7 @@ impl ExecutionPlan for SortExec {
         Ok(Arc::new(new_sort))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
         let new_sort = self.with_new_children(children)?;
@@ -1200,7 +1256,7 @@ impl ExecutionPlan for SortExec {
             .clone();
         // Our dynamic filter and execution metrics are the state we need to reset.
         new_sort.filter = Some(new_sort.create_filter());
-        new_sort.metrics_set = ExecutionPlanMetricsSet::new();
+        new_sort.metrics = ExecutionPlanMetricsSet::new();
 
         Ok(Arc::new(new_sort))
     }
@@ -1209,7 +1265,13 @@ impl ExecutionPlan for SortExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         trace!(
             "Start SortExec::execute for partition {} of context session_id {} and task_id {:?}",
             partition,
@@ -1217,7 +1279,21 @@ impl ExecutionPlan for SortExec {
             context.task_id()
         );
 
-        let mut input = self.input.execute(partition, Arc::clone(&context))?;
+        // Initialize state prior to execute input to possibly provide
+        // an access to dynamic filters for children nodes.
+        #[cfg(feature = "stateless_plan")]
+        let filter = {
+            let exec_state = state.get_or_init_state(|| SortExecState {
+                filter: self.execute_filter(),
+            });
+            exec_state.filter.clone()
+        };
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let filter = self.execute_filter();
+
+        let mut input =
+            execute_input!(0, self.input, partition, Arc::clone(&context), state)?;
 
         let execution_options = &context.session_config().options().execution;
 
@@ -1233,11 +1309,10 @@ impl ExecutionPlan for SortExec {
                 input,
                 0,
                 Some(*fetch),
-                BaselineMetrics::new(&self.metrics_set, partition),
+                BaselineMetrics::new(plan_metrics!(self, state), partition),
             ))),
             (true, None) => Ok(input),
             (false, Some(fetch)) => {
-                let filter = self.filter.clone();
                 let mut topk = TopK::try_new(
                     partition,
                     input.schema(),
@@ -1246,7 +1321,7 @@ impl ExecutionPlan for SortExec {
                     *fetch,
                     context.session_config().batch_size(),
                     context.runtime_env(),
-                    &self.metrics_set,
+                    plan_metrics!(self, state),
                     Arc::clone(&unwrap_or_internal_err!(filter)),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -1273,7 +1348,7 @@ impl ExecutionPlan for SortExec {
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
                     context.session_config().spill_compression(),
-                    &self.metrics_set,
+                    plan_metrics!(self, state),
                     context.runtime_env(),
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -1291,8 +1366,9 @@ impl ExecutionPlan for SortExec {
         }
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics_set.clone_inner())
+        Some(self.metrics.clone_inner())
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -1367,7 +1443,7 @@ impl ExecutionPlan for SortExec {
         if let Some(filter) = &self.filter
             && config.optimizer.enable_topk_dynamic_filter_pushdown
         {
-            child = child.with_self_filter(filter.read().expr());
+            child = child.with_self_filter(Arc::clone(filter) as Arc<_>);
         }
 
         Ok(FilterDescription::new().with_child(child))
@@ -1383,7 +1459,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::collect;
-    use crate::execution_plan::Boundedness;
+    use crate::execution_plan::{Boundedness, collect_and_get_metrics_of, execute_plan};
     use crate::expressions::col;
     use crate::test;
     use crate::test::TestMemoryExec;
@@ -1398,6 +1474,7 @@ mod tests {
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::metrics::MetricsSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_expr::expressions::{Column, Literal};
@@ -1468,6 +1545,7 @@ mod tests {
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,
+            #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
         ) -> Result<SendableRecordBatchStream> {
             Ok(Box::pin(SortedUnboundedStream {
                 schema: Arc::new(self.schema.clone()),
@@ -1573,7 +1651,7 @@ mod tests {
         let input = test::scan_partitioned(partitions);
         let schema = input.schema();
 
-        let sort_exec = Arc::new(SortExec::new(
+        let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
             [PhysicalSortExpr {
                 expr: col("i", &schema)?,
                 options: SortOptions::default(),
@@ -1582,8 +1660,9 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
-        let result = collect(
-            Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>,
+        let (result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&sort_exec),
+            &sort_exec,
             Arc::clone(&task_ctx),
         )
         .await?;
@@ -1591,7 +1670,7 @@ mod tests {
         assert_eq!(result.len(), 2);
 
         // Now, validate metrics
-        let metrics = sort_exec.metrics().unwrap();
+        let metrics = metrics.unwrap();
 
         assert_eq!(metrics.output_rows().unwrap(), 10000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
@@ -1644,7 +1723,7 @@ mod tests {
         // Read the first record batch to assert that our memory limit and sort_spill_reservation
         // settings trigger the test scenario.
         {
-            let mut stream = plan.execute(0, Arc::clone(&task_ctx))?;
+            let mut stream = execute_plan(Arc::clone(&plan), 0, Arc::clone(&task_ctx))?;
             let first_batch = stream.next().await.unwrap()?;
             let batch_reservation = get_reserved_byte_for_record_batch(&first_batch);
 
@@ -1695,7 +1774,7 @@ mod tests {
         let input = test::scan_partitioned_utf8(200);
         let schema = input.schema();
 
-        let sort_exec = Arc::new(SortExec::new(
+        let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
             [PhysicalSortExpr {
                 expr: col("i", &schema)?,
                 options: SortOptions::default(),
@@ -1704,13 +1783,18 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
 
-        let result = collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
+        let (result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&sort_exec),
+            &sort_exec,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
 
         let num_rows = result.iter().map(|batch| batch.num_rows()).sum::<usize>();
         assert_eq!(num_rows, 20000);
 
         // Now, validate metrics
-        let metrics = sort_exec.metrics().unwrap();
+        let metrics = metrics.unwrap();
 
         assert_eq!(metrics.output_rows().unwrap(), 20000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
@@ -1791,7 +1875,7 @@ mod tests {
             let csv = test::scan_partitioned(partitions);
             let schema = csv.schema();
 
-            let sort_exec = Arc::new(
+            let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(
                 SortExec::new(
                     [PhysicalSortExpr {
                         expr: col("i", &schema)?,
@@ -1803,11 +1887,15 @@ mod tests {
                 .with_fetch(fetch),
             );
 
-            let result =
-                collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
+            let (result, metrics) = collect_and_get_metrics_of(
+                Arc::clone(&sort_exec),
+                &sort_exec,
+                Arc::clone(&task_ctx),
+            )
+            .await?;
             assert_eq!(result.len(), 1);
 
-            let metrics = sort_exec.metrics().unwrap();
+            let metrics = metrics.unwrap();
             let did_it_spill = metrics.spill_count().unwrap_or(0) > 0;
             assert_eq!(did_it_spill, expect_spillage, "with fetch: {fetch:?}");
         }
@@ -1890,7 +1978,7 @@ mod tests {
             ],
         )?;
 
-        let sort_exec = Arc::new(SortExec::new(
+        let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
             [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
@@ -1917,9 +2005,13 @@ mod tests {
             *sort_exec.schema().field(1).data_type()
         );
 
-        let result: Vec<RecordBatch> =
-            collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
-        let metrics = sort_exec.metrics().unwrap();
+        let (result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&sort_exec),
+            &sort_exec,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+        let metrics = metrics.unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 4);
         assert_eq!(result.len(), 1);
@@ -1977,7 +2069,7 @@ mod tests {
             ],
         )?;
 
-        let sort_exec = Arc::new(SortExec::new(
+        let sort_exec: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
             [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
@@ -2001,9 +2093,13 @@ mod tests {
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
         assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
 
-        let result: Vec<RecordBatch> =
-            collect(Arc::clone(&sort_exec) as Arc<dyn ExecutionPlan>, task_ctx).await?;
-        let metrics = sort_exec.metrics().unwrap();
+        let (result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&sort_exec),
+            &sort_exec,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+        let metrics = metrics.unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 8);
         assert_eq!(result.len(), 1);
@@ -2384,10 +2480,14 @@ mod tests {
             TestMemoryExec::try_new_exec(std::slice::from_ref(&batches), schema, None)?,
         ));
 
-        let sorted_batches =
-            collect(Arc::clone(&sort_exec), Arc::clone(&task_ctx)).await?;
+        let (sorted_batches, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&sort_exec),
+            &sort_exec,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
 
-        let metrics = sort_exec.metrics().expect("sort have metrics");
+        let metrics = metrics.expect("sort have metrics");
 
         // assert output
         {

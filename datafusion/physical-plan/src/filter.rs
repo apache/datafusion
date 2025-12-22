@@ -39,9 +39,11 @@ use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
     try_embed_projection, update_expr,
 };
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayFormatType, ExecutionPlan,
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
+    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, RatioMetrics},
 };
 
 use arrow::compute::filter_record_batch;
@@ -54,6 +56,8 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::MetricsSet;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
@@ -79,8 +83,6 @@ pub struct FilterExec {
     predicate: Arc<dyn PhysicalExpr>,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Selectivity for statistics. 0 = no rows, 100 = all rows
     default_selectivity: u8,
     /// Properties equivalence properties, partitioning, etc.
@@ -91,6 +93,9 @@ pub struct FilterExec {
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl FilterExec {
@@ -112,12 +117,13 @@ impl FilterExec {
                 Ok(Self {
                     predicate,
                     input: Arc::clone(&input),
-                    metrics: ExecutionPlanMetricsSet::new(),
                     default_selectivity,
                     cache,
                     projection: None,
                     batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
                     fetch: None,
+                    #[cfg(not(feature = "stateless_plan"))]
+                    metrics: ExecutionPlanMetricsSet::new(),
                 })
             }
             other => {
@@ -161,6 +167,7 @@ impl FilterExec {
         Ok(Self {
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: self.metrics.clone(),
             default_selectivity: self.default_selectivity,
             cache,
@@ -174,6 +181,7 @@ impl FilterExec {
         Ok(Self {
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: self.metrics.clone(),
             default_selectivity: self.default_selectivity,
             cache: self.cache.clone(),
@@ -413,18 +421,24 @@ impl ExecutionPlan for FilterExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         trace!(
             "Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}",
             partition,
             context.session_id(),
             context.task_id()
         );
-        let metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let metrics = FilterExecMetrics::new(plan_metrics!(self, state), partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
-            input: self.input.execute(partition, context)?,
+            input: execute_input!(0, self.input, partition, context, state)?,
             metrics,
             projection: self.projection.clone(),
             batch_coalescer: LimitedBatchCoalescer::new(
@@ -435,6 +449,7 @@ impl ExecutionPlan for FilterExec {
         }))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -582,6 +597,7 @@ impl ExecutionPlan for FilterExec {
             let new = FilterExec {
                 predicate: Arc::clone(&new_predicate),
                 input: Arc::clone(&filter_input),
+                #[cfg(not(feature = "stateless_plan"))]
                 metrics: self.metrics.clone(),
                 default_selectivity: self.default_selectivity,
                 cache: Self::compute_properties(
@@ -607,6 +623,7 @@ impl ExecutionPlan for FilterExec {
         Some(Arc::new(Self {
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: self.metrics.clone(),
             default_selectivity: self.default_selectivity,
             cache: self.cache.clone(),

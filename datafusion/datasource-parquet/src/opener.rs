@@ -1303,10 +1303,8 @@ mod test {
     }
 
     fn make_dynamic_expr(expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-        Arc::new(DynamicFilterPhysicalExpr::new(
-            expr.children().into_iter().map(Arc::clone).collect(),
-            expr,
-        ))
+        let children = expr.children().into_iter().map(Arc::clone).collect();
+        Arc::new(DynamicFilterPhysicalExpr::new(expr, children))
     }
 
     #[tokio::test]

@@ -28,7 +28,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::BaselineMetrics;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
@@ -55,6 +57,8 @@ use datafusion_common::{
     HashMap, Result, arrow_datafusion_err, exec_datafusion_err, exec_err,
 };
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_physical_expr::window::{
@@ -81,8 +85,6 @@ pub struct BoundedWindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Describes how the input is ordered relative to the partition keys
     pub input_order_mode: InputOrderMode,
     /// Partition by indices that define ordering
@@ -96,6 +98,9 @@ pub struct BoundedWindowAggExec {
     cache: PlanProperties,
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl BoundedWindowAggExec {
@@ -131,11 +136,12 @@ impl BoundedWindowAggExec {
             input,
             window_expr,
             schema,
-            metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
             cache,
             can_repartition,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -351,19 +357,26 @@ impl ExecutionPlan for BoundedWindowAggExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context)?;
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
+        let input = execute_input!(0, self.input, partition, context, state)?;
         let search_mode = self.get_search_algo()?;
         let stream = Box::pin(BoundedWindowAggStream::new(
             Arc::clone(&self.schema),
             self.window_expr.clone(),
             input,
-            BaselineMetrics::new(&self.metrics, partition),
+            BaselineMetrics::new(plan_metrics!(self, state), partition),
             search_mode,
         )?);
         Ok(stream)
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -1244,6 +1257,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::common::collect;
+    use crate::execution_plan::execute_plan;
     use crate::expressions::PhysicalSortExpr;
     use crate::projection::{ProjectionExec, ProjectionExpr};
     use crate::streaming::{PartitionStream, StreamingTableExec};
@@ -1682,7 +1696,8 @@ mod tests {
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
 
-        let batches = collect(physical_plan.execute(0, task_ctx)?).await?;
+        let batches =
+            collect(execute_plan(Arc::clone(&physical_plan), 0, task_ctx)?).await?;
 
         // Get string representation of the plan
         assert_snapshot!(displayable(physical_plan.as_ref()).indent(true), @r#"

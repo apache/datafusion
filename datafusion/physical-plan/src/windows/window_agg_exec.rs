@@ -24,7 +24,9 @@ use std::task::{Context, Poll};
 
 use super::utils::create_schema;
 use crate::execution_plan::EmissionType;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::BaselineMetrics;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
@@ -44,6 +46,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
@@ -59,8 +63,6 @@ pub struct WindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Partition by indices that defines preset for existing ordering
     // see `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
@@ -68,6 +70,9 @@ pub struct WindowAggExec {
     cache: PlanProperties,
     /// If `can_partition` is false, partition_keys is always empty.
     can_repartition: bool,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl WindowAggExec {
@@ -87,10 +92,11 @@ impl WindowAggExec {
             input,
             window_expr,
             schema,
-            metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
             cache,
             can_repartition,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -273,19 +279,26 @@ impl ExecutionPlan for WindowAggExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context)?;
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
+        let input = execute_input!(0, self.input, partition, context, state)?;
         let stream = Box::pin(WindowAggStream::new(
             Arc::clone(&self.schema),
             self.window_expr.clone(),
             input,
-            BaselineMetrics::new(&self.metrics, partition),
+            BaselineMetrics::new(plan_metrics!(self, state), partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
         )?);
         Ok(stream)
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

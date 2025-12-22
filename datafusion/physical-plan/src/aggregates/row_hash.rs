@@ -33,6 +33,8 @@ use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{PhysicalExpr, aggregates, metrics};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
@@ -462,16 +464,22 @@ impl GroupedHashAggregateStream {
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<Self> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         debug!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
         let agg_group_by = agg.group_by.clone();
         let agg_filter_expr = agg.filter_expr.clone();
 
         let batch_size = context.session_config().batch_size();
-        let input = agg.input.execute(partition, Arc::clone(context))?;
-        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
-        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
+        let input = execute_input!(0, agg.input, partition, Arc::clone(context), state)?;
+        let baseline_metrics = BaselineMetrics::new(plan_metrics!(agg, state), partition);
+        let group_by_metrics = GroupByMetrics::new(plan_metrics!(agg, state), partition);
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -603,7 +611,7 @@ impl GroupedHashAggregateStream {
 
         let spill_manager = SpillManager::new(
             context.runtime_env(),
-            metrics::SpillMetrics::new(&agg.metrics, partition),
+            metrics::SpillMetrics::new(plan_metrics!(agg, state), partition),
             Arc::clone(&spill_schema),
         )
         .with_compression_type(context.session_config().spill_compression());
@@ -615,7 +623,7 @@ impl GroupedHashAggregateStream {
             is_stream_merging: false,
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
-            peak_mem_used: MetricBuilder::new(&agg.metrics)
+            peak_mem_used: MetricBuilder::new(plan_metrics!(agg, state))
                 .gauge("peak_mem_used", partition),
             spill_manager,
         };
@@ -639,7 +647,7 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
-            let skipped_aggregation_rows = MetricBuilder::new(&agg.metrics)
+            let skipped_aggregation_rows = MetricBuilder::new(plan_metrics!(agg, state))
                 .counter("skipped_aggregation_rows", partition);
             Some(SkipAggregationProbe::new(
                 probe_rows_threshold,
@@ -652,7 +660,7 @@ impl GroupedHashAggregateStream {
 
         let reduction_factor = if agg.mode == AggregateMode::Partial {
             Some(
-                MetricBuilder::new(&agg.metrics)
+                MetricBuilder::new(plan_metrics!(agg, state))
                     .with_type(metrics::MetricType::SUMMARY)
                     .ratio_metrics("reduction_factor", partition),
             )
@@ -1305,7 +1313,8 @@ impl GroupedHashAggregateStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution_plan::ExecutionPlan;
+    use crate::ExecutionPlan;
+    use crate::execution_plan::{execute_plan, execute_plan_and_get_metrics_of};
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1389,18 +1398,17 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode where the race condition occurs
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,
             vec![None],
             exec,
             Arc::clone(&schema),
-        )?;
+        )?);
 
         // Execute and collect results
-        let mut stream =
-            GroupedHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
+        let mut stream = execute_plan(aggregate_exec, 0, task_ctx)?;
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {
@@ -1532,18 +1540,21 @@ mod tests {
         let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
 
         // Use Partial mode
-        let aggregate_exec = AggregateExec::try_new(
+        let aggregate_exec: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(group_expr),
             aggr_expr,
             vec![None],
             exec,
             Arc::clone(&schema),
-        )?;
+        )?);
 
-        // Execute and collect results
-        let mut stream =
-            GroupedHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
+        let (mut stream, metrics) = execute_plan_and_get_metrics_of(
+            Arc::clone(&aggregate_exec),
+            &aggregate_exec,
+            0,
+            task_ctx,
+        )?;
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {
@@ -1553,7 +1564,7 @@ mod tests {
 
         // Check that skip aggregation actually happened
         // The key metric is skipped_aggregation_rows
-        let metrics = aggregate_exec.metrics().unwrap();
+        let metrics = metrics.unwrap();
         let skipped_rows = metrics
             .sum_by_name("skipped_aggregation_rows")
             .map(|m| m.as_usize())

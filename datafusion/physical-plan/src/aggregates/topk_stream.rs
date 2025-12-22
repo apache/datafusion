@@ -24,6 +24,8 @@ use crate::aggregates::{
     evaluate_many,
 };
 use crate::metrics::BaselineMetrics;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
@@ -57,12 +59,19 @@ impl GroupedTopKAggregateStream {
         context: &Arc<TaskContext>,
         partition: usize,
         limit: usize,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<Self> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = aggr.group_by.clone();
-        let input = aggr.input.execute(partition, Arc::clone(context))?;
-        let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
-        let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
+        let input = execute_input!(0, aggr.input, partition, Arc::clone(context), state)?;
+        let baseline_metrics =
+            BaselineMetrics::new(plan_metrics!(aggr, state), partition);
+        let group_by_metrics = GroupByMetrics::new(plan_metrics!(aggr, state), partition);
         let aggregate_arguments =
             aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
         let (val_field, desc) = aggr

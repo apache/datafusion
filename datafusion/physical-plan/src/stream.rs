@@ -27,6 +27,8 @@ use super::metrics::ExecutionPlanMetricsSet;
 use super::metrics::{BaselineMetrics, SplitMetrics};
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{Result, exec_err};
@@ -326,11 +328,19 @@ impl RecordBatchReceiverStreamBuilder {
         input: Arc<dyn ExecutionPlan>,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) {
         let output = self.tx();
+        #[cfg(feature = "stateless_plan")]
+        let state = Arc::clone(state);
 
         self.inner.spawn(async move {
-            let mut stream = match input.execute(partition, context) {
+            #[cfg(feature = "stateless_plan")]
+            let stream = input.execute(partition, context, &state);
+            #[cfg(not(feature = "stateless_plan"))]
+            let stream = input.execute(partition, context);
+
+            let mut stream = match stream {
                 Err(e) => {
                     // If send fails, the plan being torn down, there
                     // is no place to send the error and no reason to continue.
@@ -743,6 +753,36 @@ mod test {
         consume(input, max_batches).await
     }
 
+    #[cfg(feature = "stateless_plan")]
+    #[must_use]
+    fn run_input(
+        builder: &mut RecordBatchReceiverStreamBuilder,
+        input: Arc<dyn ExecutionPlan>,
+        partition: usize,
+        task_ctx: Arc<TaskContext>,
+    ) -> Arc<PlanStateNode> {
+        let state = PlanStateNode::new_root_arc(Arc::clone(&input));
+        builder.run_input(input, partition, task_ctx, &state);
+        state
+    }
+
+    struct EmptyState {}
+
+    impl Drop for EmptyState {
+        fn drop(&mut self) {}
+    }
+
+    #[cfg(not(feature = "stateless_plan"))]
+    fn run_input(
+        builder: &mut RecordBatchReceiverStreamBuilder,
+        input: Arc<dyn ExecutionPlan>,
+        partition: usize,
+        task_ctx: Arc<TaskContext>,
+    ) -> EmptyState {
+        builder.run_input(input, partition, task_ctx);
+        EmptyState {}
+    }
+
     #[tokio::test]
     async fn record_batch_receiver_stream_drop_cancel() {
         let task_ctx = Arc::new(TaskContext::default());
@@ -754,14 +794,16 @@ mod test {
 
         // Configure a RecordBatchReceiverStream to consume the input
         let mut builder = RecordBatchReceiverStream::builder(schema, 2);
-        builder.run_input(Arc::new(input), 0, Arc::clone(&task_ctx));
+
+        let state = run_input(&mut builder, Arc::new(input), 0, Arc::clone(&task_ctx));
         let stream = builder.build();
 
         // Input should still be present
         assert!(std::sync::Weak::strong_count(&refs) > 0);
 
-        // Drop the stream, ensure the refs go to zero
+        // Drop the stream and state, ensure the refs go to zero
         drop(stream);
+        drop(state);
         assert_strong_count_converges_to_zero(refs).await;
     }
 
@@ -781,7 +823,12 @@ mod test {
         .with_use_task(false);
 
         let mut builder = RecordBatchReceiverStream::builder(schema, 2);
-        builder.run_input(Arc::new(error_stream), 0, Arc::clone(&task_ctx));
+        let _state = run_input(
+            &mut builder,
+            Arc::new(error_stream),
+            0,
+            Arc::clone(&task_ctx),
+        );
         let mut stream = builder.build();
 
         // Get the first result, which should be an error
@@ -844,12 +891,15 @@ mod test {
         // Configure a RecordBatchReceiverStream to consume all the input partitions
         let mut builder =
             RecordBatchReceiverStream::builder(input.schema(), num_partitions);
+        let mut states = vec![];
         for partition in 0..num_partitions {
-            builder.run_input(
+            let state = run_input(
+                &mut builder,
                 Arc::clone(&input) as Arc<dyn ExecutionPlan>,
                 partition,
                 Arc::clone(&task_ctx),
             );
+            states.push(state);
         }
         let mut stream = builder.build();
 

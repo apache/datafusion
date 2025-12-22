@@ -24,7 +24,9 @@ use std::task::{Context, Poll};
 
 use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::BaselineMetrics;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -35,6 +37,8 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::EquivalenceProperties;
 
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -160,6 +164,7 @@ pub struct LazyMemoryExec {
     /// Plan properties cache storing equivalence properties, partitioning, and execution mode
     cache: PlanProperties,
     /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -204,6 +209,7 @@ impl LazyMemoryExec {
             projection: None,
             batch_generators: generators,
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -326,7 +332,13 @@ impl ExecutionPlan for LazyMemoryExec {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::plan_metrics;
+
         assert_or_internal_err!(
             partition < self.batch_generators.len(),
             "Invalid partition {} for LazyMemoryExec with {} partitions",
@@ -334,7 +346,8 @@ impl ExecutionPlan for LazyMemoryExec {
             self.batch_generators.len()
         );
 
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let baseline_metrics =
+            BaselineMetrics::new(plan_metrics!(self, state), partition);
 
         let stream = LazyMemoryStream {
             schema: Arc::clone(&self.schema),
@@ -345,6 +358,7 @@ impl ExecutionPlan for LazyMemoryExec {
         Ok(Box::pin(cooperative(stream)))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -408,6 +422,7 @@ impl RecordBatchStream for LazyMemoryStream {
 mod lazy_memory_tests {
     use super::*;
     use crate::common::collect;
+    use crate::execution_plan::{execute_plan, execute_plan_and_get_metrics_of};
     use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::StreamExt;
@@ -470,7 +485,7 @@ mod lazy_memory_tests {
         assert_eq!(exec.schema().field(0).name(), "a");
 
         // Test execution
-        let stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        let stream = execute_plan(Arc::new(exec), 0, Arc::new(TaskContext::default()))?;
         let batches: Vec<_> = stream.collect::<Vec<_>>().await;
 
         assert_eq!(batches.len(), 3);
@@ -517,7 +532,7 @@ mod lazy_memory_tests {
             LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
 
         // Test invalid partition
-        let result = exec.execute(1, Arc::new(TaskContext::default()));
+        let result = execute_plan(Arc::new(exec), 1, Arc::new(TaskContext::default()));
 
         // partition is 0-indexed, so there only should be partition 0
         assert!(matches!(
@@ -547,15 +562,18 @@ mod lazy_memory_tests {
                 schema: Arc::clone(&schema),
             };
 
-            let exec =
-                LazyMemoryExec::try_new(schema, vec![Arc::new(RwLock::new(generator))])?;
+            let exec: Arc<dyn ExecutionPlan> = Arc::new(LazyMemoryExec::try_new(
+                schema,
+                vec![Arc::new(RwLock::new(generator))],
+            )?);
             let task_ctx = Arc::new(TaskContext::default());
 
-            let stream = exec.execute(0, task_ctx)?;
+            let (stream, metrics) =
+                execute_plan_and_get_metrics_of(Arc::clone(&exec), &exec, 0, task_ctx)?;
             let batches = collect(stream).await?;
 
             // Verify metrics exist with actual expected numbers
-            let metrics = exec.metrics().unwrap();
+            let metrics = metrics.unwrap();
 
             // Count actual rows returned
             let actual_rows: usize = batches.iter().map(|b| b.num_rows()).sum();

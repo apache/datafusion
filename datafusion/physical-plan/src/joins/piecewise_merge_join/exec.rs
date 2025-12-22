@@ -24,6 +24,8 @@ use arrow::{
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::not_impl_err;
 use datafusion_common::{JoinSide, Result, internal_err};
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_execution::{
     SendableRecordBatchStream,
     memory_pool::{MemoryConsumer, MemoryReservation},
@@ -50,7 +52,8 @@ use crate::joins::piecewise_merge_join::utils::{
     build_visited_indices_map, is_existence_join, is_right_existence_join,
 };
 use crate::joins::utils::asymmetric_join_output_partitioning;
-use crate::metrics::MetricsSet;
+#[cfg(feature = "stateless_plan")]
+use crate::state::{PlanState, PlanStateNode};
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlanProperties};
 use crate::{
     ExecutionPlan, PlanProperties,
@@ -58,7 +61,6 @@ use crate::{
         SharedBitmapBuilder,
         utils::{BuildProbeJoinMetrics, OnceAsync, OnceFut, build_join_schema},
     },
-    metrics::ExecutionPlanMetricsSet,
     spill::get_record_batch_memory_size,
 };
 
@@ -86,7 +88,7 @@ use crate::{
 /// Both sides are sorted so that we can iterate from index 0 to the end on each side.  This ordering ensures
 /// that when we find the first matching pair of rows, we can emit the current stream row joined with all remaining
 /// probe rows from the match position onward, without rescanning earlier probe rows.
-///  
+///
 /// For `<` and `<=` operators, both inputs are sorted in **descending** order, while for `>` and `>=` operators
 /// they are sorted in **ascending** order. This choice ensures that the pointer on the buffered side can advance
 /// monotonically as we stream new batches from the stream side.
@@ -129,34 +131,34 @@ use crate::{
 ///
 /// Processing Row 1:
 ///
-///       Sorted Buffered Side                                         Sorted Streamed Side          
-///       ┌──────────────────┐                                         ┌──────────────────┐         
-///     1 │       100        │                                       1 │       100        │        
-///       ├──────────────────┤                                         ├──────────────────┤         
-///     2 │       200        │ ─┐                                    2 │       200        │        
-///       ├──────────────────┤  │  For row 1 on streamed side with     ├──────────────────┤         
-///     3 │       200        │  │  value 100, we emit rows 2 - 5.    3 │       500        │       
+///       Sorted Buffered Side                                         Sorted Streamed Side
+///       ┌──────────────────┐                                         ┌──────────────────┐
+///     1 │       100        │                                       1 │       100        │
+///       ├──────────────────┤                                         ├──────────────────┤
+///     2 │       200        │ ─┐                                    2 │       200        │
+///       ├──────────────────┤  │  For row 1 on streamed side with     ├──────────────────┤
+///     3 │       200        │  │  value 100, we emit rows 2 - 5.    3 │       500        │
 ///       ├──────────────────┤  │  as matches when the operator is     └──────────────────┘
 ///     4 │       300        │  │  `Operator::Lt` (<) Emitting all
 ///       ├──────────────────┤  │  rows after the first match (row
 ///     5 │       400        │ ─┘  2 buffered side; 100 < 200)
-///       └──────────────────┘     
+///       └──────────────────┘
 ///
 /// Processing Row 2:
 ///   By sorting the streamed side we know
 ///
-///       Sorted Buffered Side                                         Sorted Streamed Side          
-///       ┌──────────────────┐                                         ┌──────────────────┐         
-///     1 │       100        │                                       1 │       100        │        
-///       ├──────────────────┤                                         ├──────────────────┤         
-///     2 │       200        │ <- Start here when probing for the    2 │       200        │        
-///       ├──────────────────┤    streamed side row 2.                 ├──────────────────┤         
-///     3 │       200        │                                       3 │       500        │       
+///       Sorted Buffered Side                                         Sorted Streamed Side
+///       ┌──────────────────┐                                         ┌──────────────────┐
+///     1 │       100        │                                       1 │       100        │
+///       ├──────────────────┤                                         ├──────────────────┤
+///     2 │       200        │ <- Start here when probing for the    2 │       200        │
+///       ├──────────────────┤    streamed side row 2.                 ├──────────────────┤
+///     3 │       200        │                                       3 │       500        │
 ///       ├──────────────────┤                                         └──────────────────┘
-///     4 │       300        │  
-///       ├──────────────────┤  
+///     4 │       300        │
+///       ├──────────────────┤
 ///     5 │       400        │
-///       └──────────────────┘     
+///       └──────────────────┘
 /// ```
 ///
 /// ## Existence Joins (Semi, Anti, Mark)
@@ -202,10 +204,10 @@ use crate::{
 ///          1 │       100        │        1 │       500        │
 ///            ├──────────────────┤          ├──────────────────┤
 ///          2 │       200        │        2 │       200        │
-///            ├──────────────────┤          ├──────────────────┤    
+///            ├──────────────────┤          ├──────────────────┤
 ///          3 │       200        │        3 │       300        │
 ///            ├──────────────────┤          └──────────────────┘
-///          4 │       300        │ ─┐       
+///          4 │       300        │ ─┐
 ///            ├──────────────────┤  | We emit matches for row 4 - 5
 ///          5 │       400        │ ─┘ on the buffered side.
 ///            └──────────────────┘
@@ -236,11 +238,11 @@ use crate::{
 ///
 /// # Mark Join:
 /// Sorts the probe side, then computes the min/max range of the probe keys and scans the buffered side only
-/// within that range.  
+/// within that range.
 ///   Complexity: `O(|S| + scan(R[range]))`.
 ///
 /// ## Nested Loop Join
-/// Compares every row from `S` with every row from `R`.  
+/// Compares every row from `S` with every row from `R`.
 ///   Complexity: `O(|S| * |R|)`.
 ///
 /// ## Nested Loop Join
@@ -262,10 +264,6 @@ pub struct PiecewiseMergeJoinExec {
     pub join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Buffered data
-    buffered_fut: OnceAsync<BufferedSideData>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
 
     /// Sort expressions - See above for more details [`PiecewiseMergeJoinExec`]
     ///
@@ -282,6 +280,26 @@ pub struct PiecewiseMergeJoinExec {
     cache: PlanProperties,
     /// Number of partitions to process
     num_partitions: usize,
+
+    /// Plan state
+    #[cfg(not(feature = "stateless_plan"))]
+    state: PiecewiseMergeJoinExecState,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
+}
+
+#[derive(Debug, Default)]
+struct PiecewiseMergeJoinExecState {
+    /// Buffered data
+    buffered_fut: OnceAsync<BufferedSideData>,
+}
+
+#[cfg(feature = "stateless_plan")]
+impl PlanState for PiecewiseMergeJoinExecState {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl PiecewiseMergeJoinExec {
@@ -368,13 +386,17 @@ impl PiecewiseMergeJoinExec {
             operator,
             join_type,
             schema,
-            buffered_fut: Default::default(),
-            metrics: ExecutionPlanMetricsSet::new(),
+
             left_child_plan_required_order,
             right_batch_required_orders,
             sort_options,
             cache,
             num_partitions,
+
+            #[cfg(not(feature = "stateless_plan"))]
+            state: Default::default(),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -531,16 +553,31 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         &self,
         partition: usize,
         context: Arc<datafusion_execution::TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         let on_buffered = Arc::clone(&self.on.0);
         let on_streamed = Arc::clone(&self.on.1);
 
-        let metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
-        let buffered_fut = self.buffered_fut.try_once(|| {
+        #[cfg(feature = "stateless_plan")]
+        let buffered_fut = &state
+            .get_or_init_state(PiecewiseMergeJoinExecState::default)
+            .buffered_fut;
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let buffered_fut = &self.state.buffered_fut;
+
+        let metrics = BuildProbeJoinMetrics::new(partition, plan_metrics!(self, state));
+        let buffered_fut = buffered_fut.try_once(|| {
             let reservation = MemoryConsumer::new("PiecewiseMergeJoinInput")
                 .register(context.memory_pool());
 
-            let buffered_stream = self.buffered.execute(0, Arc::clone(&context))?;
+            let buffered_stream =
+                execute_input!(0, self.buffered, 0, Arc::clone(&context), state)?;
             Ok(build_buffered_data(
                 buffered_stream,
                 Arc::clone(&on_buffered),
@@ -551,7 +588,8 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
             ))
         })?;
 
-        let streamed = self.streamed.execute(partition, Arc::clone(&context))?;
+        let streamed =
+            execute_input!(1, self.streamed, partition, Arc::clone(&context), state)?;
 
         let batch_size = context.session_config().batch_size();
 
@@ -574,6 +612,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         }
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

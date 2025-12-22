@@ -21,6 +21,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics, common};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning,
@@ -133,6 +135,7 @@ impl ExecutionPlan for EmptyExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         trace!(
             "Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}",
@@ -183,6 +186,7 @@ impl ExecutionPlan for EmptyExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution_plan::execute_plan;
     use crate::test;
     use crate::with_new_children_if_necessary;
 
@@ -195,7 +199,7 @@ mod tests {
         assert_eq!(empty.schema(), schema);
 
         // We should have no results
-        let iter = empty.execute(0, task_ctx)?;
+        let iter = execute_plan(Arc::new(empty), 0, task_ctx)?;
         let batches = common::collect(iter).await?;
         assert!(batches.is_empty());
 
@@ -225,11 +229,11 @@ mod tests {
     async fn invalid_execute() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
-        let empty = EmptyExec::new(schema);
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
 
         // ask for the wrong partition
-        assert!(empty.execute(1, Arc::clone(&task_ctx)).is_err());
-        assert!(empty.execute(20, task_ctx).is_err());
+        assert!(execute_plan(Arc::clone(&empty), 1, Arc::clone(&task_ctx)).is_err());
+        assert!(execute_plan(Arc::clone(&empty), 20, Arc::clone(&task_ctx)).is_err());
         Ok(())
     }
 }

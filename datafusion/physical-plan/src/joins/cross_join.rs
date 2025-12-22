@@ -26,11 +26,12 @@ use super::utils::{
     reorder_output_after_swap,
 };
 use crate::execution_plan::{EmissionType, boundedness_from_children};
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs,
 };
+#[cfg(feature = "stateless_plan")]
+use crate::state::{PlanState, PlanStateNode};
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -46,6 +47,8 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -84,6 +87,17 @@ pub struct CrossJoinExec {
     pub right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
+    /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
+    cache: PlanProperties,
+    /// Execution plan metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
+    #[cfg(not(feature = "stateless_plan"))]
+    state: CrossJoinExecState,
+}
+
+#[derive(Debug, Default)]
+struct CrossJoinExecState {
     /// Buffered copy of left (build) side in memory.
     ///
     /// This structure is *shared* across all output streams.
@@ -91,10 +105,13 @@ pub struct CrossJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the left side loading.
     left_fut: OnceAsync<JoinLeftData>,
-    /// Execution plan metrics
-    metrics: ExecutionPlanMetricsSet,
-    /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
-    cache: PlanProperties,
+}
+
+#[cfg(feature = "stateless_plan")]
+impl PlanState for CrossJoinExecState {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl CrossJoinExec {
@@ -123,9 +140,11 @@ impl CrossJoinExec {
             left,
             right,
             schema,
-            left_fut: Default::default(),
-            metrics: ExecutionPlanMetricsSet::default(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            state: Default::default(),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::default(),
         }
     }
 
@@ -264,6 +283,7 @@ impl ExecutionPlan for CrossJoinExec {
         vec![&self.left, &self.right]
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -278,12 +298,13 @@ impl ExecutionPlan for CrossJoinExec {
         )))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let new_exec = CrossJoinExec {
             left: Arc::clone(&self.left),
             right: Arc::clone(&self.right),
             schema: Arc::clone(&self.schema),
-            left_fut: Default::default(), // reset the build side!
+            state: Default::default(), // reset the build side!
             metrics: ExecutionPlanMetricsSet::default(),
             cache: self.cache.clone(),
         };
@@ -301,7 +322,13 @@ impl ExecutionPlan for CrossJoinExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         assert_eq_or_internal_err!(
             self.left.output_partitioning().partition_count(),
             1,
@@ -309,9 +336,11 @@ impl ExecutionPlan for CrossJoinExec {
                  consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        let stream = self.right.execute(partition, Arc::clone(&context))?;
+        let stream =
+            execute_input!(1, self.right, partition, Arc::clone(&context), state)?;
 
-        let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+        let join_metrics =
+            BuildProbeJoinMetrics::new(partition, plan_metrics!(self, state));
 
         // Initialization of operator-level reservation
         let reservation =
@@ -321,8 +350,16 @@ impl ExecutionPlan for CrossJoinExec {
         let enforce_batch_size_in_joins =
             context.session_config().enforce_batch_size_in_joins();
 
-        let left_fut = self.left_fut.try_once(|| {
-            let left_stream = self.left.execute(0, context)?;
+        #[cfg(feature = "stateless_plan")]
+        let left_fut = &state
+            .get_or_init_state(CrossJoinExecState::default)
+            .left_fut;
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let left_fut = &self.state.left_fut;
+
+        let left_fut = left_fut.try_once(|| {
+            let left_stream = execute_input!(0, self.left, 0, context, state)?;
 
             Ok(load_left_input(
                 left_stream,
@@ -668,9 +705,11 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 mod tests {
     use super::*;
     use crate::common;
+    use crate::execution_plan::execute_plan_and_get_metrics_of;
     use crate::test::{assert_join_metrics, build_table_scan_i32};
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
+    use datafusion_execution::metrics::MetricsSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use insta::assert_snapshot;
 
@@ -679,14 +718,13 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
-        let join = CrossJoinExec::new(left, right);
+        let join: Arc<dyn ExecutionPlan> = Arc::new(CrossJoinExec::new(left, right));
         let columns_header = columns(&join.schema());
 
-        let stream = join.execute(0, context)?;
+        let (stream, metrics) =
+            execute_plan_and_get_metrics_of(Arc::clone(&join), &join, 0, context)?;
         let batches = common::collect(stream).await?;
-        let metrics = join.metrics().unwrap();
-
-        Ok((columns_header, batches, metrics))
+        Ok((columns_header, batches, metrics.unwrap()))
     }
 
     #[tokio::test]

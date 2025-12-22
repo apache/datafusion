@@ -27,6 +27,8 @@ use super::{
 };
 use crate::display::DisplayableExecutionPlan;
 use crate::metrics::MetricType;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
@@ -160,6 +162,7 @@ impl ExecutionPlan for AnalyzeExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq_or_internal_err!(
             partition,
@@ -174,7 +177,18 @@ impl ExecutionPlan for AnalyzeExec {
         let mut builder =
             RecordBatchReceiverStream::builder(self.schema(), num_input_partitions);
 
+        #[cfg(feature = "stateless_plan")]
+        let child_state = state.child_state(0);
         for input_partition in 0..num_input_partitions {
+            #[cfg(feature = "stateless_plan")]
+            builder.run_input(
+                Arc::clone(&self.input),
+                input_partition,
+                Arc::clone(&context),
+                &child_state,
+            );
+
+            #[cfg(not(feature = "stateless_plan"))]
             builder.run_input(
                 Arc::clone(&self.input),
                 input_partition,
@@ -194,6 +208,9 @@ impl ExecutionPlan for AnalyzeExec {
         // JoinSet that computes the overall row count and final
         // record batch
         let mut input_stream = builder.build();
+
+        #[cfg(feature = "stateless_plan")]
+        let state = Arc::clone(state);
         let output = async move {
             let mut total_rows = 0;
             while let Some(batch) = input_stream.next().await.transpose()? {
@@ -202,13 +219,14 @@ impl ExecutionPlan for AnalyzeExec {
 
             let duration = Instant::now() - start;
             create_output_batch(
-                verbose,
-                show_statistics,
+                (verbose, show_statistics),
                 total_rows,
                 duration,
                 &captured_input,
                 &captured_schema,
                 &metric_types,
+                #[cfg(feature = "stateless_plan")]
+                state,
             )
         };
 
@@ -221,13 +239,13 @@ impl ExecutionPlan for AnalyzeExec {
 
 /// Creates the output of AnalyzeExec as a RecordBatch
 fn create_output_batch(
-    verbose: bool,
-    show_statistics: bool,
+    (verbose, show_statistics): (bool, bool),
     total_rows: usize,
     duration: std::time::Duration,
     input: &Arc<dyn ExecutionPlan>,
     schema: &SchemaRef,
     metric_types: &[MetricType],
+    #[cfg(feature = "stateless_plan")] state: Arc<PlanStateNode>,
 ) -> Result<RecordBatch> {
     let mut type_builder = StringBuilder::with_capacity(1, 1024);
     let mut plan_builder = StringBuilder::with_capacity(1, 1024);
@@ -235,7 +253,14 @@ fn create_output_batch(
     // TODO use some sort of enum rather than strings?
     type_builder.append_value("Plan with Metrics");
 
-    let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
+    #[cfg(feature = "stateless_plan")]
+    let annotated_plan =
+        DisplayableExecutionPlan::with_metrics(input.as_ref(), Arc::clone(&state));
+
+    #[cfg(not(feature = "stateless_plan"))]
+    let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref());
+
+    let annotated_plan = annotated_plan
         .set_metric_types(metric_types.to_vec())
         .set_show_statistics(show_statistics)
         .indent(verbose)
@@ -247,7 +272,14 @@ fn create_output_batch(
     if verbose {
         type_builder.append_value("Plan with Full Metrics");
 
-        let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref())
+        #[cfg(feature = "stateless_plan")]
+        let annotated_plan =
+            DisplayableExecutionPlan::with_full_metrics(input.as_ref(), state);
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref());
+
+        let annotated_plan = annotated_plan
             .set_metric_types(metric_types.to_vec())
             .set_show_statistics(show_statistics)
             .indent(verbose)

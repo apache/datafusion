@@ -26,16 +26,20 @@ use crate::coop::make_cooperative;
 use crate::display::{ProjectSchemaDisplay, display_orderings};
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::limit::LimitStream;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::BaselineMetrics;
 use crate::projection::{
     ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_ordering,
 };
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use async_trait::async_trait;
@@ -68,6 +72,7 @@ pub struct StreamingTableExec {
     infinite: bool,
     limit: Option<usize>,
     cache: PlanProperties,
+    #[cfg(not(feature = "stateless_plan"))]
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -112,6 +117,7 @@ impl StreamingTableExec {
             infinite,
             limit,
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -263,7 +269,13 @@ impl ExecutionPlan for StreamingTableExec {
         &self,
         partition: usize,
         ctx: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::plan_metrics;
+
         let stream = self.partitions[partition].execute(Arc::clone(&ctx));
         let projected_stream = match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
@@ -279,7 +291,8 @@ impl ExecutionPlan for StreamingTableExec {
         Ok(match self.limit {
             None => stream,
             Some(fetch) => {
-                let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+                let baseline_metrics =
+                    BaselineMetrics::new(plan_metrics!(self, state), partition);
                 Box::pin(LimitStream::new(stream, 0, Some(fetch), baseline_metrics))
             }
         })
@@ -323,6 +336,7 @@ impl ExecutionPlan for StreamingTableExec {
         .map(|e| Some(Arc::new(e) as _))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -336,6 +350,7 @@ impl ExecutionPlan for StreamingTableExec {
             infinite: self.infinite,
             limit,
             cache: self.cache.clone(),
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: self.metrics.clone(),
         }))
     }

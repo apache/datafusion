@@ -25,7 +25,7 @@ use crate::joins::{
 };
 use crate::repartition::RepartitionExec;
 use crate::test::TestMemoryExec;
-use crate::{ExecutionPlan, ExecutionPlanProperties, Partitioning, common};
+use crate::{ExecutionPlan, ExecutionPlanProperties, Partitioning};
 
 use arrow::array::{
     ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
@@ -107,17 +107,11 @@ pub async fn partitioned_sym_join_with_filter(
         StreamJoinPartitionMode::Partitioned,
     )?;
 
-    let mut batches = vec![];
-    for i in 0..partition_count {
-        let stream = join.execute(i, Arc::clone(&context))?;
-        let more_batches = common::collect(stream).await?;
-        batches.extend(
-            more_batches
-                .into_iter()
-                .filter(|b| b.num_rows() > 0)
-                .collect::<Vec<_>>(),
-        );
-    }
+    let batches = crate::collect(Arc::new(join), context)
+        .await?
+        .into_iter()
+        .filter(|b| b.num_rows() > 0)
+        .collect();
 
     Ok(batches)
 }
@@ -154,17 +148,11 @@ pub async fn partitioned_hash_join_with_filter(
         null_equality,
     )?);
 
-    let mut batches = vec![];
-    for i in 0..partition_count {
-        let stream = join.execute(i, Arc::clone(&context))?;
-        let more_batches = common::collect(stream).await?;
-        batches.extend(
-            more_batches
-                .into_iter()
-                .filter(|b| b.num_rows() > 0)
-                .collect::<Vec<_>>(),
-        );
-    }
+    let batches = crate::collect(join, context)
+        .await?
+        .into_iter()
+        .filter(|b| b.num_rows() > 0)
+        .collect();
 
     Ok(batches)
 }

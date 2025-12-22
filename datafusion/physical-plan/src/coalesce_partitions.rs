@@ -21,7 +21,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::metrics::BaselineMetrics;
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
@@ -31,12 +31,16 @@ use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::PhysicalExpr;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
@@ -45,11 +49,12 @@ use datafusion_physical_expr::PhysicalExpr;
 pub struct CoalescePartitionsExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     pub(crate) fetch: Option<usize>,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl CoalescePartitionsExec {
@@ -58,9 +63,10 @@ impl CoalescePartitionsExec {
         let cache = Self::compute_properties(&input);
         CoalescePartitionsExec {
             input,
-            metrics: ExecutionPlanMetricsSet::new(),
             cache,
             fetch: None,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -160,7 +166,13 @@ impl ExecutionPlan for CoalescePartitionsExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         // CoalescePartitionsExec produces a single partition
         assert_eq_or_internal_err!(
             partition,
@@ -176,9 +188,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
             1 => {
                 // single-partition path: execute child directly, but ensure fetch is respected
                 // (wrap with ObservedStream only if fetch is present so we don't add overhead otherwise)
-                let child_stream = self.input.execute(0, context)?;
+                let child_stream = execute_input!(0, self.input, 0, context, state)?;
                 if self.fetch.is_some() {
-                    let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+                    let baseline_metrics =
+                        BaselineMetrics::new(plan_metrics!(self, state), partition);
                     return Ok(Box::pin(ObservedStream::new(
                         child_stream,
                         baseline_metrics,
@@ -188,7 +201,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 Ok(child_stream)
             }
             _ => {
-                let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+                let baseline_metrics =
+                    BaselineMetrics::new(plan_metrics!(self, state), partition);
                 // record the (very) minimal work done so that
                 // elapsed_compute is not reported as 0
                 let elapsed_compute = baseline_metrics.elapsed_compute().clone();
@@ -202,11 +216,23 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
+
+                #[cfg(feature = "stateless_plan")]
+                let child_state = state.child_state(0);
                 for part_i in 0..input_partitions {
+                    #[cfg(not(feature = "stateless_plan"))]
                     builder.run_input(
                         Arc::clone(&self.input),
                         part_i,
                         Arc::clone(&context),
+                    );
+
+                    #[cfg(feature = "stateless_plan")]
+                    builder.run_input(
+                        Arc::clone(&self.input),
+                        part_i,
+                        Arc::clone(&context),
+                        &child_state,
                     );
                 }
 
@@ -220,6 +246,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         }
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -273,6 +300,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(Arc::new(CoalescePartitionsExec {
             input: Arc::clone(&self.input),
             fetch: limit,
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))
@@ -327,6 +355,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution_plan::execute_plan;
     use crate::test::exec::{
         BlockingExec, PanicExec, assert_strong_count_converges_to_zero,
     };
@@ -356,7 +385,7 @@ mod tests {
         );
 
         // the result should contain 4 batches (one per input partition)
-        let iter = merge.execute(0, task_ctx)?;
+        let iter = execute_plan(Arc::new(merge), 0, task_ctx)?;
         let batches = common::collect(iter).await?;
         assert_eq!(batches.len(), num_partitions);
 
@@ -412,7 +441,7 @@ mod tests {
         // Test with fetch=3
         let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(3));
 
-        let stream = coalesce.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(coalesce), 0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
@@ -432,7 +461,7 @@ mod tests {
         // Test with fetch=1 (the original bug: was returning multiple rows instead of 1)
         let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(1));
 
-        let stream = coalesce.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(coalesce), 0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
@@ -454,7 +483,7 @@ mod tests {
         // Test without fetch (should return all rows)
         let coalesce = CoalescePartitionsExec::new(input);
 
-        let stream = coalesce.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(coalesce), 0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
@@ -476,7 +505,7 @@ mod tests {
         // Test with fetch larger than available rows
         let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(200));
 
-        let stream = coalesce.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(coalesce), 0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
@@ -499,7 +528,7 @@ mod tests {
         // Test with fetch=400 (exactly all rows)
         let coalesce = CoalescePartitionsExec::new(csv).with_fetch(Some(400));
 
-        let stream = coalesce.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(coalesce), 0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
         let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();

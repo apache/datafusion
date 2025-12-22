@@ -22,9 +22,11 @@ use std::sync::Arc;
 
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -33,6 +35,8 @@ use crate::{
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use crate::execution_plan::{EvaluationType, SchedulingType};
@@ -88,8 +92,6 @@ pub struct SortPreservingMergeExec {
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: LexOrdering,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Optional number of rows to fetch. Stops producing rows after this fetch
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
@@ -98,6 +100,9 @@ pub struct SortPreservingMergeExec {
     ///
     /// See [`Self::with_round_robin_repartition`] for more information.
     enable_round_robin_repartition: bool,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl SortPreservingMergeExec {
@@ -107,10 +112,11 @@ impl SortPreservingMergeExec {
         Self {
             input,
             expr,
-            metrics: ExecutionPlanMetricsSet::new(),
             fetch: None,
             cache,
             enable_round_robin_repartition: true,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -238,6 +244,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(Arc::new(Self {
             input: Arc::clone(&self.input),
             expr: self.expr.clone(),
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: self.metrics.clone(),
             fetch: limit,
             cache: self.cache.clone(),
@@ -279,7 +286,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         trace!("Start SortPreservingMergeExec::execute for partition: {partition}");
         assert_eq_or_internal_err!(
             partition,
@@ -303,7 +316,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             ),
             1 => match self.fetch {
                 Some(fetch) => {
-                    let stream = self.input.execute(0, context)?;
+                    let stream = execute_input!(0, self.input, 0, context, state)?;
                     debug!(
                         "Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}"
                     );
@@ -311,11 +324,11 @@ impl ExecutionPlan for SortPreservingMergeExec {
                         stream,
                         0,
                         Some(fetch),
-                        BaselineMetrics::new(&self.metrics, partition),
+                        BaselineMetrics::new(plan_metrics!(self, state), partition),
                     )))
                 }
                 None => {
-                    let stream = self.input.execute(0, context);
+                    let stream = execute_input!(0, self.input, 0, context, state);
                     debug!(
                         "Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch"
                     );
@@ -325,8 +338,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
             _ => {
                 let receivers = (0..input_partitions)
                     .map(|partition| {
-                        let stream =
-                            self.input.execute(partition, Arc::clone(&context))?;
+                        let stream = execute_input!(
+                            0,
+                            self.input,
+                            partition,
+                            Arc::clone(&context),
+                            state,
+                        )?;
                         Ok(spawn_buffered(stream, 1))
                     })
                     .collect::<Result<_>>()?;
@@ -339,7 +357,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_streams(receivers)
                     .with_schema(schema)
                     .with_expressions(&self.expr)
-                    .with_metrics(BaselineMetrics::new(&self.metrics, partition))
+                    .with_metrics(BaselineMetrics::new(
+                        plan_metrics!(self, state),
+                        partition,
+                    ))
                     .with_batch_size(context.session_config().batch_size())
                     .with_fetch(self.fetch)
                     .with_reservation(reservation)
@@ -355,6 +376,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         }
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -410,7 +432,9 @@ mod tests {
     use super::*;
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
-    use crate::execution_plan::{Boundedness, EmissionType};
+    use crate::execution_plan::{
+        Boundedness, EmissionType, collect_and_get_metrics_of, execute_plan,
+    };
     use crate::expressions::col;
     use crate::metrics::{MetricValue, Timestamp};
     use crate::repartition::RepartitionExec;
@@ -432,6 +456,7 @@ mod tests {
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::metrics::ExecutionPlanMetricsSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_expr::expressions::Column;
@@ -1091,7 +1116,9 @@ mod tests {
 
             let sender = builder.tx();
 
-            let mut stream = batches.execute(partition, Arc::clone(&task_ctx)).unwrap();
+            let mut stream =
+                execute_plan(Arc::clone(&batches), partition, Arc::clone(&task_ctx))
+                    .unwrap();
             builder.spawn(async move {
                 while let Some(batch) = stream.next().await {
                     sender.send(batch).await.unwrap();
@@ -1160,11 +1187,13 @@ mod tests {
         .into();
         let exec =
             TestMemoryExec::try_new_exec(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
+        let merge: Arc<dyn ExecutionPlan> =
+            Arc::new(SortPreservingMergeExec::new(sort, exec));
 
-        let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
-            .await
-            .unwrap();
+        let (collected, metrics) =
+            collect_and_get_metrics_of(Arc::clone(&merge), &merge, task_ctx)
+                .await
+                .unwrap();
         assert_snapshot!(batches_to_string(collected.as_slice()), @r"
         +----+---+
         | a  | b |
@@ -1177,7 +1206,7 @@ mod tests {
         ");
 
         // Now, validate metrics
-        let metrics = merge.metrics().unwrap();
+        let metrics = metrics.unwrap();
 
         assert_eq!(metrics.output_rows().unwrap(), 4);
         assert!(metrics.elapsed_compute().unwrap() > 0);
@@ -1402,6 +1431,7 @@ mod tests {
             &self,
             partition: usize,
             _context: Arc<TaskContext>,
+            #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
         ) -> Result<SendableRecordBatchStream> {
             Ok(Box::pin(CongestedStream {
                 schema: Arc::new(self.schema.clone()),

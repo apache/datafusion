@@ -22,6 +22,8 @@ use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
 use crate::ExecutionPlanProperties;
+use crate::dynamic_filter::PlannedDynamicFilterPhysicalExpr;
+use crate::dynamic_filter::make_planned_dynamic_filter;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -55,7 +57,11 @@ use crate::{
         build_join_schema, check_join_is_valid, estimate_join_statistics,
         need_produce_result_in_final, symmetric_join_output_partitioning,
     },
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+};
+#[cfg(feature = "stateless_plan")]
+use crate::{
+    dynamic_filter::DynamicFilterPhysicalExpr,
+    state::{PlanState, PlanStateNode},
 };
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
@@ -72,12 +78,14 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::lit;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
 use ahash::RandomState;
@@ -329,19 +337,10 @@ pub struct HashJoinExec {
     /// The schema after join. Please be careful when using this schema,
     /// if there is a projection, the schema isn't the same as the output schema.
     join_schema: SchemaRef,
-    /// Future that consumes left input and builds the hash table
-    ///
-    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
-    ///
-    /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the hash table creation.
-    left_fut: Arc<OnceAsync<JoinLeftData>>,
     /// Shared the `SeededRandomState` for the hashing algorithm (seeds preserved for serialization)
     random_state: SeededRandomState,
     /// Partitioning mode to use
     pub mode: PartitionMode,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// The projection indices of the columns in the output schema of join
     pub projection: Option<Vec<usize>>,
     /// Information of index and left / right placement of columns
@@ -350,19 +349,62 @@ pub struct HashJoinExec {
     pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Dynamic filter for pushing down to the probe side
-    /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
-    /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
-    dynamic_filter: Option<HashJoinExecDynamicFilter>,
+    /// Dynamic filter for pushing down to the probe side.
+    dynamic_filter: Option<Arc<PlannedDynamicFilterPhysicalExpr>>,
+    /// Plan state.
+    #[cfg(not(feature = "stateless_plan"))]
+    state: HashJoinExecState,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
-#[derive(Clone)]
-struct HashJoinExecDynamicFilter {
-    /// Dynamic filter that we'll update with the results of the build side once that is done.
-    filter: Arc<DynamicFilterPhysicalExpr>,
+#[derive(Default, Clone)]
+struct HashJoinExecState {
+    /// Future that consumes left input and builds the hash table
+    ///
+    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the hash table creation.
+    left_fut: Arc<OnceAsync<JoinLeftData>>,
+
+    /// Dynamic filter for pushing down to the probe side.
+    /// Note: it is originated from [`HashJoinExec::dynamic_filter`] on execution stage.
+    /// It is not stored in the case of stateful plan as in this case planned and executable
+    /// filters are the same and filter is stored directly in [`HashJoinExec`].
+    #[cfg(feature = "stateless_plan")]
+    dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
+
     /// Build accumulator to collect build-side information (hash maps and/or bounds) from each partition.
     /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
     build_accumulator: OnceLock<Arc<SharedBuildAccumulator>>,
+}
+
+impl HashJoinExecState {
+    #[cfg(feature = "stateless_plan")]
+    fn new(dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>) -> Self {
+        Self {
+            left_fut: Default::default(),
+            dynamic_filter,
+            build_accumulator: Default::default(),
+        }
+    }
+}
+
+#[cfg(feature = "stateless_plan")]
+impl PlanState for HashJoinExecState {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn dynamic_filters(&self) -> Vec<Arc<DynamicFilterPhysicalExpr>> {
+        if let Some(filter) = self.dynamic_filter.as_ref() {
+            vec![Arc::clone(filter)]
+        } else {
+            vec![]
+        }
+    }
 }
 
 impl fmt::Debug for HashJoinExec {
@@ -374,10 +416,8 @@ impl fmt::Debug for HashJoinExec {
             .field("filter", &self.filter)
             .field("join_type", &self.join_type)
             .field("join_schema", &self.join_schema)
-            .field("left_fut", &self.left_fut)
             .field("random_state", &self.random_state)
             .field("mode", &self.mode)
-            .field("metrics", &self.metrics)
             .field("projection", &self.projection)
             .field("column_indices", &self.column_indices)
             .field("null_equality", &self.null_equality)
@@ -447,24 +487,26 @@ impl HashJoinExec {
             filter,
             join_type: *join_type,
             join_schema,
-            left_fut: Default::default(),
             random_state,
             mode: partition_mode,
-            metrics: ExecutionPlanMetricsSet::new(),
             projection,
             column_indices,
             null_equality,
             cache,
             dynamic_filter: None,
+            #[cfg(not(feature = "stateless_plan"))]
+            state: HashJoinExecState::default(),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
-    fn create_dynamic_filter(on: &JoinOn) -> Arc<DynamicFilterPhysicalExpr> {
+    fn create_dynamic_filter(on: &JoinOn) -> Arc<PlannedDynamicFilterPhysicalExpr> {
         // Extract the right-side keys (probe side keys) from the `on` clauses
         // Dynamic filter will be created from build side values (left side) and applied to probe side (right side)
         let right_keys: Vec<_> = on.iter().map(|(_, r)| Arc::clone(r)).collect();
         // Initialize with a placeholder expression (true) that will be updated when the hash table is built
-        Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
+        Arc::new(make_planned_dynamic_filter(lit(true), right_keys))
     }
 
     /// left (build) side which gets hashed
@@ -852,10 +894,8 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
-            left_fut: Arc::clone(&self.left_fut),
             random_state: self.random_state.clone(),
             mode: self.mode,
-            metrics: ExecutionPlanMetricsSet::new(),
             projection: self.projection.clone(),
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
@@ -868,11 +908,15 @@ impl ExecutionPlan for HashJoinExec {
                 self.mode,
                 self.projection.as_ref(),
             )?,
-            // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: self.metrics.clone(),
+            #[cfg(not(feature = "stateless_plan"))]
+            state: self.state.clone(),
         }))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(HashJoinExec {
             left: Arc::clone(&self.left),
@@ -881,8 +925,6 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
-            // Reset the left_fut to allow re-execution
-            left_fut: Arc::new(OnceAsync::default()),
             random_state: self.random_state.clone(),
             mode: self.mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -891,6 +933,7 @@ impl ExecutionPlan for HashJoinExec {
             null_equality: self.null_equality,
             cache: self.cache.clone(),
             // Reset dynamic filter and bounds accumulator to initial state
+            state: HashJoinExecState::default(),
             dynamic_filter: None,
         }))
     }
@@ -899,7 +942,13 @@ impl ExecutionPlan for HashJoinExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         let on_left = self
             .on
             .iter()
@@ -921,12 +970,27 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
+        #[cfg(not(feature = "stateless_plan"))]
+        let exec_state = &self.state;
+
+        #[cfg(feature = "stateless_plan")]
+        let exec_state = state.get_or_init_state(|| {
+            HashJoinExecState::new(
+                // Make executable filter from stored planned filter.
+                self.dynamic_filter
+                    .as_ref()
+                    .map(|f| Arc::new(f.to_executable())),
+            )
+        });
+
         let enable_dynamic_filter_pushdown = self.dynamic_filter.is_some();
 
-        let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+        let join_metrics =
+            BuildProbeJoinMetrics::new(partition, plan_metrics!(self, state));
         let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.try_once(|| {
-                let left_stream = self.left.execute(0, Arc::clone(&context))?;
+            PartitionMode::CollectLeft => exec_state.left_fut.try_once(|| {
+                let left_stream =
+                    execute_input!(0, self.left, 0, Arc::clone(&context), state)?;
 
                 let reservation =
                     MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
@@ -953,7 +1017,8 @@ impl ExecutionPlan for HashJoinExec {
                 ))
             })?,
             PartitionMode::Partitioned => {
-                let left_stream = self.left.execute(partition, Arc::clone(&context))?;
+                let left_stream =
+                    execute_input!(0, self.left, partition, Arc::clone(&context), state)?;
 
                 let reservation =
                     MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
@@ -990,19 +1055,25 @@ impl ExecutionPlan for HashJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
+        #[cfg(feature = "stateless_plan")]
+        let df = &exec_state.dynamic_filter;
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let df = &self.dynamic_filter;
+
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
         let repartition_random_state = REPARTITION_RANDOM_STATE;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
-                self.dynamic_filter.as_ref().map(|df| {
-                    let filter = Arc::clone(&df.filter);
+                df.as_ref().map(|df| {
+                    let filter = Arc::clone(df);
                     let on_right = self
                         .on
                         .iter()
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
-                    Some(Arc::clone(df.build_accumulator.get_or_init(|| {
+                    Some(Arc::clone(exec_state.build_accumulator.get_or_init(|| {
                         Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
@@ -1019,7 +1090,7 @@ impl ExecutionPlan for HashJoinExec {
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
-        let right_stream = self.right.execute(partition, context)?;
+        let right_stream = execute_input!(1, self.right, partition, context, state)?;
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match &self.projection {
@@ -1057,6 +1128,7 @@ impl ExecutionPlan for HashJoinExec {
         )))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -1194,7 +1266,7 @@ impl ExecutionPlan for HashJoinExec {
             // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
             if let Ok(dynamic_filter) =
-                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
+                Arc::downcast::<PlannedDynamicFilterPhysicalExpr>(predicate)
             {
                 // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
                 let new_node = Arc::new(HashJoinExec {
@@ -1204,18 +1276,17 @@ impl ExecutionPlan for HashJoinExec {
                     filter: self.filter.clone(),
                     join_type: self.join_type,
                     join_schema: Arc::clone(&self.join_schema),
-                    left_fut: Arc::clone(&self.left_fut),
                     random_state: self.random_state.clone(),
                     mode: self.mode,
-                    metrics: ExecutionPlanMetricsSet::new(),
                     projection: self.projection.clone(),
                     column_indices: self.column_indices.clone(),
                     null_equality: self.null_equality,
                     cache: self.cache.clone(),
-                    dynamic_filter: Some(HashJoinExecDynamicFilter {
-                        filter: dynamic_filter,
-                        build_accumulator: OnceLock::new(),
-                    }),
+                    dynamic_filter: Some(dynamic_filter),
+                    #[cfg(not(feature = "stateless_plan"))]
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    #[cfg(not(feature = "stateless_plan"))]
+                    state: self.state.clone(),
                 });
                 result = result.with_updated_node(new_node as Arc<dyn ExecutionPlan>);
             }
@@ -1543,8 +1614,11 @@ async fn collect_left_input(
 mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
+    #[cfg(feature = "stateless_plan")]
+    use crate::execution_plan::execute_plan_preserving_state;
+    use crate::execution_plan::{execute_plan, execute_plan_and_get_metrics_of};
     use crate::joins::hash_join::stream::lookup_join_hashmap;
-    use crate::test::{TestMemoryExec, assert_join_metrics};
+    use crate::test::{TestMemoryExec, assert_join_metrics, collect_batches};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
         test::exec::MockExec,
@@ -1561,10 +1635,13 @@ mod tests {
         exec_err, internal_err,
     };
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::metrics::MetricsSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr::expressions::{
+        BinaryExpr, DynamicFilterPhysicalExpr, Literal,
+    };
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
@@ -1640,12 +1717,14 @@ mod tests {
         null_equality: NullEquality,
         context: Arc<TaskContext>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
-        let join = join(left, right, on, join_type, null_equality)?;
+        let join: Arc<dyn ExecutionPlan> =
+            Arc::new(join(left, right, on, join_type, null_equality)?);
         let columns_header = columns(&join.schema());
 
-        let stream = join.execute(0, context)?;
+        let (stream, metrics) =
+            execute_plan_and_get_metrics_of(Arc::clone(&join), &join, 0, context)?;
         let batches = common::collect(stream).await?;
-        let metrics = join.metrics().unwrap();
+        let metrics = metrics.unwrap();
 
         Ok((columns_header, batches, metrics))
     }
@@ -1731,19 +1810,7 @@ mod tests {
 
         let columns = columns(&join.schema());
 
-        let mut batches = vec![];
-        for i in 0..partition_count {
-            let stream = join.execute(i, Arc::clone(&context))?;
-            let more_batches = common::collect(stream).await?;
-            batches.extend(
-                more_batches
-                    .into_iter()
-                    .filter(|b| b.num_rows() > 0)
-                    .collect::<Vec<_>>(),
-            );
-        }
-        let metrics = join.metrics().unwrap();
-
+        let (batches, metrics) = collect_batches(Arc::new(join), context).await?;
         Ok((columns, batches, metrics))
     }
 
@@ -2191,19 +2258,19 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         )];
 
-        let join = join(
+        let join: Arc<dyn ExecutionPlan> = Arc::new(join(
             left,
             right,
             on,
             &JoinType::Inner,
             NullEquality::NullEqualsNothing,
-        )?;
+        )?);
 
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         // first part
-        let stream = join.execute(0, Arc::clone(&task_ctx))?;
+        let stream = execute_plan(Arc::clone(&join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         let expected_batch_count = if cfg!(not(feature = "force_hash_collisions")) {
@@ -2238,7 +2305,7 @@ mod tests {
         }
 
         // second part
-        let stream = join.execute(1, Arc::clone(&task_ctx))?;
+        let stream = execute_plan(Arc::clone(&join), 1, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         let expected_batch_count = if cfg!(not(feature = "force_hash_collisions")) {
@@ -2312,7 +2379,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx)).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
@@ -2362,7 +2429,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx)).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
@@ -2410,7 +2477,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx)).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
@@ -2454,7 +2521,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx)).unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
@@ -2609,7 +2676,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // ignore the order
@@ -2672,7 +2739,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header.clone(), vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, Arc::clone(&task_ctx))?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -2711,7 +2778,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -2751,7 +2818,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // RightSemi join output is expected to preserve right input order
@@ -2814,7 +2881,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, Arc::clone(&task_ctx))?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // RightSemi join output is expected to preserve right input order
@@ -2851,7 +2918,8 @@ mod tests {
             &JoinType::RightSemi,
             NullEquality::NullEqualsNothing,
         )?;
-        let stream = join.execute(0, task_ctx)?;
+
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // RightSemi join output is expected to preserve right input order
@@ -2892,7 +2960,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -2952,7 +3020,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, Arc::clone(&task_ctx))?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -2995,7 +3063,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -3038,7 +3106,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // RightAnti join output is expected to preserve right input order
@@ -3099,7 +3167,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, Arc::clone(&task_ctx))?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // RightAnti join output is expected to preserve right input order
@@ -3146,7 +3214,7 @@ mod tests {
         let columns_header = columns(&join.schema());
         assert_eq!(columns_header, vec!["a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         // RightAnti join output is expected to preserve right input order
@@ -3292,7 +3360,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -3659,7 +3727,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -3736,7 +3804,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -3785,7 +3853,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -3837,7 +3905,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -3888,7 +3956,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         let expected = [
@@ -4092,7 +4160,7 @@ mod tests {
         )?;
 
         let task_ctx = Arc::new(TaskContext::default());
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
@@ -4153,7 +4221,7 @@ mod tests {
             .unwrap();
             let task_ctx = Arc::new(TaskContext::default());
 
-            let stream = join.execute(0, task_ctx).unwrap();
+            let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx)).unwrap();
 
             // Expect that an error is returned
             let result_string = common::collect(stream).await.unwrap_err().to_string();
@@ -4266,7 +4334,8 @@ mod tests {
                 )
                 .unwrap();
 
-                let stream = join.execute(0, task_ctx).unwrap();
+                let stream =
+                    execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx)).unwrap();
                 let batches = common::collect(stream).await.unwrap();
 
                 // For inner/right join expected batch count equals dev_ceil result,
@@ -4356,7 +4425,7 @@ mod tests {
                 NullEquality::NullEqualsNothing,
             )?;
 
-            let stream = join.execute(0, task_ctx)?;
+            let stream = execute_plan(Arc::new(join), 0, Arc::clone(&task_ctx))?;
             let err = common::collect(stream).await.unwrap_err();
 
             // Asserting that operator-level reservation attempting to overallocate
@@ -4437,7 +4506,7 @@ mod tests {
                 NullEquality::NullEqualsNothing,
             )?;
 
-            let stream = join.execute(1, task_ctx)?;
+            let stream = execute_plan(Arc::new(join), 1, Arc::clone(&task_ctx))?;
             let err = common::collect(stream).await.unwrap_err();
 
             // Asserting that stream-level reservation attempting to overallocate
@@ -4586,6 +4655,40 @@ mod tests {
         schema.fields().iter().map(|f| f.name().clone()).collect()
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
+    async fn collect_and_get_dynamic_filter(
+        join: HashJoinExec,
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<Arc<DynamicFilterPhysicalExpr>> {
+        let join = Arc::new(join);
+        let _batches = crate::collect(Arc::clone(&join) as Arc<_>, task_ctx).await?;
+        Ok(join.dynamic_filter.clone().unwrap())
+    }
+
+    #[cfg(feature = "stateless_plan")]
+    async fn collect_and_get_dynamic_filter(
+        join: HashJoinExec,
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<Arc<DynamicFilterPhysicalExpr>> {
+        let dynamic_filter = join.dynamic_filter.clone().unwrap();
+        // Execute the join
+        let (stream, state) =
+            execute_plan_preserving_state(Arc::new(join), 0, Arc::clone(&task_ctx))
+                .as_result()
+                .unwrap()
+                .into_parts();
+        let _batches = common::collect(stream).await?;
+        Ok(Arc::new(
+            state
+                .planned_dynamic_filter_to_executable(dynamic_filter)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .unwrap()
+                .clone(),
+        ))
+    }
+
     /// This test verifies that the dynamic filter is marked as complete after HashJoinExec finishes building the hash table.
     #[tokio::test]
     async fn test_hash_join_marks_filter_complete() -> Result<()> {
@@ -4608,7 +4711,6 @@ mod tests {
 
         // Create a dynamic filter manually
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
 
         // Create HashJoinExec with the dynamic filter
         let mut join = HashJoinExec::try_new(
@@ -4621,18 +4723,12 @@ mod tests {
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
         )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: dynamic_filter,
-            build_accumulator: OnceLock::new(),
-        });
+        join.dynamic_filter = Some(Arc::clone(&dynamic_filter));
 
-        // Execute the join
-        let stream = join.execute(0, task_ctx)?;
-        let _batches = common::collect(stream).await?;
-
+        let filter = collect_and_get_dynamic_filter(join, task_ctx).await?;
         // After the join completes, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        filter.wait_complete().await;
 
         Ok(())
     }
@@ -4656,7 +4752,6 @@ mod tests {
 
         // Create a dynamic filter manually
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
-        let dynamic_filter_clone = Arc::clone(&dynamic_filter);
 
         // Create HashJoinExec with the dynamic filter
         let mut join = HashJoinExec::try_new(
@@ -4669,18 +4764,14 @@ mod tests {
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
         )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: dynamic_filter,
-            build_accumulator: OnceLock::new(),
-        });
+
+        join.dynamic_filter = Some(Arc::clone(&dynamic_filter));
 
         // Execute the join
-        let stream = join.execute(0, task_ctx)?;
-        let _batches = common::collect(stream).await?;
-
+        let filter = collect_and_get_dynamic_filter(join, task_ctx).await?;
         // Even with empty build side, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
-        dynamic_filter_clone.wait_complete().await;
+        filter.wait_complete().await;
 
         Ok(())
     }
