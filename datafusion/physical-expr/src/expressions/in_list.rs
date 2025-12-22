@@ -1336,16 +1336,59 @@ mod tests {
     /// Test data: 0 (in list), 2000 (not in list), [1000, 3000] (other list values)
     #[test]
     fn in_list_timestamp_types() -> Result<()> {
-        run_test_cases(vec![InListPrimitiveTestCase {
-            name: "timestamp_nanosecond",
-            value_in: ScalarValue::TimestampNanosecond(Some(0), None),
-            value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
-            other_list_values: vec![
-                ScalarValue::TimestampNanosecond(Some(1000), None),
-                ScalarValue::TimestampNanosecond(Some(3000), None),
-            ],
-            null_value: Some(ScalarValue::TimestampNanosecond(None, None)),
-        }])
+        run_test_cases(vec![
+            InListPrimitiveTestCase {
+                name: "timestamp_nanosecond",
+                value_in: ScalarValue::TimestampNanosecond(Some(0), None),
+                value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
+                other_list_values: vec![
+                    ScalarValue::TimestampNanosecond(Some(1000), None),
+                    ScalarValue::TimestampNanosecond(Some(3000), None),
+                ],
+                null_value: Some(ScalarValue::TimestampNanosecond(None, None)),
+            },
+            InListPrimitiveTestCase {
+                name: "timestamp_millisecond_with_tz",
+                value_in: ScalarValue::TimestampMillisecond(
+                    Some(1500000),
+                    Some("+05:00".into()),
+                ),
+                value_not_in: ScalarValue::TimestampMillisecond(
+                    Some(2500000),
+                    Some("+05:00".into()),
+                ),
+                other_list_values: vec![ScalarValue::TimestampMillisecond(
+                    Some(3500000),
+                    Some("+05:00".into()),
+                )],
+                null_value: Some(ScalarValue::TimestampMillisecond(
+                    None,
+                    Some("+05:00".into()),
+                )),
+            },
+            InListPrimitiveTestCase {
+                name: "timestamp_millisecond_mixed_tz",
+                value_in: ScalarValue::TimestampMillisecond(
+                    Some(1500000),
+                    Some("+05:00".into()),
+                ),
+                value_not_in: ScalarValue::TimestampMillisecond(
+                    Some(2500000),
+                    Some("+05:00".into()),
+                ),
+                other_list_values: vec![
+                    ScalarValue::TimestampMillisecond(
+                        Some(3500000),
+                        Some("+01:00".into()),
+                    ),
+                    ScalarValue::TimestampMillisecond(Some(4500000), Some("UTC".into())),
+                ],
+                null_value: Some(ScalarValue::TimestampMillisecond(
+                    None,
+                    Some("+05:00".into()),
+                )),
+            },
+        ])
     }
 
     #[test]
