@@ -29,7 +29,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::stats::{ColumnStatistics, Precision};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Result, assert_or_internal_err, internal_datafusion_err, plan_err,
+    Result, ScalarValue, assert_or_internal_err, internal_datafusion_err, plan_err,
 };
 
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -589,7 +589,7 @@ impl ProjectionExprs {
                 std::mem::take(&mut stats.column_statistics[col.index()])
             } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
                 let data_type = expr.data_type(output_schema)?;
-                
+
                 if literal.value().is_null() {
                     // For NULL literals (constant NULL columns), output proper statistics
                     // This enables optimizations like constant column detection and sort elimination
@@ -602,7 +602,7 @@ impl ProjectionExprs {
                         Precision::Exact(num_rows) => Precision::Exact(num_rows),
                         _ => Precision::Absent, // Can't determine null_count without exact row count
                     };
-                    
+
                     ColumnStatistics {
                         min_value: Precision::Absent, // NULLs don't have min/max
                         max_value: Precision::Absent,
@@ -624,11 +624,29 @@ impl ProjectionExprs {
                     let null_count = Precision::Exact(0);
 
                     // Calculate byte_size: for primitive types, use width * num_rows
-                    let byte_size = if let Some(byte_width) = data_type.primitive_width() {
+                    let byte_size = if let Some(byte_width) = data_type.primitive_width()
+                    {
                         stats.num_rows.multiply(&Precision::Exact(byte_width))
                     } else {
-                        // For complex types (Utf8, List, etc.), we can't calculate exact size
-                        // without knowing the actual data, so leave it as Absent
+                        // For complex types (Utf8, List, etc.), the byte_size when materialized
+                        // as an array depends on the array encoding and representation (e.g.,
+                        // dictionary encoding, string view arrays), so we conservatively set it to Absent
+                        Precision::Absent
+                    };
+
+                    // Calculate sum_value: for numeric types, sum = value * num_rows
+                    // This is useful for optimizations (e.g., cross joins multiply sum_value by row count)
+                    let sum_value = if !value.is_null() {
+                        // Convert num_rows to a ScalarValue of the same type as the value
+                        Precision::<ScalarValue>::from(stats.num_rows)
+                            .cast_to(&value.data_type())
+                            .ok()
+                            .map(|row_count| {
+                                // Multiply value * num_rows to get the sum
+                                Precision::Exact(value.clone()).multiply(&row_count)
+                            })
+                            .unwrap_or(Precision::Absent)
+                    } else {
                         Precision::Absent
                     };
 
@@ -637,7 +655,7 @@ impl ProjectionExprs {
                         max_value: Precision::Exact(value.clone()),
                         distinct_count,
                         null_count,
-                        sum_value: Precision::Absent, // Sum doesn't make sense for constants
+                        sum_value,
                         byte_size,
                     }
                 }
@@ -2698,6 +2716,11 @@ pub(crate) mod tests {
             output_stats.column_statistics[0].byte_size,
             Precision::Exact(40)
         );
+        // For a constant column, sum_value = value * num_rows = 42 * 5 = 210
+        assert_eq!(
+            output_stats.column_statistics[0].sum_value,
+            Precision::Exact(ScalarValue::Int64(Some(210)))
+        );
 
         // Second column (col0) should preserve statistics
         assert_eq!(
@@ -2761,6 +2784,10 @@ pub(crate) mod tests {
             output_stats.column_statistics[0].byte_size,
             Precision::Absent // NULLs don't take space
         );
+        assert_eq!(
+            output_stats.column_statistics[0].sum_value,
+            Precision::Absent // Sum doesn't make sense for NULLs
+        );
 
         // Second column (col0) should preserve statistics
         assert_eq!(
@@ -2783,7 +2810,9 @@ pub(crate) mod tests {
         // Projection with Utf8 literal (complex type): SELECT 'hello' AS text, col0 AS num
         let projection = ProjectionExprs::new(vec![
             ProjectionExpr {
-                expr: Arc::new(Literal::new(ScalarValue::Utf8(Some("hello".to_string())))),
+                expr: Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                    "hello".to_string(),
+                )))),
                 alias: "text".to_string(),
             },
             ProjectionExpr {
@@ -2825,6 +2854,12 @@ pub(crate) mod tests {
         // because we can't calculate exact size without knowing the actual data
         assert_eq!(
             output_stats.column_statistics[0].byte_size,
+            Precision::Absent
+        );
+        // Non-numeric types (Utf8) should have sum_value = Absent
+        // because sum is only meaningful for numeric types
+        assert_eq!(
+            output_stats.column_statistics[0].sum_value,
             Precision::Absent
         );
 
