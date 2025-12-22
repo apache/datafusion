@@ -293,8 +293,10 @@ impl ExecutionPlan for ProjectionExec {
             context.session_id(),
             context.task_id()
         );
+
+        let projector = self.projector.with_metrics(&self.metrics, partition);
         Ok(Box::pin(ProjectionStream::new(
-            self.projector.clone(),
+            projector,
             self.input.execute(partition, context)?,
             BaselineMetrics::new(&self.metrics, partition),
         )?))
@@ -1002,6 +1004,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::common::collect;
+    
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
