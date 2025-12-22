@@ -18,7 +18,7 @@
 use arrow::array::ArrayRef;
 use arrow::compute::like;
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{
     ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
