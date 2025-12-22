@@ -556,12 +556,13 @@ impl Session for ForeignSession {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_ffi_session() -> Result<(), DataFusionError> {

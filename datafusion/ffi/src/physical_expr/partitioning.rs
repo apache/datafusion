@@ -17,7 +17,8 @@
 
 use std::sync::Arc;
 
-use abi_stable::{StableAbi, std_types::RVec};
+use abi_stable::StableAbi;
+use abi_stable::std_types::RVec;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -70,7 +71,8 @@ impl From<&FFI_Partitioning> for Partitioning {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_physical_expr::{Partitioning, expressions::lit};
+    use datafusion_physical_expr::Partitioning;
+    use datafusion_physical_expr::expressions::lit;
 
     use crate::physical_expr::partitioning::FFI_Partitioning;
 

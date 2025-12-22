@@ -17,10 +17,11 @@
 
 use std::sync::Arc;
 
+use datafusion_catalog::MemTable;
+
 use super::{create_record_batch, create_test_schema};
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::table_provider::FFI_TableProvider;
-use datafusion::datasource::MemTable;
 
 pub(crate) fn create_sync_table_provider(
     codec: FFI_LogicalExtensionCodec,

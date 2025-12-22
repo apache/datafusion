@@ -15,26 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::util::FFIResult;
-use crate::{
-    arrow_wrappers::{WrappedArray, WrappedSchema},
-    df_result, rresult, rresult_return,
-};
-use abi_stable::{
-    StableAbi,
-    std_types::{ROption, RVec},
-};
-use arrow::{
-    array::{Array, ArrayRef, BooleanArray},
-    error::ArrowError,
-    ffi::to_ffi,
-};
-use datafusion::{
-    error::{DataFusionError, Result},
-    logical_expr::{EmitTo, GroupsAccumulator},
-};
+use std::ffi::c_void;
+use std::ops::Deref;
 use std::ptr::null_mut;
-use std::{ffi::c_void, ops::Deref, sync::Arc};
+use std::sync::Arc;
+
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RVec};
+use arrow::array::{Array, ArrayRef, BooleanArray};
+use arrow::error::ArrowError;
+use arrow::ffi::to_ffi;
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_expr::{EmitTo, GroupsAccumulator};
+
+use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
+use crate::util::FFIResult;
+use crate::{df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`GroupsAccumulator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -468,16 +464,15 @@ impl From<FFI_EmitTo> for EmitTo {
 
 #[cfg(test)]
 mod tests {
-    use super::{FFI_EmitTo, FFI_GroupsAccumulator, ForeignGroupsAccumulator};
     use arrow::array::{Array, BooleanArray, make_array};
+    use datafusion::common::create_array;
+    use datafusion::error::Result;
     use datafusion::functions_aggregate::stddev::StddevGroupsAccumulator;
-    use datafusion::{
-        common::create_array,
-        error::Result,
-        logical_expr::{EmitTo, GroupsAccumulator},
-    };
+    use datafusion::logical_expr::{EmitTo, GroupsAccumulator};
     use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
     use datafusion_functions_aggregate_common::stats::StatsType;
+
+    use super::{FFI_EmitTo, FFI_GroupsAccumulator, ForeignGroupsAccumulator};
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
