@@ -15,18 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::to_timestamp::ToTimestampSecondsFunc;
+use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{Result, exec_err, internal_err, plan_err};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility, cast,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
-    description = "Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps, integer, unsigned integer, float, and decimal types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers, unsigned integers, floats, and decimals are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).",
+    description = "Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps, integer, unsigned integer, and float types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).",
     syntax_example = "to_unixtime(expression[, ..., format_n])",
     sql_example = r#"
 ```sql
@@ -67,7 +68,7 @@ impl Default for ToUnixtimeFunc {
 impl ToUnixtimeFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -98,62 +99,12 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
             return exec_err!("to_unixtime function requires 1 or more arguments, got 0");
         }
 
-        match arg_args[0].data_type() {
-            DataType::Int64 => Ok(arg_args[0].clone()),
-            DataType::Null => arg_args[0].cast_to(&DataType::Int64, None),
-            DataType::Timestamp(_, _) => arg_args[0].cast_to(&DataType::Int64, None),
-            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => internal_err!(
-                "to_unixtime should have been simplified to to_timestamp_seconds"
-            ),
-            other => {
-                exec_err!("Unsupported data type {} for function to_unixtime", other)
-            }
-        }
-    }
-
-    fn simplify(
-        &self,
-        args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
-    ) -> Result<ExprSimplifyResult> {
-        if args.is_empty() {
-            return plan_err!("to_unixtime function requires 1 or more arguments, got 0");
-        }
-
-        let input_type = info.get_data_type(&args[0])?;
-        match input_type {
-            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
-                Ok(ExprSimplifyResult::Simplified(cast(
-                    super::to_timestamp_seconds().call(args),
-                    DataType::Int64,
-                )))
-            }
-            _ => Ok(ExprSimplifyResult::Original(args)),
-        }
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() {
-            return plan_err!("to_unixtime function requires 1 or more arguments, got 0");
-        }
-
         // validate that any args after the first one are Utf8
-        for (idx, data_type) in arg_types.iter().skip(1).enumerate() {
-            match data_type {
-                DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
-                    // all good
-                }
-                _ => {
-                    return plan_err!(
-                        "to_unixtime function unsupported data type at index {}: {}",
-                        idx + 1,
-                        data_type
-                    );
-                }
-            }
+        if arg_args.len() > 1 {
+            validate_data_types(arg_args, "to_unixtime")?;
         }
 
-        let coerced_first = match &arg_types[0] {
+        match arg_args[0].data_type() {
             DataType::Int8
             | DataType::Int16
             | DataType::Int32
@@ -165,29 +116,22 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
             | DataType::Float16
             | DataType::Float32
             | DataType::Float64
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)
-            | DataType::Null => DataType::Int64,
-            DataType::Date32 | DataType::Date64 => {
-                DataType::Timestamp(TimeUnit::Second, None)
-            }
-            DataType::Timestamp(_, tz) => {
-                DataType::Timestamp(TimeUnit::Second, tz.clone())
-            }
+            | DataType::Null => arg_args[0].cast_to(&DataType::Int64, None),
+            DataType::Date64 | DataType::Date32 => arg_args[0]
+                .cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)?
+                .cast_to(&DataType::Int64, None),
+            DataType::Timestamp(_, tz) => arg_args[0]
+                .cast_to(&DataType::Timestamp(TimeUnit::Second, tz), None)?
+                .cast_to(&DataType::Int64, None),
             DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
-                arg_types[0].clone()
+                ToTimestampSecondsFunc::new()
+                    .invoke_with_args(args)?
+                    .cast_to(&DataType::Int64, None)
             }
             other => {
-                return plan_err!(
-                    "Unsupported data type {} for function to_unixtime",
-                    other
-                );
+                exec_err!("Unsupported data type {} for function to_unixtime", other)
             }
-        };
-
-        Ok(std::iter::once(coerced_first)
-            .chain(arg_types.iter().skip(1).cloned())
-            .collect())
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {

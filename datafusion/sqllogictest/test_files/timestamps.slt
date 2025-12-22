@@ -3492,11 +3492,6 @@ select to_unixtime(arrow_cast(1000.414, 'Float32'));
 1000
 
 query I
-select to_unixtime(arrow_cast(1000.414, 'Decimal128(10, 3)'));
-----
-1000
-
-query I
 select to_unixtime(arrow_cast('2020-09-08T12:00:00+00:00', 'Utf8View'));
 ----
 1599566400
