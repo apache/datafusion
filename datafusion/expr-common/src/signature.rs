@@ -23,7 +23,8 @@ use std::sync::Arc;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{
-    DataType, Decimal128Type, DecimalType, Field, IntervalUnit, TimeUnit,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
+    Decimal128Type, DecimalType, Field, IntervalUnit, TimeUnit,
 };
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
@@ -900,7 +901,20 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
         NativeType::String => {
             vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View]
         }
-        NativeType::Decimal(_, _) => todo!(),
+        NativeType::Decimal(precision, scale) => {
+            // We assume incoming NativeType is valid already, in terms of precision & scale
+            let mut types = vec![DataType::Decimal256(*precision, *scale)];
+            if *precision <= DECIMAL32_MAX_PRECISION {
+                types.push(DataType::Decimal32(*precision, *scale));
+            }
+            if *precision <= DECIMAL64_MAX_PRECISION {
+                types.push(DataType::Decimal64(*precision, *scale));
+            }
+            if *precision <= DECIMAL128_MAX_PRECISION {
+                types.push(DataType::Decimal128(*precision, *scale));
+            }
+            types
+        }
         NativeType::Timestamp(time_unit, timezone) => {
             vec![DataType::Timestamp(*time_unit, timezone.to_owned())]
         }
