@@ -15,22 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{
-    StableAbi,
-    std_types::{RResult, RVec},
-};
-use arrow::{array::ArrayRef, error::ArrowError};
-use datafusion::{
-    error::{DataFusionError, Result},
-    logical_expr::Accumulator,
-    scalar::ScalarValue,
-};
-use prost::Message;
+use std::ffi::c_void;
+use std::ops::Deref;
 use std::ptr::null_mut;
-use std::{ffi::c_void, ops::Deref};
 
+use abi_stable::StableAbi;
+use abi_stable::std_types::{RResult, RVec};
+use arrow::array::ArrayRef;
+use arrow::error::ArrowError;
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::scalar::ScalarValue;
+use datafusion_expr::Accumulator;
+use prost::Message;
+
+use crate::arrow_wrappers::WrappedArray;
 use crate::util::FFIResult;
-use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
+use crate::{df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`Accumulator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -340,13 +340,14 @@ impl Accumulator for ForeignAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use super::{FFI_Accumulator, ForeignAccumulator};
     use arrow::array::{Array, make_array};
-    use datafusion::{
-        common::create_array, error::Result,
-        functions_aggregate::average::AvgAccumulator, logical_expr::Accumulator,
-        scalar::ScalarValue,
-    };
+    use datafusion::common::create_array;
+    use datafusion::error::Result;
+    use datafusion::functions_aggregate::average::AvgAccumulator;
+    use datafusion::logical_expr::Accumulator;
+    use datafusion::scalar::ScalarValue;
+
+    use super::{FFI_Accumulator, ForeignAccumulator};
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
