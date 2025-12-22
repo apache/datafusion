@@ -752,3 +752,240 @@ DROP TABLE sorted_parquet;
 
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
+
+
+# Test 7: Sort pushdown with constant column filtering
+# This tests the case where a leading sort column becomes constant through WHERE filtering
+
+# Create a multi-column sorted dataset (like time-series data)
+statement ok
+CREATE TABLE timeseries_data(timeframe VARCHAR, period_end INT, value DOUBLE) AS VALUES
+('daily', 1, 100.0),
+('daily', 2, 150.0),
+('daily', 3, 200.0),
+('weekly', 1, 500.0),
+('weekly', 2, 600.0),
+('weekly', 3, 700.0),
+('monthly', 1, 1000.0),
+('monthly', 2, 1100.0),
+('monthly', 3, 1200.0),
+('quarterly', 1, 5000.0),
+('quarterly', 2, 5500.0),
+('quarterly', 3, 6000.0);
+
+# Copy to parquet with multi-column sorting (timeframe ASC, period_end ASC)
+query I
+COPY (SELECT * FROM timeseries_data ORDER BY timeframe ASC, period_end ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet';
+----
+12
+
+statement ok
+CREATE EXTERNAL TABLE timeseries_parquet(timeframe VARCHAR, period_end INT, value DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet'
+WITH ORDER (timeframe ASC, period_end ASC);
+
+# Test 7.1: Query with constant prefix filter and DESC on remaining column
+# WHERE timeframe='quarterly' makes the first sort column constant
+# ORDER BY period_end DESC should trigger reverse scan because:
+# File ordering: [timeframe ASC, period_end ASC]
+# After filtering timeframe='quarterly': effectively [period_end ASC]
+# Request: [period_end DESC] -> exact reverse!
+query TT
+EXPLAIN SELECT * FROM timeseries_parquet
+WHERE timeframe = 'quarterly'
+ORDER BY period_end DESC
+LIMIT 2;
+----
+logical_plan
+01)Sort: timeseries_parquet.period_end DESC NULLS FIRST, fetch=2
+02)--Filter: timeseries_parquet.timeframe = Utf8View("quarterly")
+03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("quarterly")]
+physical_plan
+01)SortPreservingMergeExec: [period_end@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[period_end@1 DESC], preserve_partitioning=[true]
+03)----FilterExec: timeframe@0 = quarterly
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=timeframe@0 = quarterly AND DynamicFilter [ empty ], reverse_row_groups=true, pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= quarterly AND quarterly <= timeframe_max@1, required_guarantees=[timeframe in (quarterly)]
+
+# Test 7.2: Verify the results are correct
+query TIR
+SELECT * FROM timeseries_parquet
+WHERE timeframe = 'quarterly'
+ORDER BY period_end DESC
+LIMIT 2;
+----
+quarterly 3 6000
+quarterly 2 5500
+
+# Test 7.3: Same filter but ASC order (should not trigger reverse scan, ordering already satisfied)
+query TT
+EXPLAIN SELECT * FROM timeseries_parquet
+WHERE timeframe = 'quarterly'
+ORDER BY period_end ASC
+LIMIT 2;
+----
+logical_plan
+01)Sort: timeseries_parquet.period_end ASC NULLS LAST, fetch=2
+02)--Filter: timeseries_parquet.timeframe = Utf8View("quarterly")
+03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("quarterly")]
+physical_plan
+01)SortPreservingMergeExec: [period_end@1 ASC NULLS LAST], fetch=2
+02)--FilterExec: timeframe@0 = quarterly, fetch=2
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], output_ordering=[timeframe@0 ASC NULLS LAST, period_end@1 ASC NULLS LAST], file_type=parquet, predicate=timeframe@0 = quarterly, pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= quarterly AND quarterly <= timeframe_max@1, required_guarantees=[timeframe in (quarterly)]
+
+# Test 7.4: Verify ASC results
+query TIR
+SELECT * FROM timeseries_parquet
+WHERE timeframe = 'quarterly'
+ORDER BY period_end ASC
+LIMIT 2;
+----
+quarterly 1 5000
+quarterly 2 5500
+
+# Test 7.5: Test with different constant value
+query TIR
+SELECT * FROM timeseries_parquet
+WHERE timeframe = 'weekly'
+ORDER BY period_end DESC;
+----
+weekly 3 700
+weekly 2 600
+weekly 1 500
+
+# Test 7.6: Test without constant filter (no reverse scan because need both columns)
+# Request: [timeframe ASC, period_end DESC]
+# File has: [timeframe ASC, period_end ASC]
+# These are NOT reverse of each other
+query TT
+EXPLAIN SELECT * FROM timeseries_parquet
+ORDER BY timeframe ASC, period_end DESC
+LIMIT 3;
+----
+logical_plan
+01)Sort: timeseries_parquet.timeframe ASC NULLS LAST, timeseries_parquet.period_end DESC NULLS FIRST, fetch=3
+02)--TableScan: timeseries_parquet projection=[timeframe, period_end, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[timeframe@0 ASC NULLS LAST, period_end@1 DESC], preserve_partitioning=[false], sort_prefix=[timeframe@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], output_ordering=[timeframe@0 ASC NULLS LAST, period_end@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Test 7.7: Disable sort pushdown and verify filter still works
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = false;
+
+query TT
+EXPLAIN SELECT * FROM timeseries_parquet
+WHERE timeframe = 'quarterly'
+ORDER BY period_end DESC
+LIMIT 2;
+----
+logical_plan
+01)Sort: timeseries_parquet.period_end DESC NULLS FIRST, fetch=2
+02)--Filter: timeseries_parquet.timeframe = Utf8View("quarterly")
+03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("quarterly")]
+physical_plan
+01)SortPreservingMergeExec: [period_end@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[period_end@1 DESC], preserve_partitioning=[true]
+03)----FilterExec: timeframe@0 = quarterly
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], output_ordering=[timeframe@0 ASC NULLS LAST, period_end@1 ASC NULLS LAST], file_type=parquet, predicate=timeframe@0 = quarterly AND DynamicFilter [ empty ], pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= quarterly AND quarterly <= timeframe_max@1, required_guarantees=[timeframe in (quarterly)]
+
+# Results should still be correct
+query TIR
+SELECT * FROM timeseries_parquet
+WHERE timeframe = 'quarterly'
+ORDER BY period_end DESC
+LIMIT 2;
+----
+quarterly 3 6000
+quarterly 2 5500
+
+# Re-enable
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Test 7.8: Test with IN clause (multiple constant values)
+query TT
+EXPLAIN SELECT * FROM timeseries_parquet
+WHERE timeframe IN ('daily', 'weekly')
+ORDER BY period_end DESC
+LIMIT 3;
+----
+logical_plan
+01)Sort: timeseries_parquet.period_end DESC NULLS FIRST, fetch=3
+02)--Filter: timeseries_parquet.timeframe = Utf8View("daily") OR timeseries_parquet.timeframe = Utf8View("weekly")
+03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("daily") OR timeseries_parquet.timeframe = Utf8View("weekly")]
+physical_plan
+01)SortPreservingMergeExec: [period_end@1 DESC], fetch=3
+02)--SortExec: TopK(fetch=3), expr=[period_end@1 DESC], preserve_partitioning=[true]
+03)----FilterExec: timeframe@0 = daily OR timeframe@0 = weekly
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], output_ordering=[timeframe@0 ASC NULLS LAST, period_end@1 ASC NULLS LAST], file_type=parquet, predicate=(timeframe@0 = daily OR timeframe@0 = weekly) AND DynamicFilter [ empty ], pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= daily AND daily <= timeframe_max@1 OR timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= weekly AND weekly <= timeframe_max@1, required_guarantees=[timeframe in (daily, weekly)]
+
+# Note: IN clause with multiple values means timeframe is NOT constant
+# (could be 'daily' or 'weekly'), so reverse scan should not be applied in this case
+# The physical plan should NOT show reverse_row_groups=true
+
+# Test 7.9: Complex case - literal constant in sort expression itself
+# This should be stripped and remaining column checked
+query TT
+EXPLAIN SELECT * FROM timeseries_parquet
+WHERE timeframe = 'monthly'
+ORDER BY 'constant', period_end DESC
+LIMIT 2;
+----
+logical_plan
+01)Sort: Utf8("constant") ASC NULLS LAST, timeseries_parquet.period_end DESC NULLS FIRST, fetch=2
+02)--Filter: timeseries_parquet.timeframe = Utf8View("monthly")
+03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("monthly")]
+physical_plan
+01)SortPreservingMergeExec: [constant ASC NULLS LAST, period_end@1 DESC], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[period_end@1 DESC], preserve_partitioning=[true]
+03)----FilterExec: timeframe@0 = monthly
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=timeframe@0 = monthly AND DynamicFilter [ empty ], reverse_row_groups=true, pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= monthly AND monthly <= timeframe_max@1, required_guarantees=[timeframe in (monthly)]
+
+# Verify results
+query TIR
+SELECT * FROM timeseries_parquet
+WHERE timeframe = 'monthly'
+ORDER BY period_end DESC
+LIMIT 2;
+----
+monthly 3 1200
+monthly 2 1100
+
+# Test 7.10: Edge case - filter on non-leading sort column (should NOT trigger reverse scan)
+# File order: [timeframe ASC, period_end ASC]
+# Filter: period_end = 2 (not the leading column)
+# Request: [timeframe DESC]
+# This should NOT optimize because period_end filter doesn't make timeframe constant
+query TT
+EXPLAIN SELECT * FROM timeseries_parquet
+WHERE period_end = 2
+ORDER BY timeframe DESC;
+----
+logical_plan
+01)Sort: timeseries_parquet.timeframe DESC NULLS FIRST
+02)--Filter: timeseries_parquet.period_end = Int32(2)
+03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.period_end = Int32(2)]
+physical_plan
+01)SortPreservingMergeExec: [timeframe@0 DESC]
+02)--SortExec: expr=[timeframe@0 DESC], preserve_partitioning=[true]
+03)----FilterExec: period_end@1 = 2
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=period_end@1 = 2, reverse_row_groups=true, pruning_predicate=period_end_null_count@2 != row_count@3 AND period_end_min@0 <= 2 AND 2 <= period_end_max@1, required_guarantees=[period_end in (2)]
+
+# Cleanup
+statement ok
+DROP TABLE timeseries_data;
+
+statement ok
+DROP TABLE timeseries_parquet;
+
+# Reset to default
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;

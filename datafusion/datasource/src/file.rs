@@ -29,7 +29,7 @@ use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
@@ -149,15 +149,46 @@ pub trait FileSource: Send + Sync {
 
     /// Try to create a new FileSource that can produce data in the specified sort order.
     ///
+    /// This method attempts to optimize data retrieval to match the requested ordering.
+    /// It receives both the requested ordering and equivalence properties that describe
+    /// relationships between expressions (e.g., constant columns, monotonic functions).
+    ///
+    /// # Parameters
+    /// * `order` - The requested sort ordering
+    /// * `eq_properties` - Equivalence properties that can be used to determine if a reversed
+    ///   ordering satisfies the request. This includes information about:
+    ///   - Constant columns (e.g., from filters like `ticker = 'AAPL'`)
+    ///   - Monotonic functions (e.g., `extract_year_month(timestamp)`)
+    ///   - Other equivalence relationships
+    ///
+    /// # Examples
+    ///
+    /// ## Example 1: Simple reverse
+    /// ```text
+    /// File ordering: [a ASC, b DESC]
+    /// Requested:     [a DESC]
+    /// Reversed file: [a DESC, b ASC]
+    /// Result: Satisfies request (prefix match) → Inexact
+    /// ```
+    ///
+    /// ## Example 2: Monotonic function
+    /// ```text
+    /// File ordering: [extract_year_month(ts) ASC, ts ASC]
+    /// Requested:     [ts DESC]
+    /// Reversed file: [extract_year_month(ts) DESC, ts DESC]
+    /// Result: Through monotonicity, satisfies [ts DESC] → Inexact
+    /// ```
+    ///
     /// # Returns
-    /// * `Exact` - Created a source that guarantees perfect ordering
-    /// * `Inexact` - Created a source optimized for ordering (e.g., reordered files) but not perfectly sorted
+    /// * `Exact` - Created a source that guarantees perfect ordering (e.g., file reordering)
+    /// * `Inexact` - Created a source optimized for ordering (e.g., reversed row groups) but not perfectly sorted
     /// * `Unsupported` - Cannot optimize for this ordering
     ///
     /// Default implementation returns `Unsupported`.
     fn try_reverse_output(
         &self,
         _order: &[PhysicalSortExpr],
+        _eq_properties: &EquivalenceProperties,
     ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
         Ok(SortOrderPushdownResult::Unsupported)
     }

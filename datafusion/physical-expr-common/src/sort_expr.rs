@@ -426,37 +426,6 @@ impl LexOrdering {
         self.exprs.truncate(len);
         true
     }
-
-    /// Check if reversing this ordering would satisfy another ordering requirement.
-    ///
-    /// This supports **prefix matching**: if this ordering is `[A DESC, B ASC]`
-    /// and `other` is `[A ASC]`, reversing this gives `[A ASC, B DESC]`, which
-    /// satisfies `other` since `[A ASC]` is a prefix.
-    ///
-    /// # Arguments
-    /// * `other` - The ordering requirement to check against
-    ///
-    /// # Returns
-    /// `true` if reversing this ordering would satisfy `other`
-    ///
-    /// # Example
-    /// ```text
-    /// self:  [number DESC, letter ASC]
-    /// other: [number ASC]
-    /// After reversing self: [number ASC, letter DESC]  ✓ Prefix match!
-    /// ```
-    pub fn is_reverse(&self, other: &LexOrdering) -> bool {
-        let self_exprs = self.as_ref();
-        let other_exprs = other.as_ref();
-
-        if other_exprs.len() > self_exprs.len() {
-            return false;
-        }
-
-        other_exprs.iter().zip(self_exprs.iter()).all(|(req, cur)| {
-            req.expr.eq(&cur.expr) && is_reversed_sort_options(&req.options, &cur.options)
-        })
-    }
 }
 
 /// Check if two SortOptions represent reversed orderings.

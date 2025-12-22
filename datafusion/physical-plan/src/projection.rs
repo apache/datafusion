@@ -24,7 +24,7 @@ use super::expressions::{Column, Literal};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
@@ -51,7 +51,9 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, PhysicalSortExpr,
+};
 // Re-exported from datafusion-physical-expr for backwards compatibility
 // We recommend updating your imports to use datafusion-physical-expr directly
 pub use datafusion_physical_expr::projection::{
@@ -356,6 +358,27 @@ impl ExecutionPlan for ProjectionExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        let child = self.input();
+
+        match child.try_pushdown_sort(order)? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                Ok(SortOrderPushdownResult::Exact { inner: new_exec })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                Ok(SortOrderPushdownResult::Inexact { inner: new_exec })
+            }
+            SortOrderPushdownResult::Unsupported => {
+                Ok(SortOrderPushdownResult::Unsupported)
+            }
+        }
     }
 }
 
