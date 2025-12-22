@@ -284,150 +284,46 @@ pub struct ToTimestampNanosFunc {
     timezone: Option<Arc<str>>,
 }
 
-impl Default for ToTimestampFunc {
-    fn default() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-}
-
-impl ToTimestampFunc {
-    #[deprecated(since = "52.0.0", note = "use `new_with_config` instead")]
-    /// Deprecated constructor retained for backwards compatibility.
-    ///
-    /// Prefer [`ToTimestampFunc::new_with_config`] which allows specifying the
-    /// timezone via [`ConfigOptions`]. This helper now mirrors the
-    /// canonical default offset (None) provided by `ConfigOptions::default()`.
-    pub fn new() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-
-    pub fn new_with_config(config: &ConfigOptions) -> Self {
-        Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            timezone: config
-                .execution
-                .time_zone
-                .as_ref()
-                .map(|tz| Arc::from(tz.as_str())),
+/// Macro to generate boilerplate constructors and config methods for ToTimestamp* functions.
+/// Generates: Default impl, deprecated new(), new_with_config(), and extracts timezone from ConfigOptions.
+macro_rules! impl_to_timestamp_constructors {
+    ($func:ty) => {
+        impl Default for $func {
+            fn default() -> Self {
+                Self::new_with_config(&ConfigOptions::default())
+            }
         }
-    }
-}
 
-impl Default for ToTimestampSecondsFunc {
-    fn default() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-}
+        impl $func {
+            #[deprecated(since = "52.0.0", note = "use `new_with_config` instead")]
+            /// Deprecated constructor retained for backwards compatibility.
+            ///
+            /// Prefer [`new_with_config`] which allows specifying the
+            /// timezone via [`ConfigOptions`]. This helper now mirrors the
+            /// canonical default offset (None) provided by `ConfigOptions::default()`.
+            pub fn new() -> Self {
+                Self::new_with_config(&ConfigOptions::default())
+            }
 
-impl ToTimestampSecondsFunc {
-    #[deprecated(since = "52.0.0", note = "use `new_with_config` instead")]
-    /// Deprecated constructor retained for backwards compatibility.
-    ///
-    /// Prefer [`ToTimestampSecondsFunc::new_with_config`] which allows specifying the
-    /// timezone via [`ConfigOptions`]. This helper now mirrors the
-    /// canonical default offset (None) provided by `ConfigOptions::default()`.
-    pub fn new() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-
-    pub fn new_with_config(config: &ConfigOptions) -> Self {
-        Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            timezone: config
-                .execution
-                .time_zone
-                .as_ref()
-                .map(|tz| Arc::from(tz.as_str())),
+            pub fn new_with_config(config: &ConfigOptions) -> Self {
+                Self {
+                    signature: Signature::variadic_any(Volatility::Immutable),
+                    timezone: config
+                        .execution
+                        .time_zone
+                        .as_ref()
+                        .map(|tz| Arc::from(tz.as_str())),
+                }
+            }
         }
-    }
+    };
 }
 
-impl Default for ToTimestampMillisFunc {
-    fn default() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-}
-
-impl ToTimestampMillisFunc {
-    #[deprecated(since = "52.0.0", note = "use `new_with_config` instead")]
-    /// Deprecated constructor retained for backwards compatibility.
-    ///
-    /// Prefer [`ToTimestampMillisFunc::new_with_config`] which allows specifying the
-    /// timezone via [`ConfigOptions`]. This helper now mirrors the
-    /// canonical default offset (None) provided by `ConfigOptions::default()`.
-    pub fn new() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-
-    pub fn new_with_config(config: &ConfigOptions) -> Self {
-        Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            timezone: config
-                .execution
-                .time_zone
-                .as_ref()
-                .map(|tz| Arc::from(tz.as_str())),
-        }
-    }
-}
-
-impl Default for ToTimestampMicrosFunc {
-    fn default() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-}
-
-impl ToTimestampMicrosFunc {
-    #[deprecated(since = "52.0.0", note = "use `new_with_config` instead")]
-    /// Deprecated constructor retained for backwards compatibility.
-    ///
-    /// Prefer [`ToTimestampMicrosFunc::new_with_config`] which allows specifying the
-    /// timezone via [`ConfigOptions`]. This helper now mirrors the
-    /// canonical default offset (None) provided by `ConfigOptions::default()`.
-    pub fn new() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-
-    pub fn new_with_config(config: &ConfigOptions) -> Self {
-        Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            timezone: config
-                .execution
-                .time_zone
-                .as_ref()
-                .map(|tz| Arc::from(tz.as_str())),
-        }
-    }
-}
-
-impl Default for ToTimestampNanosFunc {
-    fn default() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-}
-
-impl ToTimestampNanosFunc {
-    #[deprecated(since = "52.0.0", note = "use `new_with_config` instead")]
-    /// Deprecated constructor retained for backwards compatibility.
-    ///
-    /// Prefer [`ToTimestampNanosFunc::new_with_config`] which allows specifying the
-    /// timezone via [`ConfigOptions`]. This helper now mirrors the
-    /// canonical default offset (None) provided by `ConfigOptions::default()`.
-    pub fn new() -> Self {
-        Self::new_with_config(&ConfigOptions::default())
-    }
-
-    pub fn new_with_config(config: &ConfigOptions) -> Self {
-        Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
-            timezone: config
-                .execution
-                .time_zone
-                .as_ref()
-                .map(|tz| Arc::from(tz.as_str())),
-        }
-    }
-}
+impl_to_timestamp_constructors!(ToTimestampFunc);
+impl_to_timestamp_constructors!(ToTimestampSecondsFunc);
+impl_to_timestamp_constructors!(ToTimestampMillisFunc);
+impl_to_timestamp_constructors!(ToTimestampMicrosFunc);
+impl_to_timestamp_constructors!(ToTimestampNanosFunc);
 
 /// to_timestamp SQL function
 ///
@@ -435,6 +331,15 @@ impl ToTimestampNanosFunc {
 /// The supported range for integer input is between `-9223372037` and `9223372036`.
 /// Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`.
 /// Please use `to_timestamp_seconds` for the input outside of supported bounds.
+/// Macro to generate the with_updated_config method for ToTimestamp* functions.
+macro_rules! impl_with_updated_config {
+    () => {
+        fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+            Some(Self::new_with_config(config).into())
+        }
+    };
+}
+
 impl ScalarUDFImpl for ToTimestampFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -452,9 +357,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
         Ok(Timestamp(Nanosecond, self.timezone.clone()))
     }
 
-    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
-        Some(Self::new_with_config(config).into())
-    }
+    impl_with_updated_config!();
 
     fn invoke_with_args(
         &self,
@@ -547,9 +450,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         Ok(Timestamp(Second, self.timezone.clone()))
     }
 
-    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
-        Some(Self::new_with_config(config).into())
-    }
+    impl_with_updated_config!();
 
     fn invoke_with_args(
         &self,
@@ -611,9 +512,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         Ok(Timestamp(Millisecond, self.timezone.clone()))
     }
 
-    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
-        Some(Self::new_with_config(config).into())
-    }
+    impl_with_updated_config!();
 
     fn invoke_with_args(
         &self,
@@ -673,9 +572,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         Ok(Timestamp(Microsecond, self.timezone.clone()))
     }
 
-    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
-        Some(Self::new_with_config(config).into())
-    }
+    impl_with_updated_config!();
 
     fn invoke_with_args(
         &self,
@@ -735,9 +632,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         Ok(Timestamp(Nanosecond, self.timezone.clone()))
     }
 
-    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
-        Some(Self::new_with_config(config).into())
-    }
+    impl_with_updated_config!();
 
     fn invoke_with_args(
         &self,
