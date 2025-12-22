@@ -881,6 +881,8 @@ fn add_roundrobin_on_top(
 /// * `hash_exprs`: Stores Physical Exprs that are used during hashing.
 /// * `n_target`: desired target partition number, if partition number of the
 ///   current executor is less than this value. Partition number will be increased.
+/// * `allow_subset_satisfy_partitioning`: Whether to allow subset partitioning logic in satisfaction checks.
+///   Set to `false` for partitioned hash joins to ensure exact hash matching.
 ///
 /// # Returns
 ///
@@ -890,6 +892,7 @@ fn add_hash_on_top(
     input: DistributionContext,
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     n_target: usize,
+    allow_subset_satisfy_partitioning: bool,
 ) -> Result<DistributionContext> {
     // Early return if hash repartition is unnecessary
     // `RepartitionExec: partitioning=Hash([...], 1), input_partitions=1` is unnecessary.
@@ -898,15 +901,23 @@ fn add_hash_on_top(
     }
 
     let dist = Distribution::HashPartitioned(hash_exprs);
-    let satisfied = input
-        .plan
-        .output_partitioning()
-        .satisfy(&dist, input.plan.equivalence_properties());
+    let satisfaction = input.plan.output_partitioning().satisfaction(
+        &dist,
+        input.plan.equivalence_properties(),
+        allow_subset_satisfy_partitioning,
+    );
 
     // Add hash repartitioning when:
-    // - The hash distribution requirement is not satisfied, or
-    // - We can increase parallelism by adding hash partitioning.
-    if !satisfied || n_target > input.plan.output_partitioning().partition_count() {
+    // - When subset satisfaction is enabled (current >= threshold): only repartition if not satisfied
+    // - When below threshold (current < threshold): repartition if expressions don't match OR to increase parallelism
+    let needs_repartition = if allow_subset_satisfy_partitioning {
+        !satisfaction.is_satisfied()
+    } else {
+        !satisfaction.is_satisfied()
+            || n_target > input.plan.output_partitioning().partition_count()
+    };
+
+    if needs_repartition {
         // When there is an existing ordering, we preserve ordering during
         // repartition. This will be rolled back in the future if any of the
         // following conditions is true:
@@ -1175,6 +1186,7 @@ pub fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
+    let subset_satisfaction_threshold = config.optimizer.subset_repartition_threshold;
     let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
         && matches!(
             dist_context.plan.pipeline_behavior(),
@@ -1212,6 +1224,41 @@ pub fn ensure_distribution(
         plan = updated_window;
     };
 
+    // For joins in partitioned mode, we need exact hash matching between
+    // both sides, so subset partitioning logic must be disabled.
+    //
+    // Why: Different hash expressions produce different hash values, causing
+    // rows with the same join key to land in different partitions. Since
+    // partitioned joins match partition N left with partition N right, rows
+    // that should match may be in different partitions and miss each other.
+    //
+    // Example JOIN ON left.a = right.a:
+    //
+    // Left: Hash([a])
+    //  Partition 1: a=1
+    //  Partition 2: a=2
+    //
+    // Right: Hash([a, b])
+    //  Partition 1: (a=1, b=1) -> Same a=1
+    //  Partition 2: (a=2, b=2)
+    //  Partition 3: (a=1, b=2) -> Same a=1
+    //
+    // Partitioned join execution:
+    //  P1 left (a=1) joins P1 right (a=1, b=1) -> Match
+    //  P2 left (a=2) joins P2 right (a=2, b=2) -> Match
+    //  P3 left (empty) joins P3 right (a=1, b=2) -> Missing, errors
+    //
+    // The row (a=1, b=2) should match left.a=1 but they're in different
+    // partitions, causing panics.
+    //
+    // CollectLeft/CollectRight modes are safe because one side is collected
+    // to a single partition which eliminates partition-to-partition mapping.
+    let is_partitioned_join = plan
+        .as_any()
+        .downcast_ref::<HashJoinExec>()
+        .is_some_and(|join| matches!(join.mode, PartitionMode::Partitioned))
+        || plan.as_any().is::<SortMergeJoinExec>();
+
     let repartition_status_flags =
         get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
     // This loop iterates over all the children to:
@@ -1237,12 +1284,23 @@ pub fn ensure_distribution(
                 hash_necessary,
             },
         )| {
+            let increases_partition_count =
+                child.plan.output_partitioning().partition_count() < target_partitions;
+
             let add_roundrobin = enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
                 && roundrobin_beneficial
                 && roundrobin_beneficial_stats
                 // Unless partitioning increases the partition count, it is not beneficial:
-                && child.plan.output_partitioning().partition_count() < target_partitions;
+                && increases_partition_count;
+
+            // Allow subset satisfaction when:
+            // 1. Current partition count >= threshold
+            // 2. Not a partitioned join since must use exact hash matching for joins
+            let current_partitions = child.plan.output_partitioning().partition_count();
+            let allow_subset_satisfy_partitioning = current_partitions
+                >= subset_satisfaction_threshold
+                && !is_partitioned_join;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
@@ -1267,8 +1325,12 @@ pub fn ensure_distribution(
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
-                        child =
-                            add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
+                        child = add_hash_on_top(
+                            child,
+                            exprs.to_vec(),
+                            target_partitions,
+                            allow_subset_satisfy_partitioning,
+                        )?;
                     }
                 }
                 Distribution::UnspecifiedDistribution => {

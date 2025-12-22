@@ -240,6 +240,10 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "range_and_generate_series"
+
+[[bench]]
+harness = false
 name = "sql_planner"
 
 [[bench]]

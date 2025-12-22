@@ -15,43 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc};
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    StableAbi,
-    std_types::{RResult::ROk, RVec},
-};
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RVec};
 use arrow::datatypes::SchemaRef;
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_expr::EquivalenceProperties,
-    physical_plan::{
-        PlanProperties,
-        execution_plan::{Boundedness, EmissionType},
-    },
-    prelude::SessionContext,
-};
-use datafusion_proto::{
-    physical_plan::{
-        DefaultPhysicalExtensionCodec,
-        from_proto::{parse_physical_sort_exprs, parse_protobuf_partitioning},
-        to_proto::{serialize_partitioning, serialize_physical_sort_exprs},
-    },
-    protobuf::{Partitioning, PhysicalSortExprNodeCollection},
-};
-use prost::Message;
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_plan::PlanProperties;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
-use crate::util::FFIResult;
-use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
+use crate::arrow_wrappers::WrappedSchema;
+use crate::physical_expr::partitioning::FFI_Partitioning;
+use crate::physical_expr::sort::FFI_PhysicalSortExpr;
 
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_PlanProperties {
-    /// The output partitioning is a [`Partitioning`] protobuf message serialized
-    /// into bytes to pass across the FFI boundary.
-    pub output_partitioning: unsafe extern "C" fn(plan: &Self) -> FFIResult<RVec<u8>>,
+    /// The output partitioning of the plan.
+    pub output_partitioning: unsafe extern "C" fn(plan: &Self) -> FFI_Partitioning,
 
     /// Return the emission type of the plan.
     pub emission_type: unsafe extern "C" fn(plan: &Self) -> FFI_EmissionType,
@@ -59,9 +45,9 @@ pub struct FFI_PlanProperties {
     /// Indicate boundedness of the plan and its memory requirements.
     pub boundedness: unsafe extern "C" fn(plan: &Self) -> FFI_Boundedness,
 
-    /// The output ordering is a [`PhysicalSortExprNodeCollection`] protobuf message
-    /// serialized into bytes to pass across the FFI boundary.
-    pub output_ordering: unsafe extern "C" fn(plan: &Self) -> FFIResult<RVec<u8>>,
+    /// The output ordering of the plan.
+    pub output_ordering:
+        unsafe extern "C" fn(plan: &Self) -> ROption<RVec<FFI_PhysicalSortExpr>>,
 
     /// Return the schema of the plan.
     pub schema: unsafe extern "C" fn(plan: &Self) -> WrappedSchema,
@@ -92,15 +78,8 @@ impl FFI_PlanProperties {
 
 unsafe extern "C" fn output_partitioning_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> FFIResult<RVec<u8>> {
-    let codec = DefaultPhysicalExtensionCodec {};
-    let partitioning_data = rresult_return!(serialize_partitioning(
-        properties.inner().output_partitioning(),
-        &codec
-    ));
-    let output_partitioning = partitioning_data.encode_to_vec();
-
-    ROk(output_partitioning.into())
+) -> FFI_Partitioning {
+    properties.inner().output_partitioning().into()
 }
 
 unsafe extern "C" fn emission_type_fn_wrapper(
@@ -117,22 +96,17 @@ unsafe extern "C" fn boundedness_fn_wrapper(
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> FFIResult<RVec<u8>> {
-    let codec = DefaultPhysicalExtensionCodec {};
-    let output_ordering = match properties.inner().output_ordering() {
-        Some(ordering) => {
-            let physical_sort_expr_nodes = rresult_return!(
-                serialize_physical_sort_exprs(ordering.to_owned(), &codec)
-            );
-            let ordering_data = PhysicalSortExprNodeCollection {
-                physical_sort_expr_nodes,
-            };
+) -> ROption<RVec<FFI_PhysicalSortExpr>> {
+    let ordering: Option<RVec<FFI_PhysicalSortExpr>> =
+        properties.inner().output_ordering().map(|lex_ordering| {
+            let vec_ordering: Vec<PhysicalSortExpr> = lex_ordering.clone().into();
+            vec_ordering
+                .iter()
+                .map(FFI_PhysicalSortExpr::from)
+                .collect()
+        });
 
-            ordering_data.encode_to_vec()
-        }
-        None => Vec::default(),
-    };
-    ROk(output_ordering.into())
+    ordering.into()
 }
 
 unsafe extern "C" fn schema_fn_wrapper(properties: &FFI_PlanProperties) -> WrappedSchema {
@@ -186,38 +160,18 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let ffi_schema = unsafe { (ffi_props.schema)(&ffi_props) };
         let schema = (&ffi_schema.0).try_into()?;
 
-        // TODO Extend FFI to get the registry and codex
-        let default_ctx = SessionContext::new();
-        let task_context = default_ctx.task_ctx();
-        let codex = DefaultPhysicalExtensionCodec {};
+        let ffi_orderings: Option<RVec<FFI_PhysicalSortExpr>> =
+            unsafe { (ffi_props.output_ordering)(&ffi_props) }.into();
+        let sort_exprs = ffi_orderings
+            .map(|ordering_vec| {
+                ordering_vec
+                    .iter()
+                    .map(PhysicalSortExpr::from)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
-        let ffi_orderings = unsafe { (ffi_props.output_ordering)(&ffi_props) };
-
-        let proto_output_ordering =
-            PhysicalSortExprNodeCollection::decode(df_result!(ffi_orderings)?.as_ref())
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let sort_exprs = parse_physical_sort_exprs(
-            &proto_output_ordering.physical_sort_expr_nodes,
-            &task_context,
-            &schema,
-            &codex,
-        )?;
-
-        let partitioning_vec =
-            unsafe { df_result!((ffi_props.output_partitioning)(&ffi_props))? };
-        let proto_output_partitioning =
-            Partitioning::decode(partitioning_vec.as_ref())
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let partitioning = parse_protobuf_partitioning(
-            Some(&proto_output_partitioning),
-            &task_context,
-            &schema,
-            &codex,
-        )?
-        .ok_or(DataFusionError::Plan(
-            "Unable to deserialize partitioning protobuf in FFI_PlanProperties"
-                .to_string(),
-        ))?;
+        let partitioning = unsafe { (ffi_props.output_partitioning)(&ffi_props) };
 
         let eq_properties = if sort_exprs.is_empty() {
             EquivalenceProperties::new(Arc::new(schema))
@@ -233,7 +187,7 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
         Ok(PlanProperties::new(
             eq_properties,
-            partitioning,
+            (&partitioning).into(),
             emission_type,
             boundedness,
         ))
@@ -307,7 +261,8 @@ impl From<FFI_EmissionType> for EmissionType {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::{physical_expr::PhysicalSortExpr, physical_plan::Partitioning};
+    use datafusion::physical_expr::PhysicalSortExpr;
+    use datafusion::physical_plan::Partitioning;
 
     use super::*;
 
@@ -331,6 +286,7 @@ mod tests {
     #[test]
     fn test_round_trip_ffi_plan_properties() -> Result<()> {
         let original_props = create_test_props()?;
+
         let mut local_props_ptr = FFI_PlanProperties::from(&original_props);
         local_props_ptr.library_marker_id = crate::mock_foreign_marker_id;
 
@@ -342,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ffi_execution_plan_local_bypass() -> Result<()> {
+    fn test_ffi_plan_properties_local_bypass() -> Result<()> {
         let props = create_test_props()?;
 
         let ffi_plan = FFI_PlanProperties::from(&props);
