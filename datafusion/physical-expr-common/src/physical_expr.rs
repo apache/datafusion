@@ -430,6 +430,67 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn is_volatile_node(&self) -> bool {
         false
     }
+
+    // ---------------
+    // Pruning related
+    // ---------------
+    // None means propagation not implemented/supported for this node
+    fn propagate_range_stats(
+        child_range_stats: &[RangeStats],
+    ) -> Result<Option<RangeStats>> {
+        Ok(None)
+    }
+
+    fn propagate_null_stats(
+        child_range_stats: &[NullStats],
+    ) -> Result<Option<NullStats>> {
+        Ok(None)
+    }
+
+    fn evaluate_pruning(&self) -> Result<PruningIntermediate> {
+        // This will be the default impl for stats propagation nodes (like arithmetic
+        // expressions)
+        // 1. Evaluate pruning for all child
+        // 2. Extract all range_stats from the child, call self's `propagagte_range_stats`
+        //   , and build the output RangeStats
+        // 3. ditto for NullStats
+        // 4. Finally build the PruningIntermediate for current node
+        unimplemented!()
+    }
+}
+
+// Pruner Common
+/// e.g. for x > 5
+/// bucket 1 has stat [10,15] -> AlwaysTrue
+/// bucket 2 has stat [0,5] -> AlwaysFalse
+/// bucket 3 has stat [0,10] -> Unknown
+pub enum PruningResult {
+    AlwaysTrue,
+    AlwaysFalse,
+    Unknown,
+}
+
+pub struct RangeStats {
+    mins: Option<ArrayRef>,
+    maxs: Option<ArrayRef>,
+    length: usize,
+}
+
+pub struct NullStats {
+    null_counts: Option<ArrayRef>,
+    row_counts: Option<ArrayRef>,
+    length: usize,
+}
+
+pub struct ColumnStats {
+    range_stats: Option<RangeStats>,
+    null_stats: Option<NullStats>,
+}
+
+pub enum PruningIntermediate {
+    IntermediateStats(ColumnStats),
+    IntermediateResult(PruningResult),
+    Unsupported,
 }
 
 #[deprecated(
